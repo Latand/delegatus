@@ -24,6 +24,7 @@ function deferred<T>() {
 for (const exit of [0, 37]) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
   const env = withoutInheritedGate(isolatedEnvironment(root, checkEnvironment(process.env)));
+  env.TMPDIR = root;
   env.CODEX_HOME = path.join(root, "codex"); fs.mkdirSync(env.CODEX_HOME);
   env.PATH = [path.dirname(process.execPath), path.dirname(Bun.which("node")!), "/usr/bin", "/bin"].join(path.delimiter);
   Object.assign(env, { LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_LOCK_DIR: root });
@@ -76,6 +77,7 @@ fs.writeFileSync(root + '/ready', 'ready');
   child.stderr.on("data", data => { diagnostics = (diagnostics + data).slice(-8000); });
   const pending = new Map<number, (result: unknown) => void>(); let serial = 0;
   const lines = createInterface({ input: child.stdout });
+  let readyWatcher: fs.FSWatcher | undefined;
   const notifications: string[] = [];
   lines.on("line", line => {
     const message = JSON.parse(line);
@@ -127,7 +129,8 @@ fs.writeFileSync(root + '/ready', 'ready');
     expect(requests, diagnostics).toBe(2);
     expect(fs.existsSync(path.join(root, "check.log.gate/exit"))).toBe(false);
     if (!fs.existsSync(path.join(root, "ready"))) await bounded(new Promise<void>(resolve => {
-      const watcher = fs.watch(root, () => { if (fs.existsSync(path.join(root, "ready"))) { watcher.close(); resolve(); } });
+      const check = () => { if (fs.existsSync(path.join(root, "ready"))) { readyWatcher?.close(); resolve(); } };
+      readyWatcher = fs.watch(root, check); check();
     }));
     for (let i = 0; i < 1000; i++) fs.appendFileSync(path.join(root, "check.log"), `progress ${i}\n`);
     await Promise.resolve();
@@ -141,6 +144,7 @@ fs.writeFileSync(root + '/ready', 'ready');
     expect(fs.readFileSync(path.join(root, "check.log.gate/exit"), "utf8")).toBe(`${exit}\n`);
     await bounded(finished.promise);
   } finally {
+    readyWatcher?.close();
     fs.writeFileSync(path.join(root, "release"), "release");
     abort.abort();
     await stopFixtureProcess(child);
