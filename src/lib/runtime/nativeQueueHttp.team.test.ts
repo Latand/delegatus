@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { NextRequest } from "next/server";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
@@ -23,7 +23,7 @@ const { nativeQueueDeliveryKey } = await import("./deliveryDedup");
 const { conversationMessageSenders, messageSenders } = await import("@/lib/team");
 const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
 const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
-const { existingTeamStore, resetTeamStoreForTests, teamStore, teamStoreFile } = await import("@/lib/team/store");
+const { existingTeamStore, resetTeamStoreForTests, teamStore, teamStoreFile, TeamStore } = await import("@/lib/team/store");
 type RuntimeHostClient = import("./client").RuntimeHostClient;
 type NativeQueueCommand = import("./nativeQueueContracts").NativeQueueCommand;
 type RuntimeJournalType = InstanceType<typeof RuntimeJournal>;
@@ -51,7 +51,12 @@ function post(body: Record<string, unknown>, journal: RuntimeJournalType, cookie
     body: JSON.stringify(body),
   }), {
     client: () => ({
-      command: async (command: NativeQueueCommand) => journal.executeOperation(command),
+      command: async (command: NativeQueueCommand) => {
+        if (cookie && (command.action === "add" || command.action === "update")) {
+          expect(existingTeamStore()!.latestConversationMember(command.conversationId)).not.toBeNull();
+        }
+        return journal.executeOperation(command);
+      },
       nativeQueueRead: async (id: string) => journal.nativeQueueRead(id),
     }) as unknown as RuntimeHostClient,
     enabled: () => true,
@@ -100,6 +105,7 @@ test("a member's admitted queued message names them, under the key its record ca
   const journal = makeJournal();
   const response = await post(add("oleh-queue-1", "after this turn, rerun the gate"), journal, oleh.cookie);
   expect(response.status).toBe(202);
+  expect(store.latestConversationMember(conversationId)).toBe(oleh.member.id);
   const body = await response.json() as { receipt: { nativeQueue: { entryId: string; revision: number } } };
   const key = nativeQueueDeliveryKey(body.receipt.nativeQueue.entryId, body.receipt.nativeQueue.revision);
   expect(journal.nativeQueueRead(conversationId).map((entry) => entry.entryId)).toEqual([body.receipt.nativeQueue.entryId]);
@@ -133,4 +139,15 @@ test("an agent queued version keeps its server author across admission", async (
   expect(journal.nativeQueueRead(conversationId)[0]?.versions[0]?.origin).toMatchObject({
     kind: "agent", role: "agent", conversationId: "conversation_agent",
   });
+});
+
+test("a failed native queue authority write refuses without a journal effect", async () => {
+  const owner = claimInstall(teamStore(), "Owner", DESKTOP);
+  const journal = makeJournal();
+  const write = spyOn(TeamStore.prototype, "admitConversationMember").mockImplementation(() => { throw new Error("fixture write refused"); });
+  try {
+    const response = await post(add("authority-refusal", "Workspace request"), journal, owner.cookie);
+    expect(response.status).toBe(503);
+    expect(journal.nativeQueueRead(conversationId)).toEqual([]);
+  } finally { write.mockRestore(); }
 });
