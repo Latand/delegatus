@@ -1195,6 +1195,8 @@ export type PipelineConversationSource = {
 };
 
 export type Pipeline = {
+  /** Server-attributed member scope, retained across stage retries and restart. */
+  workspace?: import("@/lib/accounts/migration/contracts").LaunchProfile["workspace"];
   /** Receipt-owned invention provenance, retained across attachment edits. */
   proactiveTaskIds?: string[];
   /** Historical context only; never grants creator or spawn authority. */

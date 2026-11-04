@@ -488,10 +488,8 @@ and the new `src/lib/forge/baseUpdate.test.ts`.
   hours on three days within fourteen, read from merge records.
 - **Raising `LLV_MERGE_REFRESH_CONCURRENCY`.** Rejected for behind PRs (§5.1);
   for conflict refreshes it stays 1 until conflicts queue up.
-- **Mechanical retest of a red check on an outdated base** (the
-  `failedCheck` path, lines 696-702). Same operation as §5.2, but it changes
-  a test that builds production ports (`autoRefresh.test.ts:374`) and the
-  acceptance asks only for behind PRs.
+- **Mechanical retest of a red check on an outdated base** was deferred by
+  this design. The bounded extension in §10 covers it under #3619.
 - **Running the local pre-push gate on the mechanical commit.** The required
   checks cover it; the gate would cost 10–25 minutes per update behind CPU
   admission.
@@ -502,3 +500,75 @@ and the new `src/lib/forge/baseUpdate.test.ts`.
   slot.
 - **GitHub merge queue.** Unavailable for a user-owned repository and would
   change repository settings.
+
+
+## 10. Outdated heads with red checks (#3619)
+
+The queue now tries the existing mechanical update after the failed-check
+path proves, by comparing immutable head and base SHAs, that the PR lacks
+the current base. This covers both required and optional failures, including
+soft protection where GitHub reports `UNSTABLE` instead of `BEHIND`.
+`decideMerge` still blocks a failing current head. The extension runs inside
+`refreshAdmission` and keeps the mechanical path's same-repository, named
+branch, inactive delivery owner, passed review and non-proactive restrictions.
+
+The write and recovery contract stays the one in §5: `updateBehindBase`
+records the commit before `pushBaseUpdate` dispatches it;
+`replayBaseUpdate` recreates that receipt after interruption;
+`admitUpdateHead` admits its exact SHA; `decideMerge` starts that head's
+check clock. The existing store reader accepts the same update shape.
+No schema, Git helper, refresh-stage runtime pin or scheduling policy changes.
+
+A pending update waits for its receipt even when the old head is red. It
+retains the failed check's name in the updating reason. Recording a red-head
+update also logs the failed check, original head, base and planned commit;
+the forge's original check result remains untouched. Once the update reaches
+the PR, missing or pending required checks hold the new head. Any reported
+failure on that current head blocks it and releases the next queue member.
+If the local Git plan proves the head already contains the base despite a
+stale forge comparison, the failure stays blocked. A textual conflict still
+uses the visible refresh lane and requires resolution review.
+
+The causal probe lives in `src/lib/forge/autoRefresh.test.ts`, the five tests
+whose names begin `outdated red probe`. It uses `behindQueue` and the actual
+`sweepAutoMerge` runner with synthetic forge/Git ports, fixed time and SHAs.
+The compare port returns an older merge base; simply labelling the PR
+`BEHIND` would not reproduce the failed-check path. The probe block is
+identical on pinned base `7da984802f9f0143a32a7f5f709d5f40289cd8de`
+and the corrected source. Its SHA-256 is
+`6bf6a0827a2530857cc641295abb1217be818fb786431d4acb14bd67e6d0fba9`.
+
+| Observation | Plans | Pushes | Agent refresh lanes | Merges |
+| --- | ---: | ---: | ---: | ---: |
+| Base, each required/optional failure under BEHIND/UNSTABLE | 0 | 0 | 1 | 0 |
+| Fixed, each of those cases at the first sweep | 1 | 1 | 0 | 0 |
+| Base, three reviewed outdated red PRs | 0 | 0 | 3 | 0 |
+| Fixed, the same three-PR fixture through fresh green checks | 3 | 3 | 0 | 3 |
+
+The three-PR probe closes each old runner's synthetic refresh child to free
+its slot; it does not simulate the work those agents would perform. These
+counts establish avoided lane creation for this fixture. They measure no
+production latency, cost or defect rate. The historical audit's 327 pipelines
+and 505 refresh attempts include behavior before the mechanical updater and
+cannot supply such a rate.
+
+Reproduction: export the pinned base, copy the final test file into that
+export, and run `bun run test src/lib/forge/autoRefresh.test.ts -t
+'outdated red probe'`. Repeat on an export of the corrected source. Run each
+through the declared `gate-slot.sh` with Bun 1.4.0, private disk-backed
+`HOME`, `XDG_CONFIG_HOME`, `LLV_STATE_DIR` and `TMPDIR`, a closed Viewer
+control endpoint, and isolated engine configuration. The base must fail all
+five assertions; the fixed source must pass them unchanged. The focused
+verification also runs `src/lib/forge/autoMerge.test.ts` and
+`src/lib/forge/baseUpdate.test.ts`; the latter drives real Git against local
+bare remotes. [The evidence record](../../evidence/merge-queue-outdated-red.json) contains
+the command results and source hashes.
+
+Remaining fallbacks: fork or unnamed/mismatched branches, absent checkouts
+or update ports, and authorized proactive lanes retain the existing refresh
+path. Unowned or unreviewed work receives no new authority. Conflicts require
+an agent and review; red checks on the updated current head remain blocked.
+An advancing base can still require another distinct update and fresh checks.
+Uncertain pushes replay the recorded commit under the existing bound, while
+foreign heads and lost delivery authority stay fenced. No live PR, production
+benchmark, deployment or merge was used for this verification.

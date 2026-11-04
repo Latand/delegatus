@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { statePath } from "@/lib/configDir";
 import { captureProcessTree, signalProcessGroup } from "@/lib/processGroup";
-import { bindHostExitWriter, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
+import { bindHostExitWriter, discardHostExitWriter, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
 
 /** Uses the serving interpreter and builtins only, including on installations
  * where the optional namespace launcher/Python is unavailable. */
@@ -112,7 +112,7 @@ export function spawnNativeWaitOwner(command: string, args: string[], options: S
       bindHostExitWriter(directory, native, captureProcessIdentity(waiter.pid!));
       const exit = readHostExitSpool(directory)?.exit;
       if (exit) recordHostExit(native, exit.code, exit.signal);
-    } else fs.writeFileSync(path.join(directory, "host-exit.json"), JSON.stringify({ discard: true }), { mode: 0o600 });
+    } else discardHostExitWriter(directory);
     fs.writeFileSync(path.join(directory, "attached"), "true", { mode: 0o600 });
     retained = true;
     cleanup();

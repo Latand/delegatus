@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { pipelineSelectionSource, loadPipelinesForList } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadPipelinesForList } from "@/lib/pipelines/store";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
@@ -19,7 +19,7 @@ export interface PrototypeWorld {
   orchestrator(project: string): string | null;
 }
 export const prototypeWorld: PrototypeWorld = {
-  pipeline: id => pipelineSelectionSource().read(id),
+  pipeline: id => findPipelineRecord(id),
   caller(request) {
     const id = callerConversationId(request);
     if (!id) {
