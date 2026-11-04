@@ -65,7 +65,7 @@ test("a settled root retires beside more than 32 unrelated checkouts; a linking 
   expect(await attemptReferencesClear(directory, directory, scan(), async () => true)).toBeFalse();
 });
 
-test("one tick reads each checkout once across roots and rereads it once stale", async () => {
+test("one tick shares checkout walks and invalidates a negative result after a late link", async () => {
   const parent = root(), first = path.join(parent, "llv-stage-first"), second = path.join(parent, "llv-stage-second");
   fs.mkdirSync(first); fs.mkdirSync(second);
   const processes = repositoryProcesses(parent, 34);
@@ -76,13 +76,13 @@ test("one tick reads each checkout once across roots and rereads it once stale",
   expect(inventory.walks.length).toBe(34);
   // Checkouts are read in name order; repository-9 is the last one.
   fs.symlinkSync(second, path.join(parent, "repository-9/work/late-link"), "dir");
-  // Within the freshness window the read is shared, so the late link is not
-  // yet seen; past it every checkout is read again before the decision.
-  expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeTrue();
-  expect(inventory.walks.length).toBe(34);
+  // Unchanged checkouts reuse their inventory. A nested directory change
+  // invalidates just that checkout's negative result immediately.
+  expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeFalse();
+  expect(inventory.walks.length).toBe(35);
   now += 10_001;
   expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeFalse();
-  expect(inventory.walks.length).toBe(68);
+  expect(inventory.walks.length).toBe(69);
   now += 20_000;
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });

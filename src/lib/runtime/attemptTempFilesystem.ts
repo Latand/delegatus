@@ -9,44 +9,65 @@ import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTe
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
-async function repositoryLinks(directory: string, timeout?: number): Promise<string[]> {
+type RepositoryDirectoryVersion = { path: string; identity: string; mtimeMs: number; ctimeMs: number };
+type RepositoryLinkSnapshot = { targets: string[]; directories: RepositoryDirectoryVersion[] };
+
+async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
   if (process.platform !== "win32") {
-    try { return (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "-type", "l", "-print0"], timeout)).stdout.split("\0").filter(Boolean); }
+    try {
+      const entries = (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "(", "-type", "d", "-o", "-type", "l", ")", "-print0"], timeout)).stdout.split("\0").filter(Boolean);
+      const links: string[] = [], directories: RepositoryDirectoryVersion[] = [];
+      for (const entry of entries) {
+        const stat = fs.lstatSync(entry);
+        if (stat.isDirectory()) directories.push({ path: entry, identity: `${stat.dev}:${stat.ino}`, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs });
+        else if (stat.isSymbolicLink()) links.push(entry);
+      }
+      const rootStat = fs.lstatSync(directory);
+      directories.push({ path: directory, identity: `${rootStat.dev}:${rootStat.ino}`, mtimeMs: rootStat.mtimeMs, ctimeMs: rootStat.ctimeMs });
+      return { links, directories };
+    }
     catch (error) {
       // A process snapshot may outlive its checkout. Only proven absence is
       // clear; permission errors and partial inventories remain refusals.
-      if (!fs.lstatSync(directory, { throwIfNoEntry: false })) return [];
+      if (!fs.lstatSync(directory, { throwIfNoEntry: false })) return { links: [], directories: [] };
       throw new Error(attemptTempFailureDetail(error), { cause: error });
     }
   }
-  const pending = [directory], links: string[] = []; let visited = 0;
+  const pending = [directory], links: string[] = [], directories: RepositoryDirectoryVersion[] = []; let visited = 0;
   while (pending.length) for (const entry of await fs.promises.readdir(pending.pop()!, { withFileTypes: true })) {
     if (++visited > 200_000) throw new Error("partial inbound-link inventory");
     const file = path.join(entry.parentPath, entry.name);
     if (entry.isSymbolicLink()) links.push(file);
-    else if (entry.isDirectory() && entry.name !== ".git") pending.push(file);
+    else if (entry.isDirectory()) {
+      const stat = fs.lstatSync(file);
+      directories.push({ path: file, identity: `${stat.dev}:${stat.ino}`, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs });
+      if (entry.name !== ".git") pending.push(file);
+    }
   }
-  return links;
+  const rootStat = fs.lstatSync(directory);
+  directories.push({ path: directory, identity: `${rootStat.dev}:${rootStat.ino}`, mtimeMs: rootStat.mtimeMs, ctimeMs: rootStat.ctimeMs });
+  return { links, directories };
 }
 
 /** Each link's lexical and physical targets, including dangling links. */
-async function repositoryLinkTargets(repository: string, timeout?: number): Promise<string[]> {
-  const targets: string[] = [];
-  for (const link of await repositoryLinks(repository, timeout)) {
+async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
+  const inventory = await repositoryLinks(repository, timeout), targets: string[] = [];
+  for (const link of inventory.links) {
     let target: string;
     try { target = path.resolve(path.dirname(link), fs.readlinkSync(link)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
     targets.push(target, resolvePhysicalPath(target));
   }
-  return targets;
+  return { targets, directories: inventory.directories };
 }
 
 /** One tick's checkout link inventory, shared by every root the tick examines,
  * so the cost is one walk per checkout rather than one per checkout per root.
- * A read older than `freshMs` is repeated, and every walk ends by the tick's
- * budget; past it the remaining roots are deferred until the next tick. */
+ * Directory identity and change timestamps invalidate a negative result as
+ * soon as any inventoried directory changes. Older reads are also repeated;
+ * every walk ends by the tick's budget, then remaining roots are deferred. */
 export class RepositoryLinkInventory {
-  private readonly reads = new Map<string, { at: number; targets: Promise<string[]> }>();
+  private readonly reads = new Map<string, { at: number; targets: Promise<string[]>; directories?: RepositoryDirectoryVersion[] }>();
   private readonly repositoriesOf = new Map<string, string | null>();
   private readonly deadline: number;
   readonly walks: string[] = [];
@@ -54,6 +75,14 @@ export class RepositoryLinkInventory {
     this.deadline = this.now() + (options.budgetMs ?? 30_000);
   }
   private now() { return (this.options.now ?? Date.now)(); }
+  private directoriesUnchanged(directories: readonly RepositoryDirectoryVersion[]) {
+    return directories.every(directory => {
+      const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
+      return !!current?.isDirectory() && !current.isSymbolicLink()
+        && `${current.dev}:${current.ino}` === directory.identity
+        && current.mtimeMs === directory.mtimeMs && current.ctimeMs === directory.ctimeMs;
+    });
+  }
   /** The nearest enclosing checkout of a process cwd. */
   repositoryOf(cwd: string): string | null {
     if (this.repositoriesOf.has(cwd)) return this.repositoriesOf.get(cwd)!;
@@ -66,14 +95,12 @@ export class RepositoryLinkInventory {
   }
   targets(repository: string): Promise<string[]> {
     const now = this.now(), cached = this.reads.get(repository);
-    if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)) return cached.targets;
+    if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)
+      && (!cached.directories || this.directoriesUnchanged(cached.directories))) return cached.targets;
     const remaining = this.deadline - now;
     if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
-    const targets = repositoryLinkTargets(repository, Math.min(15_000, remaining)).then(targets => {
-      const read = this.reads.get(repository);
-      if (read?.targets === observed) read.at = this.now();
-      return targets;
-    });
+    const snapshot = repositoryLinkTargets(repository, Math.min(15_000, remaining));
+    const targets = snapshot.then(result => result.targets);
     const observed: Promise<string[]> = targets.catch(error => {
       // A refused read is not a cache entry. The next root can observe a
       // recovered checkout in this same process.
@@ -81,8 +108,15 @@ export class RepositoryLinkInventory {
       if (this.now() >= this.deadline) throw new AttemptTempBudgetDeferred(`checkout link inventory exceeded its tick budget; ${attemptTempFailureDetail(error)}`);
       throw error;
     });
+    const read = { at: now, targets: observed, directories: undefined as RepositoryDirectoryVersion[] | undefined };
+    this.reads.set(repository, read);
+    void snapshot.then(result => {
+      if (this.reads.get(repository) === read) {
+        read.directories = result.directories;
+        read.at = this.now();
+      }
+    }, () => undefined);
     this.walks.push(repository);
-    this.reads.set(repository, { at: now, targets: observed });
     return observed;
   }
 }

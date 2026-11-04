@@ -109,6 +109,53 @@ test("the real sweep shares checkout inventory with production lane authority ac
   } finally { observed.mockRestore(); store.close(); }
 });
 
+test("a checkout link created after the first authority inventory keeps its attempt root", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { attemptReferencesClear, RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-late-checkout-link-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "late-link-lane", task: "Late checkout link", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "late-link-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  fs.mkdirSync(path.join(pipeline.worktreeDir!, ".git"), { recursive: true });
+  savePipelines([pipeline]);
+  const directory = path.join(root, "llv-stage-late-link"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+  const checkoutLink = path.join(pipeline.worktreeDir!, "nested", "node_modules");
+  fs.mkdirSync(path.dirname(checkoutLink), { recursive: true });
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  store.register({ directory, pipelineId: pipeline.id, launchId: "late-link-launch", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  let inventory: InstanceType<typeof RepositoryLinkInventory> | undefined;
+  let injected = false;
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const observed = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(function (this: InstanceType<typeof RepositoryLinkInventory>, repository: string) {
+    const read = targets.call(this, repository);
+    return read.then(found => {
+      if (!injected && repository === pipeline.worktreeDir) {
+        injected = true;
+        fs.symlinkSync(directory, checkoutLink, "dir");
+      }
+      return found;
+    });
+  });
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 1, capBytes: 0,
+      state: (owner, current) => { inventory = current; return attemptTempState(owner, current); },
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, inventory!),
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [pipeline.worktreeDir!] }] }) });
+    expect(injected).toBeTrue();
+    expect(report).toMatchObject({ removed: 0, errors: 0, held: 1, liveHeld: 1 });
+    expect(fs.existsSync(directory)).toBeTrue();
+    expect(fs.lstatSync(checkoutLink).isSymbolicLink()).toBeTrue();
+  } finally { observed.mockRestore(); store.close(); }
+});
+
 test("production settlement retires the attempt scratch and config sandbox", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-production-")); roots.push(root);
   const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
