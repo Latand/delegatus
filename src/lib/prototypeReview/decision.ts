@@ -1,6 +1,7 @@
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { currentSeat, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { canonicalProject } from "@/lib/projects/aliases";
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { NextRequest } from "next/server";
@@ -25,7 +26,7 @@ import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliveryExhausted } from "./deliveryPolicy";
+import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliveryExhausted, prototypeDeliverySettled } from "./deliveryPolicy";
 import { prototypeTextLength } from "./textLength";
 import { telegramPostSignals } from "./telegramPostSignals";
 import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
@@ -195,10 +196,10 @@ function prototypeAuthorCurrent(decision: PrototypeDecision): boolean {
 /** Refreshes a saved answer from its receipt; a read never sends or retries. */
 export async function refreshPrototypeDelivery(taskId: string | null,reviewId: string,delivery = prototypeDelivery): Promise<void> {
   const held = findPrototypeRound(taskId,reviewId)?.decision;
-  if (!held?.delivery.conversationId || held.delivery.state === "sent") return;
+  if (!held?.delivery.conversationId || prototypeDeliverySettled(held.delivery)) return;
   await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
     const decision = findPrototypeRound(taskId,reviewId)?.decision;
-    if (!decision?.delivery.conversationId || decision.delivery.state === "sent") return;
+    if (!decision?.delivery.conversationId || prototypeDeliverySettled(decision.delivery)) return;
     if (decision.revision !== undefined && !decision.delivery.dispatchedAt && !decision.delivery.operationId) return;
     const key = decision.delivery.clientMessageId;
     const recovered: PrototypeDeliveryResult = await delivery.recover(decision).then(result => result ?? { state: "failed" as const },() => ({ state: "uncertain" as const }));
@@ -257,7 +258,7 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     }
     if ("retry" in input) {
       if (!round.decision) throw new PrototypeError("save a decision before retrying");
-      if (round.decision.delivery.state === "sent") return false;
+      if (prototypeDeliverySettled(round.decision.delivery)) return false;
       // The operator asked again: the backoff starts over and so does the wait before attention.
       delete round.decision.delivery.failures; delete round.decision.delivery.failingSince;
       delete round.decision.delivery.attempts; delete round.decision.delivery.exhaustedAt;
@@ -327,6 +328,17 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     message nobody owes any more, so it is never written over the new one. */
 class SupersededDecision extends Error {}
 export interface PrototypeDeliveryPorts { delivery: PrototypeDelivery; world: PrototypeWorld; now: () => number }
+
+function closedPrototypeTarget(round: PrototypeReviewRound, world: PrototypeWorld): NonNullable<PrototypeDecision["delivery"]["settlement"]>["reason"] | null {
+  if (!round.source.pipelineId) return null;
+  const pipeline = world.pipeline(round.source.pipelineId);
+  if (!pipeline || pipeline.id !== round.source.pipelineId || canonicalProject(pipeline.project) !== canonicalProject(round.project)) return null;
+  if (pipeline.state === "closed") return "target-pipeline-closed";
+  // A publisher normally completes before the operator answers its form.
+  // Completion alone therefore leaves the answer owed to the seat.
+  const attempt = pipeline.runs.find(run => run.stageId === round.source.stageId)?.attempts.find(attempt => attempt.n === round.source.attempt);
+  return attempt?.state === "skipped" ? "target-stage-closed" : null;
+}
 /**
  * One attempt to deliver a saved decision, under the round's decision lock so
  * no other attempt, in this process or another, sends at the same time.
@@ -344,7 +356,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
     return await withViewerOperation("prototype.delivery", () => withFileTransaction(decisionLock(reviewId), "prototype decision is busy", async () => {
       const round = await withPrototypeState(roundAt);
       let decision = round?.decision;
-      if (!round || !decision || decision.delivery.state === "sent") return decision ?? null;
+      if (!round || !decision || prototypeDeliverySettled(decision.delivery)) return decision ?? null;
       const key = decision.delivery.clientMessageId;
       const wakeReceipt = await withPrototypeState(() => deliveredPrototypeWake(round));
       const at = () => new Date(ports.now()).toISOString();
@@ -358,6 +370,19 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
         if (held?.delivery.clientMessageId !== key) throw new SupersededDecision();
         return held;
       };
+      const settleClosedTarget = () => withPrototypeState(() => {
+        const latest = roundAt();
+        if (latest?.decision?.delivery.clientMessageId !== key) throw new SupersededDecision();
+        const reason = closedPrototypeTarget(latest, ports.world);
+        if (!reason) return null;
+        return mutatePrototypeRound(taskId, reviewId, held => {
+          if (held.decision?.delivery.clientMessageId !== key) throw new SupersededDecision();
+          held.decision.delivery.settlement = { at: at(), reason };
+          return structuredClone(held.decision);
+        });
+      });
+      const closed = await settleClosedTarget();
+      if (closed) return closed;
       if (wakeReceipt) return update(held => {
         if (!wakeSeatCurrent(round.project, wakeReceipt)) return;
         held.delivery.state = "sent";
@@ -378,6 +403,8 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
       let recovered = handedOver ? await ports.delivery.recover(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" })) : null;
       // Re-read every captured decision and seat after asynchronous evidence.
       decision = await revalidate();
+      const closedAfterRecovery = await settleClosedTarget();
+      if (closedAfterRecovery) return closedAfterRecovery;
       let seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
       if ((recovered?.state === "failed" || recovered?.state === "pending" || recovered?.state === "uncertain") && recovered.operationId && seat && seat !== decision.delivery.conversationId) {
         decision = await update(held => { held.delivery.operationId = recovered!.operationId; });
@@ -402,6 +429,8 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
         } else {
           if (!await mayDispatch()) result = { state: "failed" };
           else {
+            const closedBeforeDispatch = await settleClosedTarget();
+            if (closedBeforeDispatch) return closedBeforeDispatch;
             decision = await update(held => {
               if (ports.world.orchestrator(round.project) !== seat) throw new SupersededDecision();
               if (recovered === null && seat) held.delivery.conversationId = seat;
