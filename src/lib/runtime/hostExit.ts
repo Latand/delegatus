@@ -33,7 +33,13 @@ function slot(process: ProcessIdentity, kind: "stop" | "exit" | "writer"): strin
 /** The independent native waiter receives only its own immutable output slot. */
 export function bindHostExitWriter(directory: string, process: ProcessIdentity, writer = captureProcessIdentity(globalThis.process.pid)): void {
   record(slot(process, "writer"), writer);
-  fs.writeFileSync(path.join(directory, "host-exit.json"), JSON.stringify({ file: slot(process, "exit") }), { mode: 0o600 });
+  record(path.join(directory, "host-exit.json"), { file: slot(process, "exit") }, true);
+}
+
+/** A waiter may read this binding as soon as its native child exits. Publish
+ * replacements atomically, including a decision to discard outer evidence. */
+export function discardHostExitWriter(directory: string): void {
+  record(path.join(directory, "host-exit.json"), { discard: true }, true);
 }
 
 export function hostExitWriterPending(process: ProcessIdentity): boolean {
