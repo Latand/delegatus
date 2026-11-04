@@ -1,3 +1,4 @@
+import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { integrationRecord, integrationScope, integrationRequirementRevision } from "@/lib/pipelines/integration";
 import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
 import { assertProactivePipelineExecution, proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
@@ -1094,6 +1095,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
         || current.merge?.reviewedHead !== current.lastPassedCommit)) {
         throw new Error("proactive merge requires result-review evidence for its implemented head");
       }
+      if ((current ?? read).workspace && !workspacePrincipalAllows((current ?? read).workspace!, (current ?? read).project))
+        throw new Error("merge workspace access denied");
       const policy = ports.setting((current ?? read).project);
       if (!policy.enabled || current?.merge?.integration && policy.changedAt !== current.merge.integration.decisionRevision)
         throw new Error("merge policy changed or was revoked before dispatch");

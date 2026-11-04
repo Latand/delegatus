@@ -11071,7 +11071,8 @@ async function tickPipeline(
   if (integration && pipeline.cursor && INTEGRATION_STAGES.includes(pipeline.cursor.stageId as typeof INTEGRATION_STAGES[number])
     && pipeline.delivery?.operation?.state !== "running") {
     const policy = mergeOnReviewSetting(pipeline.project);
-    if (!policy.enabled || policy.changedAt !== integration.decisionRevision || integration.scope !== integrationScope(pipeline)
+    if (pipeline.workspace && !workspacePrincipalAllows(pipeline.workspace, pipeline.project)
+      || !policy.enabled || policy.changedAt !== integration.decisionRevision || integration.scope !== integrationScope(pipeline)
       || integration.requirementRevision !== integrationRequirementRevision(pipeline) || integration.ownerEpoch !== pipeline.delivery?.epoch) {
       integration.state = "blocked";
       await park(pipeline, "integration requirements, policy or delivery authority changed; review before continuing", attempt);
@@ -16278,6 +16279,7 @@ function graphEditBriefer(actor: PauseResumeActor | null, pipeline: Pipeline, po
 /** Reopen the existing outcome through the same delivery CAS and stage engine.
  * No creation request, user pipeline, alternate host or report channel is made. */
 export async function startPipelineIntegration(expected: Pipeline, ports: PipelinePorts = defaultPipelinePorts()): Promise<{ pipeline?: Pipeline; error?: string }> {
+  if (expected.workspace && !workspacePrincipalAllows(expected.workspace, expected.project)) return { error: "integration workspace access denied" };
   const normalized = normalizeStages(integrationStages(expected), ports.roleLookup, undefined, 1, expected.project);
   if (!normalized.stages) return { error: normalized.error ?? "integration stages could not be normalized" };
   const remote = expected.delivery?.target;
@@ -16291,6 +16293,7 @@ export async function startPipelineIntegration(expected: Pipeline, ports: Pipeli
     if (!current?.merge?.refresh || !current.delivery) return { error: "integration outcome is unavailable" };
     assertWorkspaceExecution(current.project);
     assertProactivePipelineExecution(current);
+    if (current.workspace && !workspacePrincipalAllows(current.workspace, current.project)) return { error: "integration workspace access denied" };
     if (integrationScope(current) !== integrationScope(expected) || current.merge.refresh.key !== expected.merge?.refresh?.key
       || current.merge.refresh.digest !== expected.merge?.refresh?.digest) return { error: "integration reservation or scope changed before admission" };
     const setting = mergeOnReviewSetting(current.project);
@@ -18294,7 +18297,8 @@ export async function reportStageCompletion(
     const integration = pipeline.merge?.integration;
     if (integration && INTEGRATION_STAGES.includes(stageId as typeof INTEGRATION_STAGES[number])) {
       const policy = mergeOnReviewSetting(pipeline.project);
-      if (integration.scope !== integrationScope(pipeline) || integration.requirementRevision !== integrationRequirementRevision(pipeline)
+      if (pipeline.workspace && !workspacePrincipalAllows(pipeline.workspace, pipeline.project)
+        || integration.scope !== integrationScope(pipeline) || integration.requirementRevision !== integrationRequirementRevision(pipeline)
         || integration.ownerEpoch !== pipeline.delivery?.epoch || pipeline.delivery?.ownerId !== pipeline.id
         || !policy.enabled || policy.changedAt !== integration.decisionRevision)
         return { error: "integration report lost its delivery or policy authority", status: 409, code: "STAGE_REPORT_INTEGRATION_FENCED" };

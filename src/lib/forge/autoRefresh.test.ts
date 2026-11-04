@@ -3175,3 +3175,15 @@ test.each(["main", "release"])("durable integration an unknown main landing fenc
   expect(h.merges().map(args => args[2])).toEqual(base === "release" ? ["12"] : []);
   expect(h.merge("queued-0")!.effectUncertain).toBe(true);
 });
+
+
+test("durable integration a matching persisted scope cannot land after its workspace grant is lost", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] }); h.enableIntegration();
+  await h.sweep(); completeIntegration(h, "finished", MAIN_2);
+  const p = h.pipeline("finished"); p.workspace = { memberId: "fixture-member", workspaceId: "missing-workspace" };
+  const { integrationScope } = await import("@/lib/pipelines/integration"); p.merge!.integration!.scope = integrationScope(p);
+  Object.assign(h.prs.get(11)!, { head: MAIN_2, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" });
+  await h.run(6 * MERGE_POLL_MS);
+  expect(h.writes).toHaveLength(0);
+  expect(h.merge("finished")!.reason).toContain("workspace access denied");
+});

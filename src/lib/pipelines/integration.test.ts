@@ -201,3 +201,23 @@ test("a parked integration retains its binding and records a blocked item for ba
   expect(loadPipelines()[0]!.merge!.integration).toMatchObject({ state: "blocked",
     binding: { stageId: "integration-resolve", launchId: "launch-integration", conversationId: "conversation_integration" } });
 });
+
+
+test("integration refuses a missing workspace grant before remote reads", async () => {
+  const p = finished(); p.workspace = { memberId: "fixture-member", workspaceId: "missing-workspace" };
+  p.merge!.integration = integrationRecord(p, NOW); savePipelines([p]);
+  const h = ports(); let reads = 0;
+  h.exec = async () => { reads++; return { code: 0, stdout: HEAD, stderr: "" }; };
+  expect((await startPipelineIntegration(p, h)).error).toContain("workspace access denied");
+  expect(reads).toBe(0);
+  expect(loadPipelines()[0]!.delivery!.active).toBe(false);
+});
+
+test("integration report requires a live workspace grant even with matching persisted scope", async () => {
+  const h = await runningIntegration(); const p = loadPipelines()[0]!;
+  p.workspace = { memberId: "fixture-member", workspaceId: "missing-workspace" };
+  const { integrationScope } = await import("./integration"); p.merge!.integration!.scope = integrationScope(p); savePipelines([p]);
+  const result = await reportStageCompletion({ verdict: "pass" }, { kind: "agent", role: "merger", conversationId: "conversation_integration" }, h);
+  expect(result.code).toBe("STAGE_REPORT_INTEGRATION_FENCED");
+  expect(loadPipelines()[0]!.stageReports ?? []).toHaveLength(0);
+});
