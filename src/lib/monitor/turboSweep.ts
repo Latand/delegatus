@@ -53,6 +53,7 @@ export interface TurboSweepPorts {
   /** Whether the conversation is still live, and its tier now. */
   liveTier(conversationId: string, expected?: Pick<TurboSwitch, "accountId" | "model">): Promise<{ live: boolean; hosted?: boolean; tier: string | null }>;
   reading(accountId: string): TurboAccountReading;
+  spendCredits?(accountId: string): boolean;
   authorize?(project: string, episode: string, conversationId: string): void;
   /** Live tier change of a non-stage conversation. */
   setTier(conversationId: string, operationId: string, tier: string | null, cut: "boundary" | "none", authorize?: () => void, expected?: Pick<TurboSwitch, "accountId" | "model">, beforeCut?: (turnId: string) => Promise<void>): Promise<{ cut: "cut" | "armed" | "none"; appliedTier?: string | null }>;
@@ -185,7 +186,7 @@ export class TurboSweep {
     /* The credit rule: a credit-holding account without approval stops at 90 %. */
     const accounts = [...new Set(episode.switches.filter(row => ["queued", "applying", "armed", "switched", "reverting"].includes(row.state) || row.state === "failed" && row.startedAt).map(row => row.accountId))];
     for (const accountId of accounts) {
-      const verdict = turboAccountVerdict(episode, accountId, this.ports.reading(accountId), this.ports.now());
+      const verdict = turboAccountVerdict(episode, accountId, this.ports.reading(accountId), this.ports.now(), this.ports.spendCredits?.(accountId));
       if (verdict.verdict !== "hold" && !episode.switches.some(row => row.accountId === accountId && row.state === "reverting")) continue;
       const reason = verdict.reason ?? "credit margin reached";
       episode = await this.update(project, episode.startedAt, current => ({ ...current, held: { ...current.held, [accountId]: this.at() },
@@ -206,7 +207,7 @@ export class TurboSweep {
           if (!current || !turboActive(current, this.ports.now())) break;
           const live = current.switches.find(item => item.conversationId === row.conversationId);
           if (live?.state !== "queued") continue;
-          const verdict = turboAccountVerdict(current, row.accountId, this.ports.reading(row.accountId), this.ports.now());
+          const verdict = turboAccountVerdict(current, row.accountId, this.ports.reading(row.accountId), this.ports.now(), this.ports.spendCredits?.(row.accountId));
           if (verdict.verdict === "hold") {
             await this.write(project, current, [{ ...live, state: "skipped", reason: verdict.reason, at: this.at() }]);
             this.rerun.add(project);
@@ -234,7 +235,7 @@ export class TurboSweep {
     if (!to) return skip("its account offers no faster tier for this model");
     if (candidate.stage?.switchOpen) return skip("another runtime switch is open on this stage");
     if (!raisesTier(candidate.tier, to)) return skip("already at this speed or faster");
-    const verdict = turboAccountVerdict(episode, account.accountId, this.ports.reading(account.accountId), this.ports.now());
+    const verdict = turboAccountVerdict(episode, account.accountId, this.ports.reading(account.accountId), this.ports.now(), this.ports.spendCredits?.(account.accountId));
     if (verdict.verdict === "hold") return skip(verdict.reason ?? "credit margin reached");
     return { ...base, state: "queued", ...(candidate.seat ? { reason: "seat: speed only, its turn is never cut" } : {}) };
   }
@@ -259,7 +260,7 @@ export class TurboSweep {
       if (!armed && this.ports.now() >= deadline) throw new Error("timed out");
       const current = this.episodes(project).find(item => item.startedAt === episode.startedAt);
       if (!current || !turboActive(current, this.ports.now())
-        || turboAccountVerdict(current, row.accountId, this.ports.reading(row.accountId), this.ports.now()).verdict === "hold") {
+        || turboAccountVerdict(current, row.accountId, this.ports.reading(row.accountId), this.ports.now(), this.ports.spendCredits?.(row.accountId)).verdict === "hold") {
         throw new Error("Turbo authority or included usage ended before dispatch");
       }
     };

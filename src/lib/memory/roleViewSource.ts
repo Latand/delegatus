@@ -61,6 +61,74 @@ function keys(prefix: string, predicate = "1", bindings: SQLQueryBindings[] = []
   `).all(prefix, `${prefix}\uffff`, ...bindings).map(row => row.row_key);
 }
 
+/** Validate a cooperative view after peer writes without decoding scope
+ * histories. Missing change history or a large batch refuses the view. */
+export function projectViewUnaffectedByChanges(project: string, from: number | undefined, through: number | undefined,
+  selected: readonly RoleMemoryRow[]): boolean {
+  if (from === undefined || through === undefined || through < from) return false;
+  // Preserve absent lookup dependencies too: a peer can insert a referenced
+  // rule or scope after its lookup without changing any selected row.
+  const dependencyKeys = new Set<string>();
+  const ids = new Set<string>();
+  const ruleDependency = (id: string) => { dependencyKeys.add(`r:${id}`); ids.add(id); };
+  for (const row of selected) {
+    if (row.kind === "rule") {
+      ruleDependency(row.id);
+      for (const id of [...(row.versions ?? []), ...(row.mergedFrom ?? []),
+        ...(row.versionOf ? [row.versionOf] : []), ...(row.splitFrom ? [row.splitFrom] : [])]) ruleDependency(id);
+      dependencyKeys.add(`s:${row.scope}`);
+      dependencyKeys.add(`s:${canonicalScope(row.scope)}`);
+    } else if (row.kind === "scope") {
+      dependencyKeys.add(`s:${row.scope}`);
+      for (const id of row.active) ruleDependency(id);
+    } else dependencyKeys.add(`q:${row.pipelineId}:${row.stageId}:${row.attempt}`);
+  }
+  const relevantScope = (scope: unknown) => typeof scope === "string" && (scope === "machine"
+    || isCrossProjectRoleScope(scope) || scopeProject(canonicalScope(scope)) === project);
+  const db = reader();
+  db.exec("BEGIN");
+  try {
+    const meta = db.query<{ revision: number; change_floor: number }, []>(
+      "SELECT revision, change_floor FROM state_collections WHERE collection='role_memory'").get();
+    if (!meta || meta.revision !== through || meta.change_floor > from) return false;
+    const changed = db.query<{ row_key: string; inputs: string | null }, [number, number]>(`
+      SELECT changes.row_key, CASE WHEN substr(changes.row_key,1,2)='s:' THEN NULL
+        ELSE json_extract(row.value_json, '$.kind', '$.scope', '$.mergedInto',
+          '$.versionOf', '$.splitFrom', '$.versions', '$.mergedFrom', '$.rewrote', '$.ruleIds') END AS inputs
+      FROM (SELECT DISTINCT row_key FROM state_changes
+        WHERE collection='role_memory' AND revision>? AND revision<=? LIMIT 257) changes
+      LEFT JOIN state_rows row ON row.collection='role_memory' AND row.row_key=changes.row_key
+    `).all(from, through);
+    if (changed.length > 256 || through > from && !changed.length) return false;
+    const sweepComplete = db.query<{ completed: string | null }, []>(`
+      SELECT json_extract(value_json, '$.budgetSweepCompletedAt') AS completed
+      FROM state_rows WHERE collection='role_memory_curation' AND row_key='machine'
+    `).get()?.completed;
+    for (const row of changed) {
+      if (dependencyKeys.has(row.row_key)) return false;
+      // Scope identity is in the key; parsing its JSON would also parse its
+      // retained history even when only a few metadata fields are extracted.
+      if (row.row_key.startsWith("s:")) {
+        if (relevantScope(row.row_key.slice(2))) return false;
+        continue;
+      }
+      // Before the one-time budget sweep finishes, even foreign rules affect
+      // the machine-wide sweep eligibility shown by this project's status.
+      if (!sweepComplete && row.row_key.startsWith("r:")) return false;
+      if (row.inputs === null) continue;
+      const [kind, scope, mergedInto, versionOf, splitFrom, versions, mergedFrom, rewrote, ruleIds] = JSON.parse(row.inputs) as unknown[];
+      if (kind === "scope" || kind === "rule") {
+        if (relevantScope(scope)) return false;
+      } else if (kind !== "request") return false;
+      const links = [mergedInto, versionOf, splitFrom, rewrote,
+        ...(Array.isArray(versions) ? versions : []), ...(Array.isArray(mergedFrom) ? mergedFrom : []),
+        ...(Array.isArray(ruleIds) ? ruleIds : [])];
+      if (links.some(id => typeof id === "string" && ids.has(id))) return false;
+    }
+    return true;
+  } finally { db.exec("ROLLBACK"); }
+}
+
 /** Inspect scope identities without decoding their potentially large histories. */
 export function roleScopeKeys(): string[] {
   return roleMemoryCollection() ? keys("s:").map(key => key.slice(2)) : [];

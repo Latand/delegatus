@@ -5,15 +5,17 @@ export interface PaidCredits {
   hasCredits: boolean;
   balance: string | null;
   unlimited: boolean;
+  /** Unix seconds of the balance reading, retained with an older balance. */
+  observedAt?: number | null;
 }
 
 /** App-server snapshots use camelCase; native transcripts use snake_case. */
-export function paidCredits(value: unknown): PaidCredits | undefined {
+export function paidCredits(value: unknown, observedAt?: number | null): PaidCredits | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
   const hasCredits = row.hasCredits ?? row.has_credits;
   if (typeof hasCredits !== "boolean") return undefined;
-  return { hasCredits, balance: typeof row.balance === "string" ? row.balance : null, unlimited: row.unlimited === true };
+  return { hasCredits, balance: typeof row.balance === "string" ? row.balance : null, unlimited: row.unlimited === true, ...(observedAt !== undefined ? { observedAt } : {}) };
 }
 
 export function creditGuardUsedPercent(env: Record<string, string | undefined> = process.env): number {
@@ -24,8 +26,8 @@ export function creditGuardUsedPercent(env: Record<string, string | undefined> =
 /** A stale guarded balance stays stopped until a new reading proves headroom.
  * Passing a predicted reset alone cannot authorize paid usage. */
 export function creditGuardBlock(engine: string, limits: EngineLimits | null | undefined,
-  threshold = creditGuardUsedPercent()): { resetsAt: number | null } | null {
-  if (engine !== "codex" || !limits?.credits?.hasCredits) return null;
+  threshold = creditGuardUsedPercent(), spendCredits = false): { resetsAt: number | null } | null {
+  if (engine !== "codex" || spendCredits || !limits?.credits?.hasCredits) return null;
   const windows = [limits.session, limits.weekly].filter(window => window && window.usedPercent >= threshold);
   if (!windows.length) return null;
   return { resetsAt: windows.every(window => window!.resetsAt !== null)

@@ -1,3 +1,4 @@
+import { codexAccountSpendsCredits } from "@/lib/accounts/creditPolicy";
 import { agentRegistry } from "@/lib/agent/registry";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import { listCodexAccounts } from "@/lib/accounts/codex";
@@ -191,7 +192,7 @@ export function authorizeTurboTier(project: string, episodeKey: string, conversa
   const allowed = allowedAccountIdsForProject(project, "codex");
   if (!generation.accountId || allowed && !allowed.includes(generation.accountId)) throw new Error("Turbo account is no longer allowed");
   const observation = agentRegistry().quotaObservations("codex").find(item => item.accountId === generation.accountId);
-  const verdict = turboAccountVerdict(setting, generation.accountId, observation ? { limits: observation.limits, stale: staleObservation(observation) } : null, Date.now());
+  const verdict = turboAccountVerdict(setting, generation.accountId, observation ? { limits: observation.limits, stale: staleObservation(observation) } : null, Date.now(), codexAccountSpendsCredits(generation.accountId));
   if (verdict.verdict === "hold") throw new Error(verdict.reason);
 }
 
@@ -214,6 +215,7 @@ function productionPorts(): TurboSweepPorts {
       const same = !expected || generation?.accountId === expected.accountId && profile?.model === expected.model;
       return { live: same && !!generation && !generation.archivedAt, hosted: !!structuredDeliveryHostForConversation(conversationId), tier: profile ? launchServiceTier(profile) ?? null : null };
     },
+    spendCredits: codexAccountSpendsCredits,
     reading: accountId => {
       const observation = agentRegistry().quotaObservations("codex").find(item => item.accountId === accountId);
       return observation ? { limits: observation.limits, stale: staleObservation(observation) } : null;

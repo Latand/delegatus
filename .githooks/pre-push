@@ -18,11 +18,19 @@ if [ ! -t 0 ]; then
       fi
       continue
     fi
-    if [[ -n "${LLV_GATE_PUSH_HEAD:-}" && "$LLV_GATE_PUSH_HEAD" != "$local_sha" ]]; then
+    checked_head=$local_sha
+    if [[ "$remote_ref" == refs/tags/* ]]; then
+      # Annotated tags name the commit whose checkout the gate validates.
+      checked_head=$(git --no-replace-objects rev-parse --verify "$local_sha^{commit}") || {
+        echo "pre-push: tag target cannot be checked as a commit" >&2
+        exit 1
+      }
+    fi
+    if [[ -n "${LLV_GATE_PUSH_HEAD:-}" && "$LLV_GATE_PUSH_HEAD" != "$checked_head" ]]; then
       echo "pre-push: check each distinct pushed head separately" >&2
       exit 1
     fi
-    export LLV_GATE_PUSH_HEAD="$local_sha"
+    export LLV_GATE_PUSH_HEAD="$checked_head"
     if [[ -n "${LLV_GATE_PUBLICATION_RECEIPT:-}" ]]; then
       if [[ -n "${LLV_GATE_PUBLICATION_OBSERVED:-}" ]]; then
         echo "pre-push: a publication sends exactly one ref" >&2

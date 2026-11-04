@@ -13,7 +13,7 @@ import { afterAccountMutationAdmission, accountProbeSnapshot, accountProbeIdenti
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, fallbackAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
-import { creditGuardBlock } from "./creditGuard";
+import { accountCreditGuardBlock } from "./creditPolicy";
 import { turboCreditExemptFor } from "./turboCreditExemption";
 import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { ClaudeCredentialUnavailableError, selectHealthyClaudeAccount } from "./spawnHealth";
@@ -41,7 +41,7 @@ function contextForSpawn(engine: "claude" | "codex", requested?: string | null, 
 }
 
 function assertCodexCreditCapacity(accountId: string, project: string | null = null): void {
-  const guarded = creditGuardBlock("codex", agentRegistry().quotaObservations("codex").find(item => item.accountId === accountId)?.limits);
+  const guarded = accountCreditGuardBlock("codex", accountId, agentRegistry().quotaObservations("codex").find(item => item.accountId === accountId)?.limits);
   if (guarded && !turboCreditExemptFor(project, accountId)) throw new ProjectAccountRefusedError({ kind: "exhausted", ...guarded, allowedAccountIds: [accountId] }, "codex", project,
     "paid-credit guard reached; continue on an allowed account with capacity");
 }
