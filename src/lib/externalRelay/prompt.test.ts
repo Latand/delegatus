@@ -15,7 +15,7 @@ function longReplyRequest() {
     author: { ...base.author, self: true } };
   const current = { ...base, id: "new-reply", text: "Поясни останній пункт", reply_to: parent.id };
   request.input.conversation = [
-    ...Array.from({ length: 20 }, (_, index) => ({ ...base, id: `earlier-${index}`, text: "Earlier 😀 <answer> ".repeat(160),
+    ...Array.from({ length: 20 }, (_, index) => ({ ...base, id: `earlier-${index}`, text: "Earlier 😀 <answer> ".repeat(400),
       author: { ...base.author, self: true } })), parent, current,
   ];
   request.input.respond_to = current.id;
@@ -42,7 +42,17 @@ test("structured owner prompt builders fit escaped history while preserving the 
   const quoted = section(initial, "owner_reply_context") as { text: string };
   expect(Buffer.byteLength(quoted.text)).toBeLessThanOrEqual(4096);
   const sent = section(initial, "conversation") as typeof request.input.conversation;
-  expect(ownerInitialCursor(request, owner, 1).seen).toEqual([...new Set([...sent.map(message => message.id), current.id])]);
+  const cursor = ownerInitialCursor(request, owner, 1);
+  const originals = new Map(request.input.conversation.map(message => [message.id, message]));
+  const complete = sent.filter(message => message.text === originals.get(message.id)?.text);
+  expect(cursor.seen).toEqual([...new Set([...complete.map(message => message.id), current.id])]);
+  const clipped = sent.find(message => message.text !== originals.get(message.id)?.text)!;
+  expect(clipped).toBeDefined();
+  expect(cursor.seen).not.toContain(clipped.id);
+  const next = { ...current, id: "reply-to-clipped", reply_to: clipped.id };
+  const followup = { ...request, input: { ...request.input, respond_to: next.id, conversation: [originals.get(clipped.id)!, next] } };
+  const continued = ownerContinuationPrompt(followup, { ...owner, messageId: next.id }, 1, { seen: cursor.seen, staticDigest: cursor.digest }).prompt;
+  expect((section(continued, "conversation") as typeof sent).find(message => message.id === clipped.id)).toEqual(originals.get(clipped.id));
   expect(JSON.stringify(request)).toBe(original);
 });
 

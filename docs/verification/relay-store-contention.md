@@ -99,8 +99,9 @@ Structured owner prompt builders now measure the fully composed, escaped UTF-8 t
 `MAX_STRUCTURED_TEXT_BYTES`. They shorten optional quoted history and remove
 the oldest context first, then reduce optional memory, documents and service
 context. The current message and its direct parent remain whole. Oversized
-mandatory content is refused before dispatch. Cursors acknowledge only retained
-context. A learned bot answer to a delivered turn already belongs to that
+mandatory content is refused before dispatch. Cursors acknowledge only complete
+retained messages; shortened quotations stay eligible for a later direct reply.
+A learned bot answer to a delivered turn already belongs to that
 agent's chain, so its continuation sends the new message without re-quoting it.
 
 The regression exercises a long answer with sources followed by a short owner

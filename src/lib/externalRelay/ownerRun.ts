@@ -84,12 +84,19 @@ function ownerAttachmentInstructions(request: ExternalRelayRequest, owner: Owner
   return [`[Before answering, fetch ${target} with the direct get_media tool; its content is missing from <documents>.]`];
 }
 
-function boundedOwnerPrompt<T extends string | { prompt: string }>(request: ExternalRelayRequest, owner: OwnerInstruction,
-  render: (request: ExternalRelayRequest, owner: OwnerInstruction) => T) {
+function boundedOwnerPrompt<T extends { prompt: string; seen: string[] }>(request: ExternalRelayRequest, owner: OwnerInstruction,
+  render: (request: ExternalRelayRequest, owner: OwnerInstruction) => T, alreadySeen: readonly string[] = []) {
   const localIds = new Set(owner.localContext?.conversation.map(message => message.id));
-  return boundedRelayPrompt(request, value => render(value, value === request || !owner.localContext ? owner : {
+  const original = new Map([...request.input.conversation, ...(owner.localContext?.conversation ?? [])].map(message => [message.id, message]));
+  const bounded = boundedRelayPrompt(request, value => render(value, value === request || !owner.localContext ? owner : {
     ...owner, localContext: { ...owner.localContext, conversation: value.input.conversation.filter(message => localIds.has(message.id)) },
   }), owner.localContext?.conversation);
+  const clipped = new Set(bounded.request.input.conversation.filter(message => original.get(message.id)?.text !== message.text).map(message => message.id));
+  const prior = new Set(alreadySeen);
+  // A shortened quotation is not proof that the complete message reached
+  // this conversation. A later direct reply must still receive its full text.
+  return { ...bounded, result: { ...bounded.result,
+    seen: bounded.result.seen.filter(id => id === owner.messageId || prior.has(id) || !clipped.has(id)) } };
 }
 export function ownerRunPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, suffix = ""): string {
   return prepareOwnerPrompt(request, owner, hardCapMinutes, suffix).prompt;
@@ -138,7 +145,7 @@ function ownerStaticSections(request: ExternalRelayRequest) {
     .map(([name, value]) => `<${name}>\n${json(value)}\n</${name}>`).join("\n");
 }
 export function ownerContinuationPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors">>) {
-  return boundedOwnerPrompt(request, owner, (value, instruction) => ownerContinuationPromptText(value, instruction, hardCapMinutes, record)).result;
+  return boundedOwnerPrompt(request, owner, (value, instruction) => ownerContinuationPromptText(value, instruction, hardCapMinutes, record), record.seen).result;
 }
 function ownerContinuationPromptText(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors">>) {
   const sections = ownerStaticSections(request);
