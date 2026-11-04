@@ -25,6 +25,7 @@ export function isPipelineIntegration(value: unknown): value is PipelineIntegrat
   return str(i.outcomeId) && ["queued", "legacy-draining", "resolving", "reviewing", "checking", "waiting", "blocked", "landing", "reconciling", "landed"].includes(i.state)
     && str(i.scope) && str(i.requirementRevision) && str(i.decisionRevision) && sha(i.desiredBase)
     && (i.integratedHead === null || sha(i.integratedHead)) && sha(i.expectedRemoteHead) && count(i.ownerEpoch) && count(i.cycles) && count(i.repairs)
+    && (i.featureBase === null || sha(i.featureBase))
     && str(i.reservationKey) && time(i.startedAt) && time(i.deadline)
     && (i.binding === null || !!i.binding && INTEGRATION_STAGES.includes(i.binding.stageId as typeof INTEGRATION_STAGES[number])
       && count(i.binding.attempt) && (i.binding.launchId === null || str(i.binding.launchId)) && (i.binding.conversationId === null || str(i.binding.conversationId)))
@@ -40,7 +41,9 @@ export function integrationRecord(pipeline: Pipeline, now: string): PipelineInte
   return {
     outcomeId: previous?.outcomeId ?? pipeline.refreshOf?.pipelineId ?? pipeline.id,
     state: "queued", scope: integrationScope(pipeline), requirementRevision: integrationRequirementRevision(pipeline),
-    decisionRevision: merge.policyChangedAt, desiredBase: refresh.base, integratedHead: null, expectedRemoteHead: refresh.head,
+    decisionRevision: merge.policyChangedAt, desiredBase: refresh.base,
+    featureBase: previous ? previous.featureBase : /^[a-f0-9]{40}$/i.test(pipeline.baseRef ?? "") ? pipeline.baseRef : null,
+    integratedHead: null, expectedRemoteHead: refresh.head,
     ownerEpoch: pipeline.delivery!.epoch, cycles: previous?.cycles ?? 0, repairs: previous?.repairs ?? 0,
     reservationKey: previous?.reservationKey ?? refresh.key, startedAt: now,
     deadline: new Date(Date.parse(now) + INTEGRATION_SESSION_MS).toISOString(),
@@ -80,6 +83,10 @@ export function admitIntegration(pipeline: Pipeline, expected: Pipeline, stages:
   delete delivery.operation;
   delete delivery.releasedAt;
   pipeline.publication = "remote-branch";
+  // The same worktree is provisioned again. Its selected starting commit is
+  // the reconciled delivery head; the original comparison base stays above.
+  pipeline.baseRef = record.expectedRemoteHead;
+  pipeline.baseRefPinned = true;
   pipeline.cursor = { stageId: INTEGRATION_STAGES[0], state: "pending", input: null, activatedBy: null };
   pipeline.state = "provisioning"; pipeline.stateDetail = "integration accepted; preparing the existing outcome";
   pipeline.closedAt = null; pipeline.pausedState = null;

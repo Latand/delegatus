@@ -1387,6 +1387,8 @@ export type PipelineIntegration = {
   requirementRevision: string;
   decisionRevision: string;
   desiredBase: string;
+  /** Original feature comparison base; null only when a legacy record did not retain it. */
+  featureBase: string | null;
   integratedHead: string | null;
   expectedRemoteHead: string;
   ownerEpoch: number;

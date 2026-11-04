@@ -41,6 +41,8 @@ test("integration real stages report and publish the existing outcome, reconcili
     }
   }
   try {
+    fs.writeFileSync(path.join(worktree, "feature.ts"), "export const feature = true;\n");
+    await git(worktree, "add", "feature.ts"); await git(worktree, "commit", "-m", "Implement fixture feature");
     await finishCurrent(); await finishCurrent();
     expect(current().state).toBe("completed");
     const history = structuredClone(current().runs);
@@ -103,6 +105,7 @@ test("integration real stages report and publish the existing outcome, reconcili
     await finishCurrent(); await finishCurrent();
     expect(current().state).toBe("completed");
     expect(current().merge!.integration!.cycles).toBe(2);
+    expect(current().merge!.integration!.featureBase).toBe(box.base);
     expect(current().runs.find(r => r.stageId === "integration-resolve")!.attempts[0]!.historical).toBe(true);
     expect(current().runs.slice(0, history.length)).toEqual(history);
     expect(pushes).toBe(2);
