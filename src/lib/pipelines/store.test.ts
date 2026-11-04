@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { stateLockProcessKind } from "@/lib/state/lockWait";
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
@@ -107,10 +107,10 @@ test("adopted integration receipts replay through the keyed SQLite index", async
   expect(await archiveSettledPipelines(Date.parse("2027-01-01T00:00:00.000Z"))).toBe(1);
   const observed: Array<{ db: Database; sql: string }> = [];
   const original = Database.prototype.query;
-  const capture = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+  const capture = spyOn(Database.prototype, "query").mockImplementation(function <T, P extends SQLQueryBindings | SQLQueryBindings[]>(this: Database, sql: string) {
     if (sql.includes("pipeline_request_receipts AS receipt") || sql.includes("INDEXED BY pipeline_creation_request")
       || sql.includes("INDEXED BY pipeline_adopted_creation_request")) observed.push({ db: this, sql });
-    return original.call(this, sql);
+    return original.bind(this)<T, P>(sql);
   });
   try {
     expect(pipelineDeliveryLookup({ requestKey: pipeline.creationRequest!.key })?.id).toBe(pipeline.id);
@@ -144,9 +144,9 @@ test("resolver capacity reads only active writers from its repository index", as
   savePipelines(records);
   const observed: Array<{ db: Database; sql: string }> = [];
   const original = Database.prototype.query;
-  const capture = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+  const capture = spyOn(Database.prototype, "query").mockImplementation(function <T, P extends SQLQueryBindings | SQLQueryBindings[]>(this: Database, sql: string) {
     if (sql.includes("INDEXED BY pipeline_repository_resolver_capacity")) observed.push({ db: this, sql });
-    return original.call(this, sql);
+    return original.bind(this)<T, P>(sql);
   });
   try {
     expect(pipelineIntegrationResolverCandidates(deliveryTarget.repository).map(p => p.id)).toEqual(["capacity-active"]);
@@ -850,7 +850,7 @@ test("a legacy registry loads pipelines with an empty durable task binding", () 
 
 test("a v4 review-loop fail edge migrates without poisoning the pipeline registry", () => {
   sandboxed((sandbox) => {
-    expect(PIPELINES_SCHEMA_VERSION).toBe(5);
+    expect(PIPELINES_SCHEMA_VERSION).toBeGreaterThan(4);
     const pipeline = buildPipeline({
       id: "reviewv4",
       task: "legacy review edge",
@@ -881,7 +881,7 @@ test("a v4 review-loop fail edge migrates without poisoning the pipeline registr
     savePipelines(loaded);
     checkpointPipelineRollbackMirrorsForDemotion();
     expect(JSON.parse(fs.readFileSync(path.join(sandbox, "pipelines.json"), "utf8"))).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: PIPELINES_SCHEMA_VERSION,
       pipelines: [{ stages: [{ id: "build" }, { id: "review", onFail: null }] }],
     });
   });

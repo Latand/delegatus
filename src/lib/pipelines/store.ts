@@ -1231,7 +1231,7 @@ function migrateReviewLoopFailEdges(raw: unknown): unknown {
     ...(pipeline.delivery ? { delivery: structuredClone(pipeline.delivery) } : {}),
     ...(pipeline.creationRequest ? { creationRequest: { ...pipeline.creationRequest } } : {}),
     ...(pipeline.adoptedCreationRequest ? { adoptedCreationRequest: { ...pipeline.adoptedCreationRequest } } : {}),
-    ...(pipeline.adoptedCreationRequests ? { adoptedCreationRequests: pipeline.adoptedCreationRequests.map(receipt => ({ ...receipt })) } : {}),
+    ...(pipeline.adoptedCreationRequests ? { adoptedCreationRequests: structuredClone(pipeline.adoptedCreationRequests) } : {}),
     stages: pipeline.stages.map((stage) => {
       if (!stage || typeof stage !== "object" || Array.isArray(stage)) return stage;
       const record = stage as Record<string, unknown>;
