@@ -3033,6 +3033,20 @@ test("durable integration keeps the original outcome when conflict work starts",
   expect(h.merge("finished")?.integration?.outcomeId).toBe("finished");
 });
 
+test("durable integration preserves a colliding feature stage and its graph", async () => {
+  const lane = finished();
+  lane.stages.find(stage => stage.id === "build")!.next = "integration-review";
+  lane.stages.find(stage => stage.id === "review")!.id = "integration-review";
+  lane.runs.find(run => run.stageId === "review")!.stageId = "integration-review";
+  const stages = structuredClone(lane.stages), runs = structuredClone(lane.runs);
+  const h = harness({ lanes: [lane], prs: [conflicting()] });
+  h.enableIntegration();
+  await h.sweep();
+  expect(h.creates).toHaveLength(0);
+  expect(h.pipeline("finished").stages).toEqual(stages);
+  expect(h.pipeline("finished").runs).toEqual(runs);
+});
+
 test("durable integration adopts an unstarted reservation without a successor", async () => {
   const h = harness({ lanes: [finished()], prs: [conflicting()] });
   h.enableIntegration();

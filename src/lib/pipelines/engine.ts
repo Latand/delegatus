@@ -1,4 +1,4 @@
-import { admitIntegration, integrationAttempt, integrationScope, integrationRequirementRevision, renewIntegrationDecision, INTEGRATION_STAGES, INTEGRATION_REPAIR_LIMIT } from "./integration";
+import { admitIntegration, creationRequestDigest, integrationAttempt, integrationScope, integrationRequirementRevision, renewIntegrationDecision, INTEGRATION_STAGES, INTEGRATION_REPAIR_LIMIT } from "./integration";
 import { integrationStages } from "@/lib/forge/autoRefresh";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
@@ -9637,6 +9637,27 @@ async function tickRunStage(
   persist: () => void | Promise<void>,
   recoveryAccountingDeadline: number,
 ): Promise<void> {
+  const integration = pipeline.merge?.integration;
+  const stageIsResolver = pipeline.cursor?.stageId === "integration-resolve" || pipeline.cursor?.stageId === "integration-fix";
+  if (integration && stageIsResolver && pipeline.cursor?.state === "pending") {
+    const peerHoldsSlot = integration.batch.items.some(id => {
+      if (id === pipeline.id) return false;
+      const peer = findPipelineRecord(id), peerIntegration = peer?.merge?.integration;
+      if (!peer || !peerIntegration || peerIntegration.batch.owner !== integration.batch.owner
+        || !peerIntegration.batch.items.includes(pipeline.id)
+        || !["integration-resolve", "integration-fix"].includes(peer.cursor?.stageId ?? "")) return false;
+      if (peer.state === "provisioning") return true;
+      if (peer.state !== "running") return false;
+      const active = currentAttempt(peer, peer.cursor!.stageId);
+      return !active?.providerWait && (!active || ["pending", "spawning", "running"].includes(active.state));
+    });
+    if (peerHoldsSlot) {
+      pipeline.stateDetail = `waiting for repository resolver capacity held by another integration item`;
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      ports.scheduleTick?.(1_000);
+      return;
+    }
+  }
   const canSpendRecoveryCheck = () => ports.monotonicNow() < recoveryAccountingDeadline;
   const prior = currentAttempt(pipeline, stage.id);
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
@@ -15040,7 +15061,7 @@ export async function createPipelineFromRequest(
   if (options.creationRequest) {
     const replay = pipelineDeliveryLookup({ requestKey: options.creationRequest.key });
     if (replay) {
-      if (replay.creationRequest?.digest !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
+      if (creationRequestDigest(replay, options.creationRequest.key) !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
       const repositoryInitialization = await readRepositoryInitialization(replay.repoDir);
       return { pipeline: replay, ...(options.conversationSource ? { replayed: true } : {}), ...(repositoryInitialization ? { repositoryInitialization } : {}) };
     }
@@ -16316,9 +16337,17 @@ export async function startPipelineIntegration(expected: Pipeline, ports: Pipeli
     if (!setting.enabled || setting.changedAt !== current.merge.policyChangedAt) return { error: "integration merge policy changed or was revoked" };
     const receipt = tx.pipelineLookup({ requestKey: current.merge.refresh.key });
     if (receipt && receipt.id !== current.id) {
-      if (receipt.creationRequest?.digest !== current.merge.refresh.digest || receipt.refreshOf?.pipelineId !== current.id
+      if (creationRequestDigest(receipt, current.merge.refresh.key) !== current.merge.refresh.digest || receipt.refreshOf?.pipelineId !== current.id
         || receipt.refreshOf.base !== current.merge.refresh.base) return { error: "legacy reservation receipt conflicts with integration ownership" };
       return { pipeline: receipt };
+    }
+    const adoptedKey = current.merge.refresh.key, adoptedDigest = current.merge.refresh.digest;
+    if (current.creationRequest?.key === adoptedKey && current.creationRequest.digest !== adoptedDigest)
+      return { error: "integration reservation conflicts with the outcome's original creation receipt" };
+    if (creationRequestDigest(current, adoptedKey) !== adoptedDigest) {
+      if (current.adoptedCreationRequest && (current.adoptedCreationRequest.key !== adoptedKey || current.adoptedCreationRequest.digest !== adoptedDigest))
+        return { error: "integration reservation key conflicts with its consumed receipt" };
+      current.adoptedCreationRequest = { key: adoptedKey, digest: adoptedDigest };
     }
     const owner = tx.pipelineLookup({ ...current.delivery.target, active: true });
     const history = owner ?? tx.pipelineLookup(current.delivery.target);

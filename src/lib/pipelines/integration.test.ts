@@ -57,6 +57,22 @@ test("integration real admission retains outcome, graph history and reservation 
   expect(pipelineDeliveryLookup({ ...target, active: true })?.id).toBe(p.id);
 });
 
+test("integration refuses a first admission that would appropriate a feature stage id", async () => {
+  const p = finished();
+  p.stages[0]!.id = "integration-review";
+  p.runs[0]!.stageId = "integration-review";
+  const stages = structuredClone(p.stages), runs = structuredClone(p.runs), reports = structuredClone(p.stageReports ?? []);
+  savePipelines([p]);
+  const result = await startPipelineIntegration(p, ports());
+  expect(result.error).toContain("stage identity is already in use");
+  const after = loadPipelines()[0]!;
+  expect(after.stages).toEqual(stages);
+  expect(after.runs).toEqual(runs);
+  expect(after.stageReports ?? []).toEqual(reports);
+  expect(after.delivery!.epoch).toBe(1);
+  expect(after.state).toBe("completed");
+});
+
 test.each(["epoch", "reservation", "scope", "unknown publication", "foreign head", "policy", "comparison"] as const)("integration admission refuses racing %s", async change => {
   const p = finished(); savePipelines([p]);
   const h = ports();

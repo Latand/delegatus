@@ -13,6 +13,7 @@ import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { loadTasksByIds } from "@/lib/tasks/store";
 import { assertWorkspaceProject, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { creationRequestDigest } from "./integration";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { readMessagesPage, type MessagesPageCursor } from "@/lib/session/messagesPage";
@@ -281,7 +282,7 @@ export async function createConversationDraft(req: NextRequest, input: Conversat
     const pipeline = pipelineDeliveryLookup({ requestKey: creationRequest.key });
     if (!pipeline) return null;
     admitReplay(pipeline);
-    if (pipeline.creationRequest?.digest !== creationRequest.digest) refuse("idempotency_conflict", "creation arguments changed");
+    if (creationRequestDigest(pipeline, creationRequest.key) !== creationRequest.digest) refuse("idempotency_conflict", "creation arguments changed");
     return { pipeline, status: 200 };
   };
   const existing = replay();

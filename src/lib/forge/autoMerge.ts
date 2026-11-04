@@ -1207,6 +1207,13 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
     }
     const legacy = ports.startIntegration ? ports.loadRefreshByKey?.(reservation.key) : null;
     if (legacy) {
+      if (legacy.id === read.id && legacy.merge?.integration?.reservationKey === reservation.key) {
+        await commit(ports, read, live => {
+          if (live.merge?.refresh?.key !== reservation.key || live.merge.integration?.reservationKey !== reservation.key) return;
+          live.merge.refresh.pipelineId = live.id;
+        });
+        return;
+      }
       if (legacy.creationRequest?.digest !== reservation.digest || legacy.refreshOf?.pipelineId !== read.id
         || legacy.refreshOf.base !== reservation.base) {
         await commit(ports, read, live => block(live, "legacy reservation receipt conflicts with integration ownership", ports.now()));

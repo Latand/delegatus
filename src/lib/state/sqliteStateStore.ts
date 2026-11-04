@@ -2049,9 +2049,10 @@ export class SqliteStateCollection<T> {
     const rows = ["pipelines", "pipelines_archive"].flatMap((collection) => {
       if (!("requestKey" in query) && query.active && collection !== "pipelines") return [];
       const row = "requestKey" in query
-        ? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows
-            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL
-            AND json_extract(value_json, '$.creationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
+        ? db.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
+            AND (json_extract(value_json, '$.creationRequest.key') = ?
+              OR json_extract(value_json, '$.adoptedCreationRequest.key') = ?) LIMIT 1`).get(collection, query.requestKey, query.requestKey)
         : db.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows
             WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.delivery.target.repository') = ?
             AND json_extract(value_json, '$.delivery.target.branch') = ?

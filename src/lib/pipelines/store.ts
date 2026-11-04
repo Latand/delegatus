@@ -1,4 +1,4 @@
-import { isPipelineIntegration, INTEGRATION_STAGES } from "./integration";
+import { creationRequestDigest, isPipelineIntegration, INTEGRATION_STAGES } from "./integration";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
@@ -1033,6 +1033,9 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
     isPublicationRecovery(pipeline.publicationRecovery) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
+    (pipeline.adoptedCreationRequest === undefined || !!pipeline.adoptedCreationRequest
+      && typeof pipeline.adoptedCreationRequest.key === "string" && !!pipeline.adoptedCreationRequest.key
+      && typeof pipeline.adoptedCreationRequest.digest === "string" && !!pipeline.adoptedCreationRequest.digest) &&
     (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
     Array.isArray(pipeline.taskIds) &&
@@ -1223,6 +1226,7 @@ function migrateReviewLoopFailEdges(raw: unknown): unknown {
     ...pipeline,
     ...(pipeline.delivery ? { delivery: structuredClone(pipeline.delivery) } : {}),
     ...(pipeline.creationRequest ? { creationRequest: { ...pipeline.creationRequest } } : {}),
+    ...(pipeline.adoptedCreationRequest ? { adoptedCreationRequest: { ...pipeline.adoptedCreationRequest } } : {}),
     stages: pipeline.stages.map((stage) => {
       if (!stage || typeof stage !== "object" || Array.isArray(stage)) return stage;
       const record = stage as Record<string, unknown>;
@@ -2133,7 +2137,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {
         options.admitReplay?.(existing);
-        if (existing.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
+        if (creationRequestDigest(existing, pipeline.creationRequest.key) !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
         options.onReplay?.();
         return existing;
       }

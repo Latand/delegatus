@@ -5,6 +5,11 @@ export const INTEGRATION_STAGES = ["integration-resolve", "integration-review", 
 export const INTEGRATION_SESSION_MS = 60 * 60_000;
 export const INTEGRATION_REPAIR_LIMIT = 3;
 
+export function creationRequestDigest(pipeline: Pipeline, key: string): string | undefined {
+  if (pipeline.creationRequest?.key === key) return pipeline.creationRequest.digest;
+  return pipeline.adoptedCreationRequest?.key === key ? pipeline.adoptedCreationRequest.digest : undefined;
+}
+
 /** Workspace authority is part of the context boundary, including its revision. */
 export function integrationScope(pipeline: Pipeline): string {
   return createHash("sha256").update(JSON.stringify([pipeline.project, pipeline.workspace ?? null])).digest("hex");
@@ -73,7 +78,7 @@ export function admitIntegration(pipeline: Pipeline, expected: Pipeline, stages:
     || !merge.updates.some(update => update.commit === prepared && update.head === prepared && update.base === reservation.base)))
     return "mechanical integration has no matching landed update receipt";
   const previousIds = new Set(INTEGRATION_STAGES);
-  if (pipeline.stages.some(stage => previousIds.has(stage.id as typeof INTEGRATION_STAGES[number])) && !merge.integration)
+  if (record.cycles === 0 && pipeline.stages.some(stage => previousIds.has(stage.id as typeof INTEGRATION_STAGES[number])))
     return "integration stage identity is already in use";
   // Old terminal integration attempts remain in their real runs with reports.
   const retained = pipeline.stages.filter(stage => !previousIds.has(stage.id as typeof INTEGRATION_STAGES[number]));
