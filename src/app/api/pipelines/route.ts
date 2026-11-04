@@ -1,3 +1,5 @@
+import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { teamActor } from "@/lib/team/actor";
 import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -24,7 +26,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "store_busy" | typeof ENGINE_NOT_CONNECTED | "TASK_RUNS_ELSEWHERE" | "STAGE_KIND_RETIRED";
+  code?: "workspace_forbidden" | PipelineRepoPreflightErrorCode | SpawnRejectionCode | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "store_busy" | typeof ENGINE_NOT_CONNECTED | "TASK_RUNS_ELSEWHERE" | "STAGE_KIND_RETIRED";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before anything was admitted, so
@@ -173,7 +175,9 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true;
     if (origin instanceof NextResponse) return origin;
     const authority = requireOperatorAuthority(req);
     if (!authority.ok) return NextResponse.json({ error: authority.error }, { status: authority.status });
+    const actor = teamActor(req);
     const result = await createPipelineFromRequest(body, undefined, {
+      ...(actor.kind === "member" ? { workspaceMemberId: actor.memberId } : actor.kind === "agent" ? { workspace: conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), actor.conversationId) ?? undefined } : {}),
       allowOperatorDraftWithoutLineage: !isAgentInitiatedSpawn(req),
       queueWhenBusy: true,
       briefer: origin,
