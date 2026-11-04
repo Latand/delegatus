@@ -248,22 +248,27 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     // saved scrubbed reason while the request is open and the owner target
     // still authorizes the reply; otherwise the generic restart failure.
     const saved = held.ownerTurn?.failureReply;
-    if (relay && saved && Date.now() >= Date.parse(saved.until)
+    const request = relay && saved && recoveryRequest ? requestSchema.parse(recoveryRequest) : null;
+    const failureOwner = request && (held.ownerTurn?.context ?? ownerTierFor({ ownerTier: true }, request));
+    const failureAnswer = request && failureOwner && saved
+      ? ownerFailureAnswer(request, failureOwner, held.ownerTurn?.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay!.credential])
+      : null;
+    if (relay && saved && failureAnswer && Date.now() >= Date.parse(saved.until)
       && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) {
-      const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: saved.answer,
+      const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: failureAnswer,
         duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) };
       changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { body, files: [] } } }));
       const sent = await deliverOwnerLateAnswer(relay, run.requestId, body, [],
         () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
       if (sent.delivery === "accepted") {
-        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, saved.answer, true);
+        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, failureAnswer, true);
         removeRunDirectory(run.runDir);
         dropRun(run.requestId);
       }
       continue;
     }
-    const answer = saved && Date.now() < Date.parse(saved.until)
-      && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId) ? saved.answer : null;
+    const answer = saved && failureAnswer && Date.now() < Date.parse(saved.until)
+      && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId) ? failureAnswer : null;
     if (relay) {
       const body: ExternalRelayCompletion = answer
         ? { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }

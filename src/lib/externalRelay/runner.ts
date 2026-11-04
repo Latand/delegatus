@@ -408,7 +408,8 @@ export async function runClaimedRequest(
         }
       }
       if (!initiallyLate && body.outcome === "answered" && sent.delivery === "refused"
-        && (ownerPastWindow() || sent.refusalCode === "lease_lost")) {
+        && (ownerPastWindow() || sent.refusalCode === "lease_lost")
+        && ownerExecution && allowOwnerReply?.()) {
         await changeRunAsync(requestId, row => ({ ...row,
           ownerTurn: { ...row.ownerTurn!, completionAttempt: undefined, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), ownerRelayStoreDeadline());
         sent = await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!);

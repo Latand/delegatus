@@ -3160,6 +3160,29 @@ test("owner admission rechecks current store even when the claimed target object
   } finally { await service.close(); }
 });
 
+test("a member completion lease refusal never creates owner custody or retains target capacity", async () => {
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) {
+      completions.push(body);
+      return { status: 409, body: { error: { code: "lease_lost" } } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`);
+  paired.targets[0]!.concurrency = 1;
+  paired.targets[0]!.ownerTier = false;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Member answer',reply_to:'m1'}));`);
+  try {
+    await runClaimedRequest(paired, { ...contextRequest, request_id: "member_lease_refusal",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: false, is_admin: false } } }, undefined, { command });
+    expect(completions).toHaveLength(1);
+    expect(readRunLedger().runs.some(row => row.requestId === "member_lease_refusal")).toBe(false);
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
+  } finally { await service.close(); }
+});
+
 for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains pending execution and retries failed-stop custody`, async () => {
   const service = await startTestRelay((req, body) => req.url?.endsWith("/heartbeat") && trigger === "lease_lost" && (body as { seq: number }).seq > 1
     ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } });
@@ -3359,7 +3382,7 @@ for (const worker of [false, true]) test(`owner runner exception with a refused 
   }
 }, 15000);
 
-for (const recovery of ["answered", "revoked", "completed", "expired"] as const)
+for (const recovery of ["answered", "revoked", "completed", "expired", "legacy-diagnostic"] as const)
 test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}`, async () => {
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
@@ -3410,15 +3433,19 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
     if (recovery === "revoked") updateRelayStore(s => ({ ...s, relays: s.relays.map(r => ({ ...r, targets: r.targets.map(t => ({ ...t, enabled: false })) })) }));
     if (recovery === "completed") changeRun(requestId, r => ({ ...r, completionAccepted: true }));
     if (recovery === "expired") changeRun(requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, failureReply: { ...r.ownerTurn!.failureReply!, until: new Date(Date.now() - 1).toISOString() } } }));
+    if (recovery === "legacy-diagnostic") changeRun(requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, confirmed: true,
+      failureReply: { ...r.ownerTurn!.failureReply!, answer: { ...r.ownerTurn!.failureReply!.answer,
+        text: "Агент не зміг завершити запит. Причина: RelayStoreBusy: relay store is busy" } } } }));
     const ports: import("./ownerRun").OwnerRunPorts = {
       launch: async () => { throw Error("must not launch"); },
       observe: async () => ({ state: "running", conversationId }),
       stop: async () => {}, stopRetryMs: 1,
     };
     await sweepExternalRelayOrphans(ports);
-    if (recovery === "answered" || recovery === "expired") {
+    if (recovery === "answered" || recovery === "expired" || recovery === "legacy-diagnostic") {
       expect(completions).toEqual([expect.objectContaining({ outcome: "answered",
         answer: expect.objectContaining({ action: "reply", text: "Your request could not be completed. Please try again." }) })]);
+      expect(JSON.stringify(completions)).not.toContain("RelayStoreBusy");
       expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted",
         diagnostic: { source: "launch" }, answer: { text: "Your request could not be completed. Please try again." } });
     } else if (recovery === "completed") {
