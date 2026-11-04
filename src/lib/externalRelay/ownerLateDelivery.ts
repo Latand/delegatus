@@ -1,7 +1,7 @@
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { cloneClientKey, sendAsClone, type CloneSendInput } from "./cloneSend";
 import { ownerDeliverySchema, type ExternalRelayCompletion } from "./protocol";
-import { changeRunAsync, ownerStopPending, type PairedRelay, type RunRecord } from "./store";
+import { changeRunAsync, ownerRelayStoreDeadline, ownerStopPending, type PairedRelay, type RunRecord } from "./store";
 import type { StagedAttachment } from "./attachments";
 import type { RelayAnswerDelivery } from "./answers";
 import { relayRequestInFlight } from "./activity";
@@ -72,7 +72,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
       prepared.pending = pending;
       return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
         ownerTurn: { ...row.ownerTurn, lateAnswer: pending } };
-    }, Date.now() + 5000);
+    }, ownerRelayStoreDeadline());
     let pending = prepared.pending;
     if (!pending || !authorize()) return { body, delivery: "refused" };
     if (!pending.parts) {
@@ -88,7 +88,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
       // Celestia forgets keys after 24h. Each unresolved part keeps its fence.
       if (part.firstAttemptAt !== undefined && Date.now() - part.firstAttemptAt >= KEY_LIFETIME_MS - 60_000) {
         await changeRunAsync(requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!,
-          lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "retry-expired" } } }), Date.now() + 5000);
+          lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "retry-expired" } } }), ownerRelayStoreDeadline());
         return { body, delivery: "unconfirmed" };
       }
       const hadUnresolvedAttempt = part.firstAttemptAt !== undefined;
@@ -99,7 +99,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
         pending = { ...saved, parts, firstAttemptAt: parts[0]!.firstAttemptAt,
           nextAttemptAt: Date.now() + RETRY_MS, status: "retry" };
         return { ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: pending } };
-      }, Date.now() + 5000);
+      }, ownerRelayStoreDeadline());
       const sent = await sendAsClone(relay, targetId, part.payload, { partIndex: index, beforeSend: () => {
         if (!authorize()) throw new Error("owner relay revoked");
       } });
@@ -117,7 +117,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
           ...(sent.kind === "refused" && ["text_too_long", "format_invalid", "bad_request"].includes(sent.code)
             ? { status: "refused" as const } : {}) };
         return { ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: pending } };
-      }, Date.now() + 5000);
+      }, ownerRelayStoreDeadline());
       if (sent.kind !== "sent") {
         console.error("Owner relay late delivery pending", JSON.stringify({ requestId, outcome: sent.kind }));
         return { body, delivery: "unconfirmed" };

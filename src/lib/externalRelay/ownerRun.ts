@@ -24,7 +24,7 @@ import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIden
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage, transcriptErrorFromRecords } from "@/lib/spawnNotice/production";
 import { scrubOwnerOutput } from "./ownerOutput";
-import { changeRun, changeRunAsync, readRunLedger, type OwnerStopRelease, type RunRecord } from "./store";
+import { changeRun, changeRunAsync, ownerRelayStoreDeadline, readRunLedger, type OwnerStopRelease, type RunRecord } from "./store";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { noteRelayOutcome } from "./activity";
 import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision, type ExternalRelayAnswer } from "./protocol";
@@ -202,14 +202,16 @@ function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerIn
   return ownerAnswer(Array.from(explanation).length <= request.answer.max_chars ? explanation : compact, request, owner);
 }
 
-export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerInstruction, diagnostic: OwnerTurnDiagnostic, credentials: readonly string[] = []): ExternalRelayAnswer | null {
+export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerInstruction, _diagnostic: OwnerTurnDiagnostic, credentials: readonly string[] = []): ExternalRelayAnswer | null {
   const ukrainian = /[а-яіїєґ]/iu.test(owner.text);
+  // Diagnostics stay in durable custody and the journal. They may contain
+  // internal exception names and are never suitable as chat copy.
   const explanation = ukrainian
-    ? `Агент не зміг завершити запит. Причина: ${diagnostic.message}. Повторіть запит або відкрийте розмову агента в Delegatus.`
-    : `The agent could not complete your request. Reason: ${diagnostic.message}. Retry your request or open the agent conversation in Delegatus.`;
+    ? "Не вдалося завершити запит. Спробуйте ще раз."
+    : "Your request could not be completed. Please try again.";
   const caps = answerCapabilities(request, "");
   const clean = scrubOwnerOutput(explanation, credentials);
-  const compact = ukrainian ? `Помилка: ${diagnostic.message}` : `Failed: ${diagnostic.message}`;
+  const compact = ukrainian ? "Спробуйте ще раз." : "Please try again.";
   const text = Array.from(clean).length <= caps.plainMax ? clean : Array.from(scrubOwnerOutput(compact, credentials)).slice(0, caps.plainMax).join("");
   // A failure reply carries no answer parts the interrupted agent staged.
   const answer = checkedAnswerV2({ action: "reply", text, reply_to: owner.messageId, ...(caps.rich ? { format: "plain", buttons: [] } : {}) }, request, caps, { handoff: false, ignore: false });
@@ -404,7 +406,7 @@ export const OWNER_STOP_RETRY_BACKOFF_CAP = 60;
 export function ownerStopRetryDelayMs(baseMs: number, failures: number): number {
   return Math.min(baseMs * 2 ** Math.min(failures, 6), baseMs * OWNER_STOP_RETRY_BACKOFF_CAP);
 }
-const OWNER_STOP_LEDGER_WAIT_MS = 50;
+const OWNER_STOP_LEDGER_WAIT_MS = 0;
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
   let finalTextChanged = false;
   const finalMessage = (child: string) => spawnNoticeFinalMessage(child, text => {
@@ -646,8 +648,8 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
       // Older cutoffs carry no time; their bound starts when a stop first sees them.
       const cancelledAt = new Date(ports.now?.() ?? Date.now()).toISOString();
       run.ownerTurn = { ...run.ownerTurn, cancelledAt };
-      try { changeRun(run.requestId, r => r.ownerTurn ? { ...r, ownerTurn: { ...r.ownerTurn,
-        cancelledAt: Number.isFinite(Date.parse(r.ownerTurn.cancelledAt ?? "")) ? r.ownerTurn.cancelledAt : cancelledAt } } : r); }
+      try { await changeRunAsync(run.requestId, r => r.ownerTurn ? { ...r, ownerTurn: { ...r.ownerTurn,
+        cancelledAt: Number.isFinite(Date.parse(r.ownerTurn.cancelledAt ?? "")) ? r.ownerTurn.cancelledAt : cancelledAt } } : r, ownerRelayStoreDeadline()); }
       catch { /* The next attempt stamps it again. */ }
     }
     let conversationId = run.conversationId;
@@ -657,18 +659,18 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
           const observed = await bounded(ports.observe({ clientAttemptId: run.ownerTurn.clientAttemptId, claimedAt: run.startedAt, continuation: run.ownerTurn.continuation }), 1000);
           conversationId = observed.conversationId;
           if (conversationId) {
-            try { changeRun(run.requestId, r => ({ ...r, conversationId })); }
+            try { await changeRunAsync(run.requestId, r => ({ ...r, conversationId }), ownerRelayStoreDeadline()); }
             catch { /* Discovery must still reach control while persistence is unavailable. */ }
           }
           // No accepted launch after admission returned is proof of no work.
           if (!conversationId && run.ownerTurn.admissionComplete && observed.state === "failed") {
-            confirmStopPersistence(run, conversationId);
+            await confirmStopPersistence(run, conversationId);
             return true;
           }
         }
         if (conversationId) {
           await bounded(withSpawnDiagnostics(run.ownerTurn.clientAttemptId, () => ports.stop(conversationId!, run.ownerTurn!.continuation ? "interrupt" : run.ownerTurn!.cancel!, run.ownerTurn!.clientAttemptId)), 1000);
-          confirmStopPersistence(run, conversationId);
+          await confirmStopPersistence(run, conversationId);
           return true;
         }
       } catch (error) {
@@ -680,7 +682,7 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
         try {
           const observed = await bounded(ports.observe({ clientAttemptId: run.ownerTurn.clientAttemptId, conversationId, claimedAt: run.startedAt, continuation: run.ownerTurn.continuation }), 1000);
           if (run.ownerTurn.admissionComplete && (observed.state === "ended" || observed.failure?.kind === "host-died")) {
-            confirmStopPersistence(run, conversationId);
+            await confirmStopPersistence(run, conversationId);
             return true;
           }
         } catch { /* Control and observation unavailable: keep the record. */ }
@@ -723,7 +725,7 @@ async function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason
       failureReply: r.ownerTurn.failureReply ?? run.ownerTurn.failureReply,
       released: r.ownerTurn.released ?? release,
       ...(reason === "no_execution" ? { confirmed: true } : { quarantinedAt: r.ownerTurn?.quarantinedAt ?? release.at }) } };
-  }, Date.now() + 5000);
+  }, ownerRelayStoreDeadline());
   if (!found) throw new Error("owner cancellation custody missing");
   run.ownerTurn = { ...run.ownerTurn!, released: run.ownerTurn?.released ?? release,
     ...(reason === "no_execution" ? { confirmed: true } : { quarantinedAt: release.at }) };
@@ -732,15 +734,17 @@ async function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason
     requestId: run.requestId, conversationId: run.conversationId ?? null, reason, diagnostic: run.ownerTurn.diagnostic ?? null }));
 }
 /** A stop receipt cannot release custody until its cutoff and attribution are durable. */
-function confirmStopPersistence(run: RunRecord, conversationId?: string): void {
+async function confirmStopPersistence(run: RunRecord, conversationId?: string): Promise<void> {
   let found = false;
-  changeRun(run.requestId, r => {
+  await changeRunAsync(run.requestId, r => {
+    if (!r.ownerTurn || !run.ownerTurn || r.leaseId !== run.leaseId || r.ownerTurn.clientAttemptId !== run.ownerTurn.clientAttemptId)
+      throw new Error("owner cancellation custody changed");
     found = true;
     return { ...r, ...(conversationId ? { conversationId } : {}), ownerTurn: {
       ...r.ownerTurn!, cancel: run.ownerTurn!.continuation ? "interrupt" : run.ownerTurn!.cancel,
       admissionComplete: run.ownerTurn!.admissionComplete, confirmed: true,
     } };
-  });
+  }, ownerRelayStoreDeadline());
   if (!found) throw new Error("owner cancellation custody missing");
 }
 function bounded<T>(work: Promise<T>, ms: number): Promise<T> {
@@ -840,8 +844,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       ownerTurn: { ...custody.ownerTurn!, ...(failureCustody && !custody.ownerTurn?.diagnostic ? failureCustody : {}), cancel: stopped!, admissionComplete: admitted, cancelledAt } };
     let found = false;
     try {
-      // A short wait: an in-flight async ledger write cannot release while this
-      // blocks, and applyStop persists the cutoff again before it settles.
+      // Try once without waiting on the event loop. The local cutoff already
+      // revokes work; applyStop persists it asynchronously before settling.
       changeRun(input.request.request_id, r => {
         found = true;
         return { ...r, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
@@ -863,7 +867,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       // The local cutoff and known conversation take precedence over stale disk data.
       if (custody?.ownerTurn) {
         let recoveredInitialPrompt: { operationId: string; initialMessage: string } | undefined;
-        if (!launchAttempted) confirmStopPersistence(custody);
+        if (!launchAttempted) await confirmStopPersistence(custody);
         else confirmed = await confirmOwnerStop(custody, ports);
         try {
           const recovered = readRunLedger().runs.find(r => r.requestId === input.request.request_id)?.conversationId;
@@ -932,7 +936,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       let launched: ReportSpawnResult;
       if (input.continuation) {
         await input.onConversation(turn.conversationId!);
-        await changeRunAsync(input.request.request_id, r => ({ ...r, conversationId: turn.conversationId!, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation } }), Date.now() + 5000);
+        await changeRunAsync(input.request.request_id, r => ({ ...r, conversationId: turn.conversationId!, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation } }), ownerRelayStoreDeadline());
         authorize();
         const sent = await withViewerOperation("relay.owner-continuation.send", () => ports.continue?.(turn, input.continuation!.prompt + (input.inboundContext ? "\n" + input.inboundContext : ""), localTarget, authorize, input.target.engine === "codex-cloud"));
         if (!sent || !sent.ok) {
@@ -947,7 +951,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
           cancel("failed"); await applyStop(); return;
         }
         turn.continuation = { operationId: sent.operationId };
-        await changeRunAsync(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation, admissionComplete: true } }), Date.now() + 5000);
+        await changeRunAsync(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation, admissionComplete: true } }), ownerRelayStoreDeadline());
         launched = { status: 202, body: { conversationId: turn.conversationId, initialMessage: sent.outcome === "delivered" ? "delivered" : "queued" } };
       } else {
         const cwd = input.target.engine === "codex-cloud" ? cloudOwnerDirectory(input.target.project)
@@ -981,7 +985,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         await input.onConversation(id, initialPrompt); // attribution persists even after a pending cutoff
       }
       await changeRunAsync(input.request.request_id,
-        r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }), Date.now() + 5000);
+        r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }), ownerRelayStoreDeadline());
       try { authorize(); } catch { cancel("cancelled"); }
       if (stopped) { await applyStop(); return; }
       if (launched.status < 200 || launched.status >= 300 || !turn.conversationId) {

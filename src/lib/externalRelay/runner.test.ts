@@ -3050,13 +3050,13 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
         beats.push(body as Record<string, unknown>);
         return scenario === "lease_lost" && beats.length > 1 ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } };
       }
-      return { body: { status: "ok" } };
+      return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
     });
     const paired = relay(`${server.origin}/v1`);
     paired.targets[0]!.ownerTier = true;
     if (scenario === "owner_tools") paired.features = ownerFeatures;
     updateRelayStore(s => ({ ...s, relays: [paired] }));
-    const request = { ...contextRequest, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 }, request_id: id, chat: { key: "owner-group" },
+    const request = { ...contextRequest, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 }, request_id: id, chat: { key: "owner-group" }, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null },
       input: { ...contextRequest.input, ...(scenario === "owner_tools" ? { tools: ownerRequest().input.tools } : {}), requester: { ...contextRequest.input.requester, is_owner: scenario === "invalid_request" ? "true" : true } } };
     const conversationsBefore = readConversations();
     try {
@@ -3069,7 +3069,7 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
           observe: async () => {
             expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null,
               ownerTurn: { request: { text: contextRequest.input.conversation[0]!.text, requestText: null } } });
-            if (!beats.length || scenario === "lease_lost" || scenario === "hard_cap") return { state: "running" };
+            if (!beats.length || scenario === "lease_lost" && beats.length < 2 || scenario === "hard_cap") return { state: "running" };
             return { state: "ended", finalText: "Owner reply" };
           },
           stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
@@ -3086,8 +3086,8 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
         const record = readAnswerRecord(paired.id, "target_1", id);
         expect(record).toMatchObject({ profile: { webSearch: true, owner: true }, conversationId: "conversation_owner_runner" });
         if (scenario === "answer" || scenario === "owner_tools") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply", reply_to: "m1" } }); expect(stops).toEqual([]); }
-        if (scenario === "lease_lost") { expect(completion).toBeNull(); expect(stops).toEqual(["interrupt"]); }
-        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("Failed:") } }); expect(stops).toEqual(["interrupt"]); }
+        if (scenario === "lease_lost") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply" } }); expect(stops).toEqual([]); }
+        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Please try again." } }); expect(stops).toEqual(["interrupt"]); }
       }
     } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
   });
@@ -3162,7 +3162,7 @@ test("owner admission rechecks current store even when the claimed target object
 
 for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains pending execution and retries failed-stop custody`, async () => {
   const service = await startTestRelay((req, body) => req.url?.endsWith("/heartbeat") && trigger === "lease_lost" && (body as { seq: number }).seq > 1
-    ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } });
+    ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   let stops = 0, working = true, recover = false, finished = false;
@@ -3173,7 +3173,7 @@ for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger
     stop: async () => { if (++stops === 3) reached(); if (!recover) throw Error("control unavailable"); working = false; } };
   let done: ReturnType<typeof runClaimedRequest> | undefined;
   try {
-    done = runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    done = runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null }, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: trigger === "lease_lost" ? 4000 : 20, ownerPorts: ports });
     void done.then(() => { finished = true; });
     await refused;
@@ -3188,13 +3188,13 @@ for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger
     expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_pending");
     recover = true;
     const completion = await done;
-    if (trigger === "lease_lost") expect(completion).toBeNull(); else expect(completion).toMatchObject({ outcome: "answered" });
+    expect(completion).toMatchObject({ outcome: "answered" });
     expect(stops).toBeGreaterThan(3); expect(working).toBe(false); expect(readRunLedger().runs).toEqual([]);
   } finally { recover = true; await done; await service.close(); }
 });
 
 for (const failure of ["observation", "turn-error", "observe-exception", "launch-exception", "launch-refusal", "invalid-launch"] as const)
-for (const worker of [false, true]) test(`owner ${failure} keeps its reason in the record, journal and requester reply (worker=${worker})`, async () => {
+for (const worker of [false, true]) test(`owner ${failure} keeps its reason in diagnostics and sends a human reply (worker=${worker})`, async () => {
   const completions: unknown[] = [], journal: unknown[][] = [];
   const service = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/complete")) completions.push(body);
@@ -3227,7 +3227,7 @@ for (const worker of [false, true]) test(`owner ${failure} keeps its reason in t
     });
     const record = readAnswerRecord(paired.id, "target_1", "owner_reason");
     expect(record).toMatchObject({ diagnostic: { source, message: expect.stringContaining(reason), ...(failure === "launch-refusal" ? { status: 503 } : {}) } });
-    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Your request could not be completed. Please try again." } });
     expect(JSON.stringify(journal)).toContain("owner_reason");
     expect(JSON.stringify(journal)).toContain("fixture transport refused");
     expect(completions).toHaveLength(1);
@@ -3286,11 +3286,11 @@ for (const worker of [false, true]) test(`owner runner exception is recorded bef
     confirm();
     const completion = await done;
     expect(stops).toBeGreaterThan(0);
-    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining("fixture ledger write refused") } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Your request could not be completed. Please try again." } });
     expect(completions).toHaveLength(1);
-    expect(completions[0]).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("fixture ledger write refused") } });
+    expect(completions[0]).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
     const record = readAnswerRecord(paired.id, "target_1", requestId);
-    expect(record).toMatchObject({ diagnostic: { source: "exception" }, answer: { text: expect.stringContaining("fixture ledger write refused") } });
+    expect(record).toMatchObject({ diagnostic: { source: "exception" }, answer: { text: "Your request could not be completed. Please try again." } });
     for (const surface of [completion, record, journal, completions]) {
       expect(JSON.stringify(surface)).not.toContain(paired.credential);
       expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
@@ -3402,7 +3402,7 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
     const held = readRunLedger().runs.find(r => r.requestId === requestId)!;
     expect(held).toMatchObject({ ownerPid: child.pid, conversationId, ownerTurn: { cancel: expect.any(String),
       diagnostic: { source: "launch", message: expect.stringContaining(reason) },
-      failureReply: { until: new Date(Date.parse(request.deadline_at)).toISOString(), answer: { action: "reply", text: expect.stringContaining(reason) } } } });
+      failureReply: { until: new Date(Date.parse(request.deadline_at)).toISOString(), answer: { action: "reply", text: "Your request could not be completed. Please try again." } } } });
     expect(held.ownerTurn!.confirmed).toBeUndefined();
     expect(JSON.stringify(held)).not.toContain(paired.credential);
     expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "running", diagnostic: { source: "launch" } });
@@ -3418,9 +3418,9 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
     await sweepExternalRelayOrphans(ports);
     if (recovery === "answered" || recovery === "expired") {
       expect(completions).toEqual([expect.objectContaining({ outcome: "answered",
-        answer: expect.objectContaining({ action: "reply", text: expect.stringContaining(reason) }) })]);
+        answer: expect.objectContaining({ action: "reply", text: "Your request could not be completed. Please try again." }) })]);
       expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted",
-        diagnostic: { source: "launch" }, answer: { text: expect.stringContaining(reason) } });
+        diagnostic: { source: "launch" }, answer: { text: "Your request could not be completed. Please try again." } });
     } else if (recovery === "completed") {
       expect(completions).toEqual([]);
     } else {
@@ -3512,7 +3512,7 @@ for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtim
     }
     const record = readAnswerRecord(paired.id, "target_1", requestId);
     expect(record).toMatchObject({ diagnostic: { source: "observation", message: expect.stringContaining(reason) } });
-    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Your request could not be completed. Please try again." } });
     expect(completions).toHaveLength(1);
     expect(JSON.stringify(journal)).toContain(requestId);
     expect(JSON.stringify(journal)).toContain(reason);
@@ -3571,7 +3571,7 @@ for (const worker of [false, true]) test(`owner admission registry ${failure} re
   const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
   try {
     const failed = await runClaimedRequestWithLeaseWorker(paired, { ...next, request_id: requestId }, undefined, { leaseWorker: worker, ownerPorts: ports });
-    expect(failed).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(failed).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Your request could not be completed. Please try again." } });
     expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ diagnostic: { source: failure === "exception" ? "exception" : "launch", message: expect.stringContaining(reason) } });
     expect(stops).toBe(0);
     // No sweep or elapsed stop bound: the very next wire claim has capacity.
@@ -3938,7 +3938,7 @@ for (const language of ["en", "uk"] as const) test(`owner ${language} failure re
       }, stop: async () => {},
     } });
     if (stagingError) throw stagingError;
-    expect(result).toMatchObject({ outcome: "answered", answer: { format: "plain", buttons: [], text: expect.stringContaining(language === "uk" ? "Причина:" : "Reason:") } });
+    expect(result).toMatchObject({ outcome: "answered", answer: { format: "plain", buttons: [], text: language === "uk" ? "Не вдалося завершити запит. Спробуйте ще раз." : "Your request could not be completed. Please try again." } });
     if (result?.outcome === "answered") {
       expect(result.answer.attachments ?? []).toEqual([]);
       expect(result.answer.mentions ?? []).toEqual([]);
@@ -4586,14 +4586,16 @@ test("a member on-demand claim is filled before the first round and still calls 
 });
 
 
-test("owner tool lease loss interrupts the owner and completes nothing", async () => {
+test("owner tool lease loss closes service tools and preserves one owner answer", async () => {
   const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
   const request = requestSchema.parse(contextRequest);
   request.request_id = "owner_tool_lease_loss"; request.input.requester!.is_owner = true;
+  request.owner_delivery = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null };
   request.input.tools = ownerRequest().input.tools;
-  const stops: string[] = []; let posts = 0, observed = false;
+  const stops: string[] = []; let posts = 0, answers = 0, observed = false;
   const server = await startTestRelay((req) => {
     if (req.url?.endsWith("/tool-calls")) { posts++; return { status: 409, body: { error: { code: "lease_lost" } } }; }
+    if (req.url?.endsWith("/send")) { answers++; return { body: cloneReceipt() }; }
     return { body: { status: "ok" } };
   });
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
@@ -4606,10 +4608,11 @@ test("owner tool lease loss interrupts the owner and completes nothing", async (
       launch: async () => ({ status: 202, body: { conversationId: "conversation_owner_lease_loss" } }),
       observe: async () => {
         if (!observed) { observed = true; await bindings.relay_service_tools({ op: "call", calls: [{ tool: "get_media", arguments: {} }] }); }
-        return { state: stops.length ? "ended" : "running" };
+        return { state: "ended", finalText: "Saved owner answer" };
       }, stop: async (_id, action) => { stops.push(action); }, pollMs: 1,
     } });
-    expect(result).toBeNull(); expect(stops).toEqual(["interrupt"]); expect(posts).toBe(1);
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Saved owner answer" } });
+    expect(stops).toEqual([]); expect(posts).toBe(1); expect(answers).toBe(1);
     await expect(bindings.relay_service_tools({ op: "list" })).rejects.toMatchObject({ details: { code: "relay_tools_unavailable" } });
     expect(posts).toBe(1);
   } finally { await server.close(); }
