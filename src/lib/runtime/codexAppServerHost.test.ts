@@ -26,7 +26,7 @@ import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { projectEngineHostEvent } from "./engineHostEvents";
-import type { HostState, RuntimeEvent } from "./engineHost";
+import type { DeliveryTimingMark, HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
 import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -7103,6 +7103,22 @@ test.each([false, true, undefined, null, "false"])("native question flag %j reta
   await host.release();
 });
 
+test("Codex operation timing observes preparation and RPC; diagnostic refusal leaves delivery intact", async () => {
+  const server = new FakeAppServer("timing-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    const marks: DeliveryTimingMark[] = [];
+    expect(await host.send({ id: "timing-first", text: "start" }, undefined, undefined, mark => marks.push(mark))).toMatchObject({ outcome: "turn-started" });
+    expect(marks).toEqual(["codex-prepare", "codex-confirmed-read", "codex-confirmed", "codex-input-ready", "codex-rpc-start", "codex-rpc-end"]);
+    marks.length = 0;
+    server.steerError = { code: -32000, message: "active turn changed" };
+    expect(await host.send({ id: "timing-refused", text: "steer" }, undefined, undefined, mark => marks.push(mark))).toMatchObject({ outcome: "rejected" });
+    expect(marks).toEqual(["codex-prepare", "codex-confirmed-read", "codex-confirmed", "codex-input-ready", "codex-rpc-start"]);
+    server.steerError = null;
+    expect(await host.send({ id: "timing-second", text: "steer" }, undefined, undefined, () => { throw new Error("observer refused"); })).toMatchObject({ outcome: "steered" });
+  } finally { await host.release(); }
+});
+
 test("Codex stdout preserves Unicode split inside a completed user echo", async () => {
   const server = new FakeAppServer("unicode-wire");
   const eventStore = new MemoryEventStore();
@@ -7114,11 +7130,12 @@ test("Codex stdout preserves Unicode split inside a completed user echo", async 
   const beforeEcho = Date.now();
   server.stdout.write(bytes.subarray(0, split)); server.stdout.write(bytes.subarray(split));
   expect(await host.send({ id: "unicode-original", text: "Привіт 🌍" })).toMatchObject({ turnId: "turn-1" });
-  const echo = eventStore.load("unicode-wire").findLast(event => event.kind === "item" && event.phase === "completed") as { deliveryEcho?: { operationId: string; at: string } };
+  const echo = eventStore.load("unicode-wire").findLast(event => event.kind === "item" && event.phase === "completed") as { deliveryEcho?: { operationId: string; at: string; attachedAt: string } };
   expect(echo.deliveryEcho?.operationId).toBe("unicode-original");
   expect(echo.deliveryEcho?.at).toBeString();
   expect(Date.parse(echo.deliveryEcho!.at)).toBeGreaterThanOrEqual(beforeEcho);
   expect(Date.parse(echo.deliveryEcho!.at)).toBeLessThanOrEqual(Date.now());
+  expect(Date.parse(echo.deliveryEcho!.attachedAt)).toBeGreaterThanOrEqual(Date.parse(echo.deliveryEcho!.at));
   await expect(host.send({ id: "unicode-original", text: "wrong payload" })).rejects.toThrow("different payload");
   await host.release();
 });
