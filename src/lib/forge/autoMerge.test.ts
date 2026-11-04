@@ -146,6 +146,12 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (options.rulesRefusal) throw fail("branch rules unavailable");
       return options.rulesRead ?? "[]";
     }
+    // Production integration verifies the actual base and ancestry separately
+    // from branch-protection contexts, including immediately before landing.
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)
+      && args[args.indexOf("--jq") + 1] === ".commit.sha") return MAIN_1;
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/${MAIN_1}...`)
+      && args[args.indexOf("--jq") + 1] === ".merge_base_commit.sha") return MAIN_1;
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return options.classicRead ?? JSON.stringify(options.required ?? []);
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
@@ -835,8 +841,9 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
     expect(decoded.merge).toEqual(findPipelineRecord(stored.id)!.merge);
     expect(decoded.merge?.effectUncertain).toBe(true);
   } finally { if (child.exitCode === null) child.kill(); await child.exited; }
-  const recovered = harness({ lanes: [{ ...completed, merge: decoded!.merge }, lane("accepted-merge", { closedAt: T0 + 1_000 })],
-    prs: [openPr(11), openPr(12)] });
+  const recovered = harness({ lanes: [{ ...completed, merge: decoded!.merge }, lane("accepted-merge", { closedAt: T0 + 1_000 }),
+      lane("same-target", { closedAt: T0 + 2_000 })],
+    prs: [openPr(11), openPr(12, { base: "release" }), openPr(13)] });
   let receipt: "OPEN" | "MERGED" | "unreadable" = "OPEN";
   let receiptReads = 0;
   const read = recovered.ports.run;
@@ -853,7 +860,8 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   expect(recovered.merges()).toHaveLength(0);
   expect(recovered.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true });
   // A retry may requeue the row between the inventory read and queue assembly.
-  // Its unconfirmed receipt keeps custody without occupying accepted work's slot.
+  // Its unconfirmed receipt keeps the main landing fence. A different target
+  // branch can proceed, while another main landing waits for reconciliation.
   const readRows = recovered.ports.loadPipelines;
   let snapshots = 0;
   recovered.ports.loadPipelines = () => {
@@ -868,6 +876,7 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   recovered.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
   try { await recovered.sweep(); } finally { recovered.ports.loadPipelines = readRows; }
   expect(recovered.merges().filter(args => args[2] === "12")).toHaveLength(1);
+  expect(recovered.merges().filter(args => args[2] === "13")).toHaveLength(0);
   expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
   receipt = "unreadable"; recovered.advance(MERGE_WAIT_LIMIT_MS + MERGE_POLL_MS);
   // Retry cleared the head clock. Missing proof must remain paced past the
@@ -884,8 +893,12 @@ test.each([false, true])("an unconfirmed proactive merge survives restart and on
   const calls = receiptReads;
   await recovered.sweep();
   expect(receiptReads).toBe(calls);
+  expect(recovered.merges().filter(args => args[2] === "13")).toHaveLength(0);
   receipt = "MERGED"; recovered.advance(MERGE_POLL_MS);
   await recovered.sweep();
+  await recovered.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+  expect(recovered.merges().filter(args => args[2] === "12")).toHaveLength(1);
+  expect(recovered.merges().filter(args => args[2] === "13")).toHaveLength(1);
   expect(recovered.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
   expect(recovered.merge(completed.id)?.effectUncertain).toBeUndefined();
   expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
