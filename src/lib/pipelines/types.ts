@@ -531,6 +531,9 @@ export type PipelineStageAttempt = {
       Each failed operation is counted once; `exhausted` waits for an explicit
       push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Gate infrastructure retries are independent of producer summary repairs.
+      The accepted head and due time survive controller restarts. */
+  pullRequestInspection?: { sha: string; failures: number; retryAt: string; detail: string; exhausted?: boolean };
   /** Bounded PR summary corrections preserve the accepted verdict and SHA.
       Persisted before delivery so a restart reuses the same request. */
   publicationTextRepair?: {
@@ -1007,6 +1010,10 @@ export type PipelineDeliveryTarget = {
   remote: string;
   branch: string;
   pr?: number;
+  /** `<owner>/<repo>` holding `pr` when that is not the repository `remote`
+      pushes to: a PR from a fork, whose number names a PR of the checkout's
+      origin. Absent: `pr` is a PR of the delivery remote's repository. */
+  prRepository?: string;
   rejectedHead?: string;
 };
 
@@ -1436,7 +1443,8 @@ export type PipelineMerge = {
 };
 
 export type CreatePipelineRequest = {
-  delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
+  /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
+  delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
   taskIds?: string[];
   /** #2187 §5.1: `true` marks every linked task as one this pipeline
