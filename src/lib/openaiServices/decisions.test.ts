@@ -135,7 +135,7 @@ test("actual rule selector skips OpenRouter balance, keeps its wire label, and h
   const scopes = [{ scope: "machine", rules: [rule(1), rule(2)] }]; let calls = 0;
   const fetcher = mockVendor(body => { calls++; expect(body.model).toBe("gpt-6-luna"); expect(Array.isArray(body.input)).toBe(true); return reply(body.questions.map(row => row.name)); });
   const selected = await selectRoleMemory(scopes, "Receipt ownership", { fetch: fetcher });
-  expect(selected).toMatchObject({ selector: "jev", selectorVersion: "openai/gpt-6-luna-1", shadowIds: scopes[0].rules.map(row => row.id) }); expect(calls).toBe(1);
+  expect(selected).toMatchObject({ selector: "jev", selectorVersion: "openai/gpt-6-luna-v2", shadowIds: scopes[0].rules.map(row => row.id) }); expect(calls).toBe(1);
   const refused = await selectRoleMemory(scopes, "Receipt ownership", { fetch: (async () => new Response("credit_balance_exhausted", { status: 429 })) as unknown as typeof fetch });
   expect(refused).toMatchObject({ selector: "bm25", reason: "jev-http,bm25" });
 });
@@ -146,19 +146,18 @@ test("key loss between actual rule batches stops dispatch with authority reason"
   expect(await selectRoleMemory(scopes, "Receipt ownership", { fetch: fetcher })).toMatchObject({ selector: "bm25", reason: "jev-authority-changed,bm25" }); expect(calls).toBe(1);
 });
 
-test("saving an OpenAI key leaves rule selection on OpenRouter until chosen", async () => {
+test("an unsaved rule provider follows the OpenAI key when both keys exist", async () => {
   await writeKey("openai", credential);
   process.env["OPENROUTER_API_KEY"] = "baseline-fixture";
   const urls: string[] = [];
   const selected = await selectRoleMemory([{ scope: "machine", rules: [rule(1)] }], "Receipt ownership", { fetch: (async (url, init) => {
     urls.push(String(url));
-    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer baseline-fixture");
-    if (String(url).endsWith("/key")) return Response.json({ data: { limit: null, limit_remaining: null } });
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${credential}`);
     const body = JSON.parse(String(init?.body));
-    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(name => [name, { noul: .9 }])), usage: { cost: 0 } });
+    return Response.json(reply(body.questions.map((row: { name: string }) => row.name)));
   }) as typeof fetch });
-  expect(selected).toMatchObject({ selector: "jev", evidence: { provider: "openrouter" } });
-  expect(urls).toEqual(["https://openrouter.ai/api/v1/key", "https://openrouter.ai/api/alpha/decisions"]);
+  expect(selected).toMatchObject({ selector: "jev", evidence: { provider: "openai" } });
+  expect(urls).toEqual(["https://api.openai.com/v1/decisions"]);
 });
 
 test("OpenAI's real adapter preserves batch order, redaction, total cost and durable evidence", async () => {

@@ -26,7 +26,7 @@ export interface ServiceResolution<P extends string = string> {
   /** Dispatch only. Never include this field in a route answer. */
   apiKey: string | null;
 }
-type Choices = { version: 1; openai: Partial<Record<ServiceFeature, { since: string }>> };
+type Choices = { version: 1; openai: Partial<Record<ServiceFeature, { since: string }>>; rulesProvider?: ClassifierProvider };
 let warned = false;
 function readChoices(): Choices {
   try {
@@ -34,6 +34,7 @@ function readChoices(): Choices {
     if (fs.statSync(file).size > 16 * 1024) throw Error("oversized");
     const body = JSON.parse(fs.readFileSync(file, "utf8"));
     if (body?.version !== 1 || !body.openai || typeof body.openai !== "object" || Array.isArray(body.openai)
+      || (body.rulesProvider !== undefined && !["openai", "openrouter"].includes(body.rulesProvider))
       || Object.entries(body.openai).some(([feature, row]) => !isServiceFeature(feature) || !row || typeof row !== "object"
         || typeof (row as { since?: unknown }).since !== "string" || !Number.isFinite(Date.parse((row as { since: string }).since)))) throw Error("invalid");
     return body;
@@ -63,7 +64,17 @@ function codexVoiceAvailable(): boolean { return listCodexAccounts().some(accoun
 export function resolveService<F extends ServiceFeature>(feature: F, options: { voiceBaseline?: CompanionBackend } = {}): ServiceResolution<Providers[F]> {
   const native = baseline(feature, options.voiceBaseline);
   const openai = readKey("openai");
-  const opted = !native.lockedBy && !!readChoices().openai[feature];
+  const choices = readChoices();
+  if (feature === "rules") {
+    // Legacy OpenAI opt-ins remain explicit. Previously, choosing OpenRouter
+    // removed the opt-in without storing a distinct preference; new saves keep it.
+    const saved = choices.rulesProvider ?? (choices.openai.rules ? "openai" : undefined);
+    const provider = saved ?? (openai.value ? "openai" : "openrouter");
+    const apiKey = provider === "openai" ? openai.value : readKey("openrouter").value;
+    return { feature, requested: provider, effective: provider, held: !!saved && !apiKey,
+      available: !!apiKey, lockedBy: null, apiKey } as ServiceResolution<Providers[F]>;
+  }
+  const opted = !native.lockedBy && !!choices.openai[feature];
   const requested = opted ? openaiProvider(feature) : native.provider;
   const held = opted && !openai.value;
   const effective = opted && openai.value ? openaiProvider(feature) : native.provider;
@@ -98,8 +109,9 @@ function choice(feature: ServiceFeature, provider: string, legacy: boolean): boo
   }
   return provider === openaiProvider(feature) && !!readKey("openai").value;
 }
-function saveChoice(file: string, feature: ServiceFeature, opted: boolean) {
+function saveChoice(file: string, feature: ServiceFeature, opted: boolean, provider?: string) {
   const choices = readChoices();
+  if (feature === "rules" && (provider === "openai" || provider === "openrouter")) choices.rulesProvider = provider;
   if (opted) choices.openai[feature] ??= { since: new Date().toISOString() };
   else delete choices.openai[feature];
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -120,7 +132,7 @@ export async function chooseService(feature: ServiceFeature, provider: string, o
       if (feature === "dictation") await writeTranscribeBackendAsync(provider as TranscribeBackend);
       if (feature === "voice") await new CompanionStorage().writeNativeBackendAsync(provider as CompanionBackend);
     }
-    saveChoice(file, feature, opted);
+    saveChoice(file, feature, opted, provider);
   });
 }
 /** The existing synchronous storage/CLI API uses the same policy and lock. */
