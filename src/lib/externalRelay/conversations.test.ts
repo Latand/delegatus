@@ -2,6 +2,8 @@ import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
+import { conversationTurnPrompt } from "./prompt";
 import { conversationAuthority, reserveChainConversation, reserveChainConversationAsync, releaseConversation, releaseConversationAsync, resolveChainConversationAsync, readConversations, prepareConversationAccount, sweepConversations, sweepConversationsAsync } from "./conversations";
 import { sampleRequest, contextRequest } from "./request.fixture";
 import { externalRelayFile, newTargetSettings, readRunLedger, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay, type RunRecord } from "./store";
@@ -14,6 +16,31 @@ const target = { ...newTargetSettings({ target_id: "t", name: "Target", answered
 const relay = { id: "r", targets: [target] } as PairedRelay;
 const request = (id = "root", parent: string | null = null): ExternalRelayRequest => requestSchema.parse({ ...contextRequest, request_id: id, chat: { key: "fixture-chat-chain" }, input: { ...contextRequest.input,
   respond_to: id, conversation: [{ ...contextRequest.input.conversation[0]!, id, reply_to: parent }] } });
+
+test("a persisted cursor delivers a later history gap once after process restart", () => {
+  const firstRequest = request("root");
+  firstRequest.input.conversation = [];
+  const record = reserveChainConversation(relay, target, firstRequest, "member")!;
+  const first = conversationTurnPrompt(firstRequest, record, "[round]");
+  releaseConversation(record.id, { seen: first.seen, staticDigest: first.digest, sessionId: "fixture-session" });
+  const readAfterRestart = () => {
+    const result = spawnSync(process.execPath, ["-e", `import { readConversations } from ${JSON.stringify(path.join(import.meta.dir, "conversations.ts"))}; console.log(JSON.stringify(readConversations()));`], {
+      env: { ...process.env, LLV_STATE_DIR: root }, encoding: "utf8", timeout: 20_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return JSON.parse(result.stdout).find((row: { id: string }) => row.id === record.id);
+  };
+  const resumed = readAfterRestart();
+  expect(resumed.seen).toEqual([]);
+  const secondRequest = request("next", "root");
+  const missing = request("root").input.conversation[0]!;
+  secondRequest.input.conversation.unshift(missing);
+  const second = conversationTurnPrompt(secondRequest, resumed, "[round]");
+  const messages = (prompt: string) => JSON.parse(prompt.match(/<conversation>\n([\s\S]*?)\n<\/conversation>/)![1]!);
+  expect(messages(second.prompt).map((row: { id: string }) => row.id)).toEqual(["root", "next"]);
+  releaseConversation(record.id, { seen: second.seen, staticDigest: second.digest });
+  expect(messages(conversationTurnPrompt(secondRequest, readAfterRestart(), "[round]").prompt)).toEqual([]);
+});
 
 for (const asyncSweep of [false, true]) for (const state of ["pending", "confirmed", "delivery", "quarantined"] as const)
 test(`${asyncSweep ? "async" : "sync"} chain sweep separates ${state} custody from execution`, async () => {
