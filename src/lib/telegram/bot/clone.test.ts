@@ -273,10 +273,10 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
       await service.addBot(fakeBotToken(String(id)));
     }
     const allRefused = await call("all-local-bots-absent");
-    expect(allRefused).toMatchObject({ ok: false, code: "clone_files_unsupported", details: { refusals: expect.arrayContaining([
-      expect.objectContaining({ bot: { name: "Report clone", username: null }, code: "clone_files_unsupported" }),
-    ]) } });
-    expect((allRefused as { details: { refusals: unknown[] } }).details.refusals).toHaveLength(10);
+    expect(allRefused).toMatchObject({ ok: false, code: "clone_files_unsupported" });
+    const refusals = (allRefused as { details: { refusals: unknown[] } }).details.refusals;
+    expect(refusals).toHaveLength(10);
+    expect(refusals.at(-1)).toMatchObject({ bot: { name: "Report clone", username: null }, code: "clone_files_unsupported" });
     expect(bot.callsOf(method)).toHaveLength(1); expect(sends).toHaveLength(1);
   } finally {
     await client.close(); listener.stop(true);
