@@ -17,6 +17,14 @@ keeps its own claim; the original continues to mirror its progress. An unstarted
 reservation is adopted using its original key, without calling creation.
 Foreign branch work and an unresolved publication refuse adoption.
 
+Conflict-free base updates retain the runner's mechanical Git path. Its landed
+update receipt admits the prepared head directly to `integration-review` in the
+existing outcome, with no resolver attempt. Provisioning fast-forwards only the
+owned checkout to that exact remote head. Dirty tracked files and colliding
+ignored files refuse the update; remote movement or revoked authority stops
+provisioning. The previous feature attempts stay unchanged, and the new head
+cannot land until its integration review and required checks pass.
+
 Each compatible batch freezes at most eight outcomes for one hour. Its cursor
 advances from persisted item receipts; a restart reconstructs execution from
 those records. Only one conflict resolver per repository owns execution
@@ -53,6 +61,7 @@ state and temporary directories through `scripts/gate-slot.sh`:
 bun run test src/lib/forge/autoRefresh.test.ts
 bun run test src/lib/pipelines/integration.test.ts
 bun run test src/lib/pipelines/integrationLifecycle.test.ts
+bun run test src/lib/pipelines/integrationMechanical.test.ts
 bun run test src/lib/pipelines/autoRefreshStore.test.ts
 bun run test src/lib/pipelines/stageCompletion.test.ts
 ```

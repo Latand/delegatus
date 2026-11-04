@@ -10810,7 +10810,7 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string; integration: string | null };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
@@ -10827,6 +10827,8 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
     createdAt: pipeline.createdAt,
     lastPassedCommit: pipeline.lastPassedCommit,
     owner: JSON.stringify(pipeline.delivery ? [pipeline.delivery.ownerId, pipeline.delivery.epoch, pipeline.delivery.active, pipeline.delivery.target] : null),
+    integration: pipeline.merge?.integration ? JSON.stringify([integrationScope(pipeline), integrationRequirementRevision(pipeline),
+      pipeline.merge.integration.expectedRemoteHead, pipeline.merge.integration.integratedHead, pipeline.merge.integration.decisionRevision]) : null,
     repoDir: pipeline.repoDir,
     worktreeDir: pipeline.worktreeDir,
     branch: pipeline.branch,
@@ -10890,15 +10892,29 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
     : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs })));
   const jobs = pending.map((pipeline) => {
     const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
+    const integration = pipeline.merge?.integration;
+    const integrationIdentityValid = !integration || integration.scope === integrationScope(pipeline)
+      && integration.requirementRevision === integrationRequirementRevision(pipeline)
+      && integration.ownerEpoch === pipeline.delivery?.epoch;
     const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
       if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
         || JSON.stringify(provisionFence(record)) !== fence) abort.abort();
     });
-    return { pipeline, abort, revalidate };
+    return { pipeline, abort, revalidate, integrationIdentityValid };
   });
   const revalidate = () => {
     try {
-      for (const job of jobs) job.revalidate();
+      for (const job of jobs) {
+        job.revalidate();
+        const integration = job.pipeline.merge?.integration;
+        if (!integration) continue;
+        try {
+          const policy = mergeOnReviewSetting(job.pipeline.project);
+          assertWorkspaceExecution(job.pipeline.project);
+          if (!job.integrationIdentityValid || !policy.enabled || policy.changedAt !== integration.decisionRevision
+            || job.pipeline.workspace && !workspacePrincipalAllows(job.pipeline.workspace, job.pipeline.project)) job.abort.abort();
+        } catch { job.abort.abort(); }
+      }
     } catch {
       // An unreadable registry cannot authorize more provisioning work.
       for (const job of jobs) job.abort.abort();

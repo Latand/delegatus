@@ -701,7 +701,7 @@ async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: Pull
   failedBase?: { base: string; reason: string }): Promise<boolean> {
   const target = baseUpdateTarget(read);
   const updateBase = ports.updateBase;
-  if (ports.startIntegration || !target || !updateBase || read.proactiveTaskIds?.length || view.isCrossRepository !== false
+  if (!target || !updateBase || read.proactiveTaskIds?.length || view.isCrossRepository !== false
     || view.headRefName !== target.branch.replace(/^refs\/heads\//, "")
     || !deliveryOwnership(read, ports.loadPipelines(), ports.setting(read.project))) return false;
   const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
@@ -872,7 +872,16 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       return;
     }
     decision = decideMerge(merge, view, required, now);
-    if (ports.startIntegration && view.state === "OPEN" && decision.kind !== "block") {
+    // A recorded, landed mechanical update still needs review on its new base.
+    // Keep its receipt across sweeps so a clean merge never needs a resolver.
+    let preparedHead: string | null = null;
+    const viewHead = view.headRefOid;
+    const blockedReason = decision.kind === "block" ? decision.reason : null;
+    const mechanical = ports.startIntegration && view.state === "OPEN"
+      && read.merge?.integration?.reviewedHead !== viewHead
+      && (blockedReason === null || view.checks.some(check => check.verdict === "red" && blockedReason === checkFailedReason(check.name)))
+      ? merge.updates.findLast(update => update.commit === viewHead && update.head === viewHead) : undefined;
+    if (ports.startIntegration && view.state === "OPEN" && (decision.kind !== "block" || mechanical)) {
       const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
       const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
       const ancestor = (await ports.run(["api", `repos/${merge.repository}/compare/${base}...${view.headRefOid}`, "--jq", ".merge_base_commit.sha"])).trim();
@@ -880,6 +889,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       // Soft branch protection can report CLEAN on an outdated base. The old
       // feature diff and mocked checks convey no review of new base contracts.
       if (ancestor !== base) decision = { kind: "refresh" };
+      else if (mechanical?.base === base) {
+        preparedHead = view.headRefOid;
+        decision = { kind: "refresh" };
+      }
     }
     if (read.refreshOf && merge.state === "merging" && decision.kind !== "merged" && !mergeEligible(read)) {
       await commit(ports, read, (currentMerge, current) => {
@@ -887,7 +900,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       });
       return;
     }
-    if (decision.kind === "refresh" && await updateBehindBase(read, merge, view, ports, now, bookkeeping, mayMerge, queueReason)) return;
+    if (decision.kind === "refresh" && !preparedHead && await updateBehindBase(read, merge, view, ports, now, bookkeeping, mayMerge, queueReason)) return;
     const red = view.checks.find(check => check.verdict === "red");
     const failedCheck = decision.kind === "block" && red && decision.reason === checkFailedReason(red.name);
     const machineParent = decision.kind === "block" && decision.reason === MERGE_REASONS.headChanged
@@ -902,13 +915,20 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
       const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
       if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
+      if (preparedHead && mechanical?.base !== base) {
+        await commit(ports, read, live => {
+          bookkeeping(live); live.state = "checking"; live.reason = "base changed before mechanical integration review";
+          live.nextReadAt = iso(now + MERGE_POLL_MS);
+        });
+        return;
+      }
       if (machineParent !== null && machineParent !== base) {
         await commit(ports, read, (live) => block(live, MERGE_REASONS.headChanged, now));
         return;
       }
       // An already published merge must be reviewed against its first parent.
       // Keeping that boundary also makes a replay review the same resolution.
-      const refreshHead = machineParent !== null ? merge.chain.at(-1)! : view.headRefOid;
+      const refreshHead = preparedHead ? read.lastPassedCommit : machineParent !== null ? merge.chain.at(-1)! : view.headRefOid;
       // Compare immutable SHAs: soft protection need not report BEHIND.
       const mergeBase = failedCheck
         ? (await ports.run(["api", `repos/${merge.repository}/compare/${base}...${view.headRefOid}`, "--jq", ".merge_base_commit.sha"])).trim()
@@ -921,7 +941,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
           await commit(ports, read, (live) => block(live, refreshRefusal, now));
           return;
         }
-        if (read.refreshOf?.base === base || read.merge?.integration?.desiredBase === base && read.merge.integration.reviewedHead) {
+        if (!preparedHead && (read.refreshOf?.base === base || read.merge?.integration?.desiredBase === base && read.merge.integration.reviewedHead)) {
           await commit(ports, read, (live) => block(live, MERGE_REASONS.refreshSameBase, now));
           return;
         }
@@ -951,6 +971,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
             block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
             return;
           }
+          if (preparedHead) bookkeeping(live);
           live.state = "refreshing";
           live.reason = null;
           live.nextReadAt = null;
@@ -958,6 +979,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
           if (ports.startIntegration) {
             live.integration = integrationRecord(current, iso(now));
             live.integration.expectedRemoteHead = view!.headRefOid;
+            live.integration.integratedHead = preparedHead;
             if (!current.merge?.integration?.cycles) {
               let ancestor = current;
               const seen = new Set<string>();

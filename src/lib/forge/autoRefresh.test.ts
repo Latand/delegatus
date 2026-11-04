@@ -1286,6 +1286,16 @@ test("durable integration keeps the mechanical updater before requesting agent w
   expect(h.creates).toEqual([]);
   expect(h.merges()).toEqual([]);
   expect(h.pipeline("queued-0").state).toBe("completed");
+  h.setMergeBase(MAIN_1);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(plans).toHaveLength(1);
+  expect(pushes).toHaveLength(1);
+  expect(h.pipeline("queued-0").cursor?.stageId).toBe("integration-review");
+  expect(h.pipeline("queued-0").runs.find(run => run.stageId === "integration-resolve")?.attempts).toEqual([]);
+  expect(h.merge("queued-0")?.integration).toMatchObject({ integratedHead: pushes[0]!.commit, reviewedHead: null });
+  expect(h.creates).toEqual([]);
+  expect(h.merges()).toEqual([]);
 });
 
 // Keep this causal probe identical on the pinned base and the fixed runner.

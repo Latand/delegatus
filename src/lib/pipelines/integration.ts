@@ -68,6 +68,10 @@ export function admitIntegration(pipeline: Pipeline, expected: Pipeline, stages:
     || record.decisionRevision !== merge.policyChangedAt) return "integration requirements or authority changed";
   if (record.cycles >= 64) return "integration cycle budget exhausted";
   if (record.repairs >= INTEGRATION_REPAIR_LIMIT) return "integration repair budget exhausted";
+  const prepared = record.integratedHead;
+  if (prepared && (prepared !== record.expectedRemoteHead || reservation.head !== pipeline.lastPassedCommit
+    || !merge.updates.some(update => update.commit === prepared && update.head === prepared && update.base === reservation.base)))
+    return "mechanical integration has no matching landed update receipt";
   const previousIds = new Set(INTEGRATION_STAGES);
   if (pipeline.stages.some(stage => previousIds.has(stage.id as typeof INTEGRATION_STAGES[number])) && !merge.integration)
     return "integration stage identity is already in use";
@@ -87,11 +91,12 @@ export function admitIntegration(pipeline: Pipeline, expected: Pipeline, stages:
   // the reconciled delivery head; the original comparison base stays above.
   pipeline.baseRef = record.expectedRemoteHead;
   pipeline.baseRefPinned = true;
-  pipeline.cursor = { stageId: INTEGRATION_STAGES[0], state: "pending", input: null, activatedBy: null };
+  if (prepared) pipeline.lastPassedCommit = prepared;
+  pipeline.cursor = { stageId: prepared ? "integration-review" : INTEGRATION_STAGES[0], state: "pending", input: null, activatedBy: null };
   pipeline.state = "provisioning"; pipeline.stateDetail = "integration accepted; preparing the existing outcome";
   pipeline.closedAt = null; pipeline.pausedState = null;
-  record.state = "resolving"; record.cycles++; record.ownerEpoch = delivery.epoch;
-  record.desiredBase = reservation.base; record.integratedHead = null; record.reviewedHead = null;
+  record.state = prepared ? "reviewing" : "resolving"; record.cycles++; record.ownerEpoch = delivery.epoch;
+  record.desiredBase = reservation.base; record.integratedHead = prepared; record.reviewedHead = null;
   record.binding = null; record.publicationId = null;
   record.startedAt = now; record.deadline = new Date(Date.parse(now) + INTEGRATION_SESSION_MS).toISOString();
   merge.integration = record;
