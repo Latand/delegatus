@@ -1,7 +1,8 @@
-import { expect, test, harness, PROJECT, OPEN_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
+import { expect, test, spyOn, harness, PROJECT, OPEN_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { guardedSeatTickPort, seatTickWorkSignal } from "./seatTickWork";
 import type { DeadlineScheduler } from "@/lib/deadline";
+import { deepFreeze } from "@/lib/deepFreeze";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -21,6 +22,29 @@ function clock() {
     for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
   } };
 }
+
+test("an owed wake reaches the seat with retained board rows and a busy event loop", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    tasks: Array.from({ length: 640 }, (_, index) => ({ id: `retained-${index}`, status: "done" as const })) });
+  const time = clock();
+  Object.assign(rig.deps, { workBudgetMs: 75_000, workClock: time.now, workScheduler: time.scheduler });
+  const ports = rig.deps.sources!;
+  const tasks = deepFreeze(ports.tasks()), lanes = deepFreeze(ports.pipelines());
+  ports.tasks = () => tasks;
+  ports.pipelines = () => lanes;
+  const immediate = globalThis.setImmediate;
+  let turns = 0;
+  const scheduling = spyOn(globalThis, "setImmediate").mockImplementation(((callback: (...args: unknown[]) => void, ...args: unknown[]) =>
+    immediate(() => { turns++; time.advance(250); callback(...args); })) as typeof setImmediate);
+  try {
+    const result = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(result).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
+    expect(rig.sent).toHaveLength(1);
+    expect(time.now()).toBeLessThan(75_000);
+    expect(turns).toBeGreaterThan(0);
+    expect(time.timers.size).toBe(0);
+  } finally { scheduling.mockRestore(); }
+});
 
 test.each(["liveness", "workerAsks", "recordRuleReports"] as const)(
   "a slow %s yields its share and the owed wake still lands", async source => {
