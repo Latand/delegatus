@@ -19,9 +19,9 @@ function deferred<T>() {
 }
 
 // The local provider drives the real interpreter, with no credentials or model.
-// Work is held by a file event beyond exec's yield; no wall-clock race decides
-// when the model is allowed to see the completed result.
-for (const exit of [0, 37]) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit})`, async () => {
+// Recorder startup and work completion are held by file events beyond exec's
+// yield; neither receipt depends on fitting inside the exec output window.
+for (const delayedStartup of [false, true]) for (const exit of [0, 37]) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit}${delayedStartup ? ", delayed recorder" : ""})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
   const env = withoutInheritedGate(isolatedEnvironment(root, checkEnvironment(process.env)));
   env.TMPDIR = root;
@@ -72,6 +72,16 @@ const root = process.argv[2];
 const watcher = fs.watch(root, () => { if (fs.existsSync(root + '/release')) { watcher.close(); console.log('completed work'); process.exit(${exit}); } });
 fs.writeFileSync(root + '/ready', 'ready');
 `);
+  const launcher = path.join(root, "launch.mjs");
+  fs.writeFileSync(launcher, `import fs from 'node:fs';
+const root = process.argv[2];
+await new Promise(resolve => {
+  const check = () => { if (fs.existsSync(root + '/start-recorder')) { watcher.close(); resolve(); } };
+  const watcher = fs.watch(root, check); check();
+});
+const child = Bun.spawn(process.argv.slice(3), { stdin: 'ignore', stdout: 'inherit', stderr: 'inherit' });
+process.exit(await child.exited);
+`);
   const child = spawn(binary!, ["app-server", "--stdio"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   let diagnostics = "";
   child.stderr.on("data", data => { diagnostics = (diagnostics + data).slice(-8000); });
@@ -114,13 +124,23 @@ fs.writeFileSync(root + '/ready', 'ready');
     await rpc("turn/start", { threadId: thread.id, input: [{ type: "text", text: "run the check", text_elements: [] }] });
     const response = await bounded(first.promise);
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-    const cmd = ["/bin/bash", path.join(import.meta.dir, "gate-slot.sh"), "--record", path.join(root, "check.log"), process.execPath, fixture, root].map(quote).join(" ");
+    const record = ["/bin/bash", path.join(import.meta.dir, "gate-slot.sh"), "--record", path.join(root, "check.log"), process.execPath, fixture, root];
+    const cmd = (delayedStartup ? [process.execPath, launcher, root, ...record] : record).map(quote).join(" ");
     const item = { id: "one-check", type: "function_call", call_id: "one-check", name: "exec_command", arguments: JSON.stringify({ cmd, yield_time_ms: 1 }) };
     response.write(`event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item })}\n\n`);
     response.end(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "fixture", status: "completed", output: [item] } })}\n\n`);
     const yielded = await bounded(second.promise);
     const output = JSON.parse(yielded.body).input.find((item: { type: string }) => item.type === "function_call_output");
-    expect(output.output).toContain("recording started");
+    expect(output.output).toContain("Process running with session ID");
+    if (delayedStartup) {
+      expect(fs.existsSync(path.join(root, "check.log.gate/completion.json"))).toBe(false);
+      fs.writeFileSync(path.join(root, "start-recorder"), "start");
+    }
+    if (!fs.existsSync(path.join(root, "ready"))) await bounded(new Promise<void>(resolve => {
+      const check = () => { if (fs.existsSync(path.join(root, "ready"))) { readyWatcher?.close(); resolve(); } };
+      readyWatcher = fs.watch(root, check); check();
+    }));
+    expect(fs.existsSync(path.join(root, "check.log.gate/completion.json"))).toBe(true);
     const waitItem = { id: "one-wait", type: "function_call", call_id: "one-wait", name: gateCheckTool.name,
       arguments: JSON.stringify({ log: path.join(root, "check.log"), reason: "fixture comparator" }) };
     yielded.response.write(`event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: waitItem })}\n\n`);
@@ -128,10 +148,6 @@ fs.writeFileSync(root + '/ready', 'ready');
     await bounded(Promise.race([waiting.promise, third.promise.then(() => { throw Error("native wait tool did not reach its handler"); })]));
     expect(requests, diagnostics).toBe(2);
     expect(fs.existsSync(path.join(root, "check.log.gate/exit"))).toBe(false);
-    if (!fs.existsSync(path.join(root, "ready"))) await bounded(new Promise<void>(resolve => {
-      const check = () => { if (fs.existsSync(path.join(root, "ready"))) { readyWatcher?.close(); resolve(); } };
-      readyWatcher = fs.watch(root, check); check();
-    }));
     for (let i = 0; i < 1000; i++) fs.appendFileSync(path.join(root, "check.log"), `progress ${i}\n`);
     await Promise.resolve();
     expect(requests).toBe(2);
@@ -145,6 +161,7 @@ fs.writeFileSync(root + '/ready', 'ready');
     await bounded(finished.promise);
   } finally {
     readyWatcher?.close();
+    fs.writeFileSync(path.join(root, "start-recorder"), "start");
     fs.writeFileSync(path.join(root, "release"), "release");
     abort.abort();
     await stopFixtureProcess(child);
