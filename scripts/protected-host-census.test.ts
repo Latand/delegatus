@@ -353,30 +353,132 @@ test("B-4: unreadable native evidence and missing descriptions report incomplete
   }
 });
 
-test("B-4: more than 200 owners and folded live generations never claim completeness", async () => {
-  for (const folded of [false, true]) {
-    const f = fixture();
-    try {
-      const base = f.rows[0]!;
-      for (let index = 0; index < (folded ? 1 : 202); index++) {
-        const pid = 5000 + index;
-        const pathname = path.join(path.dirname(base.pathname), `extra-${index}.jsonl`);
-        fs.copyFileSync(base.pathname, pathname);
-        const entry = structuredClone(base.entry);
-        entry.artifactPath = pathname;
-        entry.key.sessionId = `extra-${index}`;
-        entry.structuredHost!.process = { pid, startIdentity: "fixture-start" };
-        f.file.entries[`codex:${entry.key.sessionId}`] = entry;
-        const generation = { ...base.conversation.generations[0]!, path: pathname, id: entry.key.sessionId };
-        if (folded) f.file.conversations[base.id]!.generations.push(generation);
-        else f.file.conversations[`conversation_extra-${index}`] = { ...structuredClone(base.conversation), id: `conversation_extra-${index}`, generations: [generation] } as never;
-      }
-      const answer = await censusSnapshot({ ...f.sources, describeTranscript: censusDescriber(f.file) }, 1, TARGET, 30000);
-      expect(answer.unselectedCount + answer.undescribedHostCount).toBeGreaterThan(0);
-      if (folded) expect(answer.measurements.foldedConversations).toBe(1);
-      else expect(answer.selection.matched).toBeGreaterThan(200);
-    } finally { f.close(); }
-  }
+test("live census: readable older hosts remain selected beside their conversation's current host", async () => {
+  const f = fixture();
+  try {
+    const base = f.rows[0]!;
+    fs.utimesSync(base.pathname, new Date(NOW), new Date(NOW));
+    const pathname = path.join(path.dirname(base.pathname), "older-generation.jsonl");
+    fs.copyFileSync(base.pathname, pathname);
+    fs.utimesSync(pathname, new Date(Date.parse(NOW) - 1000), new Date(Date.parse(NOW) - 1000));
+    const entry = structuredClone(base.entry);
+    entry.artifactPath = pathname;
+    entry.key.sessionId = "older-generation";
+    entry.structuredHost!.process = { pid: 5000, startIdentity: "fixture-start" };
+    f.file.entries["codex:older-generation"] = entry;
+    f.file.conversations[base.id]!.generations.unshift({ ...base.conversation.generations[0]!, path: pathname, id: "older-generation" });
+    const answer = await censusSnapshot({ ...f.sources, describeTranscript: censusDescriber(f.file) }, 1, TARGET, 30000);
+    expect(answer.conversations.filter(row => row.conversationId === base.id).map(row => row.host.pid).sort()).toEqual([4001, 5000]);
+    expect(answer.measurements.foldedConversations).toBe(1);
+    expect(answer.unselectedCount).toBe(0);
+    expect(answer.selection.matched).toBe(answer.selection.selected);
+    expect(answer.undescribedHostCount).toBe(0);
+  } finally { f.close(); }
+});
+
+test.each(["tmux", "receipt", "headless"])("live census: folded %s ownership keeps its own process", async kind => {
+  const f = fixture();
+  try {
+    const current = f.rows[0]!;
+    const older = f.rows.find(row => row.kind === kind)!;
+    fs.utimesSync(current.pathname, new Date(NOW), new Date(NOW));
+    fs.utimesSync(older.pathname, new Date(Date.parse(NOW) - 1000), new Date(Date.parse(NOW) - 1000));
+    delete f.file.conversations[older.id];
+    f.file.conversations[current.id]!.generations.unshift(older.conversation.generations[0]!);
+    if (kind === "receipt") f.file.receipts["receipt-only"]!.conversationId = current.id as `conversation_${string}`;
+    const flows = f.sources.flows().map(flow => ({ ...flow, rounds: flow.rounds.map(round => ({ ...round,
+      ...(kind === "headless" ? { reviewerConversationId: current.id as `conversation_${string}` } : {}),
+    })) }));
+    const answer = await censusSnapshot({ ...f.sources, flows: () => flows, describeTranscript: censusDescriber(f.file) }, 1, TARGET, 30000);
+    expect(answer.conversations.filter(row => row.conversationId === current.id).map(row => row.host.pid).sort()).toEqual([current.pid, older.pid]);
+    expect(answer.undescribedHostCount).toBe(0);
+    expect(answer.unselectedCount).toBe(0);
+    expect(answer.selection.projected + answer.selection.unreadable).toBe(0);
+  } finally { f.close(); }
+});
+
+test("live census: setup without an artifact is excluded, a real pathless host remains incomplete", async () => {
+  const f = fixture();
+  try {
+    const setup = structuredClone(f.file.receipts["receipt-only"]!);
+    Object.assign(setup, { launchId: "setup-only", conversationId: f.rows[0]!.id, artifactPath: null,
+      admissionOwner: { pid: 6000, startIdentity: "fixture-start" } });
+    f.file.receipts[setup.launchId] = setup;
+    const ready = await censusSnapshot(f.sources, 1, TARGET, 30000);
+    expect(ready.undescribedHostCount).toBe(0);
+    const owner: AgentRegistryEntry = structuredClone(f.rows[0]!.entry);
+    owner.key.sessionId = "pathless-host";
+    owner.artifactPath = "";
+    owner.structuredHost!.process = { pid: 6001, startIdentity: "fixture-start" };
+    f.file.entries["codex:pathless-host"] = owner;
+    const missing = await censusSnapshot(f.sources, 1, TARGET, 30000);
+    expect(missing.undescribedHostCount).toBe(1);
+  } finally { f.close(); }
+});
+
+test("live census: duplicate registry records count one physical owner", async () => {
+  const f = fixture();
+  try {
+    const original = f.rows[0]!;
+    const duplicate = structuredClone(original.entry);
+    duplicate.key.sessionId = "duplicate-owner";
+    f.file.entries["codex:duplicate-owner"] = duplicate;
+    const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
+    expect(answer.measurements.owners).toBe(5);
+    expect(answer.conversations.filter(row => row.host.pid === original.pid)).toHaveLength(1);
+    expect(answer.undescribedHostCount + answer.unselectedCount).toBe(0);
+  } finally { f.close(); }
+});
+
+test("live census: a folded headless owner without a path retains the native conversation fallback", async () => {
+  const f = fixture();
+  try {
+    const current = f.rows[0]!;
+    const flows = f.sources.flows().map(flow => ({ ...flow, rounds: flow.rounds.map(round => ({ ...round,
+      reviewerPath: null, reviewerConversationId: current.id as `conversation_${string}`,
+    })) }));
+    const answer = await censusSnapshot({ ...f.sources, flows: () => flows }, 1, TARGET, 30000);
+    expect(answer.conversations.filter(row => row.conversationId === current.id).map(row => row.host.pid).sort()).toEqual([4001, 4006]);
+    expect(answer.undescribedHostCount + answer.unselectedCount).toBe(0);
+  } finally { f.close(); }
+});
+
+test("live census: a missing recorded transcript counts one undescribed host and still refuses capture", async () => {
+  const f = fixture();
+  try {
+    // Both the default session home and a managed account home can lose a
+    // recorded artifact. The native describer uses the recorded path directly.
+    for (const row of [f.rows[0]!, f.rows[1]!]) fs.unlinkSync(row.pathname);
+    const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
+    expect(answer.undescribedHostCount).toBe(2);
+    expect(answer.conversations.some(row => [4001, 4002].includes(row.host.pid ?? 0))).toBe(false);
+    const check = spawnSync("python3", ["-c", "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('deploy',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.complete_activity(json.load(sys.stdin))", path.join(ROOT, "scripts/deploy-checkout.py")],
+      { input: JSON.stringify(answer), encoding: "utf8", timeout: 10000 });
+    expect(check.status).not.toBe(0);
+    expect(check.stderr).toContain("protected activity capture incomplete");
+  } finally { f.close(); }
+});
+
+test("B-4: more than 200 owners never claim completeness", async () => {
+  const f = fixture();
+  try {
+    const base = f.rows[0]!;
+    for (let index = 0; index < 202; index++) {
+      const pid = 5000 + index;
+      const pathname = path.join(path.dirname(base.pathname), `extra-${index}.jsonl`);
+      fs.copyFileSync(base.pathname, pathname);
+      const entry = structuredClone(base.entry);
+      entry.artifactPath = pathname;
+      entry.key.sessionId = `extra-${index}`;
+      entry.structuredHost!.process = { pid, startIdentity: "fixture-start" };
+      f.file.entries[`codex:${entry.key.sessionId}`] = entry;
+      const generation = { ...base.conversation.generations[0]!, path: pathname, id: entry.key.sessionId };
+      f.file.conversations[`conversation_extra-${index}`] = { ...structuredClone(base.conversation), id: `conversation_extra-${index}`, generations: [generation] } as never;
+    }
+    const answer = await censusSnapshot({ ...f.sources, describeTranscript: censusDescriber(f.file) }, 1, TARGET, 30000);
+    expect(answer.unselectedCount + answer.undescribedHostCount).toBeGreaterThan(0);
+    expect(answer.selection.matched).toBeGreaterThan(200);
+  } finally { f.close(); }
 });
 
 test("B-4: a tail that misses the evidence deadline is projected and refused", async () => {
