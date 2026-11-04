@@ -1,6 +1,6 @@
 import { expect, test, fs, path, realWorktreeLane, tickPipelines, loadPipelines, savePipelines, patchPipeline } from "./engine.fixture";
 
-test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch", "locked", "reappeared", "present-dirty"] as const)(
+test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch", "locked", "reappeared", "reappeared-at-prune", "present-dirty"] as const)(
   "activation handles a %s lane checkout before dependency setup", async shape => {
     const f = await realWorktreeLane("missing-checkout", [
       { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null },
@@ -37,12 +37,20 @@ test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch"
       if (shape === "held-branch") await f.git(f.repo, "worktree", "add", holder, lane.branch);
       if (shape === "locked") await f.git(f.repo, "worktree", "lock", f.worktree);
       f.h.ports.worktreePresent = dir => fs.existsSync(dir);
-      if (shape === "reappeared") {
+      if (shape === "reappeared" || shape === "reappeared-at-prune") {
         const exec = f.h.ports.exec;
         let restored = false;
         f.h.ports.exec = async (...input) => {
+          const args = input[1];
+          if (!restored && shape === "reappeared-at-prune" && args[0] === "worktree" && args[1] === "prune") {
+            restored = true;
+            const result = await exec(...input);
+            await f.git(f.repo, "worktree", "add", f.worktree, lane.branch);
+            fs.writeFileSync(path.join(f.worktree, "sentinel.tmp"), "owned by the recreated checkout\n");
+            return result;
+          }
           const result = await exec(...input);
-          if (!restored && input[1][0] === "worktree" && input[1][1] === "list") {
+          if (!restored && shape === "reappeared" && args[0] === "worktree" && args[1] === "list") {
             restored = true;
             await f.git(f.repo, "worktree", "remove", f.worktree);
             await f.git(f.repo, "worktree", "add", f.worktree, lane.branch);
@@ -78,6 +86,8 @@ test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch"
         expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(head);
         expect(fs.readFileSync(path.join(f.worktree, "retained.txt"), "utf8"))
           .toBe(shape === "present-dirty" || shape === "reappeared" ? "dirty work\n" : "unpublished work\n");
+        if (shape === "reappeared-at-prune")
+          expect(fs.readFileSync(path.join(f.worktree, "sentinel.tmp"), "utf8")).toBe("owned by the recreated checkout\n");
         await tickPipelines([], f.h.ports);
         expect(f.h.spawnInputs).toHaveLength(before + 1);
       }
@@ -88,7 +98,7 @@ test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch"
   }, 30_000,
 );
 
-test.each(["ref", "listing", "remove", "add"] as const)(
+test.each(["ref", "listing", "prune", "add"] as const)(
   "pausing activation after recovery %s retains custody without dispatch", async boundary => {
     const f = await realWorktreeLane("recovery-paused", [
       { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null },

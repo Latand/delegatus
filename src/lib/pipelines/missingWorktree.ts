@@ -16,7 +16,7 @@ export async function restoreMissingLaneWorktree(
   const deadline = performance.now() + 60_000;
   const git = async (args: string[]) => {
     assertCurrent();
-    if (args[0] === "worktree" && (args[1] === "remove" || args[1] === "add") && !missing())
+    if (args[0] === "worktree" && args[1] === "add" && !missing())
       throw new Error(`${prefix}; a directory appeared during recovery; inspect it and retry the stage`);
     const remaining = deadline - performance.now();
     if (signal.aborted || remaining <= 0) throw new Error(`${prefix}; checkout recovery was interrupted; retry the stage`);
@@ -44,11 +44,20 @@ export async function restoreMissingLaneWorktree(
   if (registration) {
     if (registration.some(field => field === "locked" || field.startsWith("locked ")))
       throw new Error(`${prefix}; its worktree registration is locked; resolve the lock and retry the stage`);
-    // Git removes this one stale registration without deleting the branch.
-    // No force or global prune: other registrations and present files stay.
-    const removed = await git(["worktree", "remove", lane.worktreeDir]);
-    if (!missing()) return;
-    if (removed.code !== 0) throw new Error(`${prefix}; its stale worktree registration could not be released; repair that registration and retry the stage`);
+    // `worktree remove` recursively deletes the checkout. The path can reappear
+    // after our last lstat and before Git starts, so prune stale metadata only:
+    // Git never removes files from a worktree, including one recreated during
+    // this command. Verify any reappeared checkout against the lane before
+    // accepting it; a conflicting directory is left untouched and reported.
+    const pruned = await git(["worktree", "prune", "--expire=now"]);
+    if (!missing()) {
+      const appearedHead = await git(["-C", lane.worktreeDir, "rev-parse", "HEAD"]);
+      const appearedBranch = await git(["-C", lane.worktreeDir, "symbolic-ref", "--quiet", "HEAD"]);
+      if (appearedHead.code === 0 && appearedHead.stdout.trim() === head
+        && appearedBranch.code === 0 && appearedBranch.stdout.trim() === ref) return;
+      throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
+    }
+    if (pruned.code !== 0) throw new Error(`${prefix}; its stale worktree registration could not be released; repair that registration and retry the stage`);
   }
   const current = await git(["rev-parse", "--verify", `${ref}^{commit}`]);
   if (!missing()) return;
