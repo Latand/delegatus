@@ -32,6 +32,7 @@ import {
   pipelineLinkedTasks,
   resolveStageNavFile,
   stageAttempts,
+  stageConfigurable,
   stageNames,
   type StageNavTarget,
 } from "../pipelines/pipelineModel";
@@ -53,6 +54,7 @@ import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
+import { takeRequestedStage } from "./pipelineStageRequest";
 
 /*
  * One pipeline on the phone: the Stages view (#2072 slice 6,
@@ -491,7 +493,21 @@ export function MobilePipelineScreen({
      open (§3.3: one history entry, which Back closes); this says which stage. The pane inside is the desktop's own
      editor, so a change made from the phone is the same `override-stage`
      PATCH the board sends. */
-  const [configuring, setConfiguring] = useState<string | null>(null);
+  /* A tap on a stage that has not started, on the task screen,
+     opens this screen on that stage's sheet. */
+  const [configuring, setConfiguring] = useState<string | null>(() => {
+    const requestedStage = takeRequestedStage(pipeline.id);
+    return requestedStage && stageConfigurable(pipeline, requestedStage) ? requestedStage : null;
+  });
+  const openedOnStage = useRef(configuring);
+  useEffect(() => {
+    if (openedOnStage.current) nav.openSheet("stage");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, for the stage the screen opened on
+  }, []);
+  const configureStage = (stage: PipelineStage): void => {
+    setConfiguring(stage.id);
+    nav.openSheet("stage");
+  };
   const configStage = navState.sheet === "stage" && configuring
     ? pipeline.stages.find((stage) => stage.id === configuring) ?? null
     : null;
@@ -706,10 +722,7 @@ export function MobilePipelineScreen({
           stageConversation={stageConversation}
           onOpenStage={openStage}
           onOpenAttempt={openAttempt}
-          onConfigureStage={(_pipeline, stage) => {
-            setConfiguring(stage.id);
-            nav.openSheet("stage");
-          }}
+          onConfigureStage={(_pipeline, stage) => configureStage(stage)}
           onWorkLinks={() => nav.openSheet("links")}
           afterStages={fromConversation ? <AddStageControl pipeline={pipeline} ports={ports} variant="phone" /> : undefined}
         />

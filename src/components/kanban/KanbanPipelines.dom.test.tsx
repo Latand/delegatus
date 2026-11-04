@@ -160,27 +160,32 @@ const click = (element: Element | null | undefined) => {
 };
 
 const toggle = (host: HTMLElement) => card(host).querySelector<HTMLElement>("[data-graph-toggle]");
+/* «Graph» opens the Stages sheet with its graph shown; the card draws none (docs/design/task-card-no-inline-conversations.md §3). */
+const graphView = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-stages-sheet] .gs-graph")!;
 const helperAttempt = (n: number, file: FileEntry, startedAgo: number) => attempt(n, "passed", file, startedAgo, { historical: true, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
 
-test("every card starts on the compact summary, the active Assigned card included; the toggle opens the graph, pressed, and the choice outlives a re-render", async () => {
+test("every card draws the compact summary only, the active Assigned card included; «Graph» opens the graph full-screen, outside the card, and the card stays as it was", async () => {
   const { host, render } = mount([searchPipeline()]);
   await tick();
   const section = () => card(host).querySelector(".pblock")!;
-  expect(section().querySelector(".pb-graph")).toBeNull();
-  expect(card(host).querySelector(".pnode")).toBeNull();
-  expect(toggle(host)?.getAttribute("aria-pressed")).toBe("false");
+  expect(card(host).querySelector(".pnode, .pgraph, [data-graph]")).toBeNull();
+  expect(toggle(host)?.hasAttribute("aria-pressed")).toBe(false);
   expect([...card(host).querySelectorAll(".pb-pills .pb-pill")].map((chip) => chip.getAttribute("data-stage"))).toEqual(["implement", "review", "verify", "merge"]);
   /* The fail edge rides the failing pill, never a chip of its own in the row (#1798, #2072). */
   expect(card(host).querySelector(".pb-pills .ploop")).toBeNull();
   expect(card(host).querySelector('.pb-pills [data-stage="verify"] [data-stage-return="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
+  const before = card(host).innerHTML;
   click(toggle(host));
   await tick();
-  expect(section().querySelector('.pb-graph[data-open="1"]')).toBeTruthy();
-  expect(toggle(host)?.getAttribute("aria-pressed")).toBe("true");
-  expect(card(host).querySelectorAll(".pnode")).toHaveLength(4);
+  expect(host.querySelector("[data-stages-sheet]")?.getAttribute("data-stages-sheet")).toBe("p-search");
+  expect(host.querySelector("[data-sheet-graph]")?.getAttribute("aria-pressed")).toBe("true");
+  expect(graphView(host).querySelectorAll(".pnode")).toHaveLength(4);
+  expect(card(host).querySelector(".pnode, .pgraph, [data-graph]")).toBeNull();
+  expect(section().querySelector(".pb-pills")).toBeTruthy();
+  expect(card(host).innerHTML).toBe(before);
   render([searchPipeline()]);
   await tick();
-  expect(card(host).querySelectorAll(".pnode")).toHaveLength(4);
+  expect(graphView(host).querySelectorAll(".pnode")).toHaveLength(4);
 });
 
 test("the opened graph shows each stage's state, the pass edges, the fail edge back with its spent budget, and review rounds", async () => {
@@ -188,7 +193,7 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   await tick();
   click(toggle(host));
   await tick();
-  const section = card(host).querySelector(".pblock")!;
+  const section = graphView(host);
   const nodes = [...section.querySelectorAll<HTMLElement>(".pnode")];
   expect(nodes.map((node) => node.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   expect(nodes.map((node) => node.querySelector(".pstate")?.textContent)).toEqual(["passed", "passed", "running", "waiting"]);
@@ -240,12 +245,15 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     expect(card(host).querySelector('.pb-pills [data-stage-return="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
     click(toggle(host));
     await tick();
-    expect(card(host).querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')?.dataset.stripFired).toBe("1");
-    expect(card(host).querySelector('.pnode[data-stage="implement"] .pattempt')?.textContent).toBe(" · 2");
-    click(card(host).querySelector('.pnode[data-stage="implement"]'));
+    expect(graphView(host).querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')?.dataset.stripFired).toBe("1");
+    expect(graphView(host).querySelector('.pnode[data-stage="implement"] .pattempt')?.textContent).toBe(" · 2");
+    click(graphView(host).querySelector('.pnode[data-stage="implement"]'));
     expect(await inWindow(host)).toBe("conversation_implement-2");
     expect(card(host).querySelector("[data-kanban-reader]")).toBeNull();
-    expect(card(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(graphView(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(card(host).querySelector('.pb-pills [data-stage="implement"]')?.className).toContain("selected");
+    click(host.querySelector("[data-sheet-close]"));
+    await tick();
     /* The helper stays reachable, listed as what it is. */
     const helpers = [...card(host).querySelectorAll('details.history [data-past-kind="helper"] .lbl')].map((node) => node.textContent);
     expect(helpers).toEqual(["Implement · helper conversation 1"]);
@@ -281,14 +289,14 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   await tick();
   render([searchPipeline()]);
   await tick();
-  expect(card(host).querySelector(".pstrip.live")).toBeNull();
+  expect(graphView(host).querySelector(".pstrip.live")).toBeNull();
 
   /* A helper adopted with the fail edge's provenance copied onto it. */
   const adopted = searchPipeline();
   adopted.runs[0]!.attempts.push(helperAttempt(3, conversation("implement-helper"), 900) as never);
   render([adopted]);
   await tick();
-  expect(card(host).querySelector(".pstrip.live")).toBeNull();
+  expect(graphView(host).querySelector(".pstrip.live")).toBeNull();
 
   /* Implement's own third attempt, activated by Verify failing. */
   const retried = searchPipeline();
@@ -296,7 +304,7 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   render([retried]);
   await tick();
   /* The fail edge folds into Verify's strip, which takes the live mark. */
-  const liveStrip = card(host).querySelector<HTMLElement>(".pstrip.live")!;
+  const liveStrip = graphView(host).querySelector<HTMLElement>(".pstrip.live")!;
   expect(liveStrip.dataset.strip).toBe("verify:fail:implement");
   /* The second return spends the budget: no hollow dot is left. */
   expect(liveStrip.dataset.stripFired).toBe("2");
@@ -310,9 +318,9 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   later.runs[1]!.attempts.push(attempt(2, "running", conversation("review-2"), 5) as never);
   render([later]);
   await tick();
-  expect(card(host).querySelector(".pstrip.live")).toBeTruthy();
+  expect(graphView(host).querySelector(".pstrip.live")).toBeTruthy();
   await tick(2_300);
-  expect(card(host).querySelector(".pstrip.live")).toBeNull();
+  expect(graphView(host).querySelector(".pstrip.live")).toBeNull();
 });
 
 test("a review stage with five rounds draws the latest round and a count of the earlier ones, and names every round in its label", async () => {
@@ -330,7 +338,7 @@ test("a review stage with five rounds draws the latest round and a count of the 
   await tick();
   click(toggle(host));
   await tick();
-  const review = card(host).querySelector<HTMLElement>('.pnode[data-stage="review"]')!;
+  const review = graphView(host).querySelector<HTMLElement>('.pnode[data-stage="review"]')!;
   /* One circled number for the rounds, in the same vocabulary as the arrows,
      and the hover still names every round (#1743). */
   expect(review.querySelector(".rounds-mark")?.getAttribute("data-rounds")).toBe("5");
