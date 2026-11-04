@@ -434,6 +434,7 @@ describe("shared memory settings", () => {
     const memory = await import("@/app/api/memory/settings/route");
     const keysList = await import("@/app/api/keys/route");
     const keyWrite = await import("@/app/api/keys/[id]/route");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
     const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
     const { memoryIndex } = await import("@/lib/memory/service");
     const { writeAsksYouSettings } = await import("@/lib/asks/settings");
@@ -476,6 +477,8 @@ describe("shared memory settings", () => {
         fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
         fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        /* The operator's own browser session, as the Viewer's page navigation sets it. */
+        await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
         try {
           /* Shared memory and «Keys» are pages of the header menu (docs/design/header-menu.md, keys-settings.md):
              the rail's ⋯ on the desktop, the board menu's sheet on the phone, Settings, then the row. */
@@ -12471,6 +12474,7 @@ describe("keys settings", () => {
     const backend = await import("@/app/api/transcribe/backend/route");
     const { setTelegramConnectForTests } = await import("@/lib/keys/store");
     const { KEY_IDS } = await import("@/lib/keys/shared");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
     const { saveBotToken } = await import("@/lib/telegram/bot/transport");
     const { botIdFromToken } = await import("@/lib/telegram/bot/contracts");
     const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
@@ -12587,7 +12591,8 @@ describe("keys settings", () => {
 
         const openSection = async (state: State) => {
           await context.clearCookies();
-          if (memberCookie) await context.addCookies([{ name: MEMBER_COOKIE, value: memberCookie, url: server.base }]);
+          /* The operator's own browser session, as the Viewer's page navigation sets it, or a team member's. */
+          await context.addCookies([memberCookie ? { name: MEMBER_COOKIE, value: memberCookie, url: server.base } : { name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
           await page.goto(base);
           if (state === "from-dictation") return;
           await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
