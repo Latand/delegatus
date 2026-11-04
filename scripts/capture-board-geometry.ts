@@ -7814,9 +7814,11 @@ async function installPingMain(): Promise<void> {
       const toggle = dialog.locator("[data-telemetry-ping]");
       await dialog.locator("[data-settings-details-toggle]").click();
       if (!await toggle.isChecked() || !await toggle.isEnabled()) report.failures.push(`${lang}-${width}: default switch unavailable`);
+      /* The window owns the surface and the scroll; this section's rows run on inside it. */
       const geometry = await dialog.evaluate(node => {
-        const box = node.getBoundingClientRect();
-        return { background: getComputedStyle(node).backgroundColor, overflow: node.scrollWidth - node.clientWidth, left: box.left, right: box.right, bottom: box.bottom, text: node.textContent };
+        const surface = node.closest("[data-settings-window], [data-mobile2-sheet='settings']")!;
+        const box = surface.getBoundingClientRect();
+        return { background: getComputedStyle(surface).backgroundColor, overflow: node.scrollWidth - node.clientWidth, left: box.left, right: box.right, bottom: box.bottom, text: node.textContent };
       });
       report.frames[`${lang}-${width}`] = geometry;
       if (geometry.background === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent settings`);
