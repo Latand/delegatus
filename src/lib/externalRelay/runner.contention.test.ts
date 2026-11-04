@@ -140,7 +140,9 @@ test("a reply below a long bot answer resumes the same owner conversation with o
       continuations++; expect(turn.conversationId).toBe("conversation_bounded_chain");
       assertStructuredTextEnvelope(prompt);
       expect(JSON.parse(prompt.match(/<conversation>\n([\s\S]*?)\n<\/conversation>/)![1]!)).toEqual([next]);
-      return { ok: true as const, structured: true as const, target: turn.conversationId!, outcome: "delivered" as const, operationId: "bounded-chain-reply" };
+      return { ok: true, structured: true, target: turn.conversationId!, outcome: "delivered", operationId: "bounded-chain-reply",
+        receipt: { operationId: "bounded-chain-reply", idempotencyKey: "bounded-chain-reply", conversationId: turn.conversationId!,
+          kind: "send", status: "delivered", at: "2026-11-04T00:00:00Z", revision: 1 } };
     },
     observe: async () => ({ state: "ended" as const, finalText: continuations ? "Висновок пояснено" : parent.text }),
     stop: async () => { throw new Error("a completed chain must not be stopped"); },
