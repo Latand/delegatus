@@ -9,10 +9,11 @@ if (process.argv[2] === "admit") {
   ports.roleLookup = id => ({ engine: "codex", model: null, effort: null, access: id === "reviewer" ? "read-only" : "read-write", promptScaffold: "Fixture role" });
   result = await startPipelineIntegration(p, ports);
 }
-if (process.argv[2] === "replay-adopted" && p.adoptedCreationRequest) {
+if (process.argv[2] === "replay-adopted" && (p.adoptedCreationRequests?.length || p.adoptedCreationRequest)) {
+  const receipt = p.adoptedCreationRequests?.[0] ?? p.adoptedCreationRequest!;
   result = await createPipelineFromRequest({ task: p.task, repoDir: p.repoDir, stages: p.stages }, defaultPipelinePorts(), {
-    creationRequest: p.adoptedCreationRequest,
+    creationRequest: receipt,
   });
 }
 console.log(JSON.stringify({ result, items: loadPipelines().map(p => ({ id: p.id, state: p.state, integration: p.merge?.integration,
-  epoch: p.delivery?.epoch, adoptedCreationRequest: p.adoptedCreationRequest })) }));
+  epoch: p.delivery?.epoch, adoptedCreationRequest: p.adoptedCreationRequest, adoptedCreationRequests: p.adoptedCreationRequests })) }));

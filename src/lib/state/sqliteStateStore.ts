@@ -404,6 +404,57 @@ const stateSchema = [
     PRIMARY KEY(collection, row_key),
     FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
   )`,
+  `CREATE TABLE IF NOT EXISTS pipeline_request_receipts (
+    collection TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    request_key TEXT NOT NULL,
+    PRIMARY KEY(collection, row_key, request_key),
+    FOREIGN KEY(collection, row_key) REFERENCES state_rows(collection, row_key) ON DELETE CASCADE
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_request_receipt_key
+    ON pipeline_request_receipts(collection, request_key, row_key)`,
+  `CREATE INDEX IF NOT EXISTS pipeline_adopted_creation_request
+    ON state_rows(collection, json_extract(value_json, '$.adoptedCreationRequest.key'))
+    WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
+      AND json_extract(value_json, '$.adoptedCreationRequest.key') IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS pipeline_integration_resolver_capacity
+    ON state_rows(json_extract(value_json, '$.merge.repository'), json_extract(value_json, '$.cursor.stageId'))
+    WHERE collection = 'pipelines' AND json_valid(value_json)
+      AND json_extract(value_json, '$.merge.integration') IS NOT NULL`,
+  `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_insert AFTER INSERT ON state_rows
+    WHEN NEW.collection IN ('pipelines', 'pipelines_archive') AND json_valid(NEW.value_json)
+    BEGIN
+      INSERT INTO pipeline_request_receipts(collection, row_key, request_key)
+        SELECT NEW.collection, NEW.row_key, request_key FROM (
+          SELECT json_extract(NEW.value_json, '$.creationRequest.key') AS request_key
+          WHERE json_type(NEW.value_json, '$.creationRequest.key') = 'text'
+          UNION ALL
+          SELECT json_extract(NEW.value_json, '$.adoptedCreationRequest.key')
+          WHERE json_type(NEW.value_json, '$.adoptedCreationRequest.key') = 'text'
+          UNION ALL
+          SELECT json_extract(item.value, '$.key') FROM json_each(NEW.value_json, '$.adoptedCreationRequests') AS item
+          WHERE json_type(item.value, '$.key') = 'text'
+        ) GROUP BY request_key;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_update AFTER UPDATE OF value_json ON state_rows
+    WHEN NEW.collection IN ('pipelines', 'pipelines_archive') AND json_valid(NEW.value_json)
+    BEGIN
+      DELETE FROM pipeline_request_receipts WHERE collection = OLD.collection AND row_key = OLD.row_key;
+      INSERT INTO pipeline_request_receipts(collection, row_key, request_key)
+        SELECT NEW.collection, NEW.row_key, request_key FROM (
+          SELECT json_extract(NEW.value_json, '$.creationRequest.key') AS request_key
+          WHERE json_type(NEW.value_json, '$.creationRequest.key') = 'text'
+          UNION ALL
+          SELECT json_extract(NEW.value_json, '$.adoptedCreationRequest.key')
+          WHERE json_type(NEW.value_json, '$.adoptedCreationRequest.key') = 'text'
+          UNION ALL
+          SELECT json_extract(item.value, '$.key') FROM json_each(NEW.value_json, '$.adoptedCreationRequests') AS item
+          WHERE json_type(item.value, '$.key') = 'text'
+        ) GROUP BY request_key;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_delete AFTER DELETE ON state_rows
+    WHEN OLD.collection IN ('pipelines', 'pipelines_archive')
+    BEGIN DELETE FROM pipeline_request_receipts WHERE collection = OLD.collection AND row_key = OLD.row_key; END`,
   `CREATE INDEX IF NOT EXISTS state_rows_collection_order
     ON state_rows(collection, row_order)`,
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
@@ -2049,10 +2100,15 @@ export class SqliteStateCollection<T> {
     const rows = ["pipelines", "pipelines_archive"].flatMap((collection) => {
       if (!("requestKey" in query) && query.active && collection !== "pipelines") return [];
       const row = "requestKey" in query
-        ? db.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows
+        ? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_creation_request
             WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
-            AND (json_extract(value_json, '$.creationRequest.key') = ?
-              OR json_extract(value_json, '$.adoptedCreationRequest.key') = ?) LIMIT 1`).get(collection, query.requestKey, query.requestKey)
+              AND json_extract(value_json, '$.creationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
+          ?? db.query<{ value_json: string }, [string, string]>(`SELECT row.value_json FROM pipeline_request_receipts AS receipt INDEXED BY pipeline_request_receipt_key
+            JOIN state_rows AS row ON row.collection = receipt.collection AND row.row_key = receipt.row_key
+            WHERE receipt.collection = ? AND receipt.request_key = ? LIMIT 1`).get(collection, query.requestKey)
+          ?? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_adopted_creation_request
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
+              AND json_extract(value_json, '$.adoptedCreationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
         : db.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows
             WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.delivery.target.repository') = ?
             AND json_extract(value_json, '$.delivery.target.branch') = ?
@@ -2070,6 +2126,20 @@ export class SqliteStateCollection<T> {
 
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null {
     return this.lookupPipeline(this.readDb, query);
+  }
+
+  pipelineIntegrationResolverCandidates(repository: string): T[] {
+    if (this.options.collection !== "pipelines") throw new Error("integration resolver lookup requires the pipeline collection");
+    const rows = this.readDb.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_integration_resolver_capacity
+      WHERE collection = 'pipelines' AND json_valid(value_json)
+        AND json_extract(value_json, '$.merge.integration') IS NOT NULL
+        AND json_extract(value_json, '$.merge.repository') = ?
+        AND json_extract(value_json, '$.cursor.stageId') IN (?, ?)`).all(repository, "integration-resolve", "integration-fix");
+    return rows.map(row => {
+      const decoded = this.decodeRow(row.value_json, this.readDb);
+      if (!decoded) throw new Error("invalid indexed integration resolver row");
+      return this.options.clone(decoded);
+    });
   }
 
   unclaimedPipelinePublications(): T[] {

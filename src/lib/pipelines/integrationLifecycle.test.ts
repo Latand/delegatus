@@ -106,12 +106,65 @@ test("integration real stages report and publish the existing outcome, reconcili
     await finishCurrent(); await finishCurrent();
     expect(current().state).toBe("completed");
     expect(current().merge!.integration!.cycles).toBe(2);
+    expect(current().adoptedCreationRequests).toHaveLength(2);
+    expect(current().adoptedCreationRequests![0]!.key).not.toBe(current().adoptedCreationRequests![1]!.key);
     expect(current().merge!.integration!.featureBase).toBe(box.base);
     expect(current().runs.find(r => r.stageId === "integration-resolve")!.attempts[0]!.historical).toBe(true);
     expect(current().runs.slice(0, history.length)).toEqual(history);
     expect(pushes).toBe(2);
     expect(loadPipelines()).toHaveLength(1);
+    for (let cycle = 3; cycle <= 20; cycle++) {
+      const baseFile = `base-change-${cycle}.json`;
+      fs.writeFileSync(path.join(repo, baseFile), JSON.stringify({ cycle }) + "\n");
+      await git(repo, "add", baseFile);
+      await git(repo, "commit", "-m", `Advance synthetic base ${cycle}`);
+      await git(repo, "push", "origin", "main");
+      const base = await git(repo, "rev-parse", "HEAD");
+      const at = new Date(Date.parse(h.ports.now()) + cycle * 1000).toISOString();
+      const queued = current();
+      queued.merge!.state = "refreshing";
+      queued.merge!.refresh = refreshReservation(queued, base, queued.lastPassedCommit, Date.parse(at), "main");
+      queued.merge!.integration = integrationRecord(queued, at);
+      savePipelines([queued]);
+      const reservationKey = current().merge!.refresh!.key;
+      const admittedNext = await startPipelineIntegration(current(), h.ports);
+      expect(admittedNext.error).toBeUndefined();
+      expect(admittedNext.pipeline!.merge!.integration!.cycles).toBe(cycle);
+      expect(current().adoptedCreationRequests!.some(receipt => receipt.key === reservationKey)).toBe(true);
+      const epoch = current().delivery!.epoch;
+      const replay = await startPipelineIntegration(admittedNext.pipeline!, h.ports);
+      expect(replay.error).toBeUndefined();
+      expect(current().delivery!.epoch).toBe(epoch);
+      expect(current().merge!.integration!.cycles).toBe(cycle);
+      const completed = current();
+      completed.state = "completed"; completed.cursor = null; completed.closedAt = at;
+      completed.delivery!.active = false;
+      completed.merge!.integration!.integratedHead = completed.lastPassedCommit;
+      completed.merge!.integration!.reviewedHead = completed.lastPassedCommit;
+      completed.merge!.integration!.state = "checking";
+      completed.merge!.state = "checking";
+      delete completed.merge!.refresh;
+      savePipelines([completed]);
+    }
+    expect(current().adoptedCreationRequests).toHaveLength(20);
+    expect(new Set(current().adoptedCreationRequests!.map(receipt => receipt.key)).size).toBe(20);
+    const completedEpoch = current().delivery!.epoch;
+    const completedCycles = current().merge!.integration!.cycles;
+    const replayAfterSecondCycle = Bun.spawn([process.execPath, new URL("./integration.process.fixture.ts", import.meta.url).pathname, "replay-adopted"], {
+      env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [replayOut, replayErr, replayExit] = await Promise.all([
+      new Response(replayAfterSecondCycle.stdout).text(), new Response(replayAfterSecondCycle.stderr).text(), replayAfterSecondCycle.exited,
+    ]);
+    expect(replayExit, `${replayOut}\n${replayErr}`).toBe(0);
+    const replayed = JSON.parse(replayOut.trim().split("\n").at(-1)!);
+    expect(replayed.result.pipeline.id).toBe(box.id);
+    expect(replayed.items).toHaveLength(1);
+    expect(replayed.items[0].adoptedCreationRequests).toHaveLength(20);
+    expect(current().delivery!.epoch).toBe(completedEpoch);
+    expect(current().merge!.integration!.cycles).toBe(completedCycles);
+    expect(loadPipelines()).toHaveLength(1);
   } finally {
     ids.mockRestore(); savePipelines([]); fs.rmSync(box.root, { recursive: true, force: true });
   }
-}, 60_000);
+}, 300_000);

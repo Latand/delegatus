@@ -1215,6 +1215,8 @@ export type Pipeline = {
   /** Consumed idempotency keys adopted by this durable outcome. The original
    * creationRequest remains the immutable identity of the pipeline itself. */
   adoptedCreationRequest?: { key: string; digest: string };
+  /** All consumed refresh reservations, retained so any earlier request can replay. */
+  adoptedCreationRequests?: { key: string; digest: string }[];
   id: string;
   task: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */

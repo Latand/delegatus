@@ -187,7 +187,7 @@ import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLi
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, pipelineIntegrationResolverCandidates, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled, mergeOnReviewSetting } from "@/lib/projects/settings";
@@ -9640,11 +9640,9 @@ async function tickRunStage(
   const integration = pipeline.merge?.integration;
   const stageIsResolver = pipeline.cursor?.stageId === "integration-resolve" || pipeline.cursor?.stageId === "integration-fix";
   if (integration && stageIsResolver && pipeline.cursor?.state === "pending") {
-    const peerHoldsSlot = integration.batch.items.some(id => {
-      if (id === pipeline.id) return false;
-      const peer = findPipelineRecord(id), peerIntegration = peer?.merge?.integration;
-      if (!peer || !peerIntegration || peerIntegration.batch.owner !== integration.batch.owner
-        || !peerIntegration.batch.items.includes(pipeline.id)
+    const peerHoldsSlot = pipelineIntegrationResolverCandidates(pipeline.merge!.repository).some(peer => {
+      const peerIntegration = peer.merge?.integration;
+      if (peer.id === pipeline.id || !peerIntegration
         || !["integration-resolve", "integration-fix"].includes(peer.cursor?.stageId ?? "")) return false;
       if (peer.state === "provisioning") return true;
       if (peer.state !== "running") return false;
@@ -16345,8 +16343,9 @@ export async function startPipelineIntegration(expected: Pipeline, ports: Pipeli
     if (current.creationRequest?.key === adoptedKey && current.creationRequest.digest !== adoptedDigest)
       return { error: "integration reservation conflicts with the outcome's original creation receipt" };
     if (creationRequestDigest(current, adoptedKey) !== adoptedDigest) {
-      if (current.adoptedCreationRequest && (current.adoptedCreationRequest.key !== adoptedKey || current.adoptedCreationRequest.digest !== adoptedDigest))
-        return { error: "integration reservation key conflicts with its consumed receipt" };
+      current.adoptedCreationRequests ??= current.adoptedCreationRequest ? [{ ...current.adoptedCreationRequest }] : [];
+      if (!current.adoptedCreationRequests.some(item => item.key === adoptedKey))
+        current.adoptedCreationRequests.push({ key: adoptedKey, digest: adoptedDigest });
       current.adoptedCreationRequest = { key: adoptedKey, digest: adoptedDigest };
     }
     const owner = tx.pipelineLookup({ ...current.delivery.target, active: true });

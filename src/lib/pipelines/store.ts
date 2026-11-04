@@ -45,10 +45,10 @@ export function pipelineRevision(pipeline: Pipeline): string {
   return crypto.createHash("sha256").update(JSON.stringify(pipeline)).digest("hex");
 }
 
-export const PIPELINES_SCHEMA_VERSION = 5;
+export const PIPELINES_SCHEMA_VERSION = 6;
 /** Older registries are migrated in memory on load; the file is rewritten in
     the current shape by the next successful mutation, never by a read. */
-const MIGRATABLE_SCHEMA_VERSIONS = new Set([2, 3, 4, PIPELINES_SCHEMA_VERSION]);
+const MIGRATABLE_SCHEMA_VERSIONS = new Set([2, 3, 4, 5, PIPELINES_SCHEMA_VERSION]);
 const pipelinesFile = () => statePath("pipelines.json");
 const pipelinesArchiveFile = () => statePath("pipelines-archive.json");
 const stateDatabaseFile = () => statePath("state.sqlite");
@@ -1036,6 +1036,10 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.adoptedCreationRequest === undefined || !!pipeline.adoptedCreationRequest
       && typeof pipeline.adoptedCreationRequest.key === "string" && !!pipeline.adoptedCreationRequest.key
       && typeof pipeline.adoptedCreationRequest.digest === "string" && !!pipeline.adoptedCreationRequest.digest) &&
+    (pipeline.adoptedCreationRequests === undefined || Array.isArray(pipeline.adoptedCreationRequests)
+      && pipeline.adoptedCreationRequests.every(receipt => !!receipt && typeof receipt.key === "string" && !!receipt.key
+        && typeof receipt.digest === "string" && !!receipt.digest)
+      && new Set(pipeline.adoptedCreationRequests.map(receipt => receipt.key)).size === pipeline.adoptedCreationRequests.length) &&
     (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
     Array.isArray(pipeline.taskIds) &&
@@ -1227,6 +1231,7 @@ function migrateReviewLoopFailEdges(raw: unknown): unknown {
     ...(pipeline.delivery ? { delivery: structuredClone(pipeline.delivery) } : {}),
     ...(pipeline.creationRequest ? { creationRequest: { ...pipeline.creationRequest } } : {}),
     ...(pipeline.adoptedCreationRequest ? { adoptedCreationRequest: { ...pipeline.adoptedCreationRequest } } : {}),
+    ...(pipeline.adoptedCreationRequests ? { adoptedCreationRequests: pipeline.adoptedCreationRequests.map(receipt => ({ ...receipt })) } : {}),
     stages: pipeline.stages.map((stage) => {
       if (!stage || typeof stage !== "object" || Array.isArray(stage)) return stage;
       const record = stage as Record<string, unknown>;
@@ -2076,6 +2081,11 @@ function releaseTerminalDelivery(pipeline: Pipeline): void {
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
   return pipelineStore().pipelineLookup(query);
+}
+
+/** Indexed same-repository resolver candidates used to gate resumed dispatch across batches. */
+export function pipelineIntegrationResolverCandidates(repository: string): Pipeline[] {
+  return pipelineStore().pipelineIntegrationResolverCandidates(repository);
 }
 
 export function unclaimedPipelinePublications(): Pipeline[] {

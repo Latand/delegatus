@@ -7,6 +7,8 @@ export const INTEGRATION_REPAIR_LIMIT = 3;
 
 export function creationRequestDigest(pipeline: Pipeline, key: string): string | undefined {
   if (pipeline.creationRequest?.key === key) return pipeline.creationRequest.digest;
+  const adopted = pipeline.adoptedCreationRequests?.find(receipt => receipt.key === key);
+  if (adopted) return adopted.digest;
   return pipeline.adoptedCreationRequest?.key === key ? pipeline.adoptedCreationRequest.digest : undefined;
 }
 

@@ -1208,9 +1208,9 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
     const legacy = ports.startIntegration ? ports.loadRefreshByKey?.(reservation.key) : null;
     if (legacy) {
       if (legacy.id === read.id && legacy.merge?.integration?.reservationKey === reservation.key) {
-        await commit(ports, read, live => {
-          if (live.merge?.refresh?.key !== reservation.key || live.merge.integration?.reservationKey !== reservation.key) return;
-          live.merge.refresh.pipelineId = live.id;
+        await commit(ports, read, (merge, live) => {
+          if (live.id !== read.id || merge.refresh?.key !== reservation.key || merge.integration?.reservationKey !== reservation.key) return;
+          merge.refresh.pipelineId = live.id;
         });
         return;
       }

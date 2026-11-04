@@ -4,9 +4,12 @@ The merge runner resumes integration inside the outcome that owns the PR.
 A base update does not create another user pipeline. Existing feature stages,
 attempts, reports and review evidence remain historical records of their heads.
 
-`PipelineMerge.integration` records the originating outcome, first reservation
+`PipelineMerge.integration` records the originating outcome, current reservation
 key, desired base, requirement and policy revisions, workspace scope, delivery
-epoch, stage/attempt/launch binding, publication receipt and batch cursor.
+epoch, stage/attempt/launch binding, publication receipt and batch cursor. The
+outcome retains every consumed reservation key and digest so retries after later
+base movements replay their original receipt. SQLite maintains an indexed
+receipt projection for those keys; request lookup never scans delivery history.
 The three reusable integration stages use the normal controller, runtime
 membership, `stage_report`, independent review and publication checks.
 
@@ -28,7 +31,8 @@ cannot land until its integration review and required checks pass.
 Each compatible batch freezes at most eight outcomes for one hour. Its cursor
 advances from persisted item receipts; a restart reconstructs execution from
 those records. Only one conflict resolver per repository owns execution
-capacity. Review, CI, provider and decision waits release that capacity.
+capacity across batches and workspace scopes. Resume checks use an indexed
+repository query. Review, CI, provider and decision waits release that capacity.
 Independent ready PRs can pass waiting work. A PR based on another retained
 PR's branch waits for that named predecessor. A fresh stage attempt runs each
 item; conversations and worktree authority remain scoped to that item.

@@ -90,6 +90,44 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
   }
 }
 
+test("adopted integration receipts replay through the keyed SQLite index", async () => isolatedDelivery(async () => {
+  const pipeline = deliveryFixture("integration-receipt-index");
+  pipeline.adoptedCreationRequest = { key: "integration-old", digest: "digest-old" };
+  pipeline.adoptedCreationRequests = [
+    { key: "integration-old", digest: "digest-old" },
+    { key: "integration-new", digest: "digest-new" },
+  ];
+  savePipelines([pipeline]);
+  expect(pipelineDeliveryLookup({ requestKey: "integration-old" })?.id).toBe(pipeline.id);
+  expect(pipelineDeliveryLookup({ requestKey: "integration-new" })?.id).toBe(pipeline.id);
+  pipeline.state = "closed";
+  pipeline.cursor = null;
+  pipeline.closedAt = "2026-07-01T00:00:00.000Z";
+  savePipelines([pipeline]);
+  expect(await archiveSettledPipelines(Date.parse("2027-01-01T00:00:00.000Z"))).toBe(1);
+  const observed: Array<{ db: Database; sql: string }> = [];
+  const original = Database.prototype.query;
+  const capture = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+    if (sql.includes("pipeline_request_receipts AS receipt") || sql.includes("INDEXED BY pipeline_creation_request")
+      || sql.includes("INDEXED BY pipeline_adopted_creation_request")) observed.push({ db: this, sql });
+    return original.call(this, sql);
+  });
+  try {
+    expect(pipelineDeliveryLookup({ requestKey: pipeline.creationRequest!.key })?.id).toBe(pipeline.id);
+    expect(pipelineDeliveryLookup({ requestKey: "integration-new" })?.id).toBe(pipeline.id);
+    expect(pipelineDeliveryLookup({ requestKey: "missing-integration-fixture" })).toBeNull();
+    const plans = observed.map(({ db, sql }) => ({ sql, plan: original.call(db, `EXPLAIN QUERY PLAN ${sql}`)
+      .all("pipelines", sql.includes("pipeline_request_receipts") ? "integration-new" : "missing-integration-fixture") as Array<{ detail: string }> }));
+    expect(plans.some(({ sql, plan }) => sql.includes("pipeline_request_receipts")
+      && plan.some(row => row.detail.includes("pipeline_request_receipt_key") && row.detail.includes("collection=?") && row.detail.includes("request_key=?")))).toBe(true);
+    expect(plans.some(({ sql, plan }) => sql.includes("pipeline_creation_request")
+      && plan.some(row => row.detail.includes("pipeline_creation_request") && row.detail.includes("<expr>=?")))).toBe(true);
+    expect(plans.some(({ sql, plan }) => sql.includes("pipeline_adopted_creation_request")
+      && plan.some(row => row.detail.includes("pipeline_adopted_creation_request") && row.detail.includes("<expr>=?")))).toBe(true);
+    console.info("integration receipt lookup plans", JSON.stringify(plans.map(item => item.plan)));
+  } finally { capture.mockRestore(); }
+}));
+
 test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
   const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
     stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });

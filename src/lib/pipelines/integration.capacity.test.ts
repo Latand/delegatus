@@ -6,7 +6,10 @@ import { integrationRecord, integrationAttempt } from "./integration";
 import { setMergeOnReview } from "@/lib/projects/settings";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
-test.each([true,false])("reviewer a resumed batch item reacquires capacity with active peer %s", async activePeer => {
+test.each([
+  { activePeer: true, batchRelation: "same" }, { activePeer: false, batchRelation: "same" },
+  { activePeer: true, batchRelation: "different" }, { activePeer: false, batchRelation: "different" },
+])("reviewer a resumed item keeps one resolver slot across same and different batches (%#)", async ({ activePeer, batchRelation }) => {
   savePipelines([]);
   const h = harness(), now = h.ports.now();
   const lookup = h.ports.roleLookup!;
@@ -33,6 +36,8 @@ test.each([true,false])("reviewer a resumed batch item reacquires capacity with 
   savePipelines(rows);
   expect((await startPipelineIntegration(loadPipelines().find(p=>p.id===b.id)!,h.ports)).error).toBeUndefined();
   rows=loadPipelines();const peer=rows.find(p=>p.id===b.id)!;
+  if (batchRelation === "different")
+    peer.merge!.integration!.batch={owner:peer.id,items:[peer.id],cursor:0,deadline:peer.merge!.integration!.deadline};
   peer.state=activePeer?"running":"needs_decision";peer.cursor!.state="running";
   const peerStage=peer.stages.find(s=>s.id==="integration-resolve")!;
   peer.runs.find(r=>r.stageId===peerStage.id)!.attempts.push({n:1,state:activePeer?"running":"needs_decision",effectiveRole:peerStage.effectiveRole,launchId:"peer-launch",conversationId:"conversation_peer",sessionId:"session-peer",agentPath:"/codex/peer.jsonl",paneId:"%peer",flowId:null,startedAt:now,completedAt:null,output:null,verdict:null,error:null} as PipelineStageAttempt);
@@ -44,6 +49,7 @@ test.each([true,false])("reviewer a resumed batch item reacquires capacity with 
   await tickPipelines([entry("/codex/peer.jsonl")],h.ports);
   await tickPipelines([entry("/codex/peer.jsonl")],h.ports);
   if (activePeer) {
+    expect(h.spawnInputs.filter(p=>p.membership.containerId===a.id)).toHaveLength(0);
     const latest = loadPipelines();
     const released = latest.find(p=>p.id===b.id)!;
     released.state="needs_decision";
