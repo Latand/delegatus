@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaults";
+import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaultsRead";
 
 import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { BINDINGS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";

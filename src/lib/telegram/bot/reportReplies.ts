@@ -16,7 +16,7 @@ import { resolveOriginalSend, type OriginalSendBinding, type OriginalSendEvidenc
 import { enqueueStructuredMessage, type StructuredMessageDependencies } from "@/lib/runtime/structuredMessageDelivery";
 import { withdrawRuntimeWake } from "@/lib/monitor/seatTickSources";
 import { existingTeamStore } from "@/lib/team/store";
-import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaults";
+import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaultsRead";
 
 import { type ReportReplyRow, TelegramBotStore, type TgUpdate } from "./store";
 

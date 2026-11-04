@@ -1,4 +1,4 @@
-import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaults";
+import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaultsRead";
 import fs from "node:fs";
 import path from "node:path";
 

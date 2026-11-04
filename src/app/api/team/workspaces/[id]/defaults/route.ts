@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { crossOrigin, readJson, requireMember, teamErrorResponse, teamJson } from "@/lib/team/http";
 import { requireWorkspaceManager } from "@/lib/team/workspaceAccess";
-import { readWorkspaceDefaults, setWorkspaceDefaults } from "@/lib/team/workspaceDefaults";
+import { readWorkspaceDefaults } from "@/lib/team/workspaceDefaultsRead";
+import { setWorkspaceDefaults } from "@/lib/team/workspaceDefaults";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
