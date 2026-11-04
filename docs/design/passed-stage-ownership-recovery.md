@@ -77,8 +77,8 @@ settlement source and tests are identical across that merge.
   all 62 head test files run, including a passing settlement-preparation file.
   The comparator cannot complete a baseline rerun of
   `src/lib/pipelines/engine.ports.part3.test.ts` in the remaining confirmation
-  budget. Its earlier head and baseline reruns passed. This is an incomplete
-  comparison, not a new-failure verdict. The retry uses the documented 600%
+  budget. Its earlier head and baseline reruns passed. A complete comparison
+  verdict is still required. The retry uses the documented 600%
   per-scope CPU quota, fresh isolation and unchanged gate budgets and limits.
 
 The continuation authorizes direct, fully isolated checks, one command at a
