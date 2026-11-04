@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { OWNERSHIP_PRELOAD, ownershipSandbox } from "./state/fixtures/ownershipSandbox";
+import { workingInputsFingerprint } from "../../scripts/gate-cache";
 
 /*
  * The other half of #1905: the processes that DO own the operator's state have
@@ -27,14 +28,17 @@ const OPERATOR_HOME = sandbox.home;
    §4.2): a new install holds only `~/.config/delegatus`, an existing one only
    `~/.config/agent-log-viewer`. */
 const APP_DIRS = ["delegatus", "agent-log-viewer"] as const;
-const MCP_BUNDLE = path.join(process.cwd(), "dist", "mcp-server.mjs");
 const temporaryRoots: string[] = [];
+let bundleBuildInputs: { before: string; after: string };
 
 function temporaryRoot(): string {
   const directory = sandbox.temporaryRoot();
   temporaryRoots.push(directory);
   return directory;
 }
+
+const MCP_BUNDLE_DIRECTORY = temporaryRoot();
+const MCP_BUNDLE = path.join(MCP_BUNDLE_DIRECTORY, "mcp-server.mjs");
 
 interface RunResult {
   status: number | null;
@@ -81,13 +85,25 @@ beforeAll(() => {
   /* The bundle is what Claude actually launches on a deployed install, and a
      bundler is free to reorder what a source file makes explicit — so the
      claim is proved in the artifact, not only in the source. */
+  const before = workingInputsFingerprint(process.cwd());
+  fs.cpSync(path.join(process.cwd(), "node_modules"), path.join(MCP_BUNDLE_DIRECTORY, "node_modules"), {
+    recursive: true, verbatimSymlinks: true, mode: fs.constants.COPYFILE_FICLONE,
+  });
   const built = Bun.spawnSync({
-    cmd: [process.execPath, "scripts/build-mcp.ts"],
+    cmd: [process.execPath, "scripts/build-mcp.ts", MCP_BUNDLE_DIRECTORY],
     cwd: process.cwd(),
     stdout: "pipe",
     stderr: "pipe",
   });
   if (built.exitCode !== 0) throw new Error(`scripts/build-mcp.ts failed: ${built.stderr.toString()}`);
+  bundleBuildInputs = { before, after: workingInputsFingerprint(process.cwd()) };
+});
+
+test("building the published MCP entry preserves checkout inputs and owns its output", () => {
+  expect(bundleBuildInputs.after).toBe(bundleBuildInputs.before);
+  const relative = path.relative(path.dirname(OPERATOR_HOME), fs.realpathSync(MCP_BUNDLE));
+  expect(path.isAbsolute(relative)).toBeFalse();
+  expect(relative === ".." || relative.startsWith(`..${path.sep}`)).toBeFalse();
 });
 
 afterAll(() => {
