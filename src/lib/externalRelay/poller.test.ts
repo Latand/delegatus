@@ -27,6 +27,7 @@ import { ownerTierFor } from "./profile";
 import { requestSchema } from "./protocol";
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { ownerRequestTimeoutText } from "./requestTimeout";
 import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
 import { setRelaySwitch } from "./switches";
 import { createRelaySteps } from "./progressSteps";
@@ -35,8 +36,8 @@ const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-tes
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
 
-for (const prepared of [false, true]) for (const ukrainian of [false, true]) for (const uncertain of [false, true])
-test(`legacy unsent failure is localised once (prepared=${prepared}, uk=${ukrainian}, uncertain=${uncertain})`, async () => {
+for (const prepared of [false, true]) for (const ukrainian of [false, true]) for (const uncertain of [false, true]) for (const status of [false, true])
+test(`legacy unsent reply is safe once (prepared=${prepared}, uk=${ukrainian}, uncertain=${uncertain}, status=${status})`, async () => {
   const priorStore = readRelayStore();
   const sends: CloneSendInput[] = [];
   const server = await startTestRelay((req, payload) => {
@@ -47,7 +48,7 @@ test(`legacy unsent failure is localised once (prepared=${prepared}, uk=${ukrain
   const relay = clonePairing(server.origin);
   relay.targets[0]!.ownerTier = true;
   relay.targets[0]!.enabled = true;
-  const id = `legacy_failure_${prepared}_${ukrainian}_${uncertain}`;
+  const id = `legacy_failure_${prepared}_${ukrainian}_${uncertain}_${status}`;
   const text = ukrainian ? "Допоможи із запитом" : "Help with this request";
   const request = requestSchema.parse({ ...contextRequest, request_id: id, target_id: relay.targets[0]!.id,
     answer: { max_chars: 4000, progress: "none" },
@@ -55,10 +56,12 @@ test(`legacy unsent failure is localised once (prepared=${prepared}, uk=${ukrain
       conversation: [{ ...contextRequest.input.conversation[0], text }] } });
   const owner = ownerTierFor({ ownerTier: true }, request)!;
   const answer = { action: "reply" as const, text: "Failure: RelayStoreBusy: relay store is busy", reply_to: owner.messageId };
-  const body = { lease_id: request.lease_id, outcome: "answered" as const, answer, duration_ms: 1000 };
+  const body = { lease_id: request.lease_id, outcome: "answered" as const,
+    answer: status ? { ...answer, text: ownerRequestTimeoutText(4000) } : answer, duration_ms: 1000 };
   const delivery = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null };
   const payload: CloneSendInput = { chat_id: delivery.chat_id, reply_to_message_id: delivery.reply_to_message_id,
-    client_key: cloneClientKey(relay.id, "owner-late-answer", id, 0), text: answer.text, parse_mode: null, silent: false };
+    client_key: cloneClientKey(relay.id, "owner-late-answer", id, 0), text: body.answer.text, parse_mode: null, silent: false };
+  const storedPayload = status ? { ...payload, text: answer.text } : payload;
   const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "legacy-failure-"));
   runDirs.push(directory);
   const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-04T12:02:00Z"));
@@ -72,11 +75,11 @@ test(`legacy unsent failure is localised once (prepared=${prepared}, uk=${ukrain
       request: { text: owner.text, requestText: owner.requestText }, delivery,
       cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", answer.text),
       failureReply: { answer, until: "2026-11-04T12:00:01Z" },
-      lateAnswer: { body, files: [], ...(prepared ? { payload, parts: [{ payload }] } : {}) } } });
+      lateAnswer: { body, files: [], ...(prepared ? { payload: storedPayload, parts: [{ payload: storedPayload }] } : {}) } } });
   try {
     await sweepExternalRelayOrphans();
     expect(sends).toHaveLength(1);
-    expect(sends[0]).toMatchObject({ ...payload, text: ukrainian
+    expect(sends[0]).toMatchObject({ ...payload, text: status ? ownerRequestTimeoutText(4000) : ukrainian
       ? "Не вдалося завершити запит. Спробуйте ще раз." : "Your request could not be completed. Please try again." });
     expect(readRunLedger().runs.some(row => row.requestId === id)).toBe(uncertain);
     if (!uncertain) expect(readAnswerRecord(relay.id, request.target_id, id)).toMatchObject({

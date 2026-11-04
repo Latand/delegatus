@@ -9,6 +9,8 @@ import { readAnswerRecord } from "./answers";
 import { ownerTierFor } from "./profile";
 import { ownerFailureAnswer } from "./ownerRun";
 import { isDeepStrictEqual } from "node:util";
+import { answerCapabilities } from "./answerV2";
+import { isOwnerRequestTimeoutReply } from "./requestTimeout";
 
 /** Older custody rows retained the input in the answer record. Reconstruct only
  * from that record and the already verified owner request, never from chat text. */
@@ -79,9 +81,11 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
       if (row.ownerTurn.failureReply) {
         const request = requestSchema.safeParse(ownerRecoveryRequest(row, relay));
         const owner = request.success && (row.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request.data));
-        const answer = request.success && owner && ownerFailureAnswer(request.data, owner,
-          row.ownerTurn.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay.credential]);
-        if (!answer || pending.body.outcome !== "answered") return row;
+        if (!request.success || !owner || pending.body.outcome !== "answered") return row;
+        const answer = isOwnerRequestTimeoutReply(pending.body, answerCapabilities(request.data, "").plainMax)
+          ? pending.body.answer : ownerFailureAnswer(request.data, owner,
+            row.ownerTurn.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay.credential]);
+        if (!answer) return row;
         const clean: LateAnswer = { body: { ...pending.body, answer }, files: [] };
         const payloads = payloadsFor(clean, relay.id, requestId, row.ownerTurn.delivery);
         const changed = !isDeepStrictEqual(pending.body, clean.body) || pending.files.length > 0
