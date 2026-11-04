@@ -36,9 +36,11 @@ function testArguments(): string[] {
   return argv;
 }
 if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
+  // Keep the child's temp parent: nesting its repetition root under this
+  // startup root makes Chromium's SingletonSocket exceed the Unix path limit.
+  const env = { ...process.env };
   const startup = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
   try {
-    const env = { ...process.env };
     isolateHomes(startup.root, env);
     env.LLV_TEST_STARTUP_HOME = env[process.platform === "win32" ? "USERPROFILE" : "HOME"];
     env.LLV_OWNED_RUN_PARENT_IDENTITY = JSON.stringify(captureProcessIdentity(process.pid));
