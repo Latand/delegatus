@@ -2913,6 +2913,8 @@ async function refreshSeatTickInputCooperatively(
   sources: SeatTickSources,
 ): Promise<SeatTickCheckInput> {
   return withViewerOperation("seat-tick.check", async () => {
+    // Observe queued publications even when every prepared row is a cache hit.
+    await yieldToRuntime();
     let pipelines = sources.pipelines(), tasks = sources.tasks();
     /* Even a projection cache hit crosses preparation once so durable alias
        changes invalidate its in-memory grouping before the rows are reused. */

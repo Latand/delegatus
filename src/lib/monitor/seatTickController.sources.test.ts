@@ -23,7 +23,8 @@ function clock() {
   } };
 }
 
-test("an owed wake reaches the seat with retained board rows and a busy event loop", async () => {
+const projectionCase = process.env.LLV_TICK_PROJECTION_CASE;
+test.skipIf(!projectionCase)("retained board deadline subprocess", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
     tasks: Array.from({ length: 640 }, (_, index) => ({ id: `retained-${index}`, status: "done" as const })) });
   const time = clock();
@@ -36,7 +37,12 @@ test("an owed wake reaches the seat with retained board rows and a busy event lo
   let turns = 0;
   const scheduling = spyOn(globalThis, "setImmediate").mockImplementation(((callback: (...args: unknown[]) => void, ...args: unknown[]) =>
     immediate(() => { turns++; time.advance(250); callback(...args); })) as typeof setImmediate);
+  if (projectionCase === "stalled") ports.tasks = () => {
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    for (;;) Atomics.wait(wait, 0, 0, 1000);
+  };
   try {
+    process.stdout.write("\nPROJECTION_ENTERED\n");
     const result = await runSeatTickCheck(PROJECT, rig.deps);
     expect(result).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
     expect(rig.sent).toHaveLength(1);
@@ -45,6 +51,40 @@ test("an owed wake reaches the seat with retained board rows and a busy event lo
     expect(time.timers.size).toBe(0);
   } finally { scheduling.mockRestore(); }
 });
+
+test.skipIf(!!projectionCase).each(["delivery", "stalled"] as const)(
+  "a parent supervises an owed wake with retained board rows (%s)", async mode => {
+    const child = spawn(process.execPath, ["test", "--timeout=60000", import.meta.path,
+      "--test-name-pattern", "^retained board deadline subprocess$"], {
+      env: { ...process.env, LLV_TICK_PROJECTION_CASE: mode }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "", entered = false, timedOut = false;
+    const started = performance.now();
+    const expire = () => { timedOut = true; child.kill("SIGKILL"); };
+    let timer = setTimeout(expire, 15_000);
+    child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    child.stdout.on("data", chunk => {
+      output = (output + chunk).slice(-16_000);
+      if (!entered && output.includes("PROJECTION_ENTERED")) {
+        entered = true;
+        clearTimeout(timer);
+        timer = setTimeout(expire, 5_000);
+      }
+    });
+    try {
+      const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect({ entered, timedOut, ...result, output }).toMatchObject(mode === "delivery"
+        ? { entered: true, timedOut: false, code: 0, signal: null }
+        : { entered: true, timedOut: true, code: null, signal: "SIGKILL" });
+      expect(performance.now() - started).toBeLessThan(25_000);
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  });
 
 test.each(["liveness", "workerAsks", "recordRuleReports"] as const)(
   "a slow %s yields its share and the owed wake still lands", async source => {
