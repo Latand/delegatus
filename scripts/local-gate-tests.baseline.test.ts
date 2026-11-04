@@ -3,6 +3,7 @@ import { cliAt, cpSync, expect, fixture, gateTemporaryRoot, mkdirSync, mkdtempSy
 
 test.each(["green", "new failure", "incomplete"] as const)("eight head files rendezvous before the ninth starts and retain its verdict: %s", outcome => {
   const f = fixture(source(true));
+  f.env.LLV_GATE_TEST_WORKERS = "8";
   const markers = path.join(f.dir, "rendezvous"); mkdirSync(markers);
   const files = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"].map((word, index) => `${index}-${word}.test.ts`);
   for (const [index, file] of files.slice(0, 8).entries()) writeFileSync(path.join(f.dir, file), `
@@ -46,6 +47,7 @@ test("last verdict", () => {
 
 test("full-file and filtered baseline samples rendezvous in one bounded pool", () => {
   const f = fixture(source(true));
+  f.env.LLV_GATE_TEST_WORKERS = "2";
   const markers = path.join(f.dir, "baseline-rendezvous"); mkdirSync(markers);
   const files = ["whole.test.ts", "filtered.test.ts"];
   const rendezvous = (own: string, peer: string) => `
