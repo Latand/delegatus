@@ -1599,6 +1599,12 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
   { surface: "window", name: "keys-on-key", scene: "voice-file", steps: async (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } }))), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
   { surface: "window", name: "notice-opens-privacy", scene: "privacy-notice", steps: async (page) => { await page.locator("[data-telemetry-notice] button").first().click(); }, defining: "[data-telemetry-settings]" },
+  /* First run: the setup guide fills the screen, and the install notice's button still opens a window a person can reach. */
+  { surface: "window", name: "over-onboarding", scene: "privacy-notice", steps: async (page) => {
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: null } })));
+    await page.locator("[data-onboarding-dialog]").waitFor();
+    await page.locator("[data-telemetry-notice] button").first().click();
+  }, defining: "[data-telemetry-settings]" },
   { surface: "window", name: "memory", scene: "telegram-rest", section: "memory", defining: "[data-memory-page]" },
   { surface: "window", name: "roles", scene: "telegram-rest", section: "roles", defining: "[data-header-menu-workers]" },
   { surface: "window", name: "general", scene: "telegram-rest", section: "general", defining: "[data-header-menu-page='settings']" },
@@ -1698,6 +1704,11 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   /* The title and × stay on screen. */
   const close = surface.querySelector<HTMLElement>("[data-settings-close], [data-mobile2-close]");
   if (!close || !inView(close.getBoundingClientRect())) failures.push("close is off the screen");
+  /* Nothing lies over the window: a press on its × reaches it. */
+  else {
+    const box = close.getBoundingClientRect();
+    if (!surface.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) failures.push("the window is covered");
+  }
   /* The defining element is on the first screen or scrolled whole. */
   if (defining) {
     const element = document.querySelector<HTMLElement>(defining);

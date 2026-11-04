@@ -7725,7 +7725,7 @@ async function memorySourceMain(): Promise<void> {
               const overlaps = [...lineRects, ...titleRects].filter((rect) => rect.left < s.right && rect.right > s.left && rect.top < s.bottom && rect.bottom > s.top).length;
               /* A neighbouring row's text under this row's box would be drawn over. */
               const r = host.getBoundingClientRect();
-              const neighbours = [...panel.querySelectorAll<HTMLElement>("[data-header-menu-page='memory'] > *")].filter((node) => node !== host)
+              const neighbours = [...panel.querySelectorAll<HTMLElement>("[data-header-menu-page='memory'] > *")].filter((node) => !node.contains(host))
                 .flatMap((node) => rects(node)).filter((rect) => rect.top < r.bottom - 0.5 && rect.bottom > r.top + 0.5 && rect.left < r.right && rect.right > r.left).length;
               return {
                 rowState: host.getAttribute("data-memory-source-state"), checked: control.getAttribute("aria-checked"),
