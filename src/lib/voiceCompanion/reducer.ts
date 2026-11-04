@@ -26,7 +26,7 @@ import { liveProposalRefusal, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
  *    recipient and operation.
  */
 
-export type CompanionPhase = "offline" | "idle" | "listening" | "thinking" | "speaking";
+export type CompanionPhase = "offline" | "reconnecting" | "idle" | "listening" | "thinking" | "speaking";
 
 export type LineSpeaker = "operator" | "companion";
 
@@ -299,7 +299,8 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
         ? { ...base.delegation, stage: "cancelled" as const, refusal: "session_closed" } : base.delegation;
       return next({ phase: "offline", playing: null, mouth: 0, lines, closure: { reason: event.reason, incomplete: event.incomplete ?? false },
         delegation,
-        error: ["operator", "tool"].includes(event.reason) ? null : event.reason === "cap" ? "CAP_REACHED" : event.reason === "limit" ? "CODEX_LIMIT_ENDED" : "PROVIDER_ERROR",
+        error: ["operator", "tool"].includes(event.reason) ? null : event.reason === "cap" ? "CAP_REACHED" : event.reason === "limit" ? "CODEX_LIMIT_ENDED"
+          : event.reason === "content" ? "CONTENT_BLOCKED" : base.error ?? "CONNECTION_LOST",
         errorResetsAt: null });
     }
     case "input.speech.started": {

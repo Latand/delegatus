@@ -14,7 +14,35 @@ afterEach(() => {
   }
   originals.clear();
 });
-const callbacks = () => ({ playback: () => {}, input: () => {}, lost: () => {} });
+const callbacks = () => ({ playback: () => {}, input: () => {}, lost: () => {}, connection: () => {} });
+
+test("replacing a peer keeps one microphone, audio output and context, preserves mute and ignores retired peer events", async () => {
+  let captures = 0, outputs = 0, contexts = 0, stops = 0;
+  const track = { enabled: true, stop() { stops++; } };
+  const peers: Peer[] = [];
+  class Peer extends EventTarget {
+    iceGatheringState = "complete"; localDescription = { sdp: "offer" }; connectionState = "connected";
+    constructor() { super(); peers.push(this); }
+    addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
+    async createOffer() { return {}; } async setLocalDescription() {} async setRemoteDescription() {} close() {}
+  }
+  install("navigator", { mediaDevices: { getUserMedia: async () => { captures++; return { getTracks: () => [track], getAudioTracks: () => [track] }; } } });
+  install("RTCPeerConnection", Peer);
+  install("Audio", class { constructor() { outputs++; } pause() {} });
+  install("AudioContext", class { state = "running"; constructor() { contexts++; } async resume() {} async close() {}
+    createAnalyser() { return { fftSize: 512, getFloatTimeDomainData(data: Float32Array) { data.fill(0); } }; } createMediaStreamSource() { return { connect() {} }; } });
+  const lost: string[] = [], connections: string[] = [];
+  const cb = { ...callbacks(), lost: (code: string) => { lost.push(code); }, connection: (state: string) => { connections.push(state); } };
+  const media = new BrowserCompanionMedia(cb);
+  await media.open(); media.mute(true);
+  peers[0].connectionState = "disconnected"; peers[0].dispatchEvent(new Event("connectionstatechange"));
+  await media.restart(cb);
+  peers[0].connectionState = "failed"; peers[0].dispatchEvent(new Event("connectionstatechange"));
+  peers[1].dispatchEvent(new Event("connectionstatechange"));
+  expect([captures, outputs, contexts, stops]).toEqual([1, 1, 1, 0]); expect(track.enabled).toBe(false);
+  expect(lost).toEqual([]); expect(connections).toEqual(["disconnected", "connected"]);
+  await media.close(); expect(stops).toBe(1);
+});
 
 test("hangup while microphone permission is pending stops the subsequently granted tracks", async () => {
   let grant!: (value: MediaStream) => void;
@@ -27,6 +55,49 @@ test("hangup while microphone permission is pending stops the subsequently grant
   grant(stream);
   await expect(opening).rejects.toThrow("SESSION_CLOSED");
   expect(stopped).toBe(1);
+});
+
+test("a failed replacement offer keeps capture and output available for the next attempt", async () => {
+  let captures = 0, outputs = 0, contexts = 0, stops = 0, failOffer = false;
+  const track = { enabled: true, stop() { stops++; } };
+  install("navigator", { mediaDevices: { getUserMedia: async () => { captures++; return { getTracks: () => [track], getAudioTracks: () => [track] }; } } });
+  install("RTCPeerConnection", class extends EventTarget {
+    iceGatheringState = "complete"; localDescription = { sdp: "replacement" };
+    addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
+    async createOffer() { if (failOffer) throw new Error("offer failed"); return {}; }
+    async setLocalDescription() {} close() {}
+  });
+  install("Audio", class { constructor() { outputs++; } pause() {} });
+  install("AudioContext", class { state = "running"; constructor() { contexts++; } async resume() {} async close() {}
+    createAnalyser() { return {}; } createMediaStreamSource() { return { connect() {} }; } });
+  const media = new BrowserCompanionMedia(callbacks());
+  try {
+    await media.open(); media.mute(true); failOffer = true;
+    await expect(media.restart(callbacks())).rejects.toThrow("PROVIDER_ERROR");
+    expect(stops).toBe(0); failOffer = false;
+    expect(await media.restart(callbacks())).toBe("replacement");
+    expect([captures, outputs, contexts, stops, track.enabled]).toEqual([1, 1, 1, 0, false]);
+  } finally { await media.close(); }
+  expect(stops).toBe(1);
+});
+
+test("a replacement while capture is pending shares that capture and retires the earlier offer", async () => {
+  let grant!: (value: unknown) => void; let captures = 0, peers = 0;
+  install("navigator", { mediaDevices: { getUserMedia: () => { captures++; return new Promise(resolve => { grant = resolve; }); } } });
+  install("RTCPeerConnection", class extends EventTarget {
+    iceGatheringState = "complete"; localDescription = { sdp: "replacement-offer" }; constructor() { super(); peers++; }
+    addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
+    async createOffer() { return {}; } async setLocalDescription() {} close() {}
+  });
+  install("AudioContext", class { state = "running"; async resume() {} async close() {}
+    createAnalyser() { return {}; } createMediaStreamSource() { return { connect() {} }; } });
+  install("Audio", class { pause() {} });
+  const media = new BrowserCompanionMedia(callbacks());
+  const first = media.open().then(() => null, error => error as Error);
+  const next = media.restart(callbacks());
+  grant({ getTracks: () => [{ stop() {} }], getAudioTracks: () => [] });
+  expect((await first)?.message).toBe("SESSION_CLOSED"); expect(await next).toBe("replacement-offer"); expect([captures, peers]).toEqual([1, 1]);
+  await media.close();
 });
 
 test("failed media setup and a repeated hangup release only owned microphone, peer and audio resources", async () => {
@@ -155,7 +226,8 @@ test("open() uses the stored microphone and names it for the status line, and cl
       addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
       async createOffer() { return {}; } async setLocalDescription() {} close() {}
     });
-    install("AudioContext", class { state = "running"; async resume() {} async close() {} });
+    install("AudioContext", class { state = "running"; async resume() {} async close() {}
+      createAnalyser() { return {}; } createMediaStreamSource() { return { connect() {} }; } });
     install("Audio", class { pause() {} });
     const media = new BrowserCompanionMedia(callbacks());
     await media.open();

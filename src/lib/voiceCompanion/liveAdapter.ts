@@ -1,6 +1,6 @@
 "use client";
 
-import type { CompanionCommand, CompanionEvent, CompanionUsage, Locale, Payload, ResumableCall, VoiceCompanionAdapter } from "./contract";
+import type { CompanionCommand, CompanionEvent, CompanionUsage, ConnectionEpisode, DropCause, Payload, ResumableCall, VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
 import { clientTimeZone } from "@/lib/i18n";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
@@ -15,6 +15,16 @@ interface AdapterOptions {
   now?(): number;
   /** The sounds that mark a connect and a disconnect; the browser's own unless a test replaces them. */
   cues?: CompanionCues;
+}
+type StartOptions = Parameters<VoiceCompanionAdapter["start"]>[0];
+function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  return new Promise((resolve, reject) => {
+    const aborted = () => { reject(new Error("PROVIDER_ERROR")); };
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+    if (signal.aborted) aborted();
+    else signal.addEventListener("abort", aborted, { once: true });
+  });
 }
 type StopReason = Extract<Payload, { type: "playback.stopped" }>["reason"];
 /** A pause in played audio shorter than the transcript's display pause continues the same line. */
@@ -65,24 +75,30 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private closing: Promise<void> | null = null;
   private starting: Promise<void> | null = null;
   private poll: Promise<void> | null = null;
+  private pollOwner: string | null = null;
   private readonly cues: CompanionCues;
   /** Set by the connect cue, so a session that never connected has no disconnect to mark, and each end sounds once. */
   private connected = false;
-  /** The connection failed: the close tells the Viewer the call dropped, so it is offered back. */
-  private dropping = false;
+  private episode: (ConnectionEpisode & { at: number }) | null = null;
+  private inputSpeaking = false;
+  private buffering: CompanionEvent[] | null = null;
+  private attemptError: Error | null = null;
+  private attemptCause?: DropCause;
+  private resuming = false;
   constructor(private readonly options: AdapterOptions = {}) { this.cues = options.cues ?? createBrowserCues(); }
   subscribe(emit: (event: CompanionEvent) => void): () => void { this.listeners.add(emit); return () => { this.listeners.delete(emit); }; }
   private emit(payload: Payload, original?: CompanionEvent): void {
     const event = { ...payload, version: 1 as const, sessionId: original?.sessionId ?? this.sessionId ?? this.observedId ?? this.localSession, generation: 1,
       eventId: original?.eventId ?? crypto.randomUUID(), seq: ++this.seq, atMs: Math.max(0, performance.now() - this.born) } as CompanionEvent;
-    for (const listener of this.listeners) listener(event);
+    if (this.buffering) this.buffering.push(event);
+    else for (const listener of this.listeners) listener(event);
   }
-  private async request(body?: unknown, query = ""): Promise<Record<string, unknown>> {
-    const response = await (this.options.fetch ?? fetch)(`/api/voice-companion/session${query}`, {
-      cache: "no-store", signal: AbortSignal.timeout(40_000),
+  private async request(body?: unknown, query = "", signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const response = await abortable((this.options.fetch ?? fetch)(`/api/voice-companion/session${query}`, {
+      cache: "no-store", signal: signal ?? AbortSignal.timeout(40_000),
       ...(body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
-    });
-    const result = await response.json();
+    }), signal);
+    const result = await abortable(response.json(), signal);
     if (!response.ok) {
       const failure = new Error(typeof result?.code === "string" && /^[A-Z_]{1,40}$/.test(result.code) ? result.code : "COMPANION_UNAVAILABLE");
       /* A refused plan limit names when it resets. */
@@ -91,7 +107,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     }
     return result;
   }
-  start(options: { locale: Locale; project: string; resume?: string }): Promise<void> {
+  start(options: StartOptions): Promise<void> {
     if (this.starting) return this.starting;
     /* The tap is the user activation the sounds need. */
     this.cues.prepare();
@@ -100,22 +116,44 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.starting = promise;
     return promise.finally(() => { if (this.starting === promise) this.starting = null; });
   }
-  private async begin(options: { locale: Locale; project: string; resume?: string }): Promise<void> {
-    await this.close();
+  private async begin(options: StartOptions): Promise<void> {
+    if (this.sessionId || (!options.resume && this.media)) await this.close();
     this.stopObserver();
     this.contextSync = null; this.syncedProject = undefined; this.contextUncertain = false;
-    this.muted = false;
+    if (!options.resume) this.muted = false;
+    this.resuming = !!options.resume; this.attemptError = null; this.attemptCause = undefined;
+    this.buffering = options.resume ? [] : null;
     const epoch = ++this.epoch;
     this.localSession = crypto.randomUUID(); this.requestId = crypto.randomUUID();
     this.cursor = 0; this.seq = 0; this.born = performance.now();
     this.outputs = []; this.claimed = new Set(); this.playing = null; this.lastPlayed = null; this.unbound = [];
     const callbacks: MediaCallbacks = { playback: sample => { if (epoch === this.epoch) this.playback(sample); },
-      input: () => {}, lost: code => { if (epoch === this.epoch) this.lost(code); } };
-    const media = this.media = this.options.media?.(callbacks) ?? new BrowserCompanionMedia(callbacks);
+      input: speaking => { if (epoch === this.epoch) this.inputSpeaking = speaking; }, lost: (code, cause) => { if (epoch === this.epoch) this.lost(code, cause); },
+      connection: (state, inputSpeaking) => {
+        if (epoch !== this.epoch) return;
+        if (state === "disconnected") this.episode ??= { at: this.clock(), ms: 0, speaking: this.playing ? "voice" : (inputSpeaking ?? this.inputSpeaking) ? "operator" : null };
+        else if (this.episode) {
+          const episode = this.episode; this.episode = null;
+          void this.command({ type: "episode", ms: Math.min(86_400_000, Math.max(0, Math.round(this.clock() - episode.at))), speaking: episode.speaking }).catch(() => undefined);
+        }
+      } };
+    const retained = this.media;
+    const media = this.media = retained?.restart ? retained : this.options.media?.(callbacks) ?? new BrowserCompanionMedia(callbacks);
+    const signal = options.signal ?? (options.resume ? AbortSignal.timeout(15_000) : undefined);
+    let failureCause: DropCause = "ice-failed";
     try {
-      const sdp = await media.open();
+      if (retained && retained !== media) await retained.close();
+      const sdp = await abortable(retained === media && media.restart ? media.restart(callbacks) : media.open(), signal);
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
-      const result = await this.request({ action: "start", ...options, ...clientTimeZone(), sdp, requestId: this.requestId });
+      const body = { action: "start", ...options, signal: undefined, ...clientTimeZone(), sdp, requestId: this.requestId,
+        ...(options.resume ? { reconnect: options.reconnect ?? { tier: 2, automatic: false, attempts: 1, noticedToStartMs: 0 } } : {}) };
+      let result: Record<string, unknown>;
+      try { result = await this.request(body, "", signal); }
+      catch (error) {
+        // A transport failure has no server answer. Replay this exact offer/key once.
+        if (!options.resume || signal?.aborted || (error instanceof Error && /^[A-Z_]{1,40}$/.test(error.message))) throw error;
+        result = await this.request(body, "", signal);
+      }
       if (typeof result.sessionId !== "string" || typeof result.sdp !== "string") throw new Error("PROVIDER_ERROR");
       if (epoch !== this.epoch) { await this.request({ action: "close", sessionId: result.sessionId }); throw new Error("SESSION_CLOSED"); }
       this.sessionId = result.sessionId;
@@ -123,21 +161,34 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       this.localSession = result.sessionId;
       this.syncedProject = options.project;
       void this.syncContext().catch(() => undefined);
-      await media.answer(result.sdp);
+      await abortable(media.answer(result.sdp), signal);
+      if (this.attemptError) throw this.attemptError;
       this.contextMute();
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
-      await this.readEvents();
+      failureCause = "viewer-unreachable";
+      await abortable(this.readEvents(), signal);
+      if (this.attemptError) throw this.attemptError;
+      if (!this.sessionId && options.resume) throw new Error("SESSION_CLOSED");
+      const buffered = this.buffering; this.buffering = null;
+      if (buffered) for (const event of buffered) for (const listener of this.listeners) listener(event);
       this.schedule(epoch);
       if (epoch === this.epoch && this.sessionId && !this.connected) { this.connected = true; this.cues.connect(); }
     } catch (error) {
-      if (epoch !== this.epoch) { await media.close(); return; }
+      this.buffering = null;
+      if (epoch !== this.epoch) throw error;
       // Publish readiness for a failed local attempt so hooks can display its
       // error even when no server session was minted (microphone/key/cap).
-      if (!this.sessionId) this.emit({ type: "session.ready", mode: this.mode });
+      if (!options.resume && !this.sessionId) this.emit({ type: "session.ready", mode: this.mode });
       const code = error instanceof Error && /^[A-Z_]{1,40}$/.test(error.message) ? error.message : "PROVIDER_ERROR";
       const resetsAt = (error as { resetsAt?: unknown }).resetsAt;
-      await this.close();
-      this.emit({ type: "error", code, recoverable: false, ...(typeof resetsAt === "number" ? { resetsAt } : {}) });
+      if (options.resume) {
+        const resumedId = this.sessionId;
+        if (resumedId) {
+          Object.assign(error as object, { resumeSessionId: resumedId });
+          void this.end(true, code === "AUDIO_REFUSED" ? "audio-refused" : this.attemptCause ?? failureCause, true);
+        } else { this.requestId = null; this.stopObserver(); }
+      } else await this.close();
+      if (!options.resume) this.emit({ type: "error", code, recoverable: false, ...(typeof resetsAt === "number" ? { resetsAt } : {}) });
       throw error;
     }
   }
@@ -147,15 +198,15 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       this.timer = null;
       void this.readEvents().then(() => this.schedule(epoch)).catch(() => {
         if (epoch !== this.epoch) return;
-        if (this.sessionId) this.lost("PROVIDER_ERROR");
+        if (this.sessionId) this.lost("PROVIDER_ERROR", "viewer-unreachable");
         else this.emit({ type: "error", code: "COMPANION_UNAVAILABLE", recoverable: true });
       });
     }, this.options.pollMs ?? (this.sessionId ? 500 : 2_000));
   }
   private readEvents(): Promise<void> {
-    if (this.poll) return this.poll;
     const sessionId = this.observedId;
     if (!sessionId) return Promise.resolve();
+    if (this.poll && this.pollOwner === sessionId) return this.poll;
     const epoch = this.epoch;
     const promise = (async () => {
       // Context acknowledgements can take longer than the heartbeat window.
@@ -164,20 +215,28 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       const result = await this.request(undefined, `?sessionId=${encodeURIComponent(sessionId)}&after=${this.cursor}`);
       if (epoch !== this.epoch || !Array.isArray(result.events)) return;
       for (const value of result.events as CompanionEvent[]) {
+        if (epoch !== this.epoch) return;
         if (value.sessionId !== sessionId || value.seq <= this.cursor) continue;
         this.cursor = value.seq;
         if (value.type === "delegation.tool.result" && "delivery" in value.result) this.pendingDeliveries.add(value.result.delivery.clientMessageId);
         if (value.type === "delegation.delivery.settled" && value.status === "failed") this.pendingDeliveries.delete(value.delivery.clientMessageId);
         if (value.type === "orchestrator.answer" && value.status !== "progress") this.pendingDeliveries.delete(value.delivery.clientMessageId);
-        this.emit(value, value);
+        if (value.type !== "session.closed") this.emit(value, value);
         if (value.type === "timer.fired") this.cues.timer();
         if (value.type === "transcript.snapshot" && value.speaker === "companion") this.arrived(value.itemId);
         if (value.type === "session.closed") {
           this.disconnected();
           this.stopPlayback("closed");
-          await this.media?.close(); this.media = null;
+          this.media?.mute(true);
+          if (value.reason === "content" && this.buffering) this.attemptError = new Error("CONTENT_BLOCKED");
+          if (!["transport", "error"].includes(value.reason)) {
+            const media = this.media; await media?.close();
+            if (epoch !== this.epoch) return;
+            if (this.media === media) this.media = null;
+          }
           this.sessionId = null; this.requestId = null;
           if (this.timer) clearTimeout(this.timer); this.timer = null;
+          this.emit(value, value);
         }
       }
       /* Another call's figures are that call's own: they come with its record and never reach this call's state. */
@@ -185,6 +244,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       this.schedule(epoch);
     })();
     this.poll = promise;
+    this.pollOwner = sessionId;
     return promise.finally(() => { if (this.poll === promise) this.poll = null; });
   }
   private clock(): number { return this.options.now?.() ?? performance.now(); }
@@ -303,11 +363,22 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.cues.disconnect();
   }
   /** A failed peer connection, a closed channel or a Viewer that stopped answering cut the call off: a drop. */
-  private lost(code: string): void {
+  private lost(code: string, cause?: DropCause): void {
+    if (this.buffering) { this.attemptError = new Error(code); this.attemptCause = cause; return; }
+    if (!this.sessionId) return;
     const drop = code === "PROVIDER_ERROR";
-    if (drop && this.sessionId) this.dropping = true;
+    this.stopPlayback("closed");
+    this.disconnected();
     this.emit({ type: "error", code: drop ? "CONNECTION_LOST" : code, recoverable: false });
-    void this.close().catch(() => undefined);
+    void this.end(drop || this.resuming, cause).catch(() => undefined);
+  }
+  reconnect(status: "trying" | "tick" | "gave-up" | "cancelled"): void {
+    if (status === "tick") this.cues.tick?.();
+    if (status === "gave-up") {
+      const media = this.media; this.media = null;
+      if (this.sessionId) void this.end(true, "viewer-unreachable", true);
+      this.requestId = null; this.cues.giveUp?.(); void media?.close();
+    }
   }
   async resumable(): Promise<ResumableCall | null> {
     const response = await (this.options.fetch ?? fetch)("/api/voice-companion/resume", { cache: "no-store", signal: AbortSignal.timeout(10_000) });
@@ -344,26 +415,34 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     if (this.observedId === observedId) { ++this.epoch; this.stopObserver(); await this.poll; }
     this.cues.dispose();
   }
-  close(): Promise<void> {
-    if (this.closing) return this.closing;
+  close(): Promise<void> { return this.end(false); }
+  private end(retain: boolean, cause?: DropCause, silent = false): Promise<void> {
+    if (this.closing && !this.sessionId && !this.requestId) {
+      if (!retain) { const media = this.media; this.media = null; void media?.close(); }
+      return this.closing;
+    }
     ++this.epoch;
     if (this.timer) clearTimeout(this.timer); this.timer = null;
     this.disconnected();
     this.stopPlayback("closed");
     const sessionId = this.sessionId; const requestId = this.requestId;
-    const dropped = this.dropping; this.dropping = false;
+    const dropped = retain;
+    const episode = this.episode ? { ms: Math.min(86_400_000, Math.max(0, Math.round(this.clock() - this.episode.at))), speaking: this.episode.speaking } : undefined;
+    this.episode = null;
     const media = this.media;
+    this.sessionId = null; this.requestId = null;
+    if (!retain) this.media = null;
+    const epoch = this.epoch;
     const promise = (async () => {
       // Disable microphone input immediately; keep WebRTC alive while final
       // provider usage drains through the server's close request.
       media?.mute(true);
       try {
-        if (sessionId || requestId) await this.request({ action: "close", ...(sessionId ? { sessionId, ...(dropped ? { reason: "transport" } : {}) } : { requestId }) });
-        if (sessionId) { await this.poll; await this.readEvents(); }
-      } catch { this.emit({ type: "error", code: "FINALIZATION_INCOMPLETE", recoverable: true }); }
+        if (sessionId || requestId) await this.request({ action: "close", ...(sessionId ? { sessionId, ...(dropped ? { reason: "transport", ...(cause ? { cause } : {}), ...(episode ? { episode } : {}) } : {}) } : { requestId }) });
+        if (sessionId && !silent && epoch === this.epoch) { await this.poll; if (epoch === this.epoch) await this.readEvents(); }
+      } catch { if (!retain && epoch === this.epoch) this.emit({ type: "error", code: "FINALIZATION_INCOMPLETE", recoverable: true }); }
       finally {
-        await media?.close();
-        this.media = null; this.sessionId = null; this.requestId = null;
+        if (!retain) await media?.close();
         this.schedule(this.epoch);
       }
     })();

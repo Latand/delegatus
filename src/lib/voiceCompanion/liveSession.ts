@@ -1,12 +1,12 @@
 import { askGist, spokenDecline } from "./liveGate";
 import { CALL_MEMORY_BUDGET, carriesAddedResult, privateCut, sameCallOwner, type CallMemory } from "./callMemory";
-import { callChain, chainRecord, continuationBlock, DROP_REASONS, RESUME_WINDOW_MS, spoke, STALE_BROWSER_MS, type CallSegment } from "./callResume";
+import { callChain, CHAIN_LIMIT, chainRecord, continuationBlock, DROP_REASONS, RESUME_WINDOW_MS, spoke, STALE_BROWSER_MS, type CallSegment } from "./callResume";
 import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { projectHandle } from "./projectNames";
 import { hardenedRedact } from "@/lib/view/compactText";
-import type { CompanionCommand, CompanionEvent, CompanionPlan, Locale, Payload } from "./contract";
+import type { CompanionCommand, CompanionEvent, CompanionPlan, ConnectionEpisode, DropCause, Locale, Payload, ReconnectRecord } from "./contract";
 import { CompanionStorage, type SessionStarter, type StoredSession } from "./storage";
 import { CompanionAdmission, type OperatorAttempt } from "./admission";
 import { CompanionBoardReads, READ_TOOL_NAMES, VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
@@ -114,8 +114,9 @@ interface ActiveSession {
   abort: AbortController;
   timers: ReturnType<typeof setTimeout>[]; closePromise?: Promise<void>; resolveClose?: () => void;
   reason?: Extract<Payload, { type: "session.closed" }>["reason"]; ended: boolean; endRequested: boolean;
+  cause?: DropCause; episode?: ConnectionEpisode;
   providerClosed?: boolean; finalDuration?: boolean; hungUp?: boolean;
-  lastSeen: number;
+  lastSeen: number; polled?: boolean;
   createdAt: number; voiceAllowanceSeconds: number;
   /** The first part's start: a reconnect continues the call that began there. */
   callStartedAt: number;
@@ -175,7 +176,7 @@ interface Options {
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
 /** A call that dropped and can go on: the browser offers it in one tap. */
 export interface ResumableCall { sessionId: string; project: string; endedAt: number | null }
-type StartInput = { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"]; resume?: string; timeZone?: string };
+type StartInput = { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"]; resume?: string; timeZone?: string; reconnect?: ReconnectRecord };
 /** `session.commentary.append` takes at most 500 tokens. A token holds at
  * least one byte, so text of at most 500 UTF-8 bytes always fits, whatever
  * the language. */
@@ -237,27 +238,42 @@ export class CompanionLiveSessions {
   async start(input: StartInput): Promise<MintedCompanionSession> {
     const requestId = input.requestId ?? randomUUID();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId) || (input.resume !== undefined && !/^[A-Za-z0-9_-]{1,200}$/.test(input.resume))) throw new Error("INVALID_REQUEST");
-    // A reconnect first ends the part it continues, when this Viewer still holds it open: its journal is then
-    // whole, and its provider session is not left running beside the new one.
-    // Only the starter's own call: another caller's id never cuts a live call off.
-    if (input.resume && this.active.has(input.resume) && !this.minting.has(requestId)
-      && sameCallOwner(input.startedBy, this.storage.read().sessions[input.resume]?.startedBy)) await this.close(input.resume, "transport").catch(() => undefined);
-    // No new paid session while one that lost its owner is still open, or
-    // while the provider has not confirmed that an earlier one is closed.
-    await this.recover();
-    const open = this.orphans().filter(row => row.remoteOpen);
-    if (open.some(row => row.mintUncertain && !row.providerId)) throw new Error("MINT_UNCERTAIN");
-    if (open.length) throw new Error("PROVIDER_ERROR");
     const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : [])])).digest("hex");
-    const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
-    if (previous) {
+    const knownRequest = (): Promise<MintedCompanionSession> | null => {
+      const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
+      if (!previous) return null;
       if (previous.mintDigest !== digest) throw new Error("INVALID_REQUEST");
       const pending = this.minting.get(requestId); if (pending) return pending;
       if (!previous.closed && previous.answerSdp && previous.providerId && this.active.has(previous.id))
-        return { sessionId: previous.id, providerId: previous.providerId, sdp: previous.answerSdp };
+        return Promise.resolve({ sessionId: previous.id, providerId: previous.providerId, sdp: previous.answerSdp });
       throw new Error("SESSION_CLOSED");
+    };
+    const known = knownRequest(); if (known) return known;
+    // A known request never walks or closes the part it is recovering.
+    let resume = input.resume;
+    if (resume) {
+      let head: string = resume;
+      const seen = new Set<string>();
+      for (;;) {
+        const row: StoredSession | undefined = this.storage.read().sessions[head];
+        if (!row || !sameCallOwner(input.startedBy, row.startedBy) || seen.has(head) || seen.size >= CHAIN_LIMIT) throw new Error("SESSION_UNAVAILABLE");
+        seen.add(head);
+        if (!row.resumedBy) break;
+        head = row.resumedBy;
+      }
+      resume = head;
+      const active = this.active.get(head);
+      if (active) {
+        if (resume !== input.resume && active.polled && this.now() - active.lastSeen < STALE_BROWSER_MS) throw new Error("SESSION_UNAVAILABLE");
+        await this.close(resume, "transport", resume === input.resume ? undefined : "answer-lost");
+      }
     }
-    const promise = this.mint(input, requestId, digest);
+    await this.recover();
+    const raced = knownRequest(); if (raced) return raced;
+    const open = this.orphans().filter(row => row.remoteOpen);
+    if (open.some(row => row.mintUncertain && !row.providerId)) throw new Error("MINT_UNCERTAIN");
+    if (open.length) throw new Error("PROVIDER_ERROR");
+    const promise = this.mint({ ...input, resume }, requestId, digest);
     this.minting.set(requestId, promise);
     try { return await promise; } finally { this.minting.delete(requestId); }
   }
@@ -267,6 +283,8 @@ export class CompanionLiveSessions {
     if (!input.project.trim() || input.project.length > 200 || !["en", "uk"].includes(input.locale)
       || !input.sdp.trim() || input.sdp.length > 96_000) throw new Error("INVALID_REQUEST");
     const resumed = input.resume ? this.continued(input.resume, input.startedBy) : null;
+    // Recheck after recovery/close awaited: another start may have leased this part.
+    if (input.resume && this.storage.read().sessions[input.resume]?.resumedBy) throw new Error("PROVIDER_ERROR");
     const clock = resolveVoiceClock(input.timeZone);
     const directoryProjects = this.reads.projectRows(input.project).map(({ name, handle }) => ({ name, handle }));
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
@@ -277,7 +295,7 @@ export class CompanionLiveSessions {
     if (this.options.memory || resumed || voiceTools.servers.length) {
       const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
       this.admission.record(id, { ...start, data: { ...start.data, ...(this.options.memory ? { memoryVersion: settings.callMemory ? 1 : 0 } : {}), ...(resumed ? { resumes: input.resume } : {}),
-        ...(voiceTools.servers.length ? { voiceTools: snapshotRecord(voiceTools) } : {}) } });
+        ...(input.reconnect ? { reconnect: input.reconnect } : {}), ...(voiceTools.servers.length ? { voiceTools: snapshotRecord(voiceTools) } : {}) } });
     }
     try {
       this.storage.change(document => {
@@ -325,7 +343,14 @@ export class CompanionLiveSessions {
     active.releaseState = this.storage.hold(id);
     // Recorded before the provider is asked: a lost answer or a stop before the
     // id is stored leaves a session that may be open and that nobody can name.
-    this.storage.change(document => { Object.assign(document.sessions[id], { ...(codex ? { backend: "codex" } : {}), usage: { seconds: 0, responses: {} }, remoteOpen: true, mintUncertain: true }); });
+    this.storage.change(document => {
+      if (input.resume) {
+        const previous = document.sessions[input.resume];
+        if (!previous || previous.resumedBy) throw new Error("PROVIDER_ERROR");
+        previous.resumedBy = id;
+      }
+      Object.assign(document.sessions[id], { ...(codex ? { backend: "codex" } : {}), usage: { seconds: 0, responses: {} }, remoteOpen: true, mintUncertain: true });
+    });
     let refused = false;
     let hungUpUnnamed = false;
     try {
@@ -366,6 +391,10 @@ export class CompanionLiveSessions {
       // The call clock starts with the voice, on this server's clock.
       if (codex) this.storage.change(document => { document.sessions[id].usage!.startedAt = this.now(); });
       this.admission.emit(id, { type: "session.ready", mode: "official-realtime" });
+      if (input.reconnect) {
+        const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
+        this.admission.record(id, { ...start, data: { ...start.data, reconnect: { ...input.reconnect, noticedToReadyMs: input.reconnect.noticedToStartMs + Math.max(0, this.now() - active.createdAt) } } });
+      }
       this.options.voiceTimers?.callStarted(active.owner);
       if (this.options.timers !== false) {
         const watchdog = setInterval(() => { try {
@@ -375,9 +404,9 @@ export class CompanionLiveSessions {
           if (!settings.enabled) void this.close(id, "operator");
           else if (!codex && (chargeMonth !== settings.month || settings.monthlyCapUsd < settings.usageUsd + settings.reservedUsd)) void this.close(id, "cap");
           // A browser that stopped reading the call lost it: a drop, offered back to the operator.
-          else if (this.now() - active.lastSeen > 30_000) void this.close(id, "transport");
+          else if (this.now() - active.lastSeen > 30_000) void this.close(id, "transport", "watchdog");
           else { this.renewVoice(active); this.options.memory?.checkpoint(id); }
-        } catch { void this.forceHangup(active); } }, 5_000);
+        } catch { active.reason ??= "transport"; active.cause ??= "watchdog"; void this.forceHangup(active); } }, 5_000);
         active.timers.push(watchdog);
       }
       return { sessionId: id, providerId: minted.id, sdp: minted.sdp };
@@ -397,6 +426,7 @@ export class CompanionLiveSessions {
         // A refusal bills nothing; a created session keeps its reservation as incomplete usage.
         if (refused) this.storage.settle(id, 0);
       }
+      active.cause ??= "mint-failed";
       this.finish(active, false);
       if (codex && active.providerId && !active.hungUp) this.retryHangup(id);
       if (codex) throw error;
@@ -423,6 +453,7 @@ export class CompanionLiveSessions {
         try { this.admission.emit(active.id, { type: "error", code: "PROVIDER_ERROR", recoverable: false }); }
         catch { /* The browser reads a state-unavailable response. */ }
         active.reason = "error";
+        active.cause ??= "provider-error";
         void this.forceHangup(active);
       } finally { active.processing = undefined; if (active.queue.length && !active.ended) this.enqueue(active, active.queue.pop()); }
     });
@@ -601,6 +632,13 @@ export class CompanionLiveSessions {
       });
       this.observeCost(active);
       if (event.type === "session.closed") {
+        if (active.codex && active.reason === undefined && event.reason === undefined) {
+          active.reason = "transport"; active.cause = "sideband";
+        }
+        if (!["operator", "tool", "cap", "limit"].includes(active.reason ?? "") && ["connection_lost", "expired", "remote_hangup", "content"].includes(String(event.reason))) {
+          active.reason = event.reason === "content" ? "content" : "transport";
+          active.cause ??= `provider-${event.reason}` as DropCause;
+        }
         active.providerClosed = true;
         active.finalDuration = typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0;
         this.waitForClose(active);
@@ -611,7 +649,7 @@ export class CompanionLiveSessions {
       if (active.limitReached) { void this.close(active.id, "limit"); return; }
       // Upstream messages can contain private configuration. Expose a code only.
       this.admission.emit(active.id, { type: "error", code: "PROVIDER_ERROR", recoverable: true });
-      void this.close(active.id, "error");
+      void this.close(active.id, "error", "provider-error");
     }
   }
   /** A duplicate handoff may steer the same backing turn. Its later context
@@ -1189,7 +1227,7 @@ export class CompanionLiveSessions {
           if (confirmed) delete document.sessions[id].mintUncertain;
         });
         if (confirmed) this.retrying.delete(id); else this.retryHangup(id);
-        if (!session.closed) { this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true }); this.admission.retire(id); this.options.memory?.trigger(id); }
+        if (!session.closed) { this.admission.emit(id, { type: "session.closed", reason: "transport", cause: "viewer-restart", incomplete: true }); this.admission.retire(id); this.options.memory?.trigger(id); }
         return;
       }
       const remote = !!session.providerId && (session.remoteOpen ?? !session.closed);
@@ -1211,7 +1249,7 @@ export class CompanionLiveSessions {
       }
       if (!this.admission.session(id).closed) {
         this.storage.settle(id, null);
-        this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true });
+        this.admission.emit(id, { type: "session.closed", reason: "transport", cause: "viewer-restart", incomplete: true });
         this.admission.retire(id);
         this.options.memory?.trigger(id);
       }
@@ -1228,13 +1266,18 @@ export class CompanionLiveSessions {
     }
     const active = this.active.get(id);
     if (!active || active.ended || active.closePromise) throw new Error("SESSION_CLOSED");
+    if (command.type === "episode") {
+      this.admission.record(id, { id: `connection-${randomUUID()}`, kind: "connection", atMs: Math.max(0, this.now() - active.createdAt), data: { ms: command.ms, speaking: command.speaking } });
+      return;
+    }
     if (command.type === "mute") active.connection?.send({ type: command.muted ? "session.input_audio.mute" : "session.input_audio.unmute", event_id: randomUUID() });
     if (command.type === "interrupt") active.connection?.send({ type: "session.instructions.append", event_id: randomUUID(), delegation_id: null,
       content: "Yield to the operator now. Stop your current speech and listen. Leave already confirmed work unchanged." });
   }
   async events(id: string, after: number): Promise<CompanionEvent[]> {
+    if (this.admission.session(id).resumedBy) return this.admission.events(id, after);
     const active = this.active.get(id);
-    if (active) active.lastSeen = this.now();
+    if (active) { active.lastSeen = this.now(); active.polled = true; }
     await active?.processing;
     const session = this.admission.session(id);
     if (!active && (!session.closed || session.remoteOpen)) await this.reap(id);
@@ -1248,11 +1291,13 @@ export class CompanionLiveSessions {
     if (active) { this.speakReports(active); this.speakTimers(active); }
     return this.admission.events(id, after);
   }
-  close(id: string, reason: ActiveSession["reason"] = "operator"): Promise<void> {
+  close(id: string, reason: ActiveSession["reason"] = "operator", cause?: DropCause, episode?: ConnectionEpisode): Promise<void> {
     const active = this.active.get(id);
     if (!active) return this.events(id, 0).then(() => { this.admission.retire(id); });
     if (active.closePromise) return active.closePromise;
     active.reason = reason;
+    if (cause) active.cause = cause;
+    if (episode) active.episode = episode;
     this.waitForClose(active);
     try { active.connection?.send({ type: "session.close", event_id: randomUUID() }); }
     catch { void this.forceHangup(active); }
@@ -1274,6 +1319,7 @@ export class CompanionLiveSessions {
       // missing final receipt. This preserves finals queued just before close.
       if (active.processing) { void active.processing.then(() => this.lost(active)); return; }
       active.reason ??= "transport";
+      active.cause ??= "sideband";
       void this.forceHangup(active);
       void this.close(active.id, active.reason);
     }
@@ -1325,7 +1371,8 @@ export class CompanionLiveSessions {
       if (!active.codex) this.storage.settle(active.id, complete ? usd : null);
       // Only API usage can be unconfirmed: a Codex call's seconds are this server's
       // own clock and its plan holds no reservation to keep.
-      this.admission.emit(active.id, { type: "session.closed", reason: active.reason ?? (finalized ? "operator" : "transport"), incomplete: !active.codex && !complete });
+      this.admission.emit(active.id, { type: "session.closed", reason: active.reason ?? (finalized ? "operator" : "transport"), incomplete: !active.codex && !complete,
+        ...(active.cause ? { cause: active.cause } : {}), ...(active.episode ? { episode: active.episode } : {}) });
       this.admission.retire(active.id);
       this.options.memory?.trigger(active.id);
     } finally {

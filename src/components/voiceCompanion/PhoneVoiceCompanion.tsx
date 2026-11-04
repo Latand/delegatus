@@ -377,9 +377,9 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   /* The call's clock starts when the session is ready, and ticks only while the popover shows it. */
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the clock follows the session's phase
-    setCallStart((at) => (connected ? at ?? Date.now() : null));
-    if (!connected) setMuted(false);
-  }, [connected]);
+    setCallStart((at) => (connected ? at ?? Date.now() : state.resumable ? at : null));
+    if (!connected && !state.resumable) setMuted(false);
+  }, [connected, state.resumable]);
   useEffect(() => {
     if (!menu || !connected) return;
     const timer = setInterval(() => setNow(Date.now()), 1_000);
@@ -392,7 +392,8 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   const speakersFellBack = useVoiceOutputFellBack();
   const awaiting = store.awaiting();
   /* A dropped call is said as a drop, whatever failure ended it; a reconnect says the call goes on. */
-  const sessionNotice = state.resumable && !awaiting ? { key: `drop:${state.resumable.sessionId}`, code: "CONNECTION_LOST" }
+  const sessionNotice = state.phase === "reconnecting" ? { key: `reconnecting:${state.generation}`, code: "RECONNECTING" }
+    : state.resumable && !awaiting ? { key: `drop:${state.resumable.sessionId}:${state.error}`, code: state.error ?? "CONNECTION_LOST" }
     : state.error && !awaiting ? { key: `error:${state.generation}:${state.error}`, code: state.error, resetsAt: state.errorResetsAt }
     : state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting ? { key: `closure:${state.generation}`, code: "FINALIZATION_INCOMPLETE" }
     : state.reconnected && connected && !awaiting ? { key: `restored:${state.generation}`, code: "CONNECTION_RESTORED" }
@@ -406,10 +407,10 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the failure itself
   }, [sessionNotice?.key]);
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || notice.code === "RECONNECTING" || state.phase === "offline" && state.resumable) return;
     const timer = setTimeout(() => setNotice((current) => (current?.key === notice.key ? null : current)), NOTICE_LINGER_MS);
     return () => clearTimeout(timer);
-  }, [notice]);
+  }, [notice, state.phase, state.resumable]);
 
   /* The popover closes on a tap outside it and on Escape. */
   useEffect(() => {
@@ -454,7 +455,6 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
     const target = project ?? call.project;
     if (target === null) { setNotice({ key: `refused:${(refusals.current += 1)}`, code: "NO_PROJECT" }); return; }
     setNotice(null);
-    setMuted(false);
     setStarting(true);
     setReading(false);
     void store.start({ locale: speechLocale, project: target, resume: call.sessionId }).catch(() => undefined).finally(() => setStarting(false));
@@ -492,7 +492,7 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
     setPhoneVoiceSide(nearSide);
   };
 
-  const phaseLabel = starting && !connected ? t("voiceCompanion.phase.connecting") : t(`voiceCompanion.phase.${state.phase}`);
+  const phaseLabel = state.phase === "reconnecting" ? companionErrorMessage("RECONNECT_PHASE", speechLocale) : starting && !connected ? t("voiceCompanion.phase.connecting") : t(`voiceCompanion.phase.${state.phase}`);
   const seconds = callStart === null ? 0 : Math.max(0, Math.floor((now - callStart) / 1000));
   const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   const lowHalf = rest.y + HEAD / 2 > shell.height / 2;
@@ -501,7 +501,8 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   const pieces = playingLine ? bubblesOf(playingLine, PHONE_BUBBLE_CHARS) : [];
   const reached = playingLine ? (paced?.key === playingLine.key ? Math.max(1, paced.out) : bubblesOut(playingLine, pieces, state.playedMs)) : 0;
   const speech = speaking && reached > 0 ? pieces[Math.min(reached, pieces.length) - 1] ?? null : null;
-  const said = notice ? companionErrorMessage(notice.code, speechLocale, { resetsAt: notice.resetsAt }) : speech;
+  const noticeCode = notice?.code === "RECONNECTING" || notice?.code === "RECONNECT_GAVE_UP" ? `${notice.code}_PHONE` : notice?.code;
+  const said = noticeCode ? companionErrorMessage(noticeCode, speechLocale, { resetsAt: notice?.resetsAt }) : speech;
   /* Over a sheet as tall as the screen the head says nothing: the call goes on and is heard. */
   const showWords = said !== null && !drag && !menu && shell.footer === null;
   const laneWidth = shell.width - HEAD - EDGE * 3 - shell.insetLeft - shell.insetRight;
@@ -558,8 +559,8 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
         {sheetOpen ? null : plate}
         {showWords ? (
           <div className="vc-lane pvc-lane" data-phone-voice-words data-side={lane.side} aria-live="polite" style={{ left: lane.left, top: lane.top, width: lane.width, height: lane.height }}>
-            <p className="vc-bubble" data-speaker="companion" data-newest data-tone={notice ? "notice" : undefined} data-phone-voice-bubble role={notice ? "alert" : undefined}>
-              <span className="vc-text">{tied(said)}</span>
+            <p className="vc-bubble" data-speaker="companion" data-newest data-tone={notice ? "notice" : undefined} data-code={notice?.code} data-phone-voice-bubble role={notice ? "alert" : undefined}>
+              <span className="vc-text">{notice ? said : tied(said)}</span>
             </p>
           </div>
         ) : null}

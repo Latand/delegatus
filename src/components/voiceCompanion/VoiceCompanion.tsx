@@ -641,12 +641,13 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const say = (source: string, code: string, tone: "failure" | "note" = "failure", resetsAt?: number | null, settled = true) => notices.push({ kind: "notice", key: `notice:${talks}:${source}:${code}`, code, tone, settled, resetsAt });
     if (refusedStart) say(`start${refusedStart.n}`, refusedStart.code);
     /* A call that dropped is said as a drop, whatever failure ended it, and stays offered until it is continued or replaced. */
-    if (state.resumable && !awaiting) say(`drop:${state.resumable.sessionId}`, "CONNECTION_LOST", "failure", null, false);
+    if (state.phase === "reconnecting") say("reconnecting", "RECONNECTING", "note", null, false);
+    else if (state.resumable && !awaiting) say(`drop:${state.resumable.sessionId}`, state.error ?? "CONNECTION_LOST", "failure", null, false);
     /* Until the session asked for is ready, an error the state still holds is the previous conversation's. */
     else if (state.error && !awaiting) say("error", state.error, "failure", state.errorResetsAt);
     if (state.reconnected && state.phase !== "offline" && !awaiting) say("restored", "CONNECTION_RESTORED", "note");
     /* A retained reservation exists only for an API call. */
-    if (state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
+    if (state.phase !== "reconnecting" && state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
     if (state.phase !== "offline" && micInUse?.fellBack) say("device-in", "MICROPHONE_FALLBACK", "note");
     if (state.phase !== "offline" && speakersFellBack) say("device-out", "SPEAKERS_FALLBACK", "note");
@@ -1122,7 +1123,6 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     setTalks((count) => count + 1);
     setRefusedStart(target === null ? { code: "NO_PROJECT", n: (refusedStart?.n ?? 0) + 1 } : null);
     if (target === null) return;
-    setMuted(false);
     setStarting(true);
     setReading(false);
     void store.start({ locale: speechLocale, project: target, resume: call.sessionId }).catch(() => undefined).finally(() => setStarting(false));
@@ -1164,7 +1164,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const timer = setInterval(read, 1_500);
     return () => { alive = false; clearInterval(timer); };
   }, [reading, adapter, following, waitingForReport, target, observe]);
-  const phaseLabel = starting && !connected ? t("voiceCompanion.phase.connecting") : t(`voiceCompanion.phase.${state.phase}`);
+  const phaseLabel = state.phase === "reconnecting" ? companionErrorMessage("RECONNECT_PHASE", speechLocale) : starting && !connected ? t("voiceCompanion.phase.connecting") : t(`voiceCompanion.phase.${state.phase}`);
   const muteLabel = `${t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")}${connected && micInUse?.label ? ` · ${t("voiceCompanion.micInUse", { name: micInUse.label })}` : ""}`;
   const failing = floaters.some((floater) => floater.kind === "notice" && floater.tone === "failure");
   const attention = stage === "awaiting-confirmation" || stage === "answered" || failing;
@@ -1188,7 +1188,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           <span className="vc-notice-icon" aria-hidden>{floater.code === "CONNECTION_RESTORED" ? <Check size={14} /> : <CircleAlert size={14} />}</span>
           <span className="vc-notice-text">{companionErrorMessage(floater.code, speechLocaleOf(locale), { resetsAt: floater.resetsAt })}</span>
           {onOpenSettings && SETTINGS_FAILURES.has(floater.code) ? <button type="button" className="vc-act" data-companion-open-settings onClick={onOpenSettings}><Settings size={13} aria-hidden />{t("voiceCompanion.openSettings")}</button> : null}
-          {floater.code === "CONNECTION_LOST" && state.resumable ? <button type="button" className="vc-act" data-primary data-companion-resume disabled={starting} onClick={resume}><RotateCcw size={13} aria-hidden />{t("voiceCompanion.reconnect")}</button> : null}
+          {state.phase === "offline" && state.resumable ? <button type="button" className="vc-act" data-primary data-companion-resume disabled={starting} onClick={resume}><RotateCcw size={13} aria-hidden />{t("voiceCompanion.reconnect")}</button> : null}
         </div>
       );
     }

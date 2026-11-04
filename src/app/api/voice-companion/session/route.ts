@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { companionBody, companionFailure, companionOperator, companionStarter, companionSessionOwner } from "@/lib/voiceCompanion/http";
 import { companionSessions } from "@/lib/voiceCompanion/server";
-import type { CompanionCommand } from "@/lib/voiceCompanion/contract";
+import { BROWSER_DROP_CAUSES, type CompanionCommand, type ConnectionEpisode, type DropCause, type ReconnectRecord } from "@/lib/voiceCompanion/contract";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "no-store" };
 const id = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(value);
+const episodeValid = (value: unknown): value is ConnectionEpisode => !!value && typeof value === "object" && !Array.isArray(value)
+  && Number.isSafeInteger((value as ConnectionEpisode).ms) && (value as ConnectionEpisode).ms >= 0 && (value as ConnectionEpisode).ms <= 86_400_000
+  && [null, "voice", "operator"].includes((value as ConnectionEpisode).speaking);
 
 /** Only operator browser actions reach session controls. Provider tool events,
  * final usage and transcripts have no browser-write route. */
@@ -23,12 +26,16 @@ export async function POST(req: NextRequest) {
     if (body.action === "start") {
       if (typeof body.project !== "string" || !["en", "uk"].includes(body.locale as string) || typeof body.sdp !== "string" || !id(body.requestId)
         || (body.resume !== undefined && !id(body.resume))) throw new Error("INVALID_REQUEST");
+      const reconnect = body.reconnect as ReconnectRecord | undefined;
+      if (reconnect !== undefined && (!body.resume || !reconnect || typeof reconnect !== "object" || Array.isArray(reconnect) || reconnect.tier !== 2
+        || !Number.isSafeInteger(reconnect.attempts) || reconnect.attempts < 1 || reconnect.attempts > 8 || typeof reconnect.automatic !== "boolean"
+        || !Number.isSafeInteger(reconnect.noticedToStartMs) || reconnect.noticedToStartMs < 0 || reconnect.noticedToStartMs > 86_400_000)) throw new Error("INVALID_REQUEST");
       const previous = Object.values(service.storage.read().sessions).find(session => session.mintRequestId === body.requestId);
       if (previous) companionSessionOwner(req, previous);
       /* A reconnect continues only the caller's own call. */
       if (typeof body.resume === "string") owns(body.resume);
       return NextResponse.json(await service.start({ project: body.project, locale: body.locale as "en" | "uk", sdp: body.sdp, requestId: body.requestId,
-        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}), ...(typeof body.timeZone === "string" ? { timeZone: body.timeZone } : {}) }), { status: 201, headers });
+        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}), ...(reconnect ? { reconnect } : {}), ...(typeof body.timeZone === "string" ? { timeZone: body.timeZone } : {}) }), { status: 201, headers });
     }
     if (body.action === "close" && id(body.requestId) && body.sessionId === undefined) {
       const session = Object.values(service.storage.read().sessions).find(row => row.mintRequestId === body.requestId);
@@ -40,7 +47,10 @@ export async function POST(req: NextRequest) {
     if (body.action === "close") {
       /* A browser whose media or network failed says so: the call dropped, and it is offered back. */
       if (body.reason !== undefined && body.reason !== "transport") throw new Error("INVALID_REQUEST");
-      await service.close(body.sessionId, body.reason === "transport" ? "transport" : "operator");
+      if (body.cause !== undefined && (body.reason !== "transport" || !BROWSER_DROP_CAUSES.includes(body.cause as typeof BROWSER_DROP_CAUSES[number]))) throw new Error("INVALID_REQUEST");
+      const episode = body.episode;
+      if (episode !== undefined && (body.reason !== "transport" || !episodeValid(episode))) throw new Error("INVALID_REQUEST");
+      await service.close(body.sessionId, body.reason === "transport" ? "transport" : "operator", body.cause as DropCause | undefined, episode as ConnectionEpisode | undefined);
     }
     else if (body.action === "context") {
       if (body.project !== null && (typeof body.project !== "string" || !body.project.trim() || body.project.length > 200)) throw new Error("INVALID_REQUEST");
@@ -52,6 +62,8 @@ export async function POST(req: NextRequest) {
       const command = value as CompanionCommand;
       if (command.type === "confirmation") {
         if (!id(command.proposalId) || command.via !== "tap" || !["send", "cancel"].includes(command.decision)) throw new Error("INVALID_REQUEST");
+      } else if (command.type === "episode") {
+        if (!episodeValid(command)) throw new Error("INVALID_REQUEST");
       } else if (command.type === "mute") { if (typeof command.muted !== "boolean") throw new Error("INVALID_REQUEST"); }
       else if (command.type === "interrupt") { if (!id(command.responseId)) throw new Error("INVALID_REQUEST"); }
       else throw new Error("INVALID_REQUEST");

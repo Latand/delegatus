@@ -12014,6 +12014,74 @@ describe("phone voice drop", () => {
    *
    * Frames go to `.artifacts/voice-companion/phone-drop/` and are never committed.
    */
+  browserTest("automatic voice reconnect: reconnecting, back and gave up at 390 px in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/voice-reconnect/phone"); fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    type Controls = ReturnType<typeof import("@/components/voiceCompanion/reconnectEvidence.fixture").reconnectEvidence>["controls"];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript(lang => localStorage.setItem("llv_lang", lang), lang);
+          const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+          await page.clock.install({ time: Date.UTC(2026, 10, 4, 12) }); await page.clock.pauseAt(Date.UTC(2026, 10, 4, 12, 1));
+          await page.goto(`${base}/?voice=reconnect&voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.clock.runFor(1_500);
+          const head = page.locator("[data-phone-voice-head]");
+          for (let frame = 0; frame < 50 && !(await head.count()); frame++) await page.clock.runFor(100);
+          await head.tap(); await page.clock.runFor(100); await page.locator("[data-phone-voice-talk]").tap();
+          await page.clock.runFor(100);
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "idle");
+          const control = (action: "drop" | "release" | "fail") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
+          const capture = async (state: string) => {
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+            await page.clock.runFor(400);
+            const bubble = page.locator("[data-phone-voice-bubble]"); await bubble.waitFor();
+            const geometry = await bubble.evaluate(node => {
+              const rect = node.getBoundingClientRect(); const range = document.createRange(); range.selectNodeContents(node);
+              const clipped: number[] = [];
+              const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const text = walker.currentNode; range.selectNodeContents(text);
+                for (const glyph of range.getClientRects()) for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+                  const box = parent.getBoundingClientRect(), style = getComputedStyle(parent);
+                  if (style.overflowX !== "visible" && (glyph.left < box.left - 1 || glyph.right > box.right + 1)
+                    || style.overflowY !== "visible" && (glyph.top < box.top - 1 || glyph.bottom > box.bottom + 1)) clipped.push(glyph.width);
+                }
+              }
+              return { text: node.textContent, inside: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight, clipped,
+                clamped: [...node.querySelectorAll<HTMLElement>(".vc-text")].some(text => text.scrollHeight > text.clientHeight + 1) };
+            });
+            expect(geometry.inside).toBe(true); expect(geometry.clipped).toEqual([]); expect(geometry.clamped).toBe(false);
+            const frame = `${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, frame) }); readings.push({ lang, scheme, state, frame, ...geometry });
+          };
+          await control("drop"); await page.clock.runFor(300);
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "reconnecting");
+          await head.tap(); expect(await page.locator("[data-phone-voice-resume]").count()).toBe(0); expect(await page.locator("[data-phone-voice-end]").isEnabled()).toBe(true); await head.tap();
+          await capture("reconnecting");
+          await page.clock.runFor(5_000); await head.tap(); await page.clock.runFor(1_000);
+          const beforeClock = await page.locator("[data-phone-voice-clock]").innerText();
+          const seconds = (value: string) => { const parts = value.match(/(\d+):(\d+)/)!; return Number(parts[1]) * 60 + Number(parts[2]); };
+          expect(seconds(beforeClock)).toBeGreaterThanOrEqual(5); await head.tap();
+          await control("release"); await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "idle");
+          await head.tap(); expect(seconds(await page.locator("[data-phone-voice-clock]").innerText())).toBeGreaterThanOrEqual(seconds(beforeClock)); await head.tap();
+          await capture("back");
+          await control("fail"); await control("drop"); await page.clock.runFor(60_000);
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
+          await capture("gave-up"); await head.tap(); expect(await page.locator("[data-phone-voice-resume]").isEnabled()).toBe(true);
+          const observed = await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read());
+          expect(observed.opens).toBe(1); expect(observed.sounds.filter(sound => sound === "give-up")).toHaveLength(1); expect(errors).toEqual([]);
+          await page.locator("[data-phone-voice-resume]").tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice-bubble]")?.textContent?.length);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/reconnect-phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
+    } finally { await browser.close(); stop(); }
+  }, 240_000);
+
   browserTest("history after a drop, the one-tap reconnect, a reload, and the restored call at 390 px", async () => {
     const out = path.resolve(".artifacts/voice-companion/phone-drop");
     fs.mkdirSync(out, { recursive: true });
@@ -12113,7 +12181,9 @@ describe("phone voice drop", () => {
           await pause(page, 900);
 
           /* The network goes mid-call. */
+          await page.clock.install(); await page.clock.pauseAt(new Date());
           await page.evaluate(() => (window as unknown as { phoneVoice: { lose(): void } }).phoneVoice.lose());
+          await head.tap(); await page.locator("[data-phone-voice-end]").tap();
           await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
           await bubble.waitFor();
           expect(closes.at(-1)).toMatchObject({ action: "close", sessionId: "drop-call-1", reason: "transport" });
@@ -12133,6 +12203,7 @@ describe("phone voice drop", () => {
           const dropped = await readHistory("3-history", said.map(([, text]) => text));
 
           /* A reload: nothing in the page's memory, the call still offered and readable. */
+          await page.clock.resume();
           await page.reload();
           await head.waitFor(); await pause(page, 900);
           await head.tap(); await resumeRow.waitFor();
@@ -12147,7 +12218,7 @@ describe("phone voice drop", () => {
           expect(starts.at(-1)).toMatchObject({ action: "start", resume: "drop-call-1" });
           await bubble.waitFor();
           await page.waitForFunction((text) => document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ") === text,
-            lang === "uk" ? "Зʼєднання відновлено. Розмова триває з того місця, де обірвалася." : "Connection restored. The conversation goes on where it stopped.");
+            lang === "uk" ? "Зʼєднання відновлено." : "Connection restored.");
           expect(inside(await bubble.boundingBox())).toBe(true);
           await settled();
           await page.screenshot({ path: path.join(out, `${prefix}-6-restored.png`) });

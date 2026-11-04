@@ -4,10 +4,13 @@ import { DISPLAY_PAUSE_MS } from "./liveTranscript";
 export interface MediaCallbacks {
   playback(sample: { rms: number; playedMs: number; speaking: boolean }): void;
   input(speaking: boolean): void;
-  lost(code: string): void;
+  lost(code: string, cause?: import("./contract").DropCause): void;
+  connection(state: "disconnected" | "connected", inputSpeaking?: boolean): void;
 }
 export interface CompanionMedia {
   open(): Promise<string>;
+  /** Replaces just the peer; the call keeps capture, output and user activation. */
+  restart?(callbacks: MediaCallbacks): Promise<string>;
   answer(sdp: string): Promise<void>;
   mute(muted: boolean): void;
   interrupt(): void;
@@ -26,6 +29,7 @@ export class BrowserCompanionMedia implements CompanionMedia {
   private detachOutput: (() => void) | null = null;
   private context: AudioContext | null = null;
   private outputAnalyser: AnalyserNode | null = null;
+  private inputAnalyser: AnalyserNode | null = null;
   private frame: number | null = null;
   private disposed = false;
   private outputOn = false;
@@ -34,56 +38,97 @@ export class BrowserCompanionMedia implements CompanionMedia {
   private blocked = false;
   private quietSince: number | null = null;
   private cancelIce: (() => void) | null = null;
-  constructor(private readonly callbacks: MediaCallbacks) {}
-
-  async open(): Promise<string> {
-    try {
+  private generation = 0;
+  private capturing: Promise<void> | null = null;
+  constructor(private callbacks: MediaCallbacks) {}
+  private capture(): Promise<void> {
+    if (this.microphone) return Promise.resolve();
+    if (this.capturing) return this.capturing;
+    const promise = (async () => {
       const { stream: microphone, release } = await openVoiceMicrophone({ echoCancellation: true, noiseSuppression: true, autoGainControl: true });
       if (this.disposed) { microphone.getTracks().forEach(track => track.stop()); release(); throw new Error("SESSION_CLOSED"); }
       this.microphone = microphone;
       this.releaseMicrophone = release;
-    } catch (error) { throw new Error(error instanceof Error && error.message === "SESSION_CLOSED" ? "SESSION_CLOSED" : "MICROPHONE_REFUSED"); }
+    })();
+    this.capturing = promise;
+    return promise.finally(() => { if (this.capturing === promise) this.capturing = null; });
+  }
+  open(): Promise<string> { return this.negotiate(false); }
+  private async negotiate(retainOnFailure: boolean): Promise<string> {
+    if (this.disposed) throw new Error("SESSION_CLOSED");
+    const generation = ++this.generation;
+    try { await this.capture(); if (this.disposed || generation !== this.generation) throw new Error("SESSION_CLOSED"); }
+    catch (error) { throw new Error(error instanceof Error && error.message === "SESSION_CLOSED" ? "SESSION_CLOSED" : "MICROPHONE_REFUSED"); }
+    let peer: RTCPeerConnection | null = null;
     try {
-      const peer = this.peer = new RTCPeerConnection();
-      const context = this.context = new AudioContext();
+      peer = this.peer = new RTCPeerConnection();
+      const currentPeer = peer;
+      const context = this.context ??= new AudioContext();
       await context.resume();
-      if (this.disposed) throw new Error("SESSION_CLOSED");
-      const audio = this.audio = new Audio(); audio.autoplay = true;
-      this.detachOutput = attachVoiceOutput(audio);
-      peer.addEventListener("track", event => {
-        if (this.disposed || event.track.kind !== "audio") return;
+      if (this.disposed || generation !== this.generation) throw new Error("SESSION_CLOSED");
+      if (!this.inputAnalyser) {
+        this.inputAnalyser = context.createAnalyser(); this.inputAnalyser.fftSize = 512;
+        context.createMediaStreamSource(this.microphone!).connect(this.inputAnalyser);
+      }
+      const audio = this.audio ??= new Audio(); audio.autoplay = true;
+      this.detachOutput ??= attachVoiceOutput(audio);
+      currentPeer.addEventListener("track", event => {
+        if (this.disposed || currentPeer !== this.peer || event.track.kind !== "audio") return;
         const stream = new MediaStream([event.track]);
         audio.srcObject = stream;
         const output = this.outputAnalyser = context.createAnalyser(); output.fftSize = 512;
         context.createMediaStreamSource(stream).connect(output);
-        void audio.play().catch(() => { if (!this.disposed) this.callbacks.lost("AUDIO_REFUSED"); });
+        void audio.play().catch(() => { if (!this.disposed && currentPeer === this.peer) this.callbacks.lost("AUDIO_REFUSED", "audio-refused"); });
       });
-      peer.addEventListener("connectionstatechange", () => {
-        if (!this.disposed && ["failed", "closed"].includes(peer.connectionState)) this.callbacks.lost("PROVIDER_ERROR");
+      currentPeer.addEventListener("connectionstatechange", () => {
+        if (this.disposed || currentPeer !== this.peer) return;
+        if (["failed", "closed"].includes(currentPeer.connectionState)) this.callbacks.lost("PROVIDER_ERROR", "ice-failed");
+        if (currentPeer.connectionState === "disconnected" || currentPeer.connectionState === "connected") this.callbacks.connection(currentPeer.connectionState,
+          !!this.microphone?.getAudioTracks().some(track => track.enabled) && this.rms(this.inputAnalyser) >= 0.008);
       });
-      for (const track of this.microphone!.getAudioTracks()) peer.addTrack(track, this.microphone!);
-      this.channel = peer.createDataChannel("oai-events");
+      for (const track of this.microphone!.getAudioTracks()) currentPeer.addTrack(track, this.microphone!);
+      this.channel = currentPeer.createDataChannel("oai-events");
       // Sideband owns every application effect. The frontend channel cannot
       // write provider commands and never forwards tool events to the server.
-      this.channel.addEventListener("close", () => { if (!this.disposed) this.callbacks.lost("PROVIDER_ERROR"); });
-      await peer.setLocalDescription(await peer.createOffer());
-      if (this.disposed) throw new Error("SESSION_CLOSED");
-      if (peer.iceGatheringState !== "complete") await new Promise<void>((resolve, reject) => {
-        const done = () => { clearTimeout(timer); peer.removeEventListener("icegatheringstatechange", changed); this.cancelIce = null; };
-        const changed = () => { if (peer.iceGatheringState === "complete") { done(); resolve(); } };
+      this.channel.addEventListener("close", () => { if (!this.disposed && currentPeer === this.peer) this.callbacks.lost("PROVIDER_ERROR", "channel-closed"); });
+      await currentPeer.setLocalDescription(await currentPeer.createOffer());
+      if (this.disposed || generation !== this.generation) throw new Error("SESSION_CLOSED");
+      if (currentPeer.iceGatheringState !== "complete") await new Promise<void>((resolve, reject) => {
+        const done = () => { clearTimeout(timer); currentPeer.removeEventListener("icegatheringstatechange", changed); this.cancelIce = null; };
+        const changed = () => { if (currentPeer.iceGatheringState === "complete") { done(); resolve(); } };
         const timer = setTimeout(() => { done(); reject(new Error("PROVIDER_ERROR")); }, 10_000);
         this.cancelIce = () => { done(); reject(new Error("SESSION_CLOSED")); };
-        peer.addEventListener("icegatheringstatechange", changed); changed();
+        currentPeer.addEventListener("icegatheringstatechange", changed); changed();
       });
-      if (this.disposed || !peer.localDescription?.sdp) throw new Error("SESSION_CLOSED");
-      return peer.localDescription.sdp;
-    } catch (error) { await this.close(); throw error instanceof Error && error.message === "SESSION_CLOSED" ? error : new Error("PROVIDER_ERROR"); }
+      if (this.disposed || generation !== this.generation || !currentPeer.localDescription?.sdp) throw new Error("SESSION_CLOSED");
+      return currentPeer.localDescription.sdp;
+    } catch (error) {
+      if (generation === this.generation) {
+        if (retainOnFailure) {
+          this.peer = null;
+          this.channel?.close(); this.channel = null; peer?.close();
+        } else await this.close();
+      }
+      else if (peer !== this.peer) peer?.close();
+      throw error instanceof Error && error.message === "SESSION_CLOSED" ? error : new Error("PROVIDER_ERROR");
+    }
   }
   async answer(sdp: string): Promise<void> {
     if (!this.peer || this.disposed) throw new Error("SESSION_CLOSED");
-    await this.peer.setRemoteDescription({ type: "answer", sdp });
-    if (this.disposed) throw new Error("SESSION_CLOSED");
-    this.sample();
+    const peer = this.peer;
+    await peer.setRemoteDescription({ type: "answer", sdp });
+    if (this.disposed || peer !== this.peer) throw new Error("SESSION_CLOSED");
+    if (this.frame === null) this.sample();
+  }
+  async restart(callbacks: MediaCallbacks): Promise<string> {
+    this.callbacks = callbacks;
+    this.cancelIce?.();
+    const peer = this.peer; this.peer = null;
+    this.channel?.close(); this.channel = null; peer?.close();
+    if (this.frame !== null) cancelAnimationFrame(this.frame); this.frame = null;
+    this.outputAnalyser = null; this.outputOn = false; this.outputLast = 0; this.blocked = false; this.quietSince = null;
+    if (this.audio) { this.audio.pause(); this.audio.srcObject = null; this.audio.muted = false; }
+    return this.negotiate(true);
   }
   private rms(analyser: AnalyserNode | null): number {
     if (!analyser) return 0;
@@ -119,6 +164,7 @@ export class BrowserCompanionMedia implements CompanionMedia {
     this.outputOn = false;
   }
   async close(): Promise<void> {
+    ++this.generation;
     this.disposed = true;
     this.cancelIce?.();
     if (this.frame !== null) cancelAnimationFrame(this.frame);
@@ -132,5 +178,6 @@ export class BrowserCompanionMedia implements CompanionMedia {
     const context = this.context; this.context = null;
     if (context && context.state !== "closed") await context.close();
     this.outputAnalyser = null;
+    this.inputAnalyser = null;
   }
 }

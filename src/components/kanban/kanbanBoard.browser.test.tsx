@@ -25004,6 +25004,66 @@ describe("parallel ask idle fallback", () => {
  * are never committed); the measurement records are written to `evidence/voice-companion/`.
  */
 describe("floating voice companion", () => {
+  browserTest("automatic voice reconnect: reconnecting, back and gave up on desktop in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/voice-reconnect/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    type Controls = ReturnType<typeof import("@/components/voiceCompanion/reconnectEvidence.fixture").reconnectEvidence>["controls"];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&reconnect=1", { viewport: { width: 1440, height: 700 }, lang, scheme, motion: "reduce", surface: "underlay", clock: Date.UTC(2026, 10, 4, 12) });
+        try {
+          if (await page.locator("[data-companion-expand]").count()) { await page.locator("[data-companion-expand]").click(); await page.clock.runFor(100); }
+          await page.locator("[data-companion-talk]").click();
+          await page.clock.runFor(100);
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "idle");
+          const control = (action: "drop" | "release" | "fail") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
+          const capture = async (state: string) => {
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+            await page.clock.runFor(400);
+            const notice = page.locator("[data-companion-notice]").last(); await notice.waitFor();
+            const geometry = await notice.evaluate(node => {
+              const rect = node.getBoundingClientRect();
+              const clipped: string[] = [];
+              const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const text = walker.currentNode; if (!text.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(text);
+                for (const glyph of range.getClientRects()) for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                  if (style.overflowY !== "visible" && (glyph.top < box.top - 1 || glyph.bottom > box.bottom + 1)
+                    || style.overflowX !== "visible" && (glyph.left < box.left - 1 || glyph.right > box.right + 1)) clipped.push(text.textContent!);
+                }
+              }
+              return { text: node.textContent, inside: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight, clipped };
+            });
+            expect(geometry.inside).toBe(true); expect(geometry.clipped).toEqual([]);
+            const frame = `${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, frame) });
+            readings.push({ lang, scheme, state, frame, ...geometry });
+          };
+          await control("drop"); await page.clock.runFor(300);
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "reconnecting");
+          expect(await page.locator("[data-companion-resume]").count()).toBe(0); expect(await page.locator("[data-companion-end]").first().isEnabled()).toBe(true);
+          await capture("reconnecting");
+          await control("release");
+          await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]'));
+          await capture("back");
+          await control("fail"); await control("drop"); await page.clock.runFor(60_000);
+          await page.waitForFunction(() => document.querySelector('[data-code="RECONNECT_GAVE_UP"]'));
+          expect(await page.locator("[data-companion-resume]").last().isEnabled()).toBe(true);
+          await capture("gave-up"); expect(pageErrors).toEqual([]);
+          const observed = await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read());
+          expect(observed.opens).toBe(1); expect(observed.sounds.filter(sound => sound === "give-up")).toHaveLength(1);
+          await page.locator("[data-companion-resume]").last().click();
+          await page.waitForFunction(() => document.querySelector('[data-code="PROVIDER_ERROR"]'));
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/reconnect-desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+
   browserTest("call memory settings show bounded notes and clear them on desktop and phone", async () => {
     const out = path.resolve(".artifacts/voice-call-memory");
     fs.mkdirSync(out,{ recursive: true });
@@ -25715,6 +25775,7 @@ describe("floating voice companion", () => {
     phone?: boolean;
     /** Run in the page before its own scripts, from the navigation on. */
     init?: () => void;
+    clock?: number;
   }) => {
     const context = await browser.newContext({
       ...(options.phone ? { isMobile: true, hasTouch: true } : {}),
@@ -25724,9 +25785,12 @@ describe("floating voice companion", () => {
     await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(options.lang)}); } catch {}`);
     if (options.init) await context.addInitScript(options.init);
     const page = await context.newPage();
+    if (options.clock !== undefined) { await page.clock.install({ time: options.clock }); await page.clock.pauseAt(options.clock + 60_000); }
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`${base}?scenario=voice-companion${query}${options.surface ? `&surface=${options.surface}` : ""}`);
+    if (options.clock !== undefined) await page.clock.runFor(1_500);
+    if (options.clock !== undefined) for (let frame = 0; frame < 50 && !(await page.locator("[data-voice-companion][data-placed]").count()); frame++) await page.clock.runFor(100);
     if (!options.product) await page.waitForSelector("[data-voice-companion][data-placed]", { timeout: 20_000 });
     if (!options.surface && !(options.product && options.viewport.width === 390)) await page.waitForSelector(card("t-search"), { timeout: 20_000 }).catch(() => undefined);
     /* The board arrives after the first placement; the companion re-reads the page 250 ms after it changes. */
