@@ -164,7 +164,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const receipt = await step(() => ports.receipt(row.operationId));
     ports.assertActive();
     if (receipt?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
-    if (!receipt || receipt.state !== "failed" || row.state === "failed") return;
+    if (!receipt || receipt.state !== "failed") return;
     const latest = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
     if (latest?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     const recipient = ports.recipient(row.recipientConversationId ?? row.senderConversationId);
