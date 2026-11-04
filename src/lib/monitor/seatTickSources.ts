@@ -2913,6 +2913,8 @@ async function refreshSeatTickInputCooperatively(
   sources: SeatTickSources,
 ): Promise<SeatTickCheckInput> {
   return withViewerOperation("seat-tick.check", async () => {
+    // Observe queued publications even when every prepared row is a cache hit.
+    await yieldToRuntime();
     let pipelines = sources.pipelines(), tasks = sources.tasks();
     /* Even a projection cache hit crosses preparation once so durable alias
        changes invalidate its in-memory grouping before the rows are reused. */
@@ -3090,13 +3092,15 @@ async function prepareSeatTickProjection(
   const aliasesKey = JSON.stringify(aliases.aliases);
   await prepareProjectRows(pipelines, aliases);
   await prepareProjectRows(tasks, aliases);
+  // Warm rows often need only cache lookups. Keep the eight-millisecond slice
+  // without spending hundreds of event-loop turns on an unchanged board.
   await forEachCooperatively(projectRows(pipelines, project), async pipeline => {
     await preparePipelineMetadata(pipeline);
     if (isOpen(pipeline)) await preparePipelineEvidence(pipeline);
-  }, { batchSize: 4, timeBudgetMs: 8 });
+  }, { batchSize: 256, timeBudgetMs: 8 });
   await forEachCooperatively(projectRows(tasks, project), task => {
     if (deeplyFrozen(task)) taskEvidenceFor(task);
-  }, { batchSize: 4, timeBudgetMs: 8 });
+  }, { batchSize: 256, timeBudgetMs: 8 });
   if (JSON.stringify(projectAliasSnapshot().aliases) !== aliasesKey) {
     throw new Error("seat project aliases changed while preparing the project projection");
   }

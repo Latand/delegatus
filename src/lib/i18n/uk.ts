@@ -5938,6 +5938,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.blocker.unresolvedDispatch": "нерозв'язане пробудження від {age} (відправлення: {dispatch})",
   "seatTick.blocker.retryGuard": "запобіжник повторів: {reason} ({wakes} пробуджень нічого не змінили)",
   "seatTick.blocker.sourceGap": "джерело недоступне: {source}, від {since} ({gap})",
+  "seatTick.blocker.checkErrors": "перевірки тікера завершуються помилкою, від {since}",
+  "seatTick.curation.readTimeout": "Не вдалося оновити статус куратора.",
   "seatTick.blocker.migrationPending": "імпорт обліку тікера ще не завершився",
   "seatTick.blocker.migrationBlocked": "імпорт обліку тікера заблоковано, тож пробудження не готується",
   "seatTick.source.pullRequests": "пул-реквести",
