@@ -1,0 +1,323 @@
+{
+  "version": 1,
+  "digest": "9e82f02a3a9bc2d4ad8cc8cb709be7a61d61af35ff6a595aab5bd12b43d78fda",
+  "source": "24 fixed, anonymized role-launch examples with historical applied and misled labels",
+  "cases": [
+    {
+      "id": "010db2b88ca07de2",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "1be6af19f0c21b1165ab2993f7f31aa33f431c4cca8fd04b673134ddf393503b",
+      "rules": 5,
+      "applied": [
+        "r_61156b5f0a74ce4e",
+        "r_3c62671e714254a8",
+        "r_a9c9c0f324e271f9",
+        "r_224699d3e2bdbd3b"
+      ],
+      "misled": []
+    },
+    {
+      "id": "4266b6422925ee5b",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "ed36f549040c9476929c0a2990e9164edcab2df74d61dd5137627c257ea1bf32",
+      "rules": 4,
+      "applied": [
+        "r_66d005d6096d3849",
+        "r_6d2b6e01ec5a4992",
+        "r_70422f1af28b1343"
+      ],
+      "misled": []
+    },
+    {
+      "id": "229461dac5a6a471",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "862d04e8f53438e549052bf1c56142bfab3838fd4893248d9e7b7bc2946b132e",
+      "rules": 3,
+      "applied": [
+        "r_b74f71ed2dc41547",
+        "r_fb4c391905a90d8a"
+      ],
+      "misled": []
+    },
+    {
+      "id": "266af39df7818671",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "f271cef9576cf54a66f92ae51d0ed3f15797dbe69409b4f2e7f62f5142713aa7",
+      "rules": 4,
+      "applied": [
+        "r_ed94ad1b80f02be5",
+        "r_065363ad9329e93c",
+        "r_61156b5f0a74ce4e"
+      ],
+      "misled": []
+    },
+    {
+      "id": "c85be7f0f19b48a0",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "7eda2a870648842cb12b8d77611b782701107c07b000a6ba8e2610fbbbb05317",
+      "rules": 4,
+      "applied": [
+        "r_0525efea32826d36",
+        "r_20ba0b3b99d96eb3",
+        "r_4376a75b87620125"
+      ],
+      "misled": []
+    },
+    {
+      "id": "246883564da9d18a",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "8022c49bc18b703dfa75b1d30785390681ef77520c18dde1df806853f5bcad3c",
+      "rules": 6,
+      "applied": [
+        "r_66ddf22cbce5b267",
+        "r_c8e1c4ae99d34f81",
+        "r_9188d78d17840831",
+        "r_61156b5f0a74ce4e",
+        "r_a9c9c0f324e271f9"
+      ],
+      "misled": []
+    },
+    {
+      "id": "80d4215de27c45be",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "233079f811c2396a68c99ff6e0354d00f97100c3dcc2dcb54f43ad01c8cda638",
+      "rules": 3,
+      "applied": [
+        "r_61156b5f0a74ce4e",
+        "r_224699d3e2bdbd3b"
+      ],
+      "misled": []
+    },
+    {
+      "id": "a9ab06cc1ce6a255",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "40d1638da4977d16b7c5506f561cb6c908da27da3d9bd5b5dcee999ce38fc3a5",
+      "rules": 4,
+      "applied": [
+        "r_61156b5f0a74ce4e",
+        "r_ced923743d210533",
+        "r_903cdc8c252260d5"
+      ],
+      "misled": []
+    },
+    {
+      "id": "4e01e525ce270a25",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "95e488040656055b86ff0a83a9353e55ed93ee17a000ee9ca5d3d689244600fd",
+      "rules": 6,
+      "applied": [
+        "r_0d8a2fb41f924647",
+        "r_09096574469dd579",
+        "r_9301bc92d595ff6b",
+        "r_70422f1af28b1343",
+        "r_7c8b458c4adc8511"
+      ],
+      "misled": []
+    },
+    {
+      "id": "3918f9e42dd1e021",
+      "cohort": "replay",
+      "role": "builder",
+      "briefDigest": "60222560dfdae0576a2c5db228aa66f2eaf02bab863ccbf8a6f9a3a40f23dd36",
+      "rules": 5,
+      "applied": [
+        "r_4376a75b87620125",
+        "r_19a2af1a36f87812",
+        "r_9e96c5de2b5a783b",
+        "r_b74f71ed2dc41547"
+      ],
+      "misled": []
+    },
+    {
+      "id": "d2de88e57f04d812",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "a56dd9fbd29bfb407e9868cd9bc13ffae52b1417815c68fe22e9c371ed22b08d",
+      "rules": 3,
+      "applied": [
+        "r_b953c33a62fba44d"
+      ],
+      "misled": [
+        "r_43f5fcc691b94b6f"
+      ]
+    },
+    {
+      "id": "1ee5acb4f971e3e4",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "34045b2cbf08c0781b92b89ddb5bd5b01804dbd9b48e8296a1d9239ef91d1d91",
+      "rules": 2,
+      "applied": [],
+      "misled": [
+        "r_063efe98143e538c"
+      ]
+    },
+    {
+      "id": "3a588f7b1f467eac",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "cf7405ed734783b4898055d323344747c1cf8d5ba6b92a0a9dcfc2bec283b049",
+      "rules": 2,
+      "applied": [],
+      "misled": [
+        "r_b758f2de96e2ce4d"
+      ]
+    },
+    {
+      "id": "162240d57ea1a020",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "cb0a3a69055737c1796cedcd059ae9363658d5e9373abee4274c1af8c882f0aa",
+      "rules": 2,
+      "applied": [],
+      "misled": [
+        "r_f127714f224b59b2"
+      ]
+    },
+    {
+      "id": "75886a654cceb277",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "1cb5c711c82d719c792ee9fbd84211fd496098121e66dce35ce66264f20bfa42",
+      "rules": 6,
+      "applied": [
+        "r_e9e319bf8af36c82",
+        "r_065363ad9329e93c",
+        "r_f6cbd58228737166",
+        "r_b0c53fc839bc6da6"
+      ],
+      "misled": [
+        "r_1d6ddd5ba47ac8d5"
+      ]
+    },
+    {
+      "id": "731acd64d34555bb",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "b577b0124cc31e9b0ce6a64a257445dac15ec85af29ef7cf0c1834c3eceb9fd4",
+      "rules": 5,
+      "applied": [
+        "r_66d005d6096d3849",
+        "r_b3fcd5cfbbb5b355",
+        "r_70422f1af28b1343"
+      ],
+      "misled": [
+        "r_0e9ff25ff6f6ec4c"
+      ]
+    },
+    {
+      "id": "a3b42118a51018f4",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "95b9660b98648a9f8c86fb5931cbb6fa459643c7b4ed2b1475c7074bc68b0301",
+      "rules": 2,
+      "applied": [],
+      "misled": [
+        "r_5c37508bf05d21a3"
+      ]
+    },
+    {
+      "id": "e78d83ee969d475a",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "2e84c2fb33c2d886f5604b75a97f36a45d2e265bb853b1f7c6ad511e5eb31f68",
+      "rules": 5,
+      "applied": [
+        "r_e7be20ac7fcea8b4",
+        "r_651b87d30a3cfe79",
+        "r_e298d0380bceb81d"
+      ],
+      "misled": [
+        "r_12a5d60ed472573a"
+      ]
+    },
+    {
+      "id": "c038b165737f7442",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "78be560509516529648137869f73e70fbf103eafba69fbed4d8d0ed14e55a36b",
+      "rules": 4,
+      "applied": [
+        "r_e1c1503ef2237cdc",
+        "r_e01bb71ae6329fc1",
+        "r_c45f5c4322905598"
+      ],
+      "misled": []
+    },
+    {
+      "id": "ad9089ce36be77e4",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "e7ea4c8b5dd8edea998e294e3ea38c859096f0c5aaeb3f3d0bd25d43f5cbae17",
+      "rules": 2,
+      "applied": [
+        "r_fa71a716d04b11de"
+      ],
+      "misled": []
+    },
+    {
+      "id": "0d591717f82b2d00",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "4cb12eed1c7e36c35ae11c9dbebc72ce68025cfcdddd0f4afb22fe42edd7315a",
+      "rules": 6,
+      "applied": [
+        "r_0d8a2fb41f924647",
+        "r_2deeb33d732f58b8",
+        "r_6a5d85836f67ca1c",
+        "r_199f399299c4e126",
+        "r_00321b97d69c3937"
+      ],
+      "misled": []
+    },
+    {
+      "id": "4ab56201a9356da9",
+      "cohort": "recent",
+      "role": "architect",
+      "briefDigest": "521244da8cb5cbc59ddeecb1e97f201fae3e7e2d0ca7c1c5dd6af0c34af457db",
+      "rules": 6,
+      "applied": [
+        "r_14167c8dcd8fd8e5",
+        "r_8882c71609be05de",
+        "r_9f9122ec8edb438e",
+        "r_17e7e32dd3ebee4a",
+        "r_29daf73903e95363"
+      ],
+      "misled": []
+    },
+    {
+      "id": "70cf92377345ebd1",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "3775bfb07fe6316a9fcf66616b519f6a0b3d1a868d612fc37b8a504352cd3950",
+      "rules": 4,
+      "applied": [
+        "r_aae3690c142990f5",
+        "r_69c71813201f0c81",
+        "r_f9fffb97e6db098d"
+      ],
+      "misled": []
+    },
+    {
+      "id": "9431f23ebdc7d5d2",
+      "cohort": "recent",
+      "role": "builder",
+      "briefDigest": "bb075dea4e9eecf30c8e8c40d781c60bb123ed1702db2416a95cccb7a44374f4",
+      "rules": 3,
+      "applied": [
+        "r_b953c33a62fba44d",
+        "r_fd83d1163cd60162"
+      ],
+      "misled": []
+    }
+  ]
+}

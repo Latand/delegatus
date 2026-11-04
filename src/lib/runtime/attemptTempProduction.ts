@@ -57,6 +57,10 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   try {
     const report = await sweepAttemptTemps(store, {
       state: attemptTempState, mode, scan: ports.scan,
+      maxRoots: (() => {
+        try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
+        catch { return undefined; }
+      })(),
       onRetired: (count, bytes) => console.log(`[attempt temp] retired ${count} directories, ${bytes} attributed bytes`),
       capBytes: setting(env.LLV_ATTEMPT_TEMP_CAP_BYTES, 100 * 1024 ** 3),
       maxAgeMs: setting(env.LLV_ATTEMPT_TEMP_MAX_AGE_DAYS, 1) * 86400000,

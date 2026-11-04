@@ -47,7 +47,7 @@ declaration keeps the existing single-push path, including its native hooks.
 It receives no preparation attempt or receipt. Its credential lifetime remains
 bounded by the older hook's work until that branch adopts preparation support.
 
-`scripts/local-gate.publication.test.ts` drives native Git against an isolated
+`scripts/local-gate.transport.test.ts` drives native Git against an isolated
 smart HTTP server backed by `git http-backend`. Its logical credential clock
 advances during the expensive check. Direct Git discovery obtains the
 credential first, the check advances beyond its lifetime, and RPC receives

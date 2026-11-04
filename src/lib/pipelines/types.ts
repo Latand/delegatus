@@ -1007,6 +1007,10 @@ export type PipelineDeliveryTarget = {
   remote: string;
   branch: string;
   pr?: number;
+  /** `<owner>/<repo>` holding `pr` when that is not the repository `remote`
+      pushes to: a PR from a fork, whose number names a PR of the checkout's
+      origin. Absent: `pr` is a PR of the delivery remote's repository. */
+  prRepository?: string;
   rejectedHead?: string;
 };
 
@@ -1025,7 +1029,7 @@ export type PipelinePublicationRecovery = {
   app403Since?: string;
   /** Newest 64 failed operations; totalAttempts includes omitted older records. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment";
     detail: string; retryAt: string | null }>;
 };
 
@@ -1436,7 +1440,8 @@ export type PipelineMerge = {
 };
 
 export type CreatePipelineRequest = {
-  delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
+  /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
+  delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
   taskIds?: string[];
   /** #2187 §5.1: `true` marks every linked task as one this pipeline

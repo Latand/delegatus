@@ -39,6 +39,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { waitForGate } from "../../../scripts/gate-wait";
 import { checkEnvironment } from "../../../scripts/gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
+import { releaseGateSandbox } from "../../../scripts/gateSandboxRecords";
 import { withoutInheritedGate } from "@/lib/testing/inheritedGateEnv";
 import { credentialFreeSocketFixture } from "./native.fixture";
 import * as wire from "./wire";
@@ -49,6 +50,7 @@ import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDeliver
 
 const original = { ...process.env };
 const roots: string[] = [], children: ChildProcess[] = [], hosts: CodexAppServerHost[] = [], observers: RecordedCheckObserver[] = [];
+const gateSandboxes = new Set<string>();
 const logs: string[] = [], nativeOwners: ProcessIdentity[] = [];
 const servers: Array<{ stop(force?: boolean): void }> = [];
 const persistence: StructuredHostPersistenceStop[] = [];
@@ -77,7 +79,10 @@ afterEach(async () => {
   setAgentRegistryForTests(null);
   for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
   Object.assign(process.env, original);
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    if (gateSandboxes.delete(root)) releaseGateSandbox(root);
+    else fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 async function observed(directory: string, predicate: () => boolean, budget = 30_000, label = "fixture") {
   await new Promise<void>((resolve, reject) => {
@@ -102,7 +107,7 @@ const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name: "owned-check", exit: 23 }], executionMs = 180_000, deadlineOffsetMs = 240_000) {
   projections.push(credentialFreeSocketFixture());
-  const sandbox = createGateSandbox(); roots.push(sandbox);
+  const sandbox = createGateSandbox(); roots.push(sandbox); gateSandboxes.add(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
   env.LLV_CODEX_HOME = env.CODEX_HOME;
   for (const [name, value] of Object.entries(env)) {
@@ -369,6 +374,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         fs.renameSync(terminal, held);
         controller = await boot();
         await observed(f.root, () => fs.existsSync(deliveries), 30_000, "unknown result delivery");
+        // The controller still owns writes; this inspection must not initialize the ledger.
         const store = new RecordedCheckStore(undefined, false);
         let stale: NonNullable<ReturnType<RecordedCheckStore["get"]>>;
         try {

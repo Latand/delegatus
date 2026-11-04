@@ -47,18 +47,18 @@ function request(method = "GET", body?: unknown, headers: Record<string, string>
 }
 const remove = (headers?: Record<string, string>, id = "openai") => DELETE(request("DELETE", undefined, headers), { params: Promise.resolve({ id }) });
 
-test("saving and importing a key leave every existing choice and enable flag intact", async () => {
+test("saving and importing a key preserve explicit choices and use key routing for unsaved rules", async () => {
   baseline();
   const before = servicesView().features.map(row => row.requested);
   expect(await writeKey("openai", credential)).toBe("ok");
-  expect(servicesView().features.map(row => row.requested)).toEqual(before);
+  expect(servicesView().features.map(row => row.requested)).toEqual(before.map((provider, index) => SERVICE_FEATURES[index] === "rules" ? "openai" : provider));
   expect(readAsksYouSettings().enabled).toBe(false);
   expect(new CompanionStorage().settings().enabled).toBe(false);
   expect(fs.readFileSync(configFilePath("openai-services.json"), "utf8")).not.toContain('"since"');
   await removeOpenAiKey();
   const text = ["OPENAI_API_KEY", credential].join("=");
   expect((await applyImport(text, { openai: { kind: "new" } })).saved).toEqual(["openai"]);
-  expect(servicesView().features.map(row => row.requested)).toEqual(before);
+  expect(servicesView().features.map(row => row.requested)).toEqual(before.map((provider, index) => SERVICE_FEATURES[index] === "rules" ? "openai" : provider));
 });
 
 test("all six choices retain baselines through removal, restore, and fresh-process reads", async () => {
@@ -70,7 +70,7 @@ test("all six choices retain baselines through removal, restore, and fresh-proce
   expect(SERVICE_FEATURES.map(feature => resolveService(feature).held)).toEqual(SERVICE_FEATURES.map(() => false));
   expect((await remove()).status).toBe(200);
   expect((await remove()).status).toBe(200);
-  expect(SERVICE_FEATURES.map(feature => resolveService(feature).effective)).toEqual(prior);
+  expect(SERVICE_FEATURES.map(feature => resolveService(feature).effective)).toEqual(prior.map((provider, index) => SERVICE_FEATURES[index] === "rules" ? "openai" : provider));
   expect(SERVICE_FEATURES.every(feature => resolveService(feature).held)).toBe(true);
   expect(resolveService("read").available).toBe(false);
   const held = fs.readFileSync(configFilePath("openai-services.json"), "utf8");

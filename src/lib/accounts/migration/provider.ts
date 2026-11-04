@@ -30,7 +30,7 @@ import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
 import { hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, requireStructuredDeliveryControllerPublication } from "@/lib/runtime/structuredDeliveryController";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, structuredHostsEnabled } from "@/lib/runtime/registry";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, structuredHostAccessPolicy, structuredHostCell } from "@/lib/runtime/structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, materializeOwnedStructuredHostAccess, tempOwnerForConversation, structuredHostAccessPolicy, structuredHostCell } from "@/lib/runtime/structuredSpawn";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
@@ -397,10 +397,11 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   let access: ReturnType<typeof materializeStructuredHostAccess>;
   try {
     identity = await successorCapability(input, "codex");
-    access = materializeStructuredHostAccess(
+    access = await materializeOwnedStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
       { ...input.target.env, ...await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd) },
       identity.capability,
+      () => tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId),
     );
   } catch (error) {
     /* Nothing was started: release the claim and discard the pending identity,
@@ -562,10 +563,11 @@ async function publishClaudeSuccessorHost(
       return async () => {};
     }
     identity = await successorCapability(input, "claude");
-    access = materializeStructuredHostAccess(
+    access = await materializeOwnedStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
       { ...input.target.env, ...await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd) },
       identity.capability,
+      () => tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId),
     );
     const launchPaths = claudeHostLaunchPaths(input.target);
     const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.target.claudeProvider) });
