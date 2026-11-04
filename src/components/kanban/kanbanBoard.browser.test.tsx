@@ -5894,8 +5894,13 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "stages retry", async (page) => {
         await openStages(page, "t-search");
-        /* The graph's node is the navigation while the graph is shown. */
+        /* The graph's node reaches its pane and opens its conversation in the
+           agent window over the sheet (docs/design/task-card-no-inline-conversations.md §4);
+           closing the window comes back to the sheet on that pane. */
         await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
+        await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
+        await page.keyboard.press("Escape");
+        await page.waitForSelector("[data-agent-window]", { state: "detached" });
         await page.waitForTimeout(700);
         const sheet = await measureSheet(page);
         await shot(page, "production", "stages-retry", "light");
@@ -5954,7 +5959,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "flow-stage-draft-editing", "light");
         await page.keyboard.press("Control+Enter");
         await page.waitForFunction((selector) => !document.querySelector(`${selector} textarea.draft-edit`), panel, { timeout: 5_000 });
-        await page.waitForTimeout(300);
+        /* The saved stamp follows the guarded read and write. */
+        await page.waitForFunction((selector) => /\d/.test(document.querySelector(`${selector} .bstatus`)?.textContent ?? ""), panel, { timeout: 5_000 }).catch(() => {});
         const saved = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.at(-1) ?? null);
         const status = await page.locator(`${panel} .bstatus`).textContent();
         await shot(page, "production", "flow-stage-draft", "light");
@@ -6040,7 +6046,10 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "changed elsewhere", async (page) => {
         await openStages(page, "t-upload");
+        /* The node opens the first message in the agent window; closed, the pane edits it. */
         await page.click('.gsheet .gs-graph .pnode[data-stage="docs"]');
+        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
+        await page.waitForSelector("[data-agent-window]", { state: "detached" });
         await page.waitForTimeout(600);
         const pane = '.gsheet .pane[data-stage="docs"]';
         await page.click(`${pane} [data-draft-edit]`);
@@ -6054,6 +6063,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "flow-stage-changed", "light");
         await clickText(page, `${pane} [data-draft-changed] button`, "Keep mine");
         await page.waitForFunction((selector) => !document.querySelector(`${selector} textarea.draft-edit`), pane, { timeout: 5_000 });
+        /* The editor closes at once; the guarded write lands after its read. */
+        await page.waitForFunction((before) => (window as unknown as Hook).evidence.pipelinePatches.length > before, writesBefore, { timeout: 5_000 }).catch(() => {});
         const written = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.at(-1) ?? null);
         flows.changedElsewhere = { changed, writesBefore, written };
         if (changed !== "Changed elsewhere since you began: «Document the resume token and link the migration note.»" || writesBefore !== 0) failures.push(`changed elsewhere: ${JSON.stringify({ changed, writesBefore })}`);
