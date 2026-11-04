@@ -327,18 +327,32 @@ export function durableRuntimeEventFlushTailSeq(
       end = newline;
       if (end < 0 && expected > flushedCursor) return undetermined("the runtime event suffix does not reach the flushed cursor");
     }
-    /* The terminal suffix is safe only when it begins immediately after the
-       actual checkpoint row. Checking only the suffix lets a duplicate
-       sequence at the boundary hide an unflushed event (for example delta(13),
-       dead(13), unhosted(14) with cursor 12). */
+    /* The suffix is safe only after a checkpoint row that is the first
+       retained ledger row or follows cursor - 1. Checking only the suffix lets
+       a repeated checkpoint hide intervening output (for example
+       checkpoint(12), delta(13), checkpoint(12), dead(13), unhosted(14)). */
     if (flushedCursor > 0) {
       const newline = end > 0 ? buffer.lastIndexOf(0x0a, end - 1) : -1;
       if (newline < 0 && start > 0) return undetermined("the runtime event suffix boundary exceeds its read budget");
-      let predecessor: unknown;
-      try { predecessor = JSON.parse(buffer.subarray(newline + 1, end).toString("utf8")); }
+      const checkpointStart = newline + 1;
+      let checkpoint: unknown;
+      try { checkpoint = JSON.parse(buffer.subarray(checkpointStart, end).toString("utf8")); }
       catch { return undetermined("the runtime event suffix boundary is not JSON"); }
-      if (!validEvent(predecessor) || predecessor.seq !== flushedCursor) {
+      if (!validEvent(checkpoint) || checkpoint.seq !== flushedCursor) {
         return undetermined("the runtime event suffix does not follow the flushed cursor");
+      }
+      if (start + checkpointStart > 0) {
+        const previousEnd = checkpointStart - 1;
+        const previousNewline = previousEnd > 0 ? buffer.lastIndexOf(0x0a, previousEnd - 1) : -1;
+        if (previousNewline < 0 && start > 0) {
+          return undetermined("the flushed prefix boundary exceeds its read budget");
+        }
+        let predecessor: unknown;
+        try { predecessor = JSON.parse(buffer.subarray(previousNewline + 1, previousEnd).toString("utf8")); }
+        catch { return undetermined("the flushed prefix boundary is not JSON"); }
+        if (!validEvent(predecessor) || predecessor.seq !== flushedCursor - 1) {
+          return undetermined("the checkpoint row does not follow a contiguous flushed prefix");
+        }
       }
     } else if (start + end + 1 !== 0) {
       // With no checkpoint row, the terminal suffix is safe only when it
