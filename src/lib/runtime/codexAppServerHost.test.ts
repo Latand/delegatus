@@ -32,6 +32,9 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { gateCheckTool } from "./gateCheckTool";
+import { cpuOwnerIdentity } from "./signalSandboxContext";
+import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -117,6 +120,40 @@ class MemoryEventStore implements RuntimeEventStore {
     this.events.set(threadId, events);
   }
 }
+
+test("every native host offers one gate completion callback without opening operator attention", async () => {
+  const server = new FakeAppServer("gate-wait-thread");
+  const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    expect((server.requests.find(row => row.method === "thread/start")!.params as { dynamicTools: unknown[] }).dynamicTools).toContainEqual(gateCheckTool);
+    await host.send({ id: "gate-opening", text: "run a check" });
+    const log = path.join(metadataState, "check.log"), dir = `${log}.gate`;
+    fs.mkdirSync(dir); fs.writeFileSync(log, "work\n");
+    const recorder = cpuOwnerIdentity(process.pid);
+    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(recorder));
+    fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(dir), deadlineUptimeMs: custodyClock() + 60_000 }));
+    const params = { threadId: "gate-wait-thread", turnId: "turn-1", callId: "wait-call", tool: gateCheckTool.name, arguments: { log, reason: "fixture comparator" } };
+    const reply = new Promise<Record<string, unknown>>(resolve => {
+      const listener = (message: Record<string, unknown>) => { if (message.id === "gate-wait") { server.off("client-request", listener); resolve(message); } };
+      server.on("client-request", listener);
+    });
+    server.request("gate-wait", "item/tool/call", params);
+    server.request("gate-wait", "item/tool/call", params);
+    expect((await host.health()).pendingAttention).toEqual([]);
+    expect(server.requests.filter(row => row.id === "gate-wait")).toHaveLength(0);
+    fs.writeFileSync(path.join(dir, "exit"), "37\n");
+    expect((await reply).result).toMatchObject({ success: true });
+    expect(server.requests.filter(row => row.id === "gate-wait")).toHaveLength(1);
+    const foreignReply = new Promise<Record<string, unknown>>(resolve => {
+      const listener = (message: Record<string, unknown>) => { if (message.id === "foreign-wait") { server.off("client-request", listener); resolve(message); } };
+      server.on("client-request", listener);
+    });
+    server.request("foreign-wait", "item/tool/call", { ...params, threadId: "foreign-thread" });
+    expect((await foreignReply).result).toMatchObject({ success: false });
+    expect((await host.health()).pendingAttention).toEqual([]);
+  } finally { await host.release(); }
+});
 
 test("mocked structured host keeps launch admission out of the installed CLI prefix", async () => {
   const original = fs.mkdirSync, updaterDirectories: string[] = [];

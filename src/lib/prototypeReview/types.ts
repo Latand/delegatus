@@ -99,6 +99,8 @@ export interface PrototypeDecision {
     attempts?: number;
     startedAt?: string;
     exhaustedAt?: string;
+    /** Local retirement of an obsolete callback; the original receipt keeps its outcome. */
+    settlement?: { at: string; reason: "target-pipeline-closed" | "target-stage-closed" };
     /** Local proof that this exact answer reached the current seat in a wake.
         The original operationId remains available with its original outcome. */
     wakeReceipt?: { conversationId: string; seatEpoch: number; itemVersion: string; accountedThrough: string };
