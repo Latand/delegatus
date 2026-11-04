@@ -71,6 +71,9 @@ export const LANE_HEIGHTS = [360, 340, 320, 300, 280, 260, 240, 220, 200, 180] a
 /** The shorter lanes tried only for a call whose state has to be said (reconnecting, offered back, back): a column
     such as a sidebar in a short window then shows that line where every lane of `LANE_HEIGHTS` is just too tall. */
 export const CALL_LANE_HEIGHTS = [170, 160, 150, 140] as const;
+/** The room a call's line takes beside a tile that no lane can open from: one row of the notice with its Reconnect,
+    its words on two lines at the most. A column's head row in a short window holds it. */
+export const CALL_LINE: Size = { width: 320, height: 46 };
 
 /** `above`: the lane stands over the character, in a column too narrow for it beside the character. */
 export type LaneSide = "left" | "right" | "above";

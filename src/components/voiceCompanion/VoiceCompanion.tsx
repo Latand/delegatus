@@ -10,7 +10,7 @@ import { createCompanionStore } from "@/hooks/useVoiceCompanion";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import {
-  BUBBLE_MAX_WIDTH, bubbleChars, CALL_LANE_HEIGHTS, clampToViewport, CONTROL_SELECTOR, intersectionArea, isFree, isPassiveCursor, LANE_HEIGHTS, laneLayout, lineCut, NARROW_LANE_WIDTHS, pathCrosses, placeCollapsed, placeExpanded, splitSpeech,
+  BUBBLE_MAX_WIDTH, bubbleChars, CALL_LANE_HEIGHTS, CALL_LINE, clampToViewport, CONTROL_CLEARANCE, CONTROL_SELECTOR, intersectionArea, isFree, isPassiveCursor, LANE_HEIGHTS, laneLayout, lineCut, NARROW_LANE_WIDTHS, pathCrosses, placeCollapsed, placeExpanded, splitSpeech,
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/voiceCompanion/motion";
@@ -304,6 +304,9 @@ function showMore(body: HTMLElement) {
   body.scrollTo({ top: Math.max(0, Math.floor(next)), behavior: reducedMotion() ? "auto" : "smooth" });
 }
 
+/** The words of a call's line: what fits one row beside its Reconnect, whatever failure ended the call. */
+const lineWords = (code: string, phase: CompanionState["phase"]): string => (phase !== "offline" ? code : code === "RECONNECT_GAVE_UP" ? "RECONNECT_GAVE_UP_LINE" : "CONNECTION_LOST_LINE");
+
 const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const mark = (name: string, durationMs: number) => { try { performance.mark(name, { detail: { durationMs } }); } catch { /* measurement only */ } };
 const viewportSize = (): Size => ({ width: innerWidth, height: innerHeight });
@@ -311,8 +314,8 @@ const viewportSize = (): Size => ({ width: innerWidth, height: innerHeight });
 type Layout =
   /* `overPage`: it stands over the page's own text or controls, which only the operator's request brings about. */
   | { mode: "expanded"; at: Point; lane: LaneLayout; overPage?: boolean }
-  /* `yielded`: the companion was open but no free place held its lane. */
-  | { mode: "collapsed"; at: Point; yielded: boolean };
+  /* `yielded`: the companion was open but no free place held its lane. `line`: where a call's line stands beside it. */
+  | { mode: "collapsed"; at: Point; yielded: boolean; line?: Rect };
 
 /** One thing in the lane: a bubble of speech, a tool call, the delegation, the
     orchestrator's answer to it, or the count of calls at work that are not shown. */
@@ -386,7 +389,7 @@ const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.repl
 const DELEGATION_SETTLED = new Set(["answered", "refused", "cancelled", "failed"]);
 const speechLocaleOf = (locale: string): Locale => (locale === "uk" ? "uk" : "en");
 
-export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, over, rows, reserve, ready, defaultCollapsed = false }: {
+export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, over, head, rows, reserve, ready, defaultCollapsed = false }: {
   adapter: VoiceCompanionAdapter;
   /** The project in view; null on a view that shows none, where a conversation cannot start. */
   project: string | null;
@@ -404,6 +407,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   protect?: string;
   /** Selector for the host's surfaces drawn above the companion's layer (a toast). No place lies under one. */
   over?: string;
+  /** Selector for what says which page this is (its title, search and tabs): opened over the page on the operator's
+      request, the companion stands on the page's work instead wherever that leaves it a place. */
+  head?: string;
   /** Selector for surfaces that fill with rows carrying their own controls (a conversation's feed).
       The companion keeps off the whole track of every control in one, so a row that arrives under
       it, or a scroll, brings no control beneath it and it has no reason to move. */
@@ -478,8 +484,12 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
      drawn above it. Their own collapse, Home, or the end of the call gives the rule back. */
   const openAsked = useRef(false);
   /* The call's state has to be said: it is reconnecting, offered back, or just back. A shorter lane is taken for that
-     line before the tile, so it reads with no click wherever the page leaves such a place. */
+     line before the tile, and with none the line stands alone beside the tile, so it reads with no click wherever the
+     page leaves such a place. */
   const callWords = useRef(false);
+  /* Where it stood over the page when the operator collapsed it. Their tile takes the nearest place off the page's
+     text, which may lie far off, and opening again goes back to the place they saw. */
+  const pageCorner = useRef<Point | null>(null);
   /* What the last placement was computed from: the same page gives the same place without a second search. */
   const settledFor = useRef<string | null>(null);
   /* A request is on its way to the orchestrator: its row is coming into the conversation's feed, which is then kept
@@ -527,7 +537,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       let open = seek(obstacles, !chosen.current);
       if (!open && (callWords.current || openAsked.current)) open = seek(obstacles, true, CALL_LANE_HEIGHTS);
       if (!open && openAsked.current) {
-        open = seek(obstacles, false) ?? seek(overRects(root.current, over), false);
+        const above = overRects(root.current, over);
+        open = seek(obstacles, false) ?? seek([...above, ...overRects(root.current, head)], false) ?? seek(above, false);
         /* What it stands over now is what the operator asked for: it does not leave for a line of text. */
         if (open) chosen.current = true;
       }
@@ -542,11 +553,13 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         ?? placeCollapsed({ viewport, size: shape, obstacles: [...obstacles, ...text], desired })
         ?? placeCollapsed({ viewport, size: shape, obstacles, desired })
         ?? clampToViewport(desired, viewport, shape);
-      next = { mode: "collapsed", at, yielded: !isCollapsed };
+      /* Off the page's text and controls and off the tile, under it where it can be: this line is what the tile cannot say. */
+      const line = !isCollapsed && callWords.current ? placeCollapsed({ viewport, size: CALL_LINE, obstacles: [...obstacles, ...text, ...surfaces, { ...at, ...shape }], desired: { x: at.x + (shape.width - CALL_LINE.width) / 2, y: at.y + shape.height + CONTROL_CLEARANCE } }) : null;
+      next = { mode: "collapsed", at, yielded: !isCollapsed, ...(line ? { line: { ...line, ...CALL_LINE } } : {}) };
     }
     mark("vc:settle", performance.now() - began);
     setLayout((current) => (current && JSON.stringify(current) === JSON.stringify(next) ? current : next));
-  }, [block, over, rows, shape, pageContent, pageObstacles]);
+  }, [block, over, head, rows, shape, pageContent, pageObstacles]);
 
   /* First placement, once the host's late surfaces are on the page, and again whenever the viewport changes. */
   useLayoutEffect(() => {
@@ -565,7 +578,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /** The rectangles the companion reserves where it stands: the character, and the lane when open. */
   const footprint = useCallback((): Rect[] => {
     if (!layout) return [];
-    if (layout.mode === "collapsed") return [{ ...layout.at, ...shape }];
+    if (layout.mode === "collapsed") return [{ ...layout.at, ...shape }, ...(layout.line ? [layout.line] : [])];
     return [{ ...layout.at, ...block }, ...(lane ? [lane.rect] : [])];
   }, [layout, lane, block, shape]);
 
@@ -1110,7 +1123,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     event.preventDefault();
     moveAtOnce.current = true;
     const size = expanded ? block : shape;
-    if (event.key === "Home") { anchor.current = null; chosen.current = false; openAsked.current = false; }
+    if (event.key === "Home") { anchor.current = null; chosen.current = false; openAsked.current = false; pageCorner.current = null; }
     else {
       chosen.current = true;
       const box = root.current!.getBoundingClientRect();
@@ -1125,27 +1138,32 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   useEffect(() => {
     if (callHeld || !openAsked.current) return;
     openAsked.current = false;
+    pageCorner.current = null;
     settle(collapsed);
   }, [callHeld, collapsed, settle]);
   const saysCall = state.phase === "reconnecting" || (state.phase === "offline" && !!state.resumable) || floaters.some((floater) => floater.kind === "notice" && floater.code === "CONNECTION_RESTORED");
+  /* The notice that says the call's state, for the line a tile with no lane shows. */
+  const callLine = floaters.findLast((floater): floater is Extract<Floater, { kind: "notice" }> => floater.kind === "notice" && (floater.code === "RECONNECTING" || floater.code === "CONNECTION_RESTORED" || floater.key.includes(":drop:")));
   useLayoutEffect(() => {
     /* While a Reconnect is on its way the call still has that line to say: its answer decides. */
     if (starting || callWords.current === saysCall) return;
     callWords.current = saysCall;
-    /* Only the tile that gave way for want of room, or the short lane taken for this line, has to read the page again. */
-    if (saysCall ? layout?.mode === "collapsed" && layout.yielded : layout?.mode === "expanded" && layout.lane.rect.height < LANE_HEIGHTS.at(-1)!) settle(collapsed);
+    /* Only the tile that gave way for want of room, or the short lane or the line taken for this, has to read the page again. */
+    if (saysCall ? layout?.mode === "collapsed" && layout.yielded : layout?.mode === "expanded" ? layout.lane.rect.height < LANE_HEIGHTS.at(-1)! : !!layout?.line) settle(collapsed);
   }, [saysCall, starting, layout, collapsed, settle]);
   const toggle = (next: boolean) => {
     if (swallowClick.current) return;
     if (layout) {
       const size = layout.mode === "expanded" ? block : shape;
       anchor.current = { x: layout.at.x + size.width, y: layout.at.y + size.height };
+      if (next && layout.mode === "expanded" && layout.overPage) pageCorner.current = anchor.current;
     }
     setCollapsed(next);
     /* Opening a companion that collapsed for want of a place free of text is the operator's request, answered
        as a drop is: the nearest place free of controls, which may lie over text. Home gives the default rule back. */
     if (!next && layout?.mode === "collapsed" && layout.yielded) { chosen.current = true; settledFor.current = null; }
     openAsked.current = !next && (state.phase === "reconnecting" || (!connected && !!state.resumable));
+    if (openAsked.current && pageCorner.current) anchor.current = pageCorner.current;
     if (!next && !collapsed) settle(false);
   };
   const speechLocale: Locale = sessionLocale ?? (locale === "uk" ? "uk" : "en");
@@ -1217,6 +1235,17 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const attention = stage === "awaiting-confirmation" || stage === "answered" || failing;
   const seconds = (value: number) => new Intl.NumberFormat(locale === "uk" ? "uk" : "en", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value / 1000);
 
+  /* `line`: the notice as a tile's line, its words and its one action on one row, and no live region of its own: the
+     alert beside the tile says the whole sentence. */
+  const renderNotice = (floater: Extract<Floater, { kind: "notice" }>, line = false) => (
+    <div className="vc-notice" role={line ? undefined : floater.tone === "failure" ? "alert" : "status"} data-tone={floater.tone} data-code={floater.code} data-companion-notice>
+      <span className="vc-notice-icon" aria-hidden>{floater.code === "CONNECTION_RESTORED" ? <Check size={14} /> : <CircleAlert size={14} />}</span>
+      <span className="vc-notice-text">{companionErrorMessage(line ? lineWords(floater.code, state.phase) : floater.code, speechLocaleOf(locale), { resetsAt: floater.resetsAt })}</span>
+      {!line && onOpenSettings && SETTINGS_FAILURES.has(floater.code) ? <button type="button" className="vc-act" data-companion-open-settings onClick={onOpenSettings}><Settings size={13} aria-hidden />{t("voiceCompanion.openSettings")}</button> : null}
+      {state.phase === "offline" && state.resumable ? <button type="button" className="vc-act" data-primary data-companion-resume disabled={starting} onClick={resume}><RotateCcw size={13} aria-hidden />{t("voiceCompanion.reconnect")}</button> : null}
+    </div>
+  );
+
   /* `nearest`: the element standing next to the character, which a comic bubble's tail points from. */
   const renderFloater = (floater: Floater, nearest = false) => {
     if (floater.kind === "speech") {
@@ -1229,16 +1258,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       );
     }
     if (floater.kind === "more") return <div className="vc-call vc-more" data-companion-more>{t("voiceCompanion.moreCalls", { n: floater.count })}</div>;
-    if (floater.kind === "notice") {
-      return (
-        <div className="vc-notice" role={floater.tone === "failure" ? "alert" : "status"} data-tone={floater.tone} data-code={floater.code} data-companion-notice>
-          <span className="vc-notice-icon" aria-hidden>{floater.code === "CONNECTION_RESTORED" ? <Check size={14} /> : <CircleAlert size={14} />}</span>
-          <span className="vc-notice-text">{companionErrorMessage(floater.code, speechLocaleOf(locale), { resetsAt: floater.resetsAt })}</span>
-          {onOpenSettings && SETTINGS_FAILURES.has(floater.code) ? <button type="button" className="vc-act" data-companion-open-settings onClick={onOpenSettings}><Settings size={13} aria-hidden />{t("voiceCompanion.openSettings")}</button> : null}
-          {state.phase === "offline" && state.resumable ? <button type="button" className="vc-act" data-primary data-companion-resume disabled={starting} onClick={resume}><RotateCcw size={13} aria-hidden />{t("voiceCompanion.reconnect")}</button> : null}
-        </div>
-      );
-    }
+    if (floater.kind === "notice") return renderNotice(floater);
     if (floater.kind === "call") {
       const { call } = floater;
       /* A backend that summarised the call by its bare name gets the tool's own line in the interface language,
@@ -1447,6 +1467,12 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         {connected || starting ? <button type="button" className="vc-btn vc-shape-end" data-companion-end aria-label={t("voiceCompanion.end")} title={t("voiceCompanion.end")} onClick={end}><PhoneOff size={13} aria-hidden /></button> : null}
         </>
       )}
+      {/* What a tile with no lane cannot say: the state's first words with its Reconnect, the whole sentence being a click away. */}
+      {!expanded && !heldView && view?.mode === "collapsed" && view.line && callLine ? (
+        <div className="vc-line" data-companion-line style={{ left: view.line.x - at.x, top: view.line.y - at.y, width: view.line.width, height: view.line.height }}>
+          {renderNotice(callLine, true)}
+        </div>
+      ) : null}
       {/* The whole conversation, for a screen reader and for anyone who missed a bubble. */}
       <ol className="vc-sr" aria-live="polite" aria-label={t("voiceCompanion.transcript")} data-companion-transcript>
         {state.lines.filter((line) => line.final || line.playback === "cut").map((line) => <li key={line.key}>{transcriptLine(line)}</li>)}

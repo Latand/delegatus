@@ -13,6 +13,8 @@ export const COMPANION_MESSAGES = {
   RECONNECTING: ["Connection lost. Reconnecting…", "Зʼєднання втрачено. Перепідключаюся…"],
   RECONNECT_PHASE: ["Reconnecting", "Перепідключаюся"],
   RECONNECT_GAVE_UP: ["Couldn't reconnect. What was said is kept; Reconnect continues the call.", "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її."],
+  RECONNECT_GAVE_UP_LINE: ["Couldn't reconnect.", "Не вдалося перепідключитися."],
+  CONNECTION_LOST_LINE: ["The connection dropped.", "Зʼєднання обірвалося."],
   RECONNECTING_PHONE: ["Connection lost.\nReconnecting…", "Зʼєднання втрачено.\nПерепідключаюся…"],
   RECONNECT_GAVE_UP_PHONE: ["Couldn't reconnect.\nWhat was said is kept.", "Не вдалося перепідключитися.\nСказане збережено."],
   CONTENT_BLOCKED: ["The voice provider ended the call because of its content policy.", "Голосовий провайдер завершив розмову через правила щодо вмісту."],

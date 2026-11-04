@@ -7,7 +7,7 @@ import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./c
 import { COMPANION_MESSAGES, companionErrorMessage } from "./errors";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
-import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CALL_LANE_HEIGHTS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
+import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CALL_LANE_HEIGHTS, CALL_LINE, CONTROL_CLEARANCE, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
 
 const TEXT_FOR_NARROW = "The orchestrator replied. The plan holds, with one gap: last month's saved exports need a migration test before the merge, and the old keys stay readable for anyone who still has them.";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
@@ -1097,6 +1097,19 @@ describe("geometry", () => {
     expect(placed.lane.rect.width).toBe(240);
     expect(isFree({ ...placed.at, ...block }, text)).toBe(true);
     expect(isFree(placed.lane.rect, text)).toBe(true);
+  });
+
+  test("a call's line takes the free row beside a tile no lane can open from, and no place with no such row", () => {
+    const viewport = { width: 1000, height: 700 };
+    /* The board at 1000 by 700, rail full: the bar, the row with the orchestrator and the tile, the tabs, the column's words and its actions, the first card. */
+    const page = [rect(0, 0, 248, 700), rect(248, 0, 752, 40), rect(260, 56, 180, 50), rect(680, 56, 304, 62), rect(260, 114, 713, 36), rect(273, 181, 302, 16), rect(932, 175, 28, 28), rect(273, 216, 677, 484)];
+    const tile = rect(616, 48, 56, 56);
+    const desired = { x: tile.x + (tile.width - CALL_LINE.width) / 2, y: tile.y + tile.height + CONTROL_CLEARANCE };
+    const at = placeCollapsed({ viewport, size: CALL_LINE, obstacles: [...page, tile], desired })!;
+    expect(at).toEqual({ x: 584, y: 160 });
+    expect(isFree({ ...at, ...CALL_LINE }, [...page, tile])).toBe(true);
+    /* Another word in that column's head takes the row, and the tile stands alone. */
+    expect(placeCollapsed({ viewport, size: CALL_LINE, obstacles: [...page, tile, rect(575, 181, 120, 16)], desired })).toBeNull();
   });
 
   test("no frame of a rise carries more than 12 % of its path, from rest or taking over a rise in flight, even when one frame is missed", () => {

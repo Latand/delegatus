@@ -25072,7 +25072,9 @@ describe("floating voice companion", () => {
   }, 240_000);
 
   /* The real board at 1000x700, reached by resizing during a call: a healthy call stands as its tile beside the
-     attention toast, and a call that has its state to say opens by itself in the sidebar's column, over no label. */
+     attention toast, and a call that has its state to say opens by itself in the sidebar's column, over no label. With
+     a real project list that column is taken: the line stands alone beside the tile, and a click opens the companion
+     on the page's work, under its title, search and tabs. */
   browserTest("automatic voice reconnect on the board at 1000x700: the line reads with no click, over no label, and End stands clear of the toast", async () => {
     const out = path.resolve(".artifacts/voice-reconnect/board"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -25120,10 +25122,12 @@ describe("floating voice companion", () => {
     /* The open companion, every part of it drawn, against the page's labels and controls as they read with it gone, and against the toast. */
     const readOpen = (page: Page) => page.evaluate(controls => {
       const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
-      const parts = [...root.querySelectorAll(".vc-block, .vc-block *, .vc-floater:not([data-leaving]), .vc-floater:not([data-leaving]) *")].map(node => node.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
+      const parts = [...root.querySelectorAll(".vc-block, .vc-block *, .vc-shape, .vc-shape *, .vc-line .vc-notice, .vc-line .vc-notice *, .vc-floater:not([data-leaving]), .vc-floater:not([data-leaving]) *")].map(node => node.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
       const meets = (box: DOMRect) => parts.some(part => Math.min(part.right, box.right) - Math.max(part.left, box.left) > 0 && Math.min(part.bottom, box.bottom) - Math.max(part.top, box.top) > 0);
       const shows = (box: DOMRect, node: Element) => { const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2); return !!hit && (node.contains(hit) || hit.contains(node)); };
-      const underText: string[] = [], underControl: string[] = [];
+      const underText: string[] = [], underControl: string[] = [], underHead: string[] = [];
+      /* What names the page and leads around it, written here apart from what the component is told. */
+      const inHead = (node: Element) => !!node.closest("header.bar, [role='tablist'], .col-head");
       root.style.visibility = "hidden";
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       const range = document.createRange();
@@ -25131,24 +25135,24 @@ describe("floating voice companion", () => {
         const text = walker.currentNode, parent = text.parentElement;
         if (!parent || !text.textContent?.trim() || root.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT") continue;
         range.selectNodeContents(text);
-        for (const line of range.getClientRects()) if (line.width > 0 && meets(line) && shows(line, parent)) underText.push(text.textContent!);
+        for (const line of range.getClientRects()) if (line.width > 0 && meets(line) && shows(line, parent)) { underText.push(text.textContent!); if (inHead(parent)) underHead.push(text.textContent!); }
       }
-      for (const node of document.querySelectorAll(controls)) { const box = node.getBoundingClientRect(); if (!root.contains(node) && box.width > 0 && meets(box) && shows(box, node)) underControl.push(node.getAttribute("aria-label") ?? node.textContent ?? node.tagName); }
+      for (const node of document.querySelectorAll(controls)) { const box = node.getBoundingClientRect(); if (!root.contains(node) && box.width > 0 && meets(box) && shows(box, node)) { const name = node.getAttribute("aria-label") ?? node.textContent ?? node.tagName; underControl.push(name); if (inHead(node)) underHead.push(name); } }
       root.style.visibility = "";
       const toast = document.querySelector("[data-attention-toast]")?.getBoundingClientRect();
       const lane = root.querySelector<HTMLElement>("[data-companion-lane]");
-      return { layout: root.dataset.layout, at: root.style.transform, lane: lane ? { width: lane.offsetWidth, height: lane.offsetHeight, side: lane.dataset.side } : null, overPage: lane?.hasAttribute("data-over-page") ?? false, underText, underControl,
+      return { layout: root.dataset.layout, at: root.style.transform, lane: lane ? { width: lane.offsetWidth, height: lane.offsetHeight, side: lane.dataset.side } : null, overPage: lane?.hasAttribute("data-over-page") ?? false, underText, underControl, underHead,
         toastClearance: toast ? Math.min(...parts.map(part => Math.max(toast.left - part.right, part.left - toast.right, toast.top - part.bottom, part.top - toast.bottom))) : null };
     }, CONTROL_SELECTOR);
     const hasToast = (page: Page) => page.locator("[data-attention-toast]").count();
     try {
-      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const route of ["reconnecting", "gave-up", "held-open", "over-page"] as const) {
-        const { context, page, pageErrors } = await openVoice(browser, server.base, "&reconnect=1", { viewport: { width: 1440, height: 900 }, lang, scheme, motion: "reduce", clock: Date.UTC(2026, 10, 4, 12) });
+      for (const rail of [null, "few", "many"] as const) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const route of ["reconnecting", "gave-up", "held-open"] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&reconnect=1${rail ? `&rail=${rail}` : ""}`, { viewport: { width: 1440, height: 900 }, lang, scheme, motion: "reduce", clock: Date.UTC(2026, 10, 4, 12) });
         try {
-          const label = `${lang} ${scheme} ${route}`;
+          const label = `${rail ?? "one project"} ${lang} ${scheme} ${route}`;
           const control = (action: "drop" | "release" | "fail" | "recover") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
           const rest = async () => { await page.clock.runFor(800); await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } }); await page.clock.runFor(400); };
-          const frame = async (state: string) => { const name = `${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, name) }); return name; };
+          const frame = async (state: string) => { const name = `${rail ? `${rail}-` : ""}${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, name) }); return name; };
           const phase = (name: string) => page.waitForFunction(name => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === name, name);
           const giveUp = async () => { await control("fail"); await control("drop"); await page.clock.runFor(60_000); await phase("offline"); await rest(); };
           /* Words in view, on no label and no control, the toast 8 px away. */
@@ -25175,30 +25179,89 @@ describe("floating voice companion", () => {
           expect(healthyEnd.missed).toEqual([]); expect(healthyEnd.inside).toBe(true);
           /* A click on the healthy tile finds no room and changes nothing: the line of a later drop still reads by itself. */
           if (route === "reconnecting") { await tile.click(); await rest(); expect((await readTile(page)).yielded).toBe(true); }
-          if (route === "over-page") {
-            /* A page that leaves no place at all, the sidebar's column full of text: the state is a click on the tile
-               away, which opens it over the page, and no glyph of the page shows through the bubble. */
-            await page.evaluate(() => {
-              const fill = document.createElement("p");
-              fill.textContent = Array.from({ length: 30 }, (_, index) => `Earlier project ${index + 1}`).join(" · ");
-              fill.style.cssText = "position:fixed;left:8px;top:184px;width:232px;height:344px;margin:0;overflow:hidden;font-size:14px;line-height:20px;";
-              document.body.append(fill);
-            });
+          /* With the sidebar's column taken by real projects no lane fits: the tile keeps its place and the line stands by it. */
+          const expectLine = async (code: string, words: string, state: string) => {
+            const notice = await readNotice(page);
+            expect([notice.code, notice.text], `${label} ${state}`).toEqual([code, words]); expect(notice.inside).toBe(true); expect(notice.clipped).toEqual([]); expect(notice.covered).toEqual([]);
+            const placed = await readOpen(page);
+            expect(placed.layout, `${label} ${state}`).toBe("collapsed"); expect(placed.underText, `${label} ${state}: labels under the line`).toEqual([]); expect(placed.underControl, `${label} ${state}: controls under the line`).toEqual([]);
+            expect(placed.toastClearance, `${label} ${state}: the toast`).toBeGreaterThanOrEqual(8);
+            const tileEnd = code === "RECONNECT_GAVE_UP" ? null : await readControl(page, ".vc-shape-end");
+            if (tileEnd) { expect(tileEnd.disabled).toBe(false); expect(tileEnd.missed).toEqual([]); }
+            const offered = code === "RECONNECT_GAVE_UP" ? await readControl(page, "[data-companion-resume]") : null;
+            if (offered) { expect(offered.disabled).toBe(false); expect(offered.inside).toBe(true); expect(offered.missed).toEqual([]); }
+            return { notice, placed, tileEnd, offered };
+          };
+          const words = { RECONNECTING: { en: "Connection lost. Reconnecting…", uk: "Зʼєднання втрачено. Перепідключаюся…" }, CONNECTION_RESTORED: { en: "Connection restored.", uk: "Зʼєднання відновлено." }, RECONNECT_GAVE_UP: { en: "Couldn't reconnect.", uk: "Не вдалося перепідключитися." } } as const;
+          if (rail) {
+            await control("drop"); await page.clock.runFor(300); await phase("reconnecting");
+            if (route === "gave-up") { await control("release"); await phase("idle"); await giveUp(); }
             await rest();
-            await control("drop"); await page.clock.runFor(300); await phase("reconnecting"); await rest();
-            const yielded = await readTile(page);
-            expect([yielded.layout, yielded.yielded, yielded.words], label).toEqual(["collapsed", true, 0]);
+            const code = route === "gave-up" ? "RECONNECT_GAVE_UP" : "RECONNECTING";
+            const first = await expectLine(code, words[code][lang], "first frame");
+            const firstFrame = await frame(`${route}-line`);
+            if (route === "held-open") {
+              /* Back, the line says so and leaves with its notice; the next give-up says that, and its Reconnect continues the call from the line. */
+              await control("release"); await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+              const back = await expectLine("CONNECTION_RESTORED", words.CONNECTION_RESTORED[lang], "back");
+              const backFrame = await frame("back-line");
+              await page.clock.runFor(13_000); await rest();
+              const after = await readTile(page);
+              expect([after.layout, after.yielded, after.words], `${label}: healthy again`).toEqual(["collapsed", true, 0]);
+              await giveUp();
+              const held = await expectLine("RECONNECT_GAVE_UP", words.RECONNECT_GAVE_UP[lang], "gave up after back");
+              await control("recover");
+              await page.locator("[data-companion-resume]").click();
+              await page.clock.runFor(100);
+              await control("release");
+              await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+              expect(await page.locator("[data-companion-resume]").count()).toBe(0);
+              const restored = await expectLine("CONNECTION_RESTORED", words.CONNECTION_RESTORED[lang], "reconnected from the line");
+              expect(pageErrors).toEqual([]);
+              readings.push({ rail, lang, scheme, route, viewport: "1440x900 resized to 1000x700", healthy, first, back, after, held, restored, frames: [firstFrame, backFrame] });
+              continue;
+            }
+            /* A click opens it on the page's work, every word and control of the call with it, and nothing that names the page under it. */
             await tile.click(); await rest();
             const open = await readOpen(page);
-            expect(open.overPage, label).toBe(true);
+            expect(open.layout, label).toBe("expanded"); expect(open.overPage, label).toBe(true);
+            expect(open.underHead, `${label}: the page's title, count, search and tabs under the companion`).toEqual([]);
+            expect(open.toastClearance ?? 8, `${label}: the toast`).toBeGreaterThanOrEqual(8);
             const notice = await readNotice(page);
-            expect(notice.code).toBe("RECONNECTING"); expect(notice.inside).toBe(true); expect(notice.clipped).toEqual([]); expect(notice.covered).toEqual([]);
-            const bubble = await page.locator("[data-companion-bubble]").last().evaluate(node => { const style = getComputedStyle(node); return { background: style.backgroundColor, backdrop: style.backdropFilter }; });
-            expect(bubble.backdrop).toBe("none"); expect(bubble.background).not.toMatch(/\/|rgba|transparent/u);
-            const end = await readControl(page, "[data-companion-end]");
-            expect(end.disabled).toBe(false); expect(end.missed).toEqual([]);
+            expect(notice.code).toBe(code); expect(notice.inside).toBe(true); expect(notice.clipped).toEqual([]); expect(notice.covered).toEqual([]);
+            const bubbles = page.locator("[data-companion-bubble]");
+            const bubble = await bubbles.count() ? await bubbles.last().evaluate(node => { const style = getComputedStyle(node); return { background: style.backgroundColor, backdrop: style.backdropFilter }; }) : null;
+            if (bubble) { expect(bubble.backdrop).toBe("none"); expect(bubble.background).not.toMatch(/\/|rgba|transparent/u); }
+            const end = route === "gave-up" ? null : await readControl(page, "[data-companion-end]");
+            if (end) { expect(end.disabled).toBe(false); expect(end.inside).toBe(true); expect(end.missed).toEqual([]); }
+            const reconnect = route === "gave-up" ? await readControl(page, "[data-companion-resume]") : null;
+            if (reconnect) { expect(reconnect.disabled).toBe(false); expect(reconnect.inside).toBe(true); expect(reconnect.missed).toEqual([]); }
+            const collapse = await readControl(page, "[data-companion-collapse]");
+            expect(collapse.inside).toBe(true); expect(collapse.missed).toEqual([]);
+            const openFrame = await frame(`${route}-open`);
+            /* Collapsed by choice it is a tile with no line, and opens again where it stood, wherever that tile went. */
+            await page.locator("[data-companion-collapse]").click(); await rest();
+            const chosen = await readTile(page);
+            expect([chosen.layout, chosen.yielded, chosen.words]).toEqual(["collapsed", false, 0]);
+            expect(chosen.toastClearance, `${label}: the tile against the toast`).toBeGreaterThanOrEqual(8);
+            await tile.click(); await rest();
+            const reopened = await readOpen(page);
+            expect(reopened.layout).toBe("expanded"); expect(reopened.at).toBe(open.at); expect(reopened.underHead).toEqual([]);
+            let back = null, backFrame = null, afterEnd = null;
+            if (route === "reconnecting") {
+              /* Back while open it says so where it stands, still off the page's head; ended, nothing is left to say. */
+              await control("release"); await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+              back = await readOpen(page);
+              expect(back.layout, label).toBe("expanded"); expect(back.underHead).toEqual([]); expect(back.toastClearance ?? 8).toBeGreaterThanOrEqual(8);
+              const backEnd = await readControl(page, "[data-companion-end]");
+              expect(backEnd.disabled).toBe(false); expect(backEnd.missed).toEqual([]);
+              backFrame = await frame("back-open");
+              await page.locator("[data-companion-end]").last().click(); await phase("offline"); await rest();
+              afterEnd = await readTile(page);
+              expect([afterEnd.layout, afterEnd.yielded, afterEnd.words]).toEqual(["collapsed", true, 0]);
+            }
             expect(pageErrors).toEqual([]);
-            readings.push({ lang, scheme, route, viewport: "1440x900 resized to 1000x700", yielded, open, notice, bubble, end, frames: [await frame("over-page-open")] });
+            readings.push({ rail, lang, scheme, route, viewport: "1440x900 resized to 1000x700", healthy, first, open, notice, bubble, end, reconnect, collapse, chosen, reopened, back, afterEnd, frames: [firstFrame, openFrame, ...(backFrame ? [backFrame] : [])] });
             continue;
           }
           await control("drop"); await page.clock.runFor(300);
@@ -25268,7 +25331,7 @@ describe("floating voice companion", () => {
       fs.mkdirSync("evidence/voice-companion", { recursive: true });
       fs.writeFileSync("evidence/voice-companion/reconnect-board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 480_000);
+  }, 900_000);
 
   browserTest("call memory settings show bounded notes and clear them on desktop and phone", async () => {
     const out = path.resolve(".artifacts/voice-call-memory");

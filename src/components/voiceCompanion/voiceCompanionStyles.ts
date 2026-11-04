@@ -247,6 +247,13 @@ export const VOICE_COMPANION_CSS = `
 .vc-notice[data-tone="note"] .vc-notice-icon { color: var(--color-secondary); background: var(--color-sunken); }
 .vc-notice[data-code="CONNECTION_RESTORED"] .vc-notice-icon { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 14%, transparent); }
 .vc-notice .vc-act { height: 26px; margin-left: auto; }
+/* A call's line beside a tile with no lane: one row in the room reserved for it, the button kept beside the words
+   and its label alone, which the longest language needs to stay within two lines. */
+.vc-line { position: absolute; display: flex; align-items: center; pointer-events: none; }
+.vc-line .vc-notice { width: fit-content; max-width: 100%; flex-wrap: nowrap; padding: 5px 10px 5px 7px; pointer-events: auto; }
+.vc-line .vc-notice-text { flex: 0 1 auto; }
+.vc-line .vc-act { flex: none; }
+.vc-line .vc-act svg { display: none; }
 
 /* The delegation: a call of its own, in the delegation's teal */
 .vc .vc-call.vc-deleg {

@@ -44,6 +44,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -96,6 +97,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -153,6 +155,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -205,6 +208,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -245,6 +249,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -267,6 +272,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -296,6 +302,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -312,73 +319,6 @@
       },
       "frames": [
         "en-light-back-open.png"
-      ]
-    },
-    {
-      "lang": "en",
-      "scheme": "light",
-      "route": "over-page",
-      "viewport": "1440x900 resized to 1000x700",
-      "yielded": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "open": {
-        "layout": "expanded",
-        "at": "translate3d(540px, 8px, 0px)",
-        "lane": {
-          "width": 280,
-          "height": 360,
-          "side": "left"
-        },
-        "overPage": true,
-        "underText": [
-          "atlas",
-          "5",
-          "Orchestrator",
-          "working",
-          "Inbox",
-          "3",
-          "In progress",
-          "7"
-        ],
-        "underControl": [
-          "Find a task",
-          "Filter",
-          "Create",
-          "Inbox3",
-          "In progress7",
-          "Waiting2"
-        ],
-        "toastClearance": 8.390625
-      },
-      "notice": {
-        "code": "RECONNECTING",
-        "text": "Connection lost. Reconnecting…",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "bubble": {
-        "background": "rgb(255, 253, 250)",
-        "backdrop": "none"
-      },
-      "end": {
-        "box": {
-          "x": 592,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "frames": [
-        "en-light-over-page-open.png"
       ]
     },
     {
@@ -423,6 +363,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -475,6 +416,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -532,6 +474,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -584,6 +527,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -624,6 +568,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -646,6 +591,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -675,6 +621,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -691,73 +638,6 @@
       },
       "frames": [
         "en-dark-back-open.png"
-      ]
-    },
-    {
-      "lang": "en",
-      "scheme": "dark",
-      "route": "over-page",
-      "viewport": "1440x900 resized to 1000x700",
-      "yielded": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "open": {
-        "layout": "expanded",
-        "at": "translate3d(540px, 8px, 0px)",
-        "lane": {
-          "width": 280,
-          "height": 360,
-          "side": "left"
-        },
-        "overPage": true,
-        "underText": [
-          "atlas",
-          "5",
-          "Orchestrator",
-          "working",
-          "Inbox",
-          "3",
-          "In progress",
-          "7"
-        ],
-        "underControl": [
-          "Find a task",
-          "Filter",
-          "Create",
-          "Inbox3",
-          "In progress7",
-          "Waiting2"
-        ],
-        "toastClearance": 8.390625
-      },
-      "notice": {
-        "code": "RECONNECTING",
-        "text": "Connection lost. Reconnecting…",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "bubble": {
-        "background": "rgb(32, 35, 44)",
-        "backdrop": "none"
-      },
-      "end": {
-        "box": {
-          "x": 592,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "frames": [
-        "en-dark-over-page-open.png"
       ]
     },
     {
@@ -802,6 +682,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -854,6 +735,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -911,6 +793,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -963,6 +846,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1003,6 +887,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1025,6 +910,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1054,6 +940,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1070,73 +957,6 @@
       },
       "frames": [
         "uk-light-back-open.png"
-      ]
-    },
-    {
-      "lang": "uk",
-      "scheme": "light",
-      "route": "over-page",
-      "viewport": "1440x900 resized to 1000x700",
-      "yielded": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "open": {
-        "layout": "expanded",
-        "at": "translate3d(540px, 8px, 0px)",
-        "lane": {
-          "width": 280,
-          "height": 360,
-          "side": "left"
-        },
-        "overPage": true,
-        "underText": [
-          "atlas",
-          "5",
-          "Оркестратор",
-          "працює",
-          "Вхідні",
-          "3",
-          "У роботі",
-          "7"
-        ],
-        "underControl": [
-          "Знайти задачу",
-          "Фільтр",
-          "Створити",
-          "Вхідні3",
-          "У роботі7",
-          "Очікують2"
-        ],
-        "toastClearance": 8.390625
-      },
-      "notice": {
-        "code": "RECONNECTING",
-        "text": "Зʼєднання втрачено. Перепідключаюся…",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "bubble": {
-        "background": "rgb(255, 253, 250)",
-        "backdrop": "none"
-      },
-      "end": {
-        "box": {
-          "x": 592,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "frames": [
-        "uk-light-over-page-open.png"
       ]
     },
     {
@@ -1181,6 +1001,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1233,6 +1054,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1290,6 +1112,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1342,6 +1165,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1382,6 +1206,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1404,6 +1229,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1433,6 +1259,7 @@
           "overPage": false,
           "underText": [],
           "underControl": [],
+          "underHead": [],
           "toastClearance": 416.390625
         }
       },
@@ -1452,20 +1279,52 @@
       ]
     },
     {
-      "lang": "uk",
-      "scheme": "dark",
-      "route": "over-page",
+      "rail": "few",
+      "lang": "en",
+      "scheme": "light",
+      "route": "reconnecting",
       "viewport": "1440x900 resized to 1000x700",
-      "yielded": {
+      "healthy": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
         "toastClearance": 8.390625
       },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
       "open": {
         "layout": "expanded",
-        "at": "translate3d(540px, 8px, 0px)",
+        "at": "translate3d(540px, 432px, 0px)",
         "lane": {
           "width": 280,
           "height": 360,
@@ -1473,24 +1332,1414 @@
         },
         "overPage": true,
         "underText": [
-          "atlas",
-          "5",
-          "Оркестратор",
-          "працює",
-          "Вхідні",
-          "3",
-          "У роботі",
-          "7"
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
         ],
         "underControl": [
-          "Знайти задачу",
-          "Фільтр",
-          "Створити",
-          "Вхідні3",
-          "У роботі7",
-          "Очікують2"
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
         ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECTING",
+        "text": "Connection lost. Reconnecting…",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": {
+        "background": "rgb(255, 253, 250)",
+        "backdrop": "none"
+      },
+      "end": {
+        "box": {
+          "x": 592,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "frames": [
+        "few-en-light-reconnecting-line.png",
+        "few-en-light-reconnecting-open.png",
+        "few-en-light-back-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "en",
+      "scheme": "light",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
         "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 411.09375,
+          "y": 538,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 625.5625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "few-en-light-gave-up-line.png",
+        "few-en-light-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "en",
+      "scheme": "light",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "few-en-light-held-open-line.png",
+        "few-en-light-back-line.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "en",
+      "scheme": "dark",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECTING",
+        "text": "Connection lost. Reconnecting…",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": {
+        "background": "rgb(32, 35, 44)",
+        "backdrop": "none"
+      },
+      "end": {
+        "box": {
+          "x": 592,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "frames": [
+        "few-en-dark-reconnecting-line.png",
+        "few-en-dark-reconnecting-open.png",
+        "few-en-dark-back-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "en",
+      "scheme": "dark",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 411.09375,
+          "y": 538,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 625.5625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "few-en-dark-gave-up-line.png",
+        "few-en-dark-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "en",
+      "scheme": "dark",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "few-en-dark-held-open-line.png",
+        "few-en-dark-back-line.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "uk",
+      "scheme": "light",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
+      },
+      "notice": {
+        "code": "RECONNECTING",
+        "text": "Зʼєднання втрачено. Перепідключаюся…",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": {
+        "background": "rgb(255, 253, 250)",
+        "backdrop": "none"
+      },
+      "end": {
+        "box": {
+          "x": 592,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "frames": [
+        "few-uk-light-reconnecting-line.png",
+        "few-uk-light-reconnecting-open.png",
+        "few-uk-light-back-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "uk",
+      "scheme": "light",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 354.671875,
+          "y": 538,
+          "width": 164.328125,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 642.015625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "few-uk-light-gave-up-line.png",
+        "few-uk-light-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "uk",
+      "scheme": "light",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "few-uk-light-held-open-line.png",
+        "few-uk-light-back-line.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
       },
       "notice": {
         "code": "RECONNECTING",
@@ -1506,7 +2755,7 @@
       "end": {
         "box": {
           "x": 592,
-          "y": 112,
+          "y": 536,
           "width": 28,
           "height": 28
         },
@@ -1514,8 +2763,2231 @@
         "disabled": false,
         "missed": []
       },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
       "frames": [
-        "uk-dark-over-page-open.png"
+        "few-uk-dark-reconnecting-line.png",
+        "few-uk-dark-reconnecting-open.png",
+        "few-uk-dark-back-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 354.671875,
+          "y": 538,
+          "width": 164.328125,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 642.015625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "few-uk-dark-gave-up-line.png",
+        "few-uk-dark-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "few",
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "few-uk-dark-held-open-line.png",
+        "few-uk-dark-back-line.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "en",
+      "scheme": "light",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECTING",
+        "text": "Connection lost. Reconnecting…",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": {
+        "background": "rgb(255, 253, 250)",
+        "backdrop": "none"
+      },
+      "end": {
+        "box": {
+          "x": 592,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "frames": [
+        "many-en-light-reconnecting-line.png",
+        "many-en-light-reconnecting-open.png",
+        "many-en-light-back-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "en",
+      "scheme": "light",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 411.09375,
+          "y": 538,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 625.5625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "many-en-light-gave-up-line.png",
+        "many-en-light-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "en",
+      "scheme": "light",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "many-en-light-held-open-line.png",
+        "many-en-light-back-line.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "en",
+      "scheme": "dark",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECTING",
+        "text": "Connection lost. Reconnecting…",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": {
+        "background": "rgb(32, 35, 44)",
+        "backdrop": "none"
+      },
+      "end": {
+        "box": {
+          "x": 592,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "edited 9m ago",
+          "2 conversations",
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "frames": [
+        "many-en-dark-reconnecting-line.png",
+        "many-en-dark-reconnecting-open.png",
+        "many-en-dark-back-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "en",
+      "scheme": "dark",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 411.09375,
+          "y": 538,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 625.5625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Working · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, idle. Open",
+          "Change the icon of «Restore search results after the index rebuild»",
+          "Rename: Restore search results after the index rebuild",
+          "State of «Restore search results after the index rebuild»: Working for 1h 1m",
+          "Working · 1",
+          "Edit description"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "many-en-dark-gave-up-line.png",
+        "many-en-dark-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "en",
+      "scheme": "dark",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 721.3125,
+            "y": 170,
+            "width": 89.90625,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "many-en-dark-held-open-line.png",
+        "many-en-dark-back-line.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "uk",
+      "scheme": "light",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
+      },
+      "notice": {
+        "code": "RECONNECTING",
+        "text": "Зʼєднання втрачено. Перепідключаюся…",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": {
+        "background": "rgb(255, 253, 250)",
+        "backdrop": "none"
+      },
+      "end": {
+        "box": {
+          "x": 592,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "frames": [
+        "many-uk-light-reconnecting-line.png",
+        "many-uk-light-reconnecting-open.png",
+        "many-uk-light-back-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "uk",
+      "scheme": "light",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 354.671875,
+          "y": 538,
+          "width": 164.328125,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 642.015625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "many-uk-light-gave-up-line.png",
+        "many-uk-light-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "uk",
+      "scheme": "light",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "many-uk-light-held-open-line.png",
+        "many-uk-light-back-line.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
+      },
+      "notice": {
+        "code": "RECONNECTING",
+        "text": "Зʼєднання втрачено. Перепідключаюся…",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": {
+        "background": "rgb(32, 35, 44)",
+        "backdrop": "none"
+      },
+      "end": {
+        "box": {
+          "x": 592,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "collapse": {
+        "box": {
+          "x": 624,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "змінено 9 хв тому",
+          "2 розмови",
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 308
+      },
+      "back": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "frames": [
+        "many-uk-dark-reconnecting-line.png",
+        "many-uk-dark-reconnecting-open.png",
+        "many-uk-dark-back-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "notice": {
+        "code": "RECONNECT_GAVE_UP",
+        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+        "inside": true,
+        "clipped": [],
+        "covered": []
+      },
+      "bubble": null,
+      "end": null,
+      "reconnect": {
+        "box": {
+          "x": 354.671875,
+          "y": 538,
+          "width": 164.328125,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 642.015625,
+          "y": 536,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "reopened": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 432px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "Restore search results after the index rebuild",
+          "Працюють · 1",
+          "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers."
+        ],
+        "underControl": [
+          "Explorer: list every export toggle, без руху. Відкрити",
+          "Змінити іконку «Restore search results after the index rebuild»",
+          "Перейменувати: Restore search results after the index rebuild",
+          "Стан «Restore search results after the index rebuild»: Працює вже 1 год 1 хв",
+          "Працюють · 1",
+          "Змінити опис"
+        ],
+        "underHead": [],
+        "toastClearance": 314
+      },
+      "back": null,
+      "afterEnd": null,
+      "frames": [
+        "many-uk-dark-gave-up-line.png",
+        "many-uk-dark-gave-up-open.png"
+      ]
+    },
+    {
+      "rail": "many",
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": null,
+        "offered": {
+          "box": {
+            "x": 746.671875,
+            "y": 170,
+            "width": 146.328125,
+            "height": 26
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        }
+      },
+      "restored": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "placed": {
+          "layout": "collapsed",
+          "at": "translate3d(616px, 48px, 0px)",
+          "lane": null,
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "underHead": [],
+          "toastClearance": 8.390625
+        },
+        "tileEnd": {
+          "box": {
+            "x": 648,
+            "y": 80,
+            "width": 24,
+            "height": 24
+          },
+          "inside": true,
+          "disabled": false,
+          "missed": []
+        },
+        "offered": null
+      },
+      "frames": [
+        "many-uk-dark-held-open-line.png",
+        "many-uk-dark-back-line.png"
       ]
     }
   ]

@@ -390,9 +390,10 @@ deadline (on the API the median mint is 2.8 s and the slowest retained 7.6 s, §
 - **Then**: the give-up cue and "Couldn't reconnect. What was said is kept; Reconnect
   continues the call." (§4), and today's Reconnect for the rest of the 30-minute window
   (`callResume.ts:12`). While the call has this state to say, a window that leaves no
-  usual place opens the companion by itself in a shorter lane, over no label; where the
-  page leaves not even that, one click on the tile opens it with this line and Reconnect
-  over the page. Reconnect after a give-up uses the same cursor and carries the
+  usual place opens the companion by itself in a shorter lane, over no label. Where the
+  page leaves not even that, the line's first words and Reconnect stand alone beside the
+  tile, and one click opens it with the whole line on the page's work, under its title,
+  search and tabs. Reconnect after a give-up uses the same cursor and carries the
   same pending work, including reports filed while the part sat closed (§3.7), so the
   manual path resumes as exactly as the automatic one.
 
