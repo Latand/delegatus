@@ -134,3 +134,32 @@ test("portable file samples remain fresh even when their assertions pass", () =>
   expect(again.output).not.toContain("reused complete green head file");
   expect(f.samples()).toEqual({ a: 2, b: 2 });
 }, 60_000);
+
+serviceTest.each(["CHECKPOINT_TEST_MODE", "GIT_AUTHOR_NAME", "LLV_PRIVACY_TEST_MODE", "HTTPS_PROXY"])(
+  "a consumed caller environment value invalidates warm checkpoints: %s", name => {
+    const f = fixture();
+    for (const file of ["a", "b"]) writeFileSync(path.join(f.repo, `${file}.test.ts`),
+      f.source(file).replace("expect(1).toBe(1);", `expect(process.env[${JSON.stringify(name)}]).toBe("green");`));
+    f.git("add", "."); f.git("commit", "-m", "Consumed environment fixture");
+    const first = f.run({ [name]: "green" });
+    expect(first.status, first.output).toBe(0);
+    const changed = f.run({ [name]: "red" });
+    expect(changed.status, changed.output).toBe(1);
+    expect(changed.output).not.toContain("reused complete green head file");
+    expect(changed.output).toContain("NEW a.test.ts");
+    expect(changed.output).toContain("NEW b.test.ts");
+  }, 60_000);
+
+serviceTest("service checkpoints are not consumed after switching to portable execution", () => {
+  const f = fixture();
+  for (const file of ["a", "b"]) writeFileSync(path.join(f.repo, `${file}.test.ts`), f.source(file).replace("expect(1).toBe(1);",
+    'expect(require("node:child_process").spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status).toBe(0);'));
+  f.git("add", "."); f.git("commit", "-m", "Service boundary fixture");
+  const first = f.run(); expect(first.status, first.output).toBe(0);
+  const portable = f.run({ XDG_RUNTIME_DIR: path.join(f.root, "missing-manager"),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(f.root, "missing-manager", "bus")}` });
+  expect(portable.status, portable.output).toBe(1);
+  expect(portable.output).not.toContain("reused complete green head file");
+  expect(portable.output).toContain("NEW a.test.ts");
+  expect(portable.output).toContain("NEW b.test.ts");
+}, 60_000);

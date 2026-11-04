@@ -15,12 +15,17 @@ becomes a passing receipt for the whole selection.
   full working inputs (including ignored files), installed dependency bytes,
   gate and runtime bytes, Git configuration, execution environment, selection
   and budgets. The existing gate input snapshot supplies these identities.
+- The comparator also binds its unfiltered caller environment: it retains
+  custom variables that the publication wrapper normally strips. Identity,
+  privacy and proxy/certificate values consumed by direct calls are bound too.
 - Dirty trees, index flags and unreadable input identities receive fresh runs.
 - A file must have at least one passing assertion, no failed assertion or
   diagnostic, a complete report and successful owned cleanup.
 - Reusable files use Linux service cgroup cleanup. The portable fallback is
   best effort; its samples never become head checkpoints. Other platforms
   retain their existing fresh-file execution and whole-step receipt rules.
+  Current service availability is checked before reading and sealing receipts;
+  the manager transport and supervisor executables are part of the key.
 - Incomplete, timed-out and failed files run again. Baseline evidence retains
   its own confirmation rules. Diagnostic and flaky confirmation rounds remain
   fresh and never create head checkpoints.

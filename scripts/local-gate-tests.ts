@@ -385,6 +385,29 @@ function isGreenHeadFile(value: unknown): value is TestRun {
     && typeof run.elapsedMs === "number" && Number.isFinite(run.elapsedMs) && run.elapsedMs >= 0;
 }
 
+/** The comparator preserves caller variables beyond the publication wrapper's
+ * allowlist. Bind those values with the baseline environment identity, plus
+ * identity/privacy/network values that a direct comparator call still passes. */
+function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
+  const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+  return fingerprint([environmentFingerprint(env), Object.entries(env)
+    .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
+}
+
+/** Check the boundary of this invocation before reading or sealing receipts.
+ * Portable work keeps its normal fresh execution, even after a service run. */
+function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
+  if (process.platform !== "linux") return;
+  const systemctl = Bun.which("systemctl", { PATH: env.PATH ?? "" });
+  const runner = Bun.which("systemd-run", { PATH: env.PATH ?? "" });
+  if (!systemctl || !runner) return;
+  try {
+    if (spawnSync(systemctl, ["--user", "show-environment"], { env, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
+    return fingerprint([systemctl, fileFingerprint(systemctl), runner, fileFingerprint(runner),
+      env.XDG_RUNTIME_DIR ?? null, env.DBUS_SESSION_BUS_ADDRESS ?? null]);
+  } catch { return; }
+}
+
 export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
   const started = performance.now();
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"));
@@ -411,11 +434,13 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
     // A single file already gets whole-step reuse after passing; partial
     // checkpoints cannot help it, so avoid another input traversal there.
-    const inputs = process.platform === "linux" && files.length > 1 ? gateInputSnapshot(root, base,
+    const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(inherited) : undefined;
+    const environmentKey = headEnvironmentKey(inherited);
+    const inputs = cleanupIdentity ? gateInputSnapshot(root, base,
       [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], inherited) : undefined;
     const initial = inputs?.snapshot();
     const headCache = initial ? new GateCache<TestRun>(cacheDirectory(root, "head-files"), isGreenHeadFile, 24 * 60 * 60_000) : undefined;
-    const headKey = (file: string) => fingerprint([1, initial?.key, files, budgets, file]);
+    const headKey = (file: string) => fingerprint([2, initial?.key, environmentKey, cleanupIdentity, files, budgets, file]);
     const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
     for (const file of files) {
       const cached = headCache?.read(headKey(file));
@@ -430,7 +455,8 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // or failed cleanup cannot seal a checkpoint.
     sealHeadSamples = () => {
       if (!initial || !headCache) return;
-      if (inputs?.snapshot()?.key !== initial.key) {
+      if (serviceCleanupIdentity(inherited) !== cleanupIdentity || headEnvironmentKey(inherited) !== environmentKey
+        || inputs?.snapshot()?.key !== initial.key) {
         if (reused.length) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
         return;
       }
