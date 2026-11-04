@@ -17,6 +17,7 @@ import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { recordOperatorMessageAdmission } from "@/lib/suggestions/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type PriorSubmission } from "@/lib/team";
+import { admitConversationMember } from "@/lib/team/authorship";
 import { agentMessageOrigin } from "./agentMessageAuthor";
 
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -306,6 +307,14 @@ async function dispatchRuntimeCommand(
     }
   }
   const client = dependencies.client();
+  try {
+    if (["send", "steer", "inject", "answer"].includes(command.kind)) {
+      admitConversationMember(person, command.conversationId);
+    }
+  } catch {
+    attachments.outcome = "refused";
+    return refusedBeforeDispatch("conversation authority could not be recorded");
+  }
   try {
     const byOperator = operatorBrowserRequest(request);
     if (command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "interrupt" || command.kind === "kill") {

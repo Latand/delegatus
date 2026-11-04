@@ -37,13 +37,15 @@ import {
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { TelegramBotError, telegramBotService } from "@/lib/telegram/bot/service";
 import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
+import { refuseAnonymous, recordTeamEvent, teamActor } from "@/lib/team";
+import { assertProjectReportDestination } from "@/lib/team/workspaceDefaults";
+import { TeamError } from "@/lib/team/members";
 import { scrubTelegramDiagnostic } from "@/lib/telegram/bot/diagnostics";
 import path from "node:path";
 import { listFiles } from "@/lib/scanner";
 import { lastScannedProjectCatalog } from "@/lib/scanner/scanCache";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { projectPresentation, setProjectPresentation, validProjectName } from "@/lib/projects/presentation";
-import { recordTeamEvent, teamActor } from "@/lib/team";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -127,6 +129,21 @@ function projectParam(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+type ReportChat = { chat?: string; chatId: string; alias: string | null; username?: string | null; isForum?: boolean | null; postAllowed: boolean };
+
+function reportChoiceRefusal(actor: ReturnType<typeof teamActor>, project: string, chatId: string | null, chats: readonly ReportChat[]): NextResponse | null {
+  const anonymous = refuseAnonymous(actor);
+  if (anonymous) { anonymous.headers.set("Cache-Control", "no-store"); return anonymous; }
+  try {
+    assertProjectReportDestination(actor, project, chatId, reference => chats.find(chat => chat.chat === reference || chat.chatId === reference || chat.alias?.toLowerCase() === reference.toLowerCase()
+      || (reference.startsWith("@") && chat.username?.toLowerCase() === reference.slice(1).toLowerCase()))?.chatId);
+    return null;
+  } catch (error) {
+    if (error instanceof TeamError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status, headers });
+    throw error;
+  }
+}
+
 async function workspaceGET(request: NextRequest): Promise<NextResponse> {
   const project = projectParam(request.nextUrl.searchParams.get("project"));
   if (!project || project.length > 256) {
@@ -141,6 +158,7 @@ async function workspaceGET(request: NextRequest): Promise<NextResponse> {
 async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) { rejection.headers.set("Cache-Control", "no-store"); return rejection; }
+  const actor = teamActor(request);
   let payload: unknown = null;
   try {
     payload = await request.json();
@@ -215,21 +233,26 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
       const parsed = input.link ? parseTelegramChatReference(input.link) : null;
       if (input.link && !parsed) return NextResponse.json({ error: "INVALID_CHAT_REFERENCE", message: "enter a chat ID, @username or Telegram link" }, { status: 400, headers });
       const reference = parsed?.chat ?? input.chat!.trim();
-      let match: { chat?: string; chatId: string; alias: string | null; username?: string | null; isForum?: boolean | null; postAllowed: boolean } | undefined;
+      let match: ReportChat | undefined;
+      let chats: readonly ReportChat[] = [];
       const service = telegramBotService();
       try {
-        match = service.listChats().chats.find((entry) => (
-          entry.chat === reference || entry.chatId === reference || entry.alias === reference
+        chats = service.listChats().chats;
+        match = chats.find((entry) => (
+          entry.chat === reference || entry.chatId === reference || entry.alias?.toLowerCase() === reference.toLowerCase()
           || (reference.startsWith("@") && entry.username?.toLowerCase() === reference.slice(1).toLowerCase())
         ));
         if (input.link || (!match && (/^-?\d+$/.test(reference) || reference.startsWith("@")))) {
           const added = await service.addChat(reference);
-          match = service.listChats().chats.find((entry) => entry.chatId === added.chatId);
+          chats = service.listChats().chats;
+          match = chats.find((entry) => entry.chatId === added.chatId);
         }
       } catch (error) {
         return telegramVerificationFailure(error);
       }
       if (!match?.postAllowed) return NextResponse.json({ error: "CHAT_NOT_ALLOWED", message: "the bot is not in that chat or posting is not allowed" }, { status: 409, headers });
+      const refusal = reportChoiceRefusal(actor, project, match.chatId, chats);
+      if (refusal) return refusal;
       const requestedTopic = input.topicId ?? parsed?.topicId;
       const topicId = match.isForum !== false ? requestedTopic : undefined;
       if (requestedTopic && match.isForum === false) reportMessage = "This chat does not use topics; the report destination was saved for the whole chat without a topic.";
@@ -238,6 +261,8 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
       const written = setReportTelegram(project, { chat: match.alias ?? match.chat ?? match.chatId, name: input.name.trim(), ...(topicId ? { topicId } : {}) }, "operator");
       if (written === false) return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
     } else {
+      const refusal = reportChoiceRefusal(actor, project, null, []);
+      if (refusal) return refusal;
       if (setReportTelegram(project, null, "operator") === false) return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
     }
   }
