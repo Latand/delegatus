@@ -524,7 +524,7 @@ export function readAccountSource(name: AccountSourceName, directory = accountsS
      completed (EACCES, EIO), most often — and answering "empty" for it is the
      store's content disappearing. The caller reads its own file instead, with
      its own errno handling, exactly as it did before the move. */
-  if (!collection.snapshot().some((row) => spec.owns(row.k)) && legacyFileStillHoldsTheRecord(name, directory)) {
+  if (!collection.loadReadonly().some((row) => spec.owns(row.k)) && legacyFileStillHoldsTheRecord(name, directory)) {
     return { kind: "legacy" };
   }
   const gap = collection.get(spec.gapKey);
@@ -627,7 +627,10 @@ function legacyFileStillHoldsTheRecord(name: AccountSourceName, directory: strin
 }
 
 function sourceBody(collection: SqliteStateCollection<AccountStateRow>, spec: AccountSourceSpec): unknown | undefined {
-  return spec.body(collection.snapshot().filter((row) => spec.owns(row.k)), { revision: collection.revision() });
+  // Account roots are read for each observed transcript. Copy only this
+  // source's rows while preserving the caller's independently mutable body.
+  const rows = collection.loadReadonly().filter((row) => spec.owns(row.k)).map((row) => structuredClone(row));
+  return spec.body(rows, { revision: collection.revision() });
 }
 
 /**

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { creditGuardBlock, creditGuardUsedPercent, paidCredits } from "./creditGuard";
+import { creditGuardBlock, creditGuardUsedPercent, paidCredits, retainCreditGuardEvidence } from "./creditGuard";
 import { selectProjectAccount } from "./projectSelection";
 import type { DurableQuotaObservation } from "./migration/contracts";
 
@@ -32,6 +32,14 @@ test("guard configuration always stays below paid-credit exhaustion", () => {
     expect(creditGuardUsedPercent({ LLV_CODEX_CREDIT_GUARD_USED_PERCENT: value })).toBe(99);
   }
   expect(creditGuardUsedPercent({ LLV_CODEX_CREDIT_GUARD_USED_PERCENT: "98.5" })).toBe(98.5);
+});
+
+test("a retained credit balance retains the time it was read", () => {
+  const old = { ...observation(99).limits!, credits: paidCredits({ has_credits: true, balance: "12" }, now / 1000)! };
+  const windowOnly = { ...old, credits: undefined, capturedAt: now / 1000 + 60 };
+  expect(retainCreditGuardEvidence(old, windowOnly, true)?.credits).toMatchObject({ balance: "12", observedAt: now / 1000 });
+  expect(creditGuardBlock("codex", old, undefined, true)).toBeNull();
+  expect(creditGuardBlock("codex", old)).not.toBeNull();
 });
 
 test.each([false, true])("paid guard fences automatic, pinned and explicit selection (bound=%s)", bound => {
