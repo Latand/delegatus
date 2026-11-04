@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { POST as mcpPost } from "@/app/api/mcp/route";
 import { POST as agentPost } from "@/app/api/telegram/bot/agent/route";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { ownFixtureChild, reapFixtureChildren } from "@/lib/mcp/ownedFixtureChildren";
 import { setMcpHttpDependenciesForTests } from "@/lib/mcp/http";
 import { createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
 import { viewerMcpBindings, viewerMcpToolPolicy, productionViewerControlDependencies } from "@/lib/mcp/bindings";
@@ -35,14 +36,17 @@ let answer: () => { status?: number; body?: unknown; drop?: boolean };
 let pdf: string, photo: string, descriptors: number, rightsReads: number;
 let advertised: boolean, limitsPresent: boolean;
 let beforeReply: (() => Promise<void>) | null;
+let onUploadDisconnect: (() => void) | null;
 beforeEach(async () => {
   now = cloneMethodsNow; sends = []; limits = cloneMethodLimits(); rights = cloneMethodRights(); descriptors = 0; rightsReads = 0;
   beforeReply = null;
+  onUploadDisconnect = null;
   advertised = true;
   limitsPresent = true;
   const home = path.join(root, String(++sequence), "home"), state = path.join(root, String(sequence), "state"); process.env.LLV_STATE_DIR = state;
   answer = () => ({ body: { ...cloneReceipt(100 + sends.length), message_ids: [100 + sends.length] } });
   server = await startTestRelay(async (req, body) => {
+    req.socket.once("close", () => onUploadDisconnect?.());
     if (req.url === "/.well-known/delegatus-relay.json") {
       descriptors++; const descriptor = cloneMethodDescriptor(server.origin, limits);
       return { body: { ...descriptor, features: advertised ? ["clone_send_methods"] : [], limits: limitsPresent ? descriptor.limits : relay.limits } };
@@ -82,7 +86,7 @@ beforeEach(async () => {
   photo = path.join(handoff, "frame.png");
   await (await import("sharp")).default({ create: { width: 2, height: 2, channels: 3, background: "white" } }).png().toFile(photo);
 });
-afterEach(async () => { store.close(); await service.remove(); await server.close(); });
+afterEach(async () => { store.close(); await service.remove(); await server.close(); await reapFixtureChildren(); });
 afterAll(() => { if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior; fs.rmSync(root, { recursive: true, force: true }); });
 const common = (key: string) => ({ conversationId: "fixture-writer", clientRequestId: key, chat: "reports", topicId: 12, replyToMessageId: 17, silent: true });
 const document = (key = "pdf") => service.sendDocument({ ...common(key), document: { path: pdf, caption: "Fixture PDF" } });
@@ -100,6 +104,24 @@ async function restartDocument(key: string) {
   try {
     const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect({ error, exit }).toEqual({ error: "", exit: 0 }); return JSON.parse(output);
+  } finally { clearTimeout(timer); if (child.exitCode === null) child.kill(); await child.exited; }
+}
+async function childCloneSend(route: Parameters<ClonePostingPort["send"]>[0], input: Parameters<ClonePostingPort["send"]>[1],
+  options: Parameters<ClonePostingPort["send"]>[2], deadlineMs: number) {
+  const payload = options.payload && { input: options.payload.input, files: await Promise.all(options.payload.files.map(async file => ({
+    name: file.name, filename: file.filename, kind: file.kind, type: file.blob.type,
+    bytes: Buffer.from(await file.blob.arrayBuffer()).toString("base64") }))) };
+  const script = `import {sendAsClone} from './src/lib/externalRelay/cloneSend';
+    const data=JSON.parse(process.env.CLONE_FIXTURE_SEND);
+    const payload=data.payload&&{input:data.payload.input,files:data.payload.files.map(file=>({...file,blob:new Blob([Buffer.from(file.bytes,'base64')],{type:file.type})}))};
+    const result=await sendAsClone(data.route.relay,data.route.targetId,data.input,{payload,partIndex:data.partIndex,deadline:data.deadline});
+    console.log(JSON.stringify(result));`;
+  const child = ownFixtureChild(Bun.spawn([process.execPath, "-e", script], { env: { ...process.env,
+    CLONE_FIXTURE_SEND: JSON.stringify({ route, input, payload, partIndex: options.partIndex, deadline: Date.now() + deadlineMs }) }, stdout: "pipe", stderr: "pipe" }));
+  const timer = setTimeout(() => child.kill(), deadlineMs < 10000 ? deadlineMs + 5000 : 35000);
+  try {
+    const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit).toBe(0); void error; return JSON.parse(output.trim().split("\n").at(-1)!);
   } finally { clearTimeout(timer); if (child.exitCode === null) child.kill(); await child.exited; }
 }
 
@@ -239,6 +261,21 @@ test.each(["file-default", "file-short", "text-default"] as const)("%s keeps its
     else { await expect(pending).rejects.toMatchObject({ code: "send_uncertain" }); await expect(send()).rejects.toMatchObject({ code: "send_uncertain" }); }
     expect(sends).toHaveLength(1); expect(bot.callsOf(mode === "text-default" ? "sendMessage" : "sendDocument")).toHaveLength(0);
   } finally { release(); await pending.catch(() => {}); }
+});
+test("multipart send survives a real child-process wait beyond the former 20-second cutoff", async () => {
+  let requests = 0;
+  beforeReply = async () => { requests++; if (requests === 1) await new Promise(resolve => setTimeout(resolve, 21000)); };
+  port.send = (route, input, options) => childCloneSend(route, input, options, 60000);
+  expect(await document("child-long-upload")).toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" } });
+  expect(sends).toHaveLength(1); expect(requests).toBe(1); expect(bot.callsOf("sendDocument")).toHaveLength(0);
+});
+test("caller deadline cancels the real child upload and leaves its durable claim uncertain", async () => {
+  beforeReply = async () => new Promise<void>(resolve => { onUploadDisconnect = resolve; });
+  port.send = (route, input, options) => childCloneSend(route, input, options, 2500);
+  await expect(document("child-cancel-upload")).rejects.toMatchObject({ code: "send_uncertain" });
+  await expect(document("child-cancel-upload")).rejects.toMatchObject({ code: "send_uncertain" });
+  expect(store.sendRow("document:fixture-writer", "child-cancel-upload")?.state).toBe("pending");
+  expect(sends).toHaveLength(1); expect(bot.callsOf("sendDocument")).toHaveLength(0);
 });
 test("a later explicit unused state permits fallback after a lost reply", async () => {
   answer = () => sends.length === 1 ? { drop: true } : { status: 413, body: { error: { code: "too_large", key_state: "unused" } } };
