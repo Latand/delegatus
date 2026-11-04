@@ -1,0 +1,5042 @@
+{
+  "schemaVersion": 2,
+  "gitFixtureSafety": {
+    "sourceBase": "bf5d49787d689637c64934c9bad65bc23cede607",
+    "sourceSha256": "102dea050c5f6aa84a2955068dc0fbab09deba129cf35534f17c7374736601b2",
+    "cause": "The fixture captured the inherited Git guard as its native executable. The guard removes its own PATH entry and execs git, finding the fixture shim again.",
+    "causalProbe": {
+      "containment": {
+        "tasksMax": 64,
+        "memoryMax": "512M",
+        "runtimeMaxSeconds": 15
+      },
+      "inheritedGuard": {
+        "fixtureVisits": 4,
+        "exit": 78,
+        "boundedBy": "diagnostic depth limit"
+      },
+      "nativeBinary": {
+        "fixtureVisits": 1,
+        "exit": 0,
+        "stdout": "git version 2.43.0"
+      }
+    },
+    "verification": {
+      "selection": "src/lib/pipelines/releaseTagPolicy.test.ts",
+      "command": [
+        "bash",
+        "<installed-gate-slot.sh>",
+        "bun",
+        "run",
+        "test",
+        "src/lib/pipelines/releaseTagPolicy.test.ts"
+      ],
+      "isolation": "Scratch clone with its own copied dependencies; checkEnvironment then isolatedEnvironment; closed Viewer control URL; each owned test service uses TasksMax=256.",
+      "tests": 135,
+      "failures": 0,
+      "files": 1,
+      "exit": 0,
+      "cleanup": "confirmed",
+      "regressions": [
+        "A looping PATH wrapper is never executed; discovery refuses if no native binary exists.",
+        "A forwarding cycle exits 78 after exactly eight forwards."
+      ],
+      "custody": "Unadopted: handoff timed out, replay returned tool failure, terminal retry reported revision changed. Completed local recorder evidence supplies exit and cleanup, without an accepted custody receipt. Final receipt is interrupted-unknown because recorded check final stage authority is unavailable; pass reporting is refused pending terminal verification. Receipt remains unadopted."
+    }
+  },
+  "postMergeVerification": {
+    "sourceCommit": "d47cb219bd1764ae86ec317af711922f4e2a6f56",
+    "mergedMain": "b39546b3873d2916c69db8397660100ff19e73bc",
+    "trackedFilesVerified": 7432,
+    "sourceSha256": {
+      "src/lib/git/stageAttemptGuard.ts": "ab8be37165affc6e3596436bec5cc8f166416d60cae12860b087360590da6434",
+      "src/lib/git/agentHistoryGuard.ts": "845d8cd019fa3da8d399cfaf02dbd7a84fd6bc938729fef1624fd0fa28af071f",
+      "src/lib/pipelines/engine.ts": "87b4760f94b94ab20685294230ee5a19a7f2ab25cd384cf88531d4d300c011d8",
+      "src/lib/pipelines/prompts.ts": "f339a7d56173867bdba9846b06e3e2d47597ed88f979e21edc537081aaf85bb1",
+      "src/lib/pipelines/releaseTagPolicy.ts": "bfee75bf3b7b640b0984282ceeb859930237b750126a8b932bd753ee96410aee",
+      ".githooks/pre-push": "29e487954210377b866ba67dd69848fae5887d27b37f26bf2886fbce55aa493d",
+      "scripts/local-gate.ts": "51a6aebf047ed8fb7e5cebc7d06b8f8550d7f2f22864ac256779d6190fe883cc",
+      "scripts/local-gate.publication.test.ts": "5ec9992d34b30d873d8937a90b96f6c90f3a98d11ab5d0f0a7b5bc6a935688a6"
+    },
+    "gateSourceCommit": "550e16597d4288416a89b5fc229a310bcbb508d0",
+    "execution": "Serialized direct gates; checkEnvironment then isolatedEnvironment with fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; closed Viewer control URL; no recorded_check receipts.",
+    "additionalImporter": "src/lib/pipelines/engine.launchLease.test.ts",
+    "outcomes": [
+      {
+        "selection": "src/lib/pipelines/releaseTagPolicy.test.ts",
+        "startedAt": "2026-11-02T16:04:04.780Z",
+        "completedAt": "2026-11-02T16:04:59.418Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "706cddb619b7aac6477bce6f6f4bca5f91d55e97253692b541bfc50f6ac2631b",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/releaseTagPolicy.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 133,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "49b9e517a5cde9d047f8647534a4d522461d4e21dfacb6b4edc1bb78bfeac0b5"
+      },
+      {
+        "selection": "src/lib/pipelines/stageAttemptPush.test.ts",
+        "startedAt": "2026-11-02T16:05:03.021Z",
+        "completedAt": "2026-11-02T16:08:31.837Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "1ea5dcfeec7a3355e590d46d354e45a837fd610c9597ec2f2e4cdc65688cb855",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/stageAttemptPush.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 206,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "ffb2e09aab3b395674922e4d7ce61802dc2054700182141a86a31016e518ed75"
+      },
+      {
+        "selection": "scripts/local-gate.publication.test.ts",
+        "startedAt": "2026-11-02T16:08:31.840Z",
+        "completedAt": "2026-11-02T16:12:24.070Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "13a46f0e072a9307c61c1751e0c9123695e7a5d5b1c0b1701338aed197d5afc7",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "scripts/local-gate.publication.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "33a527370cc3fa98a9cb2e7b7d2fd7faa6d739b634040dba116336619ca38b71"
+      },
+      {
+        "selection": "src/lib/pipelines/engine.launchLease.test.ts",
+        "startedAt": "2026-11-02T16:12:24.072Z",
+        "completedAt": "2026-11-02T16:12:53.636Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "e5ee4a7d0ed30dac04f7def4920a256ecdec9748c4ba4fb0a875729f1adb27eb",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/engine.launchLease.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "e3e6af769e7314d3de7a1f2042bab2f99e472f3df59b73cb061d2e7fcd7abe19"
+      },
+      {
+        "selection": "src/lib/git/agentHistoryGuard.test.ts",
+        "startedAt": "2026-11-02T16:12:53.638Z",
+        "completedAt": "2026-11-02T16:13:39.236Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "defcb5c45c1fc38e183bbbf90510ba43f71b5df731b17697c9bb8b52e988b3a2",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/git/agentHistoryGuard.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 153,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "d7f0088d8f24ddaa89ccd8b0a694fe7b142673e44120ca8c5077fb7c2b106f13"
+      },
+      {
+        "selection": "tsc",
+        "startedAt": "2026-11-02T16:13:39.238Z",
+        "completedAt": "2026-11-02T16:16:09.985Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "x",
+          "tsc",
+          "--noEmit"
+        ]
+      }
+    ],
+    "passedCases": 561,
+    "notes": [
+      "Earlier complete importer and baseline outcomes remain in the original evidence sections, bound to their original source commit.",
+      "This refresh covers the merged guard and publication paths plus the new guard importer added by main.",
+      "All refreshed files passed in full, so no new baseline sampling was needed.",
+      "Full tsc used the fresh tracked source export, with no generated Next output copied from the working checkout."
+    ]
+  },
+  "purpose": "Release tag publication guard verification",
+  "sourceCommit": "c618485e246da019d266c3ebaf378089b4e7f3ed",
+  "baselineCommit": "6d3fa3881df2d207ea695c495c5917839ef37e8e",
+  "sourceFilesVerified": 7426,
+  "sourceVerificationBatches": 1,
+  "sourceModuleSha256": {
+    "src/lib/git/agentHistoryGuard.ts": "845d8cd019fa3da8d399cfaf02dbd7a84fd6bc938729fef1624fd0fa28af071f",
+    "src/lib/git/stageAttemptGuard.ts": "ab8be37165affc6e3596436bec5cc8f166416d60cae12860b087360590da6434",
+    "src/lib/pipelines/engine.ts": "a9b23c63bc9a2fd3be0977649aee989411d744cc18650990d8d1104ca51a66c7",
+    "src/lib/pipelines/prompts.ts": "f339a7d56173867bdba9846b06e3e2d47597ed88f979e21edc537081aaf85bb1",
+    "src/lib/pipelines/releaseTagPolicy.ts": "bfee75bf3b7b640b0984282ceeb859930237b750126a8b932bd753ee96410aee"
+  },
+  "repositoryPushHookSha256": "29e487954210377b866ba67dd69848fae5887d27b37f26bf2886fbce55aa493d",
+  "regressionFixtureSha256": "99854151b3eaff1a61f9465aae9055378312d1fde8cb0f33d69e3d4228b0eb23",
+  "selection": {
+    "requiredFiles": 150,
+    "supplementalFiles": 9,
+    "importerCounts": {
+      "src/lib/git/agentHistoryGuard.ts": 0,
+      "src/lib/git/stageAttemptGuard.ts": 11,
+      "src/lib/pipelines/engine.ts": 92,
+      "src/lib/pipelines/prompts.ts": 4,
+      "src/lib/pipelines/releaseTagPolicy.ts": 1
+    },
+    "includesChildProcessImports": true,
+    "hookConsumers": [
+      "scripts/cloud-checks.test.ts",
+      "scripts/docker-image-scope.test.ts",
+      "scripts/gate-runner/client.test.ts",
+      "scripts/gate-runner/remoteHook.test.ts",
+      "scripts/gate-runner/remoteOutputs.test.ts",
+      "scripts/local-gate-tests.test.ts",
+      "scripts/local-gate.publication.test.ts",
+      "scripts/local-gate.receipts.test.ts",
+      "scripts/local-gate.test.ts",
+      "scripts/merge-batch.test.ts",
+      "src/lib/git/agentHistoryGuard.test.ts",
+      "src/lib/pipelines/releaseTagPolicy.test.ts",
+      "src/lib/pipelines/stageAttemptPush.test.ts",
+      "src/lib/testing/testGitIsolation.test.ts"
+    ],
+    "hookPlannerTests": [
+      "src/lib/pipelines/releaseTagPolicy.test.ts",
+      "src/lib/git/agentHistoryGuard.test.ts",
+      "src/lib/pipelines/engine.accountGuard.test.ts",
+      "src/lib/pipelines/engine.activation.test.ts",
+      "src/lib/pipelines/engine.cloud.test.ts",
+      "src/lib/pipelines/engine.containment.test.ts",
+      "src/lib/pipelines/engine.controllerPass.test.ts",
+      "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+      "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+      "src/lib/pipelines/engine.cpuQueue.test.ts",
+      "src/lib/pipelines/engine.creation.test.ts",
+      "src/lib/pipelines/engine.fencedMessage.test.ts",
+      "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+      "src/lib/pipelines/engine.pauseMetadata.test.ts",
+      "src/lib/pipelines/engine.ports.part2.test.ts",
+      "src/lib/pipelines/engine.ports.part3.test.ts",
+      "src/lib/pipelines/engine.ports.test.ts",
+      "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "src/lib/pipelines/engine.proactive.test.ts",
+      "src/lib/pipelines/engine.providerBudget.test.ts",
+      "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+      "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+      "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+      "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+      "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+      "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+      "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+      "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+      "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+      "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+      "src/lib/pipelines/engine.providerChains.part2.test.ts",
+      "src/lib/pipelines/engine.providerChains.test.ts",
+      "src/lib/pipelines/engine.providerReset.part2.test.ts",
+      "src/lib/pipelines/engine.providerReset.part3.test.ts",
+      "src/lib/pipelines/engine.providerReset.test.ts",
+      "src/lib/pipelines/engine.providerSignals.test.ts",
+      "src/lib/pipelines/engine.provisioning.test.ts",
+      "src/lib/pipelines/engine.publication.test.ts",
+      "src/lib/pipelines/engine.recoveredPending.test.ts",
+      "src/lib/pipelines/engine.recovery.part2.test.ts",
+      "src/lib/pipelines/engine.recovery.test.ts",
+      "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+      "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+      "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+      "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+      "src/lib/pipelines/engine.restoreContinuation.test.ts",
+      "src/lib/pipelines/engine.rolePrivacy.test.ts",
+      "src/lib/pipelines/engine.routing.test.ts",
+      "src/lib/pipelines/engine.settlement.test.ts",
+      "src/lib/pipelines/engine.settlementAuthority.test.ts",
+      "src/lib/pipelines/engine.settlementPreparation.test.ts",
+      "src/lib/pipelines/engine.spawnRetry.test.ts",
+      "src/lib/pipelines/engine.spawnSilence.test.ts",
+      "src/lib/pipelines/engine.succession.part2.test.ts",
+      "src/lib/pipelines/engine.succession.part3.test.ts",
+      "src/lib/pipelines/engine.succession.test.ts",
+      "src/lib/pipelines/engine.suspendedRetry.test.ts",
+      "src/lib/pipelines/engine.terminalBudget.test.ts",
+      "src/lib/pipelines/engine.watchdogRegression.test.ts",
+      "src/lib/pipelines/prompts.test.ts",
+      "scripts/gate-slot.namespace.integration.test.ts",
+      "scripts/gate-slot.queue.test.ts",
+      "scripts/gate-slot.test.ts",
+      "scripts/local-gate-tests.cpuQueue.test.ts",
+      "scripts/local-gate-tests.test.ts",
+      "scripts/local-gate.cpuQueue.test.ts",
+      "scripts/local-gate.noproc.test.ts",
+      "scripts/local-gate.publication.test.ts",
+      "scripts/local-gate.receipts.test.ts",
+      "scripts/local-gate.test.ts",
+      "scripts/local-gate.workflows.test.ts"
+    ],
+    "fixtureModules": [
+      "src/lib/pipelines/engine.fixture.ts",
+      "src/lib/pipelines/engine.proactive.fixture.ts",
+      "src/lib/pipelines/engine.providerBudgetChains.fixture.ts",
+      "src/lib/pipelines/engine.providerBudgetOutput.fixture.ts",
+      "src/lib/pipelines/fixtures/cloudStageRestart.ts",
+      "src/lib/pipelines/fixtures/controllerJobResume.ts",
+      "src/lib/pipelines/fixtures/controllerLoad.ts",
+      "src/lib/pipelines/fixtures/priorWriterStopRestart.ts",
+      "src/lib/pipelines/publicationRecovery.fixture.ts",
+      "src/lib/runtime/fixtures/startupPipelineContender.ts"
+    ],
+    "fixtureImporters": [
+      "src/app/api/pipelines/from-conversation/route.test.ts",
+      "src/lib/pipelines/engine.accountGuard.test.ts",
+      "src/lib/pipelines/engine.activation.test.ts",
+      "src/lib/pipelines/engine.cloud.test.ts",
+      "src/lib/pipelines/engine.containment.test.ts",
+      "src/lib/pipelines/engine.controllerPass.test.ts",
+      "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+      "src/lib/pipelines/engine.creation.test.ts",
+      "src/lib/pipelines/engine.fencedMessage.test.ts",
+      "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+      "src/lib/pipelines/engine.pauseMetadata.test.ts",
+      "src/lib/pipelines/engine.ports.part2.test.ts",
+      "src/lib/pipelines/engine.ports.part3.test.ts",
+      "src/lib/pipelines/engine.ports.test.ts",
+      "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "src/lib/pipelines/engine.proactive.test.ts",
+      "src/lib/pipelines/engine.providerBudget.test.ts",
+      "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+      "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+      "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+      "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+      "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+      "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+      "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+      "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+      "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+      "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+      "src/lib/pipelines/engine.providerChains.part2.test.ts",
+      "src/lib/pipelines/engine.providerChains.test.ts",
+      "src/lib/pipelines/engine.providerReset.part2.test.ts",
+      "src/lib/pipelines/engine.providerReset.part3.test.ts",
+      "src/lib/pipelines/engine.providerReset.test.ts",
+      "src/lib/pipelines/engine.providerSignals.test.ts",
+      "src/lib/pipelines/engine.provisioning.test.ts",
+      "src/lib/pipelines/engine.publication.test.ts",
+      "src/lib/pipelines/engine.recoveredPending.test.ts",
+      "src/lib/pipelines/engine.recovery.part2.test.ts",
+      "src/lib/pipelines/engine.recovery.test.ts",
+      "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+      "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+      "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+      "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+      "src/lib/pipelines/engine.restoreContinuation.test.ts",
+      "src/lib/pipelines/engine.rolePrivacy.test.ts",
+      "src/lib/pipelines/engine.routing.test.ts",
+      "src/lib/pipelines/engine.settlement.test.ts",
+      "src/lib/pipelines/engine.settlementAuthority.test.ts",
+      "src/lib/pipelines/engine.settlementPreparation.test.ts",
+      "src/lib/pipelines/engine.spawnRetry.test.ts",
+      "src/lib/pipelines/engine.spawnSilence.test.ts",
+      "src/lib/pipelines/engine.succession.part2.test.ts",
+      "src/lib/pipelines/engine.succession.part3.test.ts",
+      "src/lib/pipelines/engine.succession.test.ts",
+      "src/lib/pipelines/engine.suspendedRetry.test.ts",
+      "src/lib/pipelines/engine.terminalBudget.test.ts",
+      "src/lib/pipelines/engine.watchdogRegression.test.ts",
+      "src/lib/pipelines/fromConversation.test.ts",
+      "src/lib/pipelines/providerRecovery.test.ts",
+      "src/lib/pipelines/publicationRecovery.test.ts",
+      "src/lib/pipelines/publicationRepairHandoff.test.ts",
+      "src/lib/pipelines/repositoryInitialization.test.ts",
+      "src/lib/pipelines/spawnAdmissionAudit.test.ts",
+      "src/lib/pipelines/stagePullRequest.test.ts",
+      "src/lib/pipelines/taskSummaryCompletion.test.ts"
+    ]
+  },
+  "totals": {
+    "passedCases": 5970,
+    "skippedCases": 151,
+    "failureSites": 271
+  },
+  "initialUnmatchedFailureSites": 0,
+  "introducedFailureSites": 0,
+  "intermittentFailureSites": 0,
+  "absentBaselineFailureSites": 0,
+  "fullTypecheck": {
+    "exitCode": 0,
+    "startedAt": "2026-11-02T05:26:35.020Z",
+    "completedAt": "2026-11-02T05:30:17.570Z",
+    "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "tests": [
+    {
+      "file": "src/lib/pipelines/releaseTagPolicy.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:30:17.605Z",
+      "completedAt": "2026-11-02T05:31:04.799Z",
+      "logSha256": "e46dcb8549a52d42470ac6c8ed425e215401bede6d792a54a8f1dc30b114d437",
+      "tests": 133,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "84c87f0f1e35508bab7c49d6335ffd7d0adb1f56bd0a532e7a26762461905517",
+      "passed": 133,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/cloud-checks.test.ts",
+      "selection": "supplemental",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:31:04.833Z",
+      "completedAt": "2026-11-02T05:31:17.482Z",
+      "logSha256": "f38b925a3e68b6dcd0b28abd9d86a8d6dca146f5e31c6de6daf328ed17ff89fc",
+      "tests": 94,
+      "junitFailures": 2,
+      "skipped": 0,
+      "junitSha256": "253854a542aeeb18425ec2aa179e0bd9ebe9d2b9189b1e58ad887aadaf70d3e0",
+      "passed": 92,
+      "failureSites": 2,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:31:17.518Z",
+        "completedAt": "2026-11-02T05:31:30.843Z",
+        "logSha256": "566c285abea5f22c0102a678d766d632c092bcdea5f7ff5cf4baad6a958c5089",
+        "tests": 94,
+        "junitFailures": 2,
+        "skipped": 0,
+        "junitSha256": "576bd75264e28bfd4236509301ee4b4d4c42f6dc3a61345e7c0b91da51bb01af",
+        "passed": 92
+      },
+      "matchingFailureSites": 2,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "environment catalogue 404 never authorizes local fallback",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "repository catalogue 404 never authorizes local fallback",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "scripts/docker-image-scope.test.ts",
+      "selection": "supplemental",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:31:30.889Z",
+      "completedAt": "2026-11-02T05:31:46.553Z",
+      "logSha256": "9dd5a7c4d19a1576a55a03082be173851c6b9e5a63eca7a7abaabc1ef177d43e",
+      "tests": 10,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "80a81a0f8b8be3d53e00a1c353506d09e672565a113aa6d61dae12ca419954b0",
+      "passed": 9,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:31:46.598Z",
+        "completedAt": "2026-11-02T05:32:00.236Z",
+        "logSha256": "a6b75256121b6a1c20cad21e1b184b118bb2e935caec91900e5e6dbc37eebf64",
+        "tests": 10,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "a447e6fc9ab0707942a9cb07ee532841357a998274c16f91721f617348d42954",
+        "passed": 9
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "the admission list covers every repository JS/JSON dependency in the TypeScript program",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "scripts/gate-runner/client.test.ts",
+      "selection": "supplemental",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:32:00.270Z",
+      "completedAt": "2026-11-02T05:32:01.430Z",
+      "logSha256": "dbb0256770ab4605f0a4ea34db43762a0b320713922836a9340ebdb2f81c9af7",
+      "tests": 20,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "5d7bae5b45dab452732d96b7b7416986f96ba2a6279b19a97ae20a560b5d004d",
+      "passed": 19,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:32:01.476Z",
+        "completedAt": "2026-11-02T05:32:02.645Z",
+        "logSha256": "3e4f2bfbac6b372f242ebc227c595d3dbde7b01c3fce666ddc8e07125f94d7a8",
+        "tests": 20,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "ec63777782783ecbc61449c8693d8d5ce5450e2d414df3982c1c55a05cc0c690",
+        "passed": 19
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "every environment variable the four drivers and scripts/local-gate*.ts read is classified",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "scripts/gate-runner/remoteHook.test.ts",
+      "selection": "supplemental",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:32:02.680Z",
+      "completedAt": "2026-11-02T05:32:41.965Z",
+      "logSha256": "63f27dcf2c49b9c7faef7db88a302d4be1d9dc24f21e0d4b14379cf29352ec4c",
+      "tests": 6,
+      "junitFailures": 6,
+      "skipped": 0,
+      "junitSha256": "8ae77d1ed3dd3783a819782511b574c8c819bdb7faceaefb42d866b71b562ee6",
+      "passed": 0,
+      "failureSites": 6,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:32:41.994Z",
+        "completedAt": "2026-11-02T05:33:18.807Z",
+        "logSha256": "2a9a72364e41fe8a486102c3914d0393d07b10a2fa42f52df9eb4163a8d43c31",
+        "tests": 6,
+        "junitFailures": 6,
+        "skipped": 0,
+        "junitSha256": "76100abbf2a40789b8a44aacc06d7e1bd2aede19b83bf2fa294adbbd27002a9c",
+        "passed": 0
+      },
+      "matchingFailureSites": 6,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a wrapped privacy parent dispatches its checks remotely: bun scripts/local-gate.ts pre-push",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a wrapped privacy parent announces local fallback: bun scripts/local-gate.ts pre-push",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a wrapped privacy parent dispatches its checks remotely: bash .githooks/pre-push",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a wrapped privacy parent announces local fallback: bash .githooks/pre-push",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a wrapped privacy parent dispatches its checks remotely: ./.githooks/pre-push",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a wrapped privacy parent announces local fallback: ./.githooks/pre-push",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "scripts/gate-runner/remoteOutputs.test.ts",
+      "selection": "supplemental",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:33:18.846Z",
+      "completedAt": "2026-11-02T05:33:34.511Z",
+      "logSha256": "014981ffd47369c19e228cb1ff5af3af4f8ed86db299676d1608913221e1ec5d",
+      "tests": 1,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "6f19945debd701e8585f76c6dd6e8fc92c949780b520f57f3888d0d228a895c8",
+      "passed": 1,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate-tests.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:33:34.538Z",
+      "completedAt": "2026-11-02T05:36:17.089Z",
+      "logSha256": "9a13aa89dbfa50722ebdd82c4b2aa32500b99e964377f4fddab4a3e1f263dc69",
+      "tests": 67,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "dc15473d517ef90c9bd8c98958ee6296a04d1a7c79cccaee69b91a4e9c91acfb",
+      "passed": 67,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate.publication.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:36:17.117Z",
+      "completedAt": "2026-11-02T05:38:18.477Z",
+      "logSha256": "6605b3cebd8d9dfca391819a625fb1e5ccb4e769ad50e43c5813bb3f72aed9e9",
+      "tests": 36,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "8ba2d8a47723d7085d02617879b92fef97292418b2996e63d4c953514277f858",
+      "passed": 36,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate.receipts.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:38:18.503Z",
+      "completedAt": "2026-11-02T05:39:37.901Z",
+      "logSha256": "c40846b478eb0fb33883f7fffde7cbe84a6208692ec7608e18f59d2a66f25dcf",
+      "tests": 8,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "98932f026e4ef4f57682f1d622ab10d7d65dc4305932a47d4b91648d5b36758f",
+      "passed": 8,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:39:37.932Z",
+      "completedAt": "2026-11-02T05:42:18.849Z",
+      "logSha256": "e326b1849b215e8fac3409e0023778e3048292f5870f81784577ad8ecbde8fdf",
+      "tests": 94,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "837a05cbe7b35a498df563aa2ffe640f54dc8c11f69012c3c11056321ec1aefc",
+      "passed": 94,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/merge-batch.test.ts",
+      "selection": "supplemental",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:42:18.876Z",
+      "completedAt": "2026-11-02T05:43:11.070Z",
+      "logSha256": "6236fbd266ec5012d19d7b41afc50e66692bc4a9fe36fc9f10e37b7d873a98f1",
+      "tests": 109,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "a2765cc492e786680c6efa44d3ba3a06e95598de2398b359b1cf4ba0f5bf6783",
+      "passed": 109,
+      "failureSites": 0
+    },
+    {
+      "file": "src/app/api/pipelines/[id]/route.lifecycle.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:43:11.095Z",
+      "completedAt": "2026-11-02T05:43:12.177Z",
+      "logSha256": "38f3f39013436acc6672ea19fb20649da4e5d457d5c8a599a43d634310828389",
+      "tests": 3,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "6b729d960f50282547bf1e0fb282303fa9638ecdbf465c6c9f12cd7133b8cb2f",
+      "passed": 3,
+      "failureSites": 0
+    },
+    {
+      "file": "src/app/api/pipelines/[id]/route.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:43:12.204Z",
+      "completedAt": "2026-11-02T05:43:12.916Z",
+      "logSha256": "6e8f7f2db82482e46c7fe23e4188d05ae5c9cbde3ace645173c4a4367d1f2e3a",
+      "tests": 18,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "6063b64e6875223b774430913846f93f7d015a8ed834dd4d7f67efef39e196a0",
+      "passed": 17,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:43:12.941Z",
+        "completedAt": "2026-11-02T05:43:13.657Z",
+        "logSha256": "b3ed30d13d87d69b6c2cf34a80e4917ee88c61f21fe732394324365154cc93f4",
+        "tests": 18,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "4fdd9752f9eb72f99a3908827673655423f0673e76546992bf722fa35c729ef3",
+        "passed": 17
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "pipeline GET record matches the same id in the collection response",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/app/api/pipelines/from-conversation/route.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:43:13.683Z",
+      "completedAt": "2026-11-02T05:43:16.079Z",
+      "logSha256": "6a0c7e4bf81c6699bbc4960c4b651286bdd0eb3f65f2f6b7d3ddc078a56e4023",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "b114c9993be73c2716cf23c80687b42500da4a327933dc022288a44a6ca0f0bd",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/app/api/pipelines/route.admission.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:43:16.106Z",
+      "completedAt": "2026-11-02T05:43:17.927Z",
+      "logSha256": "979834714982d640eef54dd08936c5bd1c9869324461f5c443e72fba50b6a8b1",
+      "tests": 6,
+      "junitFailures": 2,
+      "skipped": 0,
+      "junitSha256": "ff8a419abd72ef9f63073ebc997fad05f11b502abaa328675946607fa6f1b0a0",
+      "passed": 4,
+      "failureSites": 2,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:43:17.952Z",
+        "completedAt": "2026-11-02T05:43:19.724Z",
+        "logSha256": "8cec5e65499190fb9e3e140fdc02631484f4be3340842b13aa039970f26a0769",
+        "tests": 6,
+        "junitFailures": 2,
+        "skipped": 0,
+        "junitSha256": "921cf3c462180475bbe80caeb0b3da50daa424532de5f42d6021016d08b8944a",
+        "passed": 4
+      },
+      "matchingFailureSites": 2,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "an authenticated builder retains durable creator lineage through MCP",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "rotation revokes A's pipeline control while B, its builder and a live deputy can create work",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/app/api/tasks/[id]/proactive/route.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:43:19.754Z",
+      "completedAt": "2026-11-02T05:43:21.877Z",
+      "logSha256": "42fc1b43655279d1f52bfbbfdcfe4627af5dd22cd01f3d50ea641d958cdef341",
+      "tests": 5,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "58ed27d90caf76b0844fa92f7c186b90f06a2b057430eb6e6ac7ee1b85187240",
+      "passed": 4,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:43:21.906Z",
+        "completedAt": "2026-11-02T05:43:24.026Z",
+        "logSha256": "8216dd852d41aed5cbd1f19b8ce84597ae64e9e33f831f965756b70e1146905d",
+        "tests": 5,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "70b0800624a71fb39dda14e32b3f5599c7fbfd2a2aa140fa6f0840729366d3d9",
+        "passed": 4
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "pipeline HTTP, MCP and shared creation refuse prepared invented work before any stage or provisioning",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/components/BranchPane.spawn.dom.test.tsx",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:43:24.055Z",
+      "completedAt": "2026-11-02T05:43:25.412Z",
+      "logSha256": "5098571b5242e8d4e2ebbde8276a0da01e9b425201ad9d7fd8162a766a25b1b7",
+      "tests": 1,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "323d730fe688c621acd37ecc727955465f284451ddc8c5ddc399ad3d2524145f",
+      "passed": 0,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:43:25.439Z",
+        "completedAt": "2026-11-02T05:43:26.857Z",
+        "logSha256": "776db877598eafc4658e44bf4c1a3b87a575b1f53ed94d5f16832bcffaeff4e3",
+        "tests": 1,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "d0f16ced8c84006d5c74309f3ead039fd0db14af5e311e5dc5bbd6284027e9ac",
+        "passed": 0
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a never-started launch offers dismissal and no resume control (#1972)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/attention/landing.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:43:26.891Z",
+      "completedAt": "2026-11-02T05:43:29.197Z",
+      "logSha256": "08b7ef856844ebff554872dfd0cfc061b35684aa50f10a58946676a8d1529fc9",
+      "tests": 8,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "9eecd123bc694c1d2919b4b5382b6a50b29f35dac36051ff658c09d423725309",
+      "passed": 8,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:43:29.226Z",
+      "completedAt": "2026-11-02T05:43:33.450Z",
+      "logSha256": "5eee2b4aca6a5d98ef8e8da766dd50bdacfb135e72325bc482297385ba1b590a",
+      "tests": 67,
+      "junitFailures": 12,
+      "skipped": 0,
+      "junitSha256": "0aab9129985698b9df8d2888525f89372452cc6acc39b89e430d70d0db76df57",
+      "passed": 55,
+      "failureSites": 12,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:43:33.502Z",
+        "completedAt": "2026-11-02T05:43:37.441Z",
+        "logSha256": "059288c1faf29055cb8bfc057645b4091dfa02e0d6a276072bdba30aca4a8a14",
+        "tests": 67,
+        "junitFailures": 12,
+        "skipped": 0,
+        "junitSha256": "828a2f5ae40fb8630c93896503b75b1099842928e9110198ab41cd04e22074c8",
+        "passed": 55
+      },
+      "matchingFailureSites": 12,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "idle reconfiguration survives a transient host miss and resumes after verified termination",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a resume that cannot build a command names the failing condition (issue #935)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a resume whose recorded account this machine no longer has asks the rule instead (#1279)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "message-triggered relaunches carry the stored MCP grant on both the direct and root-relay paths",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "tmux Resume carries the stored ultrafast tier into the command",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "tmux message reopen resolves ultrafast with resumeFast=undefined",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "tmux message reopen resolves ultrafast with resumeFast=true",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "tmux message reopen resolves ultrafast with resumeFast=false",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "tmux reconfigure effort only keeps ultrafast",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "tmux reconfigure to Standard clears the durable tier and attach",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "tmux branch relay carries the root's ultrafast tier into its reopen command",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a legacy send to an unregistered transcript path reserves the same way, and an unknown pid is refused before anything is reserved or typed",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/flows/retirement.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:43:37.479Z",
+      "completedAt": "2026-11-02T05:43:40.813Z",
+      "logSha256": "178ff88c2b0b66b4bd3c2702e40b638c2419b238495cc09bb0faaf8dc7b4ba7c",
+      "tests": 16,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "edc49dcefca812402e511116f35af898072f7364b6ad0f7ef270a1bd529b82ef",
+      "passed": 15,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:43:40.842Z",
+        "completedAt": "2026-11-02T05:43:44.077Z",
+        "logSha256": "e161a90ef5ed916af93017dfd7a0a9c8896be813b620937365b88fb5a8e4d444",
+        "tests": 16,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "d6c4e169a92e396be3852bde9b6d0658e51c20bb265ea59de29b01c9152ff7d2",
+        "passed": 15
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "pipeline create, draft/add-stage/copy paths and legacy start/resume refuse STAGE_KIND_RETIRED before effects; decoder and preview survive",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/forge/autoMergeStore.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:43:44.112Z",
+      "completedAt": "2026-11-02T05:44:16.869Z",
+      "logSha256": "442f6f452b79923a3504c47bab8476e804c785ec40a00278292da6d4055681eb",
+      "tests": 139,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "820cf04afa59a76ac0ff78ebaa5fe588e725e011fdffa3e891298492a7d09a0c",
+      "passed": 139,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/forge/autoRefresh.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:44:16.895Z",
+      "completedAt": "2026-11-02T05:44:33.191Z",
+      "logSha256": "654137c7b91a759c9a34c26a1a011a5df176f74dc980a15f22ff682842aee967",
+      "tests": 203,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "045f81109c6f0cbd557dd9cbee7481c0a90a081b250391852600618c2ec1a1ef",
+      "passed": 203,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/git/agentHistoryGuard.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:44:33.218Z",
+      "completedAt": "2026-11-02T05:45:08.398Z",
+      "logSha256": "d8dd73cf802c639375926d61ac71646ba8a4d20e809c86fa3d72168bbd667898",
+      "tests": 153,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "7410d3917d03c8609d8b99d20a6b0e4b140e151e5a904d3f13afe724f288ad88",
+      "passed": 153,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/git/agentPublicationIdentity.test.ts",
+      "selection": "supplemental",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:45:08.423Z",
+      "completedAt": "2026-11-02T05:45:09.068Z",
+      "logSha256": "8c2789308131763e40aa94280910831239579f64b863bec5b1f4a21aa7021ebf",
+      "tests": 7,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "2f5ecf914124f6b120d97558f45f2464296e6c07d319e3ef220a4e0d736b7388",
+      "passed": 7,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/lifecycle/projector.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:09.093Z",
+      "completedAt": "2026-11-02T05:45:10.054Z",
+      "logSha256": "e770ad384b40e3c43a283ba26a1025f90f786dc456a414b96be43baa5e6ffd95",
+      "tests": 8,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "abab0137ada2505f6ea710ee1122d8776b3dcffdb1b8b96199639b9803163ba1",
+      "passed": 7,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:45:10.079Z",
+        "completedAt": "2026-11-02T05:45:11.022Z",
+        "logSha256": "4a916732efa202281f0e31b41535af2dda2d29e9d33ca2115fd2416ef94782c1",
+        "tests": 8,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "be191886f85dca969be1785357204979bfa1acb3c4544f1cb8ab67e634e6cb53",
+        "passed": 7
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "pausing and resuming a pipeline through the real action emits stage_paused and stage_resumed (#686)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/mainThreadInstrumentation.test.ts",
+      "selection": "supplemental",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:11.046Z",
+      "completedAt": "2026-11-02T05:45:13.014Z",
+      "logSha256": "ff0fa7aa2d84a6a5aaf86031bdd7a664c5e021cf528e97da38fb2198be480298",
+      "tests": 25,
+      "junitFailures": 7,
+      "skipped": 0,
+      "junitSha256": "f54f38730433a7ebceead1dde3f72bf601f95bbe20233633d0f24ce46d3adf97",
+      "passed": 18,
+      "failureSites": 7,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:45:13.039Z",
+        "completedAt": "2026-11-02T05:45:15.053Z",
+        "logSha256": "5981e70fe9c40091613676a864a5d3b27bce06eef9b41fcf7e4dcb3277fbf2e8",
+        "tests": 25,
+        "junitFailures": 7,
+        "skipped": 0,
+        "junitSha256": "04d47f4c45fe3c69ed34b4757fd21ff27ea0a86bcb2762bd093e911c8041f506",
+        "passed": 18
+      },
+      "matchingFailureSites": 7,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "orchestrator/seat read labels survive success and failure",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "src/lib/forge/autoMerge.ts sweepAutoMerge labels fixture reads and thrown reads",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "release retention labels its injected process scan (failed=%s)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "release retention labels its injected process scan (failed=%s)",
+          "kind": "test",
+          "occurrence": 1
+        },
+        {
+          "suite": "",
+          "name": "release byte counting records synchronous success and failure (failed=%s)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "release byte counting records synchronous success and failure (failed=%s)",
+          "kind": "test",
+          "occurrence": 1
+        },
+        {
+          "suite": "",
+          "name": "every revalidation timer labels its synchronous row read and refusal",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/mcp/inputLimits.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:45:15.077Z",
+      "completedAt": "2026-11-02T05:45:16.929Z",
+      "logSha256": "efbc248243df833aa0479c885d598b90693afb43777badceea3cc8fe0cea9232",
+      "tests": 16,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "559fe1843f819a521fdaf330f602f52558f15c1b893537558a7b7b306acec4cb",
+      "passed": 16,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/mcp/overrideStageEngineTier.integration.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:45:16.957Z",
+      "completedAt": "2026-11-02T05:45:18.328Z",
+      "logSha256": "59d70dac4e8d72c0b4c616b5e91ef99c16c291cc4b89c6e0ba4472abf88ddf35",
+      "tests": 4,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "54b99201f75bae7cb52a7b219865e1a9deceee9064432bbec167e34b79b6391b",
+      "passed": 4,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/mcp/pipelineBusyAdmission.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:18.354Z",
+      "completedAt": "2026-11-02T05:45:20.109Z",
+      "logSha256": "6ec56d22ab4cbfd36531c81b3e43bbf936c615391dee9cf23a204bbf423edc04",
+      "tests": 10,
+      "junitFailures": 9,
+      "skipped": 0,
+      "junitSha256": "6db30d1478dd42396291cbf2ca143ffea04840a0857b38841d46003b853151a3",
+      "passed": 1,
+      "failureSites": 9,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:45:20.133Z",
+        "completedAt": "2026-11-02T05:45:21.896Z",
+        "logSha256": "4623a03454ac5848e148971cf6e8922fd9863636ae184ca4dfd9c0412a212004",
+        "tests": 10,
+        "junitFailures": 9,
+        "skipped": 0,
+        "junitSha256": "fa80d30d66c99865ceadddd500f031067452b50158768b5193a9d7e431a8e6f4",
+        "passed": 1
+      },
+      "matchingFailureSites": 9,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "original-key recovery reconstructs a creation committed before its MCP receipt settled",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "two creates racing on the registry lock both succeed under their own ids",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a create that meets a held lease is queued under its id and stored exactly once (#1766, #1835)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a queued create the controller refuses when it stores it answers that refusal to the caller's read of its id (#1835)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a completed create still replays its receipt under the same id",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "the bounded wait for the lock cannot hang a request",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a pipeline_action refused on the lock keeps its id too",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a link-task refused on the task lock keeps its id too",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a create during a deploy's write fence is queued and stored by the release that can write (#1835)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/mcp/pipelineCreatorSource.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:45:21.920Z",
+      "completedAt": "2026-11-02T05:45:27.519Z",
+      "logSha256": "8a3b79268640cb8a2e0b4b751bac74d3db0b896fdbf0ae9c77aad27973916135",
+      "tests": 18,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "e592f63b5e8509c10f0b7ba06d56da601af4f66cb1e053b4ba267d4089b5b710",
+      "passed": 18,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/mcp/pipelineRoleFence.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:27.545Z",
+      "completedAt": "2026-11-02T05:45:28.700Z",
+      "logSha256": "40d05305f5940b889bfb29eb833f3252f37a91d2358729ed29f9ecec9f16cba7",
+      "tests": 6,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "ad630a291ee60ddfd69483523b5c83964b94b3d16fcebeffa2df59785cc5b046",
+      "passed": 5,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:45:28.724Z",
+        "completedAt": "2026-11-02T05:45:29.905Z",
+        "logSha256": "8122cc68b55ed749e8a67a1361f998a56ba9ab79d0570bd31d7607856d983197",
+        "tests": 6,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "44ef18ad2eb8d7a71f717b554e4ca1e9fb8c647df5754944beff51bb61ce7b5e",
+        "passed": 5
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "the reporter policy refuses every other mutation before downstream dispatch, including receipt replay",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/mcp/retryStageLaunch.integration.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:29.934Z",
+      "completedAt": "2026-11-02T05:45:31.210Z",
+      "logSha256": "1831faa6480dbac8f3ac76f9084e88217cc7b31e0a1d43301669a262cc2c2529",
+      "tests": 6,
+      "junitFailures": 4,
+      "skipped": 0,
+      "junitSha256": "c9ac7641991c56acea049e926c39074f6b2a0b5016a3b862396a8f86d84dfd8e",
+      "passed": 2,
+      "failureSites": 4,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:45:31.235Z",
+        "completedAt": "2026-11-02T05:45:32.547Z",
+        "logSha256": "7bbfd9dc0f61bc9c2050d903d5cd7d028a7b004eb8e65fd99c66b07a7820b16c",
+        "tests": 6,
+        "junitFailures": 4,
+        "skipped": 0,
+        "junitSha256": "ea061e6e73912322ac82618b22a7d5cab7a7d8ea3f49d6ed683f06a9e95dc266",
+        "passed": 2
+      },
+      "matchingFailureSites": 4,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "retry-stage by stage retries a stage whose agent started and ended on a fail verdict",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "retry-stage by stage still retries a launch that failed, with or without its launchId",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "retry-stage naming the completed launch of a stage whose host was lost retries it (#1871)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "retry-stage by stage is refused with STAGE_CHANGED when the lane waits on another stage or attempt",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/memory/roleLane.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:32.572Z",
+      "completedAt": "2026-11-02T05:45:35.189Z",
+      "logSha256": "0dc894d929f517f5c1add9d1249fc6c26696be470977e390d60c7044a3c8eff7",
+      "tests": 3,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "abce0cba2202f203a9d3334e2c654ebe1799efa150d0f50ddd0d3269debba615",
+      "passed": 2,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:45:35.230Z",
+        "completedAt": "2026-11-02T05:45:37.839Z",
+        "logSha256": "6c97feb09b9334e85db469d64ed577d128c340a5f2cf7437a54f5690ed27fe1c",
+        "tests": 3,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "0bf86c33bbe8b0708738b09830112ff9af4e734933c8c229c555bb7e1ff2c726",
+        "passed": 2
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "<hook error> owned test children survived teardown: 1078712, 1078712; guardian=kernel",
+          "kind": "error"
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/memory/roleLaunch.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:37.866Z",
+      "completedAt": "2026-11-02T05:45:43.892Z",
+      "logSha256": "9901da217ba64a0db97127f6ec3a9b0a74fb4eed085460be8057b90168bfde0c",
+      "tests": 4,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "e1af432762a5bca2816a94bbb73711869329346f80ae7a87b0f451f82fdb552c",
+      "passed": 3,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:45:43.925Z",
+        "completedAt": "2026-11-02T05:45:49.726Z",
+        "logSha256": "3d3d44e519aa5a317b4c1685807ce366b22ae1bd0a9f49ba99e3f72c136a870d",
+        "tests": 4,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "690f394c46afb5129d8908ae1ffec3b8ae684daca5cfa68f27fcd8ec3d006070",
+        "passed": 3
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "<hook error> owned test children survived teardown: 1079153, 1079153; guardian=kernel",
+          "kind": "error"
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/orchestrator/seatProjectIdentity.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:45:49.755Z",
+      "completedAt": "2026-11-02T05:45:52.129Z",
+      "logSha256": "64ffff3a54264768819ad275f50a0f3cc036691cbed10b6dda5bb38e8cca99c0",
+      "tests": 13,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "efea19e383c344d1ec2870ce370b695459dc93fd3ce97ea3c4c9508e83f12682",
+      "passed": 13,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/adoptionHistory.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:45:52.158Z",
+      "completedAt": "2026-11-02T05:45:53.523Z",
+      "logSha256": "deb359b6f04d945dae9db35e61a66e0053a13864357e88f04936e7b257fabb7a",
+      "tests": 1,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "d87a45acaa3a5384161fb559bf5334f30ee3977fc7fe75995e7acce6a7fcc76c",
+      "passed": 1,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/autoRefreshStore.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:45:53.556Z",
+      "completedAt": "2026-11-02T05:45:54.880Z",
+      "logSha256": "9524e13d0fa415529e7b496e48f1ac3381967052777337b418ed6d434d55fee8",
+      "tests": 9,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "123d975d9cfe926f1ac53c9a7ba582ddb9f1d70ee88caf1e95bec0651f22e367",
+      "passed": 9,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:45:54.906Z",
+      "completedAt": "2026-11-02T05:46:03.251Z",
+      "logSha256": "0066e2eb9d096884ad8e769352e3421b2fd28c1c37d41ca44ebd8c7a82830bdf",
+      "tests": 15,
+      "junitFailures": 6,
+      "skipped": 0,
+      "junitSha256": "34d17f5687ec68c14022a68fc37fd557f8d6d0916d4ca90d04ac979b4faa86f4",
+      "passed": 9,
+      "failureSites": 6,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:46:03.278Z",
+        "completedAt": "2026-11-02T05:46:11.287Z",
+        "logSha256": "74be4e848035c61587a99415799a36719068ad2b75b1fa7f3e368beac8067d9c",
+        "tests": 15,
+        "junitFailures": 6,
+        "skipped": 0,
+        "junitSha256": "74d4b456e432aa68d7a7beb9bb8e3b085b32d7b48108b8d79625e608e59cc36d",
+        "passed": 9
+      },
+      "matchingFailureSites": 6,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a turn that ends on a fenced fail while its background task runs stays open, and the verdict after the notification settles it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "one orphan notification after a restart ends every task it lists, and the stage reports and settles",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a monitor holds the stage through its event notices and releases it on its terminal one",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "stage_report refuses a verdict while a background task runs, records nothing, and accepts it once the task reports",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a review flow whose implementer holds a background command that never reports shows the wait, then parks naming it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a review flow reads the implementer's READY marker on the turn after its background command reports",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/controllerArtifacts.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:46:11.315Z",
+      "completedAt": "2026-11-02T05:46:16.878Z",
+      "logSha256": "a759ae172799a9adc6263bb096785cb567e9e1fffcc0566d20d68d7aafe8dcb0",
+      "tests": 102,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "f51dedd00363269fca8635686417614e595ea65fc9a3f0a94fe0955ddfea04fe",
+      "passed": 102,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/controllerLease.reproduction.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:46:16.902Z",
+      "completedAt": "2026-11-02T05:46:17.795Z",
+      "logSha256": "9d58961248cbce11497d72c0a24f6f10a9cc9ae12c20d8870396b83cdbc21cdb",
+      "tests": 1,
+      "junitFailures": 0,
+      "skipped": 1,
+      "junitSha256": "74aa6949dbda8c3a1b87c054da6f2cec5d5974e95bd748a6b84d6ac1b34fce12",
+      "passed": 0,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/decisionAuthority.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:46:17.821Z",
+      "completedAt": "2026-11-02T05:46:20.970Z",
+      "logSha256": "74a851f9fdaa1394cb462bcd9112135116165865552507e8732e6a62b69efdd0",
+      "tests": 45,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "15039dd2684a30cbfc10140dd39eb6548e2f34e20edaa27123d449c58a01546a",
+      "passed": 45,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/deputyLineage.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:46:20.996Z",
+      "completedAt": "2026-11-02T05:46:21.928Z",
+      "logSha256": "4a9cbc0a7779ad9133827afd319230f452f760adb0959eed1736c14dd874af92",
+      "tests": 3,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "b9313ed129633f42820ea78cf7478bbdc6286c273762434fbd3b716c6573e7db",
+      "passed": 3,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.cloud.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:46:21.954Z",
+      "completedAt": "2026-11-02T05:48:24.456Z",
+      "logSha256": "292bacef5989a6e2d7a50ef822d802953ee4b31e18447c31e132847a55eda5e0",
+      "tests": 110,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "7010678c52a46bfc77cd9a90a8ae77550f69430ef22e72d1991f0ed98ddc825d",
+      "passed": 110,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:48:24.482Z",
+      "completedAt": "2026-11-02T05:49:14.252Z",
+      "logSha256": "518aae2061cf652e23346cdac95d9ed63560d6a4e3b41b68415067a9b765329c",
+      "tests": 74,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "da70742036499899aeb381684d145f43793fdd8cb76635d05ec52dc6fb4149ca",
+      "passed": 74,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:49:14.281Z",
+      "completedAt": "2026-11-02T05:50:22.147Z",
+      "logSha256": "790c62dcfdd408bc3d1e47a8511961be6df661c6187b88d08407c99d4e4d32d8",
+      "tests": 20,
+      "junitFailures": 0,
+      "skipped": 5,
+      "junitSha256": "3a0eb02ff11678aae77819012e86d4fe5f78cb26847099e5486243f1a38b63ba",
+      "passed": 15,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.cpuQueue.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:50:22.173Z",
+      "completedAt": "2026-11-02T05:50:24.275Z",
+      "logSha256": "2b7b4cb2b50808d3795ec5cd494f9517779a1670fda3904a45b97324da9b73df",
+      "tests": 2,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "4414360c1c0390ecfd98eee6d06ef21c6d5125a52640b880814b04160109454f",
+      "passed": 2,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:50:24.300Z",
+      "completedAt": "2026-11-02T05:50:46.952Z",
+      "logSha256": "58dcb73c5b63dc71d54cb3ca9d9a60f382060943076ee0df1bbc2a736180be91",
+      "tests": 101,
+      "junitFailures": 0,
+      "skipped": 3,
+      "junitSha256": "b1d27fe0a92c61d7f13c49222b28a2bc9d72f0756dc364d2f1d4eb6f467a07b1",
+      "passed": 98,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.fencedMessage.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:50:46.979Z",
+      "completedAt": "2026-11-02T05:51:01.833Z",
+      "logSha256": "29124f21b057aa49e8fdf915a9e43ef25863eda5c881e1245875a9eb7ff48f4e",
+      "tests": 24,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "d9ce9d269b1fbd4c4fc39837a706fa6d51de82f2010edf934b44c38ba27e8a15",
+      "passed": 24,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:51:01.863Z",
+      "completedAt": "2026-11-02T05:51:33.928Z",
+      "logSha256": "cb809d993f990c845bad33fd8e885e41d84aa7bc47ee78234a37ed392ddc25ef",
+      "tests": 55,
+      "junitFailures": 0,
+      "skipped": 4,
+      "junitSha256": "11566ad190e41d7cfd2a2695d481c046207317b9050794f5e629d3e984cadbfc",
+      "passed": 51,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:51:33.956Z",
+      "completedAt": "2026-11-02T05:52:14.289Z",
+      "logSha256": "231a2e04cee6d825957bb8879c228269cdeec61c04ff7f31bf3c8fcae3908abc",
+      "tests": 81,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "e2faa531144acc700bc10e28e202b45b06909ec73abd7a669d2e63eb5258be7a",
+      "passed": 81,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.provisioning.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:52:14.317Z",
+      "completedAt": "2026-11-02T05:52:36.235Z",
+      "logSha256": "ac7269484479fa6825e94b0f84ae3878555b50f17c1c845d1a10382cddffae1d",
+      "tests": 87,
+      "junitFailures": 0,
+      "skipped": 17,
+      "junitSha256": "8304a763985de0a10a7570a08392f38f180b98ce364f3f484269ed61d2fc6d80",
+      "passed": 70,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveredPending.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:52:36.261Z",
+      "completedAt": "2026-11-02T05:52:41.628Z",
+      "logSha256": "f0f9d05d2a52f7f8e6040fefb62aba407d076fa0fdd82b2f72fd364d54a5527b",
+      "tests": 21,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "15844f46e566b710c29d0a3842e3732815bc2dbdcce70e65337aa59cefbdf9a7",
+      "passed": 21,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.recovery.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:52:41.655Z",
+      "completedAt": "2026-11-02T05:53:10.860Z",
+      "logSha256": "f7c5e51abcb57f938b2769e803ce2ca867247a33c77df7b942d2da842e8b1940",
+      "tests": 85,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "5d6d2485be7af00818eff99f0962cce3e61e1be8a5b5ae71c5c4cfbf198570fe",
+      "passed": 85,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.recovery.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:53:10.890Z",
+      "completedAt": "2026-11-02T05:53:39.104Z",
+      "logSha256": "1f1e28dd4cab019d44b06ad02b1a5223d1df4af63b33fe1762d4eb5acca9090b",
+      "tests": 84,
+      "junitFailures": 0,
+      "skipped": 17,
+      "junitSha256": "4e5869bd5ad5a48494a5b881d57b87193ccdb86af07f1aebf8fdea20ae58b8c8",
+      "passed": 67,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.restoreContinuation.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:53:39.132Z",
+      "completedAt": "2026-11-02T05:54:07.215Z",
+      "logSha256": "9c7f2a2ffd1023942e5fd740f40a1a255334776d3041f60475b06c8cf3beb72e",
+      "tests": 78,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "578e1f51fb71bb3f7584820c0d1ae4f3acc7cfcf6e89184e5b49e6f0a71ca449",
+      "passed": 78,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:54:07.241Z",
+      "completedAt": "2026-11-02T05:54:29.877Z",
+      "logSha256": "75b7a4ac84f9be502e4ca3db053c3d1cf8c29b9fb86d58aa42dad382bbe34874",
+      "tests": 21,
+      "junitFailures": 0,
+      "skipped": 1,
+      "junitSha256": "8e62b59e0c0af763e319f1b535eec1a3e3b83b23ecd13fdde032350fadc6e628",
+      "passed": 20,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.routing.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:54:29.902Z",
+      "completedAt": "2026-11-02T05:55:09.919Z",
+      "logSha256": "4b38074a2b96b0165e546feca9ad7cdb92d186a6698b4f3b350c9b1d197602d1",
+      "tests": 129,
+      "junitFailures": 2,
+      "skipped": 24,
+      "junitSha256": "1a046be224eee608d481e8069cbfba4b915094338a6b09202d3b53c3e9253368",
+      "passed": 103,
+      "failureSites": 2,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:55:09.944Z",
+        "completedAt": "2026-11-02T05:55:54.037Z",
+        "logSha256": "9aa644536ddfab5d5185173e3e087401a12b89281c09bf753076621f0162eb4f",
+        "tests": 129,
+        "junitFailures": 2,
+        "skipped": 24,
+        "junitSha256": "734f032b6f98e72035afdb7ea843ccb0f039e148f513c8694a6f58d66b54b2ea",
+        "passed": 103
+      },
+      "matchingFailureSites": 2,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a descendant that outlives the runtime's release is still signalled, and the attempt is replaced",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/engine.settlement.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:55:54.066Z",
+      "completedAt": "2026-11-02T05:56:45.802Z",
+      "logSha256": "f5b57d0a89b962c6721b399c03e47ec008fd84474a7fe99fe149950924df09b0",
+      "tests": 114,
+      "junitFailures": 0,
+      "skipped": 10,
+      "junitSha256": "6cea056a4d54b31afde511a781a08039147ccbba06a5235a4e514da72dbe1404",
+      "passed": 104,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.settlementAuthority.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:56:45.834Z",
+      "completedAt": "2026-11-02T05:56:47.734Z",
+      "logSha256": "c4a2547db58e05ad9a44f7f864432b1a5c46ab0a45bb21373a441845c61a27b4",
+      "tests": 1,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "6653268450d5030a655ca4bc5bca2d1ea55ada6a6e6a8992bce043dd1c28b4be",
+      "passed": 1,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.settlementPreparation.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:56:47.760Z",
+      "completedAt": "2026-11-02T05:57:07.364Z",
+      "logSha256": "9d5f032e53ee8c08b6d138e0e15f3c16370e35c2f75b15029e5eeb5365de2d9a",
+      "tests": 29,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "d233ec4b0e15601fc1f9d27cbbf988be00b2a3d0d03d07bdd1121bdb597e6720",
+      "passed": 29,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.spawnRetry.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:57:07.391Z",
+      "completedAt": "2026-11-02T05:57:31.769Z",
+      "logSha256": "c314930b10128b36bd51a72527252eed81e2395d95054ffaf15f315c99059c46",
+      "tests": 72,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "2101720d799f37671393fc222fab81c6d5c3389f9a0a0f573afdd6ed34d59af7",
+      "passed": 72,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.succession.part3.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:57:31.795Z",
+      "completedAt": "2026-11-02T05:58:25.044Z",
+      "logSha256": "a75db9a05222da0ffe17de79400e7aaf3d103b242839a8cc1cd1723256b08405",
+      "tests": 105,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "73df03af17f12265d0e748a8dced5c025e6215ef7aa06e0fc1ec4b74491fb3d5",
+      "passed": 105,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.suspendedRetry.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:58:25.074Z",
+      "completedAt": "2026-11-02T05:58:38.244Z",
+      "logSha256": "00555607d29ffe985c989d66a3984e2434ec76b3b3323d10c43b9de16c824860",
+      "tests": 21,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "0c689d94ace5618ada5bcb27ab61bdcd00b22a444044371477288a09741e4386",
+      "passed": 21,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.terminalBudget.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:58:38.275Z",
+      "completedAt": "2026-11-02T05:58:59.946Z",
+      "logSha256": "a622d0b5bbe3e6eeaf7024a11caba45d267668a32e7a4290dd6f275dae705949",
+      "tests": 11,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "d93c512361ed3f5464c879473e6f07ef9e755704c269f4b3ac0e197e4c08db5a",
+      "passed": 11,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:58:59.974Z",
+      "completedAt": "2026-11-02T05:59:03.778Z",
+      "logSha256": "ded19947550958e7cbc9da77a9f390987c106600c3ee36b8e73459999c27247e",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "f4512d0e77ad138870b6e9a8189ec67ccfb2cf24d77326d635eeceb97a20b668",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engineConnectionRefusal.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:59:03.809Z",
+      "completedAt": "2026-11-02T05:59:04.829Z",
+      "logSha256": "686a6198e506961a57355adb613cd784d6ef5370396ee9712a62076e99af635f",
+      "tests": 4,
+      "junitFailures": 4,
+      "skipped": 0,
+      "junitSha256": "6f572cf94c8d0dea6ebbc101e3e9d01805395d114803bbb46c731efcd7c1d14e",
+      "passed": 0,
+      "failureSites": 4,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T05:59:04.855Z",
+        "completedAt": "2026-11-02T05:59:05.890Z",
+        "logSha256": "2ff04a5e4b8687e48cd3d4c99eb2e8d3f36810f8b82356ad30019625949bca1d",
+        "tests": 4,
+        "junitFailures": 4,
+        "skipped": 0,
+        "junitSha256": "d4928b3a850d50111e90d6568eb425715cc90016e0a488f774378526b2cd8599",
+        "passed": 0
+      },
+      "matchingFailureSites": 4,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "starting a pipeline whose reviewer runs on a disconnected engine is refused before anything spawns",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "after the reviewer moves to Claude, the same plan starts on Claude Opus",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a stage with an explicit engine is never refused for another engine's sign-in",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a signed-in engine whose command is missing is refused just the same, and says so",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:59:05.917Z",
+      "completedAt": "2026-11-02T05:59:47.285Z",
+      "logSha256": "e2b59a6dce83634035f5c3c3ae15686528420d5ca4a95e68490c346d15590fbc",
+      "tests": 206,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "aa4aa23436f499e4162c5936fe05109f4e0cd5aed969a385c4c400a864ca3337",
+      "passed": 206,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/graphEdits.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:59:47.313Z",
+      "completedAt": "2026-11-02T05:59:54.662Z",
+      "logSha256": "8a110ea3c78c1970a76eb908fc0c9f814d5975ab237d349b967303e2e1e2e6af",
+      "tests": 23,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "ae3c633c2556b477bc70872a8e0786befd40c682fa65db581d7462e9b28a6e7d",
+      "passed": 23,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/handLaunch.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:59:54.688Z",
+      "completedAt": "2026-11-02T05:59:57.449Z",
+      "logSha256": "3b04c8aa3d11936a09c393b92ced41484648d6c5534bcaee4b26f83f2d0d38b9",
+      "tests": 4,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "68f7d288a7c20c3039427ef5d89c7593af1a7ba301534175737cc2734fd72186",
+      "passed": 4,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/legacyReviewConversion.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:59:57.477Z",
+      "completedAt": "2026-11-02T06:00:04.246Z",
+      "logSha256": "768ddcb0258d49de0191e0eaacdb6942197eb75a4a6686277e5045a648b1a5da",
+      "tests": 16,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "98be16fd888c4786597f7fca6cce70fa6c897ae67b90e3c35b1bbb383092e82c",
+      "passed": 16,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/materializationHistory.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:00:04.273Z",
+      "completedAt": "2026-11-02T06:00:05.800Z",
+      "logSha256": "1090cfaaae0212ff7b09fbc367cc9a3d24a8eff63fb2216ad787e5edef5549e6",
+      "tests": 1,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "2b7acc93b0e5ba87a1913e1fee27a71288a624c0a593491cf3d641c948be43c3",
+      "passed": 1,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/parkedPublication.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:00:05.826Z",
+      "completedAt": "2026-11-02T06:01:33.108Z",
+      "logSha256": "1c67223f52668abd77de02ebaee8439e2cb4b6d316cf4d8ed1b56226125fad59",
+      "tests": 1,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "7130f3bdf8949ca4f6d6c0919d4521d792e54ef98d3655f09051febd99463654",
+      "passed": 1,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/prompts.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:01:33.145Z",
+      "completedAt": "2026-11-02T06:01:33.846Z",
+      "logSha256": "81a5ab6c32507f4b2223b512f217143be3e011b3203ef5981552ec56aa7a764e",
+      "tests": 16,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "fb1504b506d16b99def32b92def2b1ad837a45177ca00773f0a1e54b51cd5207",
+      "passed": 16,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/providerRecovery.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:01:33.877Z",
+      "completedAt": "2026-11-02T06:02:02.571Z",
+      "logSha256": "81627cf4e92466dd399d7d1ce17ac0ae63ae077bb6ea2c01b7584b9370bf65af",
+      "tests": 36,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "671c20b79b34fa1f1ebead2a626429c6eb223f95ffe04f3eaf36f3ec6f3502b5",
+      "passed": 36,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/publicationRecovery.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:02:02.601Z",
+      "completedAt": "2026-11-02T06:03:46.317Z",
+      "logSha256": "3d946abee0490f136c958ebf64e7e071ef6f6a22598916343b21a07b2f6b7c5b",
+      "tests": 121,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "4e06a07c37c796331d5dacf7e96bfa6ed4668cb4495b76f760107986a1dcb30d",
+      "passed": 121,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/publicationRepairHandoff.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:03:46.348Z",
+      "completedAt": "2026-11-02T06:04:47.393Z",
+      "logSha256": "797804a77864bcafe6042b51109b5cc4852a83997f31fbfc6502a85b58d1a280",
+      "tests": 51,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "0d0c4c42b13577793a3404718635a10fde06bcbbe205eb53cdef79383e2334aa",
+      "passed": 51,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:04:47.419Z",
+      "completedAt": "2026-11-02T06:09:51.774Z",
+      "logSha256": "ce55bc249050f075760387437363a8dd56313481605624696d33906edab7f490",
+      "tests": 43,
+      "junitFailures": 42,
+      "skipped": 0,
+      "junitSha256": "699dd93a5b7f617d4fe5f31581c00fcfeacd5e5e2723333adb6abf0b15b8c765",
+      "passed": 1,
+      "failureSites": 42,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:09:51.810Z",
+        "completedAt": "2026-11-02T06:14:58.054Z",
+        "logSha256": "944a54b2bb3b91a3b6b44dff0657abba1e63cf4bcf1393de4d50bc5e10c0b0e4",
+        "tests": 43,
+        "junitFailures": 42,
+        "skipped": 0,
+        "junitSha256": "3d5932bfcadccf5883eb865aaf97144c65b0cce4df8b4464d517c154b034b137",
+        "passed": 1
+      },
+      "matchingFailureSites": 42,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "skip-stage durably acknowledges before its fenced Git check (success)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "skip-stage durably acknowledges before its fenced Git check (failure)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "skip-stage durably acknowledges before its fenced Git check (pause)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "skip-stage durably acknowledges before its fenced Git check (owner)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a deferred skip preserves output ownership when paused before-write",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a deferred skip preserves output ownership when paused after-write",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "compact MCP polling exposes a deferred publication failure while preserving operator detail",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "launch artifact work yields the pipeline lease to a newer pause",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "repair-before-write artifact work yields the pipeline lease to a newer pause",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "repair-after-write artifact work yields the pipeline lease to a newer pause",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a controller output commit survives pause before durable adoption",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a controller output commit survives lost-reply before durable adoption",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an accepted publication settles a unsupported locking refusal in the controller and journal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an accepted publication settles a unopenable locking refusal in the controller and journal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a blocked artifact parent produces a visible action refusal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a blocked artifact parent produces a visible stage refusal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a blocked artifact parent produces a visible repair refusal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an old publication lock refusal preserves a newer reservation and lane detail",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a queued publication is superseded by pause even after same-clock resume (%s)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a queued publication is superseded by pause even after same-clock resume (%s)",
+          "kind": "test",
+          "occurrence": 1
+        },
+        {
+          "suite": "",
+          "name": "a same-clock pause and resume during one remote probe supersedes its retry",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "review retry records pending intent before flow teardown and yields its lease",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a cancelled takeover preserves a newer pause and its detail",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "takeover settlement survives restart after the ownership transaction (paused afterward: %s)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "takeover settlement survives restart after the ownership transaction (paused afterward: %s)",
+          "kind": "test",
+          "occurrence": 1
+        },
+        {
+          "suite": "",
+          "name": "explicit publication retries a settled probe failure and preserves pending admission",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "explicit publication retries a settled push failure and preserves pending admission",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "legacy publication records acceptance before observing its missing delivery claim",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a passed-stage retry acknowledges before checking its accepted local head",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a routine mutation acknowledges an existing queued publication without executing Git",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "unsupported inherited locks settle visibly before any Git command",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "superseded stage Git leaves the current task note untouched",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "review flow identity Git yields to a pause before the controller lease",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "local committing stages progress with Git available and no flock utility",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a remote review retry records pending work before remote Git answers",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "durable retry intent settles after a fresh controller loads it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a paused lane cancels a remote check and preserves the pause",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "another pending action is refused before it can replace an admitted retry",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "remote failure settles visibly without launching a review",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a receipt that settles during remote verification cancels its retry",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "controller review Git does not hold the MCP mutation lease",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "controller build Git does not hold the MCP mutation lease",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:14:58.109Z",
+      "completedAt": "2026-11-02T06:15:08.845Z",
+      "logSha256": "43fffbd49711ab7a1ed0ef468602dfdf0533f8b53422fe90ff5dd6c0272db575",
+      "tests": 40,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "4d72d3761c8cd735363a09bd951201af10c7bf14489ae190b0027cb2a696179f",
+      "passed": 40,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/resolveDecision.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:15:08.888Z",
+      "completedAt": "2026-11-02T06:15:30.804Z",
+      "logSha256": "1335d5e25ee8d659aa55aa62df15e920630763e45d3e80982ebe25df961e7d2a",
+      "tests": 17,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "85b49195c30d8f5824d35b69007ae9ee450fc6543e89001abdad222248331bc2",
+      "passed": 17,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/runtimeReads.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:15:30.865Z",
+      "completedAt": "2026-11-02T06:15:32.941Z",
+      "logSha256": "12e398f2b0ca988042eb1344e44d594c99474b4588d12b7b1cb0fc79578ce2d1",
+      "tests": 4,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "84e6974958971d37826c26dd3b22766947e2e5a27d2b027b41b9d165fb92fb20",
+      "passed": 4,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/runtimeSwitch.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:15:32.994Z",
+      "completedAt": "2026-11-02T06:18:20.067Z",
+      "logSha256": "289fc2e9a9e39011c265945899cb9c97c3f45d12419202a5b2ef37d45f7227ac",
+      "tests": 171,
+      "junitFailures": 4,
+      "skipped": 0,
+      "junitSha256": "76206289ab7416a365c24b371a154690879196937153aed4b070b5382fe3ed3f",
+      "passed": 167,
+      "failureSites": 4,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:18:20.122Z",
+        "completedAt": "2026-11-02T06:20:36.335Z",
+        "logSha256": "6c89e0c9c6157ffb4056ac2995e511b2325c059ddf2637de3c264f7da023de30",
+        "tests": 171,
+        "junitFailures": 4,
+        "skipped": 0,
+        "junitSha256": "f0bfc9a0bcd7ae2651335088b2e6a0f246b1707e8935ed7c853132a38e5e05b6",
+        "passed": 167
+      },
+      "matchingFailureSites": 4,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "account-only applyNow through engine and reconfigure: codex target-root-0775",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "account-only applyNow through engine and reconfigure: codex target-root-changed",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "account-only applyNow through engine and reconfigure: claude target-root-0775",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "account-only applyNow through engine and reconfigure: claude target-root-changed",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/severedStageRetry.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:20:36.385Z",
+      "completedAt": "2026-11-02T06:21:09.484Z",
+      "logSha256": "6116b4564e89d80394143b7ec64c558937e23a25c8e13c11785210fb37e8e439",
+      "tests": 23,
+      "junitFailures": 2,
+      "skipped": 0,
+      "junitSha256": "ad6a915b1ef1b2d9c89131ec8070695b872ed1764ccf9e477684d4b29efca04a",
+      "passed": 21,
+      "failureSites": 2,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:21:09.539Z",
+        "completedAt": "2026-11-02T06:21:43.895Z",
+        "logSha256": "b390a3b4052f2f01f31edbe37e6031287414e234659b18395f656c54c50c4076",
+        "tests": 23,
+        "junitFailures": 2,
+        "skipped": 0,
+        "junitSha256": "213147ea0c0254b7c4de3db1060aa5e1212ccc02a25b68b4fb1b6c66e8630deb",
+        "passed": 21
+      },
+      "matchingFailureSites": 2,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a CPU-flat stage autonomously retires its exact child before one replacement attempt (#1296)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a live severed stage host is killed, retired, and its stage retried once, through the seams the incident ran through (#1282)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/severedTurnResume.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:21:43.944Z",
+      "completedAt": "2026-11-02T06:21:45.826Z",
+      "logSha256": "0925e53f6fcb1f4ddb1087140afed19a06aedd6d5ee841212229da1a9ac6d13a",
+      "tests": 10,
+      "junitFailures": 10,
+      "skipped": 0,
+      "junitSha256": "e1e712f608728a72b451e7677e81579d5e234c73d8b8970ad19da7bc587f85c1",
+      "passed": 0,
+      "failureSites": 10,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:21:45.896Z",
+        "completedAt": "2026-11-02T06:21:47.616Z",
+        "logSha256": "50a82239215c78f4dd92c9288c81666b59b581eb711c848cf5608860341cab0d",
+        "tests": 10,
+        "junitFailures": 10,
+        "skipped": 0,
+        "junitSha256": "61ab2507dc45d73162e783b6489d9c59d3add5af957519fcaf621f1869fbf2e2",
+        "passed": 0
+      },
+      "matchingFailureSites": 10,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a running attempt silent since a host succession is resumed exactly once (#1747)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an attempt whose transcript moved since the succession is never messaged (#1747)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an attempt whose transcript moved just before the sighting is never messaged, however long it then goes quiet (#1747)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an attempt with a delivery already outstanding is never messaged (#1747)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a running attempt on the generation it was launched under is never messaged (#1747)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an attempt still silent after its one continuation parks saying a deploy cut the turn (#1747)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a continuation the delivery surface refuses stays owed and is sent once when it is accepted (#1747)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a cut the Viewer release recorded (submitted) gets its continuation from the successor, not a second one from here (#1835)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a cut the Viewer release recorded (delivered) gets its continuation from the successor, not a second one from here (#1835)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a cut the Viewer release recorded (failed) gets its continuation from the successor, not a second one from here (#1835)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/spawnAdmissionAudit.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:21:47.656Z",
+      "completedAt": "2026-11-02T06:22:32.338Z",
+      "logSha256": "a74e69fe8f6c6df16c3464f25d8048e622cc9f3bc48f49253f8cd0a64681f738",
+      "tests": 27,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "583ae4996b84e2b07ef4dd92e6737353bb2155396d72ecb14e148f7bbb58060f",
+      "passed": 27,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/spawnRestartRecovery.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:22:32.402Z",
+      "completedAt": "2026-11-02T06:23:02.074Z",
+      "logSha256": "1275272c4a657251773a00e1dd0cfa52a504122fd8d6848719a2add26fc15e92",
+      "tests": 35,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "39b5dda61c540fa725bbeb01615f17097002b0008f229958a6bd388bd5a43c9e",
+      "passed": 35,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageAccountBinding.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:23:02.127Z",
+      "completedAt": "2026-11-02T06:23:11.163Z",
+      "logSha256": "bf7e993aabad1941945c097bcc508511dad7508e306354c514e75b04f1154a3e",
+      "tests": 34,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "405c57e547d1520c9dece630b4cfcae292f4a7441fd76288784210dc78c069f2",
+      "passed": 34,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageAttemptPush.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:23:11.202Z",
+      "completedAt": "2026-11-02T06:25:13.507Z",
+      "logSha256": "b3b8af2397374d98a56324085f1222230fe70f3cbdfa8d83f16e3ecc3cf740e3",
+      "tests": 206,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "cc4c1396b256b64db3ae50310b85ceb52d7d901a775c6d36f71500cb4d40f720",
+      "passed": 206,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:25:13.549Z",
+      "completedAt": "2026-11-02T06:28:12.079Z",
+      "logSha256": "6c58ee09799a7e581d2a20692e657c9815f6e3eeebb64f27d1419b9339505fc0",
+      "tests": 94,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "25e5efba1d9f46c4b946f1e4107c2d49fe3ed7509f8a152e6f16abf409160c31",
+      "passed": 94,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:28:12.137Z",
+      "completedAt": "2026-11-02T06:28:47.519Z",
+      "logSha256": "f99834501455584939c806845f39f32a7a7f74c4af5c93b3eb067cf9a1a8331f",
+      "tests": 58,
+      "junitFailures": 25,
+      "skipped": 0,
+      "junitSha256": "263758b3159995c4c5dbe7a6ed3abb5947a2bf9fd79bb41a87be1e1de1cb3c25",
+      "passed": 33,
+      "failureSites": 25,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:28:47.576Z",
+        "completedAt": "2026-11-02T06:29:16.534Z",
+        "logSha256": "680dadc0692c9e26c209cfd15d158d06aa530900a6c03cc6f896eaa7be161973",
+        "tests": 58,
+        "junitFailures": 25,
+        "skipped": 0,
+        "junitSha256": "d81a3217a26e290341cb9ffaa433e209ff9bd603a1d397b389f28153fd1565a1",
+        "passed": 33
+      },
+      "matchingFailureSites": 25,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "stage_report and controller ticks ignore a future stage beside a healthy running lane",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "terminal JSON with a bare severity cannot settle as a review finding",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a long stage_report finding survives settlement and the fix relay intact",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a live attempt's reported completion settles it when the turn ends, with server-collected provenance",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "claude final brief reaches the next stage through {{prev.output}} and the automatic relay",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "codex final brief reaches the next stage through {{prev.output}} and the automatic relay",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a brief written before stage_report survives a shorter closing message",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a long final brief is bounded in bytes with an explicit truncation marker",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a pass reported without a summary relays its prose without the fenced JSON verdict",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a persisted legacy attempt without final prose relays its summary",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a second call replaces the first before settlement, and is refused after it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a reported fail routes along the fail edge and relays the summary as the stage's output",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a review-loop stage's reviewer cannot report a completion, and nothing is written",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a needs_decision with findings fires the fail edge and hands the findings to the fix stage (#1785)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a needs_decision with findings parks once a park edge's budget is spent (#1785)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a needs_decision with findings on a spent default edge is handed to the fix stage once, then follows the pass edge (#1868)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a spent-budget handoff keeps the fix's whole brief and cuts a longer one with a marker, on a character boundary",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a needs_decision parks with no fail edge, and parks with no findings (#1785)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a plain fail still routes under its own heading, and a plain pass still advances (#1785)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a routed needs_decision leaves no chip claiming the operator is needed, while a parked one still reads needs you (#1785)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a delivered parked attempt accepts its report verdict and takes the fail edge (#1979)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a delivered parked attempt accepts its fenced verdict and takes the fail edge (#1979)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a stage parked before spawn replaces the preceding stage note, while newer notes still win",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "retrying a signed-out park clears its automatic note through running and completion",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "publication blocked, a failed stage and a spent budget each leave a plain current note",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:29:16.588Z",
+      "completedAt": "2026-11-02T06:30:21.156Z",
+      "logSha256": "5eb25fa164ea48b16d897c9d1f6e951f370d24d9bce71f58a2d502df1f22e77f",
+      "tests": 44,
+      "junitFailures": 16,
+      "skipped": 0,
+      "junitSha256": "a9d02a3633dbf76f65df38935243e3f2b3925da95eb21605daf85903265b6665",
+      "passed": 28,
+      "failureSites": 16,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:30:22.104Z",
+        "completedAt": "2026-11-02T06:32:10.715Z",
+        "logSha256": "7916b800b07387efe937106ae9ec6a234a294502388fc3147c168a6e56fcbf4a",
+        "tests": 44,
+        "junitFailures": 16,
+        "skipped": 0,
+        "junitSha256": "98fce20870e3223ab648a9be877424d501b04e1d522f342da395f206bedde41d",
+        "passed": 28
+      },
+      "matchingFailureSites": 16,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "an identity that changes between the residency probe and the signal refuses without a signal (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a seat taken while the termination awaits the runtime is seen before the signal: refused, nothing sent (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a row rebound to another process while the termination awaits the runtime is seen before the signal: refused, nothing sent (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a row naming a pid in this process's own ancestry is refused without a signal (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "with a control channel present the runtime path answers and the identity path is never entered (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "successor partial stop merges an earlier generation's late survivor evidence across restart (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "startup defers a running attempt with an unverifiable survivor until positive death permits reread recovery (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a deferred lane completes the boot once: an unrelated pending launch is reconciled, the axis is ready, and the same generation admits the lane only after positive death (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "startup rereads after transcript refresh and defers a concurrently persisted partial close (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "startup admission holds the pipeline lease until its replacement is published (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "ticks defer worktree provisioning until an earlier partial tree is positively dead (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "malformed archive {\"runs\":[]} defers startup and recovers on a successful reread (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an older attempt survivor fences every pipeline conversation until positive death (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "late pass verdict recovery waits for every retained survivor (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "late fail verdict recovery waits for every retained survivor (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "bound flow recovery keeps evidence synchronization but defers resume until positive death (#1501)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/stageHostLiveness.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:32:10.773Z",
+      "completedAt": "2026-11-02T06:32:13.427Z",
+      "logSha256": "cda878cf3cb516fb1b9cdfb113d07b6d23379a7fff728556f0824ec8b9fb6dbd",
+      "tests": 7,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "e0ca937c9b72f1df11c08ef4d7265575689662b7c55b3b6813753ad7a8fa63e1",
+      "passed": 7,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageHostTeardown.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:32:13.478Z",
+      "completedAt": "2026-11-02T06:32:16.994Z",
+      "logSha256": "45de83e2e15d10de51ac64489f817be010ce92d3bf1142a56f0a024986a17112",
+      "tests": 19,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "4a6111cea6a42c887597ac33b921be3531c9046ee500b62451fce82be87df319",
+      "passed": 19,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/stagePromptLaunch.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:32:17.057Z",
+      "completedAt": "2026-11-02T06:32:36.778Z",
+      "logSha256": "ad58f63e026230a4df7cc3ddbb87b1d7b2da953bba00537c38a19d6aafc8a860",
+      "tests": 6,
+      "junitFailures": 3,
+      "skipped": 0,
+      "junitSha256": "cc86476d1a55aa2ec9a0c458d9780bbd25eb106d37d28980a890b78556a1671c",
+      "passed": 3,
+      "failureSites": 3,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:32:36.889Z",
+        "completedAt": "2026-11-02T06:32:54.557Z",
+        "logSha256": "ec16c152a878d988348de5d57aab2139e79e56da5064f1a26cb8af7e390401f6",
+        "tests": 6,
+        "junitFailures": 3,
+        "skipped": 0,
+        "junitSha256": "4d8ed6d4ac25157a7710f39d65e5a82ddcd76fcf47056f3c9f9518ccd47382a3",
+        "passed": 3
+      },
+      "matchingFailureSites": 3,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "next review launch: {\"editor\":\"unchanged\",\"expiry\":true}",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "next review launch: {\"editor\":\"seat\",\"expiry\":true}",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "next review launch: {\"editor\":\"operator\",\"expiry\":true}",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:32:54.597Z",
+      "completedAt": "2026-11-02T06:33:13.276Z",
+      "logSha256": "15a78b2d7aac8abf2e4de400f83443a30e849389df3d4cce0e6108b55e85c473",
+      "tests": 11,
+      "junitFailures": 3,
+      "skipped": 0,
+      "junitSha256": "c12c5d2e54b5ef6730df5e558c5b39f46502725312b015853dbe67b468532ca5",
+      "passed": 8,
+      "failureSites": 3,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:33:13.327Z",
+        "completedAt": "2026-11-02T06:33:33.475Z",
+        "logSha256": "3e880e148517feeec78516997dd1e072c262abcd4c54bcba615ca08a4bbfb2a9",
+        "tests": 11,
+        "junitFailures": 3,
+        "skipped": 0,
+        "junitSha256": "90a56d3bcb2a519c5415ee6efdac8a29af8cdd2be2ea9fd258da1d30eb4c6181",
+        "passed": 8
+      },
+      "matchingFailureSites": 3,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "an accepted head refused by pre-push repairs once on its branch, republishes through the hook and completes",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "publication repair can rewrite its own refused metadata without restoring the refused commit as a parent",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an explicit publication retry can recover a declined repair without another repair turn",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/stagePullRequest.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:33:33.513Z",
+      "completedAt": "2026-11-02T06:37:28.631Z",
+      "logSha256": "e3e91de74e94be5614c3fc68a6e1b9dba068110043e69bb60e68674c914f9fd6",
+      "tests": 99,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "3a035fbb1b43766d6b511f61794d9d5a59012466ae115bf0dea1a02cf3be7f91",
+      "passed": 99,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageSizing.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:37:28.672Z",
+      "completedAt": "2026-11-02T06:37:30.070Z",
+      "logSha256": "eea4b13fa3f8dd0ccdf4ed789e37bf174ec5ff546cf5eb1f1e05dc07bffc8b57",
+      "tests": 9,
+      "junitFailures": 9,
+      "skipped": 0,
+      "junitSha256": "616ad53f0e35c6452944827a87f18f7f382b48c6e4f339d8a296329a97753a8d",
+      "passed": 0,
+      "failureSites": 9,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:37:30.114Z",
+        "completedAt": "2026-11-02T06:37:31.597Z",
+        "logSha256": "8d85e3c1ae08630a0df74718f72f2b5a04181c9295673fb06112c1a39c5ad39e",
+        "tests": 9,
+        "junitFailures": 9,
+        "skipped": 0,
+        "junitSha256": "85332719adcbf29602e068de5e317917828dfd48651590693967bc4ef2ccf5b0",
+        "passed": 0
+      },
+      "matchingFailureSites": 9,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a trivial lane briefed by a Sonnet-run agent is refused at create, its fix stage with it",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an Opus-run agent's trivial lane is admitted, its fix stage inherits size=trivial, and the answer states each runtime",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "the operator's own draft is admitted whatever it names",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an explicit Sonnet builder runs at any size on a large model's brief and not on a Sonnet one; a full-size Sonnet reviewer is refused, a trivial one admitted",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a create without a briefer (the Viewer's own) is not judged",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "override-stage and add-stage by an agent actor are checked, and by the operator they are not",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a review gate that names a full-size Sonnet builder is reviewer work: refused at create and at override-stage for an agent, admitted for the operator; a size=trivial gate is admitted",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a fail edge set by an agent cannot turn a full-size Sonnet stage into a review gate, and turns a size=trivial one into one",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a Sonnet verifier stage with a fail edge is an admitted gate at create and at set-edge; a Haiku verifier gate and a Sonnet full-size reviewer gate stay refused",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/stageVerdictRequest.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:37:31.639Z",
+      "completedAt": "2026-11-02T06:37:39.125Z",
+      "logSha256": "8adf9b43d353abea2c3e9f4cfa52a3fb537f402cb0efccd35bdbba78244ad729",
+      "tests": 9,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "30e1503610fc562a07b9a25c03fe563e31094a81b1bc14c114129da59a00bd54",
+      "passed": 8,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:37:39.167Z",
+        "completedAt": "2026-11-02T06:37:50.110Z",
+        "logSha256": "d185e4bf4b06cbd1db6524dbf21bafc96b07d8ce1f486327c8b06f2c5122c678",
+        "tests": 9,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "74b090bc24b802db05dd3cda75089123b1276f86101847acc05a25f2a60eb008",
+        "passed": 8
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "skip-stage adopts the parked stage's pushed head and advances the lane (#1756)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/taskBinding.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:37:50.185Z",
+      "completedAt": "2026-11-02T06:37:51.564Z",
+      "logSha256": "3b1195f935a94b625ed01cd80d769572865518ec6e02e477db7b8c0f52226f04",
+      "tests": 9,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "63a3f8c124f453fbd861f8d2b05de3c2f37d8676bbbaccc5f370ae38b474586d",
+      "passed": 9,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/taskSummaryCompletion.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:37:51.601Z",
+      "completedAt": "2026-11-02T06:38:00.959Z",
+      "logSha256": "e9e9046ff46a15ce5a704cbfeb2817d3ffbbf4b3ab45e27683b7295602bd446b",
+      "tests": 6,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "6a2aaabe9a3ceac033a6bc5d6bb41483830a3d5afdea77c60cfb4d12dae59eeb",
+      "passed": 6,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/terminalReap.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:38:00.997Z",
+      "completedAt": "2026-11-02T06:47:12.533Z",
+      "logSha256": "41377128e688d5880ea940790f9be1d4f17498c6227bf51f6fc1eda38aac87d1",
+      "tests": 86,
+      "junitFailures": 43,
+      "skipped": 0,
+      "junitSha256": "f7d9d05612392df6f2049929837ef97d381bbe12db9c02d7ded10818fc581ecc",
+      "passed": 43,
+      "failureSites": 78,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:47:12.615Z",
+        "completedAt": "2026-11-02T06:56:35.399Z",
+        "logSha256": "6d8e8fc4db8cb3eb35e9884e096d7142733b559ce74d4f3750121afe46539fa4",
+        "tests": 86,
+        "junitFailures": 43,
+        "skipped": 0,
+        "junitSha256": "d806bc088feccb49a05a19ffd6430c1a0f085a65d2840e7a871704518b1b27e5",
+        "passed": 43
+      },
+      "matchingFailureSites": 78,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: unavailable",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: resumed-after-snapshot",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: resumed-before-actuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: registry-busy-before-signal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: generation-before-actuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: queued-before-actuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: queued-after-actuation-read",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: retry-after-actuation-read",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: root-exits-before-helper",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: legacy-session-read",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: idle",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: live-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: legacy-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: store-only-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: pending-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: rotated-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: rotated-seat-open-turn",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: redesignated-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: seat-before-signal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: unreadable-seat-store",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: running-stage",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: seat-in-another-project",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: malformed-active-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: malformed-pending-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: malformed-seat-collection",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: malformed-revocation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: shared-running-stage",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: other-pipeline-running",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: running-before-signal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: resumed-stage-before-signal",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: publication-pending",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: publication-running",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: publication-committing",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: publication-uncertain",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: publication-unknown-result",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: publication-malformed-result",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: unknown-pipeline-record",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "automatic retirement over the production socket: native-queued-work",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an update drain keeps automatic retirement's protections: idle",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an update drain keeps automatic retirement's protections: live-seat",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an update drain keeps automatic retirement's protections: resumed-before-actuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an update drain keeps automatic retirement's protections: running-stage",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "an update drain keeps automatic retirement's protections: held-autonomous-work",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<between-tests error> error: isolated socket case failed (143):",
+          "kind": "error"
+        },
+        {
+          "suite": "",
+          "name": "<ownership error> owned runner: surviving owned processes: 1868605 (1868605:72852996), 1868539 (1868539:72852958)",
+          "kind": "error"
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/projects/succession.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:56:35.439Z",
+      "completedAt": "2026-11-02T06:56:37.317Z",
+      "logSha256": "f318d1fdd929559ccf43c59ab96cdc5dbf23f9be616a7b55ec4e537084d26acc",
+      "tests": 7,
+      "junitFailures": 2,
+      "skipped": 0,
+      "junitSha256": "ec2194509fffa0b7a56b2b7ed6420d4de95f67a6857b8286d55583a63ae3c6ee",
+      "passed": 5,
+      "failureSites": 2,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:56:37.354Z",
+        "completedAt": "2026-11-02T06:56:39.536Z",
+        "logSha256": "de1a6135874c987d13d89fe4217822ce69a3e859f3a22010dc34ef15d1df30ba",
+        "tests": 7,
+        "junitFailures": 2,
+        "skipped": 0,
+        "junitSha256": "ddb027650d476831ba7a4651f2b04755adb549c51fbbb0bd63e6d21941b85c7c",
+        "passed": 5
+      },
+      "matchingFailureSites": 2,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "a renamed repository keeps its board",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a re-pointed fork whose old key predates the ledger does not merge, and nobody is asked",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/recordedChecks/lifecycle.integration.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:56:39.580Z",
+      "completedAt": "2026-11-02T06:58:18.562Z",
+      "logSha256": "04b74b59a00ed0ff1cbccba457d948510017ac0022a4da2aeaa91227d9b99440",
+      "tests": 41,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "8f44a105bdc763cb4166ff3d6e771d6d3a0b7ae3ae6ecb97501fcb7d42bcd0b8",
+      "passed": 41,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/release/production.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:18.597Z",
+      "completedAt": "2026-11-02T06:58:20.845Z",
+      "logSha256": "0898d69458b2331246e68ee85bdc9d08b27c4f9dfba51d0157830a877e4c5adc",
+      "tests": 11,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "faa534d9e1e2c45763cc371722eb9d2cfded952757b3ad8f98f5e7ad972c72ea",
+      "passed": 11,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/release/run.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:20.894Z",
+      "completedAt": "2026-11-02T06:58:25.923Z",
+      "logSha256": "e3c120a62d001db0b1c1623b3ff886eba89d8c31097771204cf1689786ee3411",
+      "tests": 62,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "4e868b88f3f573d5c76f502aeaadb4a042dfad8ec6cfa10e68413ba1df50afa3",
+      "passed": 62,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/release/stages.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:25.954Z",
+      "completedAt": "2026-11-02T06:58:26.869Z",
+      "logSha256": "ed912f6b965fe9e067b12e0064bb933cbda741f7dbea641398fc084a5f41bcb9",
+      "tests": 3,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "ff415b3e3af676a5f88a3337014c282d5b0aafbfb1bb9ed64f41a13b77b0ea35",
+      "passed": 3,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/agentMemorySettings.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:26.915Z",
+      "completedAt": "2026-11-02T06:58:28.360Z",
+      "logSha256": "d6941a5d9299175019f9e43b0776de74e2ef74e2668d6f8497f60e9cf8bd29bd",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "80326fdff09d8efdb455a2193d517a5ad568031439f7bc55ea19f6fa34e3fade",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/codexSubagentDetection.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:28.396Z",
+      "completedAt": "2026-11-02T06:58:31.487Z",
+      "logSha256": "df91cadbaf55009da4382c7c5b445d737ad010cf0ef2da114222fa434b285104",
+      "tests": 34,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "ab536fe8b40da56eaad61c4463a61a88a22f06c8bb11cf7ff9b09ebffb90c09b",
+      "passed": 34,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/cpuAdmissionScope.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:31.517Z",
+      "completedAt": "2026-11-02T06:58:33.296Z",
+      "logSha256": "a83328ebc267d657d598b071c2e6c17c207e69f4d85c80b8f32021636584147b",
+      "tests": 15,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "2ea6c195efd4a82c40c1736cbaab3061251483b79f31e7bd25ecc23c5b9cb20d",
+      "passed": 15,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/nativeQueueHost.integration.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:33.323Z",
+      "completedAt": "2026-11-02T06:58:34.282Z",
+      "logSha256": "5c3687675e5582771980f562211289edc950552b5abf745255253516c9c71673",
+      "tests": 7,
+      "junitFailures": 0,
+      "skipped": 7,
+      "junitSha256": "ca6ec3bb95af3d895292a9d0de0b893e3f78621eaeb642c7d9b5d0ce378dacab",
+      "passed": 0,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/pipelineStageHostAccess.integration.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T06:58:34.315Z",
+      "completedAt": "2026-11-02T06:58:35.255Z",
+      "logSha256": "ffcfb74c0f81efe74fa4a6f9180ddef10400519b918c27054dfed02427b8b7f8",
+      "tests": 1,
+      "junitFailures": 0,
+      "skipped": 1,
+      "junitSha256": "eef94fc7ce52a5dcc3216757c6198e71d22ff9acb4e5f8ca32d9f8b1f6385b76",
+      "passed": 0,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/releaseInterruption.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T06:58:35.285Z",
+      "completedAt": "2026-11-02T06:59:42.820Z",
+      "logSha256": "56d7caca939694d02b509108548007a8b3552407d10d96a84e9c7e10dd1fa488",
+      "tests": 154,
+      "junitFailures": 7,
+      "skipped": 1,
+      "junitSha256": "fb515ce762164c83015a3b883e5ab86f110644ba3b213ca0605e1474a206ffb8",
+      "passed": 146,
+      "failureSites": 7,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T06:59:42.861Z",
+        "completedAt": "2026-11-02T07:00:46.506Z",
+        "logSha256": "c4fb478cc68b5464fbfdb93e2da7577e149c4baf6fe5032d124e3d52fbd478fa",
+        "tests": 154,
+        "junitFailures": 7,
+        "skipped": 1,
+        "junitSha256": "2477546d89d6fc4aa2776c7fc9353e62a8668ca8fb130189ccf47e158a4a910e",
+        "passed": 146
+      },
+      "matchingFailureSites": 7,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "an agent resumed after one restart and cut mid-turn by the next gets its own one continuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a turn an operator resumed after a cut, cut again before its transcript shows it, gets its own one continuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "Codex exit bookkeeping after a cut owes no second continuation, and a resumed turn cut again owes its own",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a claude turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "a codex turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "background work a continuation reported as killed is never cut again, and the turn that is cut mid-tool gets what it is owed",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "",
+          "name": "background work a continuation reported as killed is never cut again, and the turn that launches a new background job gets what it is owed",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:00:46.558Z",
+      "completedAt": "2026-11-02T07:00:49.966Z",
+      "logSha256": "8fab9d524e7a0a2382fe710d5309bbf16d4ddda4611dbe991076f99ba012954d",
+      "tests": 178,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "baf7a6290894ab6df222006e9ae20e8a94d66df1b46dd28d2a539d8c7e9599b9",
+      "passed": 178,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/structuredSpawn.cpuPlacement.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:00:49.999Z",
+      "completedAt": "2026-11-02T07:00:52.042Z",
+      "logSha256": "450804c47707b44e5fa534f801bf786ee2cce31633d9437c03d18dbf29927fad",
+      "tests": 11,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "ef7d7742aee5e62872bf2a845222e9da7c70a58747a5fa59fa54de40ce04bb6b",
+      "passed": 11,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/runtime/structuredSpawn.integration.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T07:00:52.072Z",
+      "completedAt": "2026-11-02T07:01:15.204Z",
+      "logSha256": "a06a5d7b4aa25761189cd5b94621ac0f5d42c0bbbf8f10ff302365a83f8b9333",
+      "tests": 147,
+      "junitFailures": 3,
+      "skipped": 0,
+      "junitSha256": "552b8db54c551aedfa0f5ff1ac37f284a820eae04c477b0d8d3f41ce427d5042",
+      "passed": 144,
+      "failureSites": 3,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T07:01:15.255Z",
+        "completedAt": "2026-11-02T07:01:41.043Z",
+        "logSha256": "a2da55a3683851b12f6df7d9b104bf19b4d027b8c7a03ac4d80a760d154e3385",
+        "tests": 147,
+        "junitFailures": 3,
+        "skipped": 0,
+        "junitSha256": "abd2daa7fbbcacd3a2599934d9e615154af4d7a60ae59aa561ac3c4950c217c7",
+        "passed": 144
+      },
+      "matchingFailureSites": 3,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "startup recovery withholds a staged identity when recovered delivery has no transcript (#1123)",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "codex structured spawn round trip",
+          "name": "spawn, send, question, answer, interrupt, resume, and kill use one pane-less host",
+          "kind": "test",
+          "occurrence": 0
+        },
+        {
+          "suite": "claude structured spawn round trip",
+          "name": "spawn, send, question, answer, interrupt, resume, and kill use one pane-less host",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:01:41.081Z",
+      "completedAt": "2026-11-02T07:01:42.861Z",
+      "logSha256": "6c81d4f2c0f5b532f56850408fc5bcb2bdf0550886549d20d4f47e6b091df285",
+      "tests": 2,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "1316ef0b795e934dcdf71bd4a3ac0c56a7444857f5198b40674e368de211dc17",
+      "passed": 2,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/testing/testGitIsolation.test.ts",
+      "selection": "supplemental",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:01:42.925Z",
+      "completedAt": "2026-11-02T07:01:47.434Z",
+      "logSha256": "9ee6d3a6031a17e5b14fdf12ed57690bde9c07334b1adf189ab612810361427b",
+      "tests": 8,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "1b85334228ded11d17bd93e6cf348442d5db3661d0dc529edbb6eeed999a8a0a",
+      "passed": 8,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/workflows/engine.cpuAdmission.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:01:47.467Z",
+      "completedAt": "2026-11-02T07:01:48.486Z",
+      "logSha256": "be541a29c11ca0697d86af18912958a9791159955873258420eddc921eeb7c28",
+      "tests": 32,
+      "junitFailures": 0,
+      "skipped": 32,
+      "junitSha256": "4e63dd7527be1969ec0f735f529b6afb6cff348c56f4b71efbe5a8a2da136e2d",
+      "passed": 0,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/gate-slot.namespace.integration.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:01:48.520Z",
+      "completedAt": "2026-11-02T07:01:49.243Z",
+      "logSha256": "dddc470ea6411fb8503203ea2438cd8ced4cb00f28a586c74049e6940b52125f",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 5,
+      "junitSha256": "0181f4456dcb7a4da2eb35d576fcdb64e552b91fdc3bace078fcd1724dcb95df",
+      "passed": 0,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/gate-slot.queue.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:01:49.278Z",
+      "completedAt": "2026-11-02T07:02:32.957Z",
+      "logSha256": "cbf12987030c5386cea63aa438542cf286f8f7bd6718f879348a923fbaec9741",
+      "tests": 16,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "f3d9b977225749ccff0af0c1519776e9e57656eba580c0aa34d10e5073fb911b",
+      "passed": 16,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/gate-slot.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:02:32.986Z",
+      "completedAt": "2026-11-02T07:02:49.160Z",
+      "logSha256": "813a0970b88906492e8d9c3b10d08f02dca661be6ee3c78d1e35ef3601323a40",
+      "tests": 15,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "bac5c8d01988d5281b7820cb5454c2c15f9e1c68f545c654471ef805b6eb7064",
+      "passed": 15,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate-tests.cpuQueue.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:02:49.196Z",
+      "completedAt": "2026-11-02T07:03:01.673Z",
+      "logSha256": "597320c93bd5f2612cbf46443f0fceb15e06b869ddbc28d12674b3c535f08ae2",
+      "tests": 4,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "cbf63852a0fabaccb17746b13be544254fefb38ea0dbf9d70044bddcf8d34035",
+      "passed": 4,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate.cpuQueue.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:03:01.706Z",
+      "completedAt": "2026-11-02T07:03:02.626Z",
+      "logSha256": "47267e01db563e27d12a408e58af794e7a4c66d7490f56075cd421d0374a989b",
+      "tests": 2,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "7b526c220ef7ef7c3c26a5e565f866ad77612bc7d174f4d60082b2531a3c9bf2",
+      "passed": 2,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate.noproc.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:03:02.663Z",
+      "completedAt": "2026-11-02T07:03:10.358Z",
+      "logSha256": "2dc1f894e9bd11cc5fe2e8b448422834b87ab35aa6b57334c641b4c70487cfd3",
+      "tests": 3,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "93c8f4e36ca4cabf83009e3d83b1b5e52b69bbfb692bce69a2613331f370db17",
+      "passed": 3,
+      "failureSites": 0
+    },
+    {
+      "file": "scripts/local-gate.workflows.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:03:10.396Z",
+      "completedAt": "2026-11-02T07:03:11.221Z",
+      "logSha256": "bc963a55bdbcd597e2e8ccbcefd8ced623be5213de966d470c89d1bc185a5a93",
+      "tests": 4,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "b22f13971b456854bc98b32553f1666bef2d45fb19be00a550a35fd30c95749f",
+      "passed": 4,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.accountGuard.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:03:11.258Z",
+      "completedAt": "2026-11-02T07:03:52.613Z",
+      "logSha256": "687a31bbfbbd7fda6da6197795836e84a3db6d46d5a72f056cdb6ca0f498f243",
+      "tests": 31,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "40a5d9741380d5747bfd35ce09496568d3ed0c9f1ee9157ce95252ed4060a95b",
+      "passed": 31,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.activation.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T07:03:52.644Z",
+      "completedAt": "2026-11-02T07:04:22.570Z",
+      "logSha256": "8ce60ed911190cea43dfe60864b72f4bfd2eb8eba0fba8d182655d49a75d8844",
+      "tests": 76,
+      "junitFailures": 1,
+      "skipped": 23,
+      "junitSha256": "43aa95c769d6481927bf13ce1222f244cd6f9c44beb8678459b5171faf7e2be7",
+      "passed": 52,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T07:04:22.604Z",
+        "completedAt": "2026-11-02T07:04:49.402Z",
+        "logSha256": "f0beddc9b66ac85c9b7baf1f56dbdb845f1023b8be0966f04df27009d08d307b",
+        "tests": 76,
+        "junitFailures": 1,
+        "skipped": 23,
+        "junitSha256": "56551ea879319e322199a7c4245a6a26396e98c11eabccb36013789dc425a551",
+        "passed": 52
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/engine.containment.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:04:49.437Z",
+      "completedAt": "2026-11-02T07:05:34.230Z",
+      "logSha256": "545ed37731da087b5da88473a43e66c26dcd5e2ace56a16a882abaf03832d2a2",
+      "tests": 55,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "cfe7dc71ffd48c992beb281f3587bac11844d9f6eb15a21a575dcaf0be57bfbd",
+      "passed": 55,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:05:34.271Z",
+      "completedAt": "2026-11-02T07:05:38.031Z",
+      "logSha256": "ae621decd60d506a92c100bcf7877eee4c50914adec067640f5a2ab967b57f4c",
+      "tests": 2,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "c87bb8f68af2df8a3f364fdaf6621e8746d97ba8731a416a79eb01371160b9b1",
+      "passed": 2,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:05:38.060Z",
+      "completedAt": "2026-11-02T07:07:32.245Z",
+      "logSha256": "315decd931709a5a62d1eb1730a8a75b3219298239354a59986ede09c403d7a1",
+      "tests": 42,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "90f9b9cf3d97bc9dbb218aebb9a5d8dd9bb9378d823e925546d5ecc924e762ce",
+      "passed": 42,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:07:32.282Z",
+      "completedAt": "2026-11-02T07:07:35.742Z",
+      "logSha256": "9ab12a49ae8ff5859d521ebf8994ca4a36c70fe87c09fb6d2bd7e7c84f3e84e4",
+      "tests": 19,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "d6ccef6dfed7c93de29fa410f703bc1c61fba964006fd4e361c8a28af314d0a4",
+      "passed": 19,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.part3.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:07:35.770Z",
+      "completedAt": "2026-11-02T07:08:38.939Z",
+      "logSha256": "2d7f3cb560a570964b201c1fdea514ecab6ace29c86db491b79fbdbfbdc0d732",
+      "tests": 18,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "342a3613cf7fcf47403b4eb14ea8dbcce61d26af85a0221a6da71a07f2f6fb7b",
+      "passed": 18,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:08:38.974Z",
+      "completedAt": "2026-11-02T07:10:18.438Z",
+      "logSha256": "5113d6ff8325b3878160afd952c2e25b3f8296dba745f60ac2c0f854ff401b03",
+      "tests": 52,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "c161825c92b88b2ff21bfff39ebdf571cfb1d8164aaf42134a0ea732c3b62158",
+      "passed": 52,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.proactive.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:10:18.469Z",
+      "completedAt": "2026-11-02T07:11:06.095Z",
+      "logSha256": "a4681b4ccb22121a7903503eaa8975cd10068c5236da5411931136137f0efc19",
+      "tests": 41,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "1fc02437bb07900053b0cda269093ea9a546814e054295042fd39bb97a1fb635",
+      "passed": 41,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:11:06.126Z",
+      "completedAt": "2026-11-02T07:11:26.057Z",
+      "logSha256": "bc83e707fba06e50fd7a3fcb093dca52465882a39656f16afe8b7e3b63e47839",
+      "tests": 42,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "42da0da404b5d97bdcd7a8212a9ef07e673cb7cf7b5f368e8ad18dcb16d31081",
+      "passed": 42,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:11:26.086Z",
+      "completedAt": "2026-11-02T07:12:44.971Z",
+      "logSha256": "35406c57b30c18370bf68263b4b9905412b9154ebf71a87654d91cd27aa02c93",
+      "tests": 18,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "174d58b2f618ac30a01a873b2562686c08783371dbc1fb1d9bab822613b84390",
+      "passed": 18,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:12:45.085Z",
+      "completedAt": "2026-11-02T07:14:46.064Z",
+      "logSha256": "169c7168a1ea0fe3212e2a6135b1be8334eac2d617ec8ca0c2725aa733917a62",
+      "tests": 26,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "973f7357d2be3a67689dc53a4f57c8ccb38ccfca7f53a947f51eb01600ee4d3e",
+      "passed": 26,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:14:46.121Z",
+      "completedAt": "2026-11-02T07:16:47.516Z",
+      "logSha256": "20bedb766c68396d747db529cd908480b80637230ac0fb8f9953369431673908",
+      "tests": 18,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "77bf52345ca3c6c6cf51d1046406ca2e13c3e58faa2dc9704982d004071b3c14",
+      "passed": 18,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:16:47.589Z",
+      "completedAt": "2026-11-02T07:17:59.819Z",
+      "logSha256": "9a394fc777041acd8f38dda91c3b365530be96aa94a465b774438b2a9632dc7e",
+      "tests": 28,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "d3119859f9c2917a675f8e5c6382ce14699d5d9b29a0e5b1f769f2fdc19a2ff6",
+      "passed": 28,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:17:59.865Z",
+      "completedAt": "2026-11-02T07:20:07.341Z",
+      "logSha256": "283e16a9b5a3bbdbae3560cb263d62170b32ea520a1584d45f5a92b0e0c4a2f5",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "0b4fb1392e1cee3b0db09dfa83545e8cc42207616e8d331d5603352daaae2d98",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:20:07.390Z",
+      "completedAt": "2026-11-02T07:22:32.049Z",
+      "logSha256": "daf6256b26e99a33bb16605888b54b1ea6a7929e6dac03d7493755b28aefc809",
+      "tests": 6,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "4b7bd5036456644faa82b189b63f5e4128cd5d04d08939a1772f0448b9736cb9",
+      "passed": 6,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:22:32.106Z",
+      "completedAt": "2026-11-02T07:24:20.238Z",
+      "logSha256": "d7bd08fb26421675cf464223a1e7bd9768b47c02997f20b67979e3f5123e2412",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "0d43041ebd28dd4d9e3a9d61decab2cdd32381e30568073dbd4df5def53d0381",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:24:20.283Z",
+      "completedAt": "2026-11-02T07:25:46.881Z",
+      "logSha256": "25c452e0524624a72f86c9a9ee089e094da9586eddc1e82db3fbbeea89650fa1",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "564f8ceb7d0d56c9cf1c64dee512310e323b8f373c1cb274a85ff64636e8c182",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:25:46.920Z",
+      "completedAt": "2026-11-02T07:27:02.791Z",
+      "logSha256": "e523f5670a0b771986c9e765f2f6ecd3685580e7033bc7520fe1ab676b8a37f7",
+      "tests": 6,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "7f44722aa5afce9823d54b157015d3ddc6e0b545d0fef917028307acf8319ba3",
+      "passed": 6,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:27:02.844Z",
+      "completedAt": "2026-11-02T07:28:12.741Z",
+      "logSha256": "5c4cc180a1cfc2c0f05f424c3f29f5768a01aa076c0456687b0888f834b6f1f8",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "3dd4f303dfe7d56f6956eeb2e050cf00eb1b4e217c4088aef47423681803ae47",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:28:12.782Z",
+      "completedAt": "2026-11-02T07:29:00.916Z",
+      "logSha256": "915c43643ec35f31ca875ac7508e52573ad8780545f975255ceb0bd86fb9d8db",
+      "tests": 32,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "4de51423fc2c67b82383deac90765b83f1b715085046cd8848cc018dd2a799b1",
+      "passed": 32,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerChains.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:29:00.949Z",
+      "completedAt": "2026-11-02T07:29:51.873Z",
+      "logSha256": "f35f4665db323f20f31a8b9ab1722c583b66c071521a20e8cc4d9d52b4840407",
+      "tests": 16,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "3e63a7febed3ee2c951891f3c3dd79ec22ae3126e154b8f6264cf41ccfc5a829",
+      "passed": 16,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:29:51.904Z",
+      "completedAt": "2026-11-02T07:31:47.280Z",
+      "logSha256": "d7274a7fdb98fe3420102cb66c5cdc6efc9987cf7aa217ed0d453827a9f23e17",
+      "tests": 5,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "35f462fbf1e0075457603bb1b4f63adc9d3be4cf6c937b02928ac976b917a23f",
+      "passed": 5,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:31:47.315Z",
+      "completedAt": "2026-11-02T07:33:38.649Z",
+      "logSha256": "f383de519c6e772731662472cad6e82dc3610a91928415e119121fc245aece49",
+      "tests": 27,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "3c9f47f3fa23067c3a679e2928f1e82803be88859f73c3e83355e14b9ce7afe3",
+      "passed": 27,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerReset.test.ts",
+      "selection": "required",
+      "exitCode": 1,
+      "startedAt": "2026-11-02T07:33:38.692Z",
+      "completedAt": "2026-11-02T07:36:02.358Z",
+      "logSha256": "add890881e34acc0e7af309fc252c25bb9d23fd16deeb95abb511ea6dddc13a6",
+      "tests": 18,
+      "junitFailures": 1,
+      "skipped": 0,
+      "junitSha256": "caa687d164d3eef61a50aac1f5c5adc67046e10556950f4dd2e8594d6cbab981",
+      "passed": 17,
+      "failureSites": 1,
+      "baseline": {
+        "exitCode": 1,
+        "startedAt": "2026-11-02T07:36:02.465Z",
+        "completedAt": "2026-11-02T07:39:30.743Z",
+        "logSha256": "332f869d49c7a23b8f7c18f0c93b8fa960a41c99faeb838cb0e024d39e7d8447",
+        "tests": 18,
+        "junitFailures": 1,
+        "skipped": 0,
+        "junitSha256": "56686b40123c54542507fdd052136d8faee1910d3bb7ddb675ec24fd1b07828d",
+        "passed": 17
+      },
+      "matchingFailureSites": 1,
+      "baselineOnlyFailureSites": 0,
+      "confirmedIntermittentSites": 0,
+      "matchingFailures": [
+        {
+          "suite": "",
+          "name": "parked provider waiting keeps controller cycles within watchdog plus horizon wakes",
+          "kind": "test",
+          "occurrence": 0
+        }
+      ],
+      "baselineOnlyFailures": [],
+      "initialUnmatchedFailures": []
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerSignals.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:39:30.805Z",
+      "completedAt": "2026-11-02T07:41:16.401Z",
+      "logSha256": "b6f999ff675132f0ae68252c06a8e69c056f1b3f9f3a7747d3e8e44a9cfc7511",
+      "tests": 28,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "457290e950937b513b2c41db9b47d6ac032842ba8e348ebc8b5d4a842f3daa11",
+      "passed": 28,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.publication.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:41:16.581Z",
+      "completedAt": "2026-11-02T07:42:08.715Z",
+      "logSha256": "fc6785bd095b0122c2584bd893f25266109aadf2e828adde765ba332f8da18c2",
+      "tests": 27,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "73c845e34cca6fe58d8c158acd510dc2939f761ff92738e7f7e55bf096738c6e",
+      "passed": 27,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:42:08.772Z",
+      "completedAt": "2026-11-02T07:43:55.314Z",
+      "logSha256": "59a857d4dc714322afdf49a3af5721fdb5ded67f44ebd70e1b752d0c83d4371e",
+      "tests": 116,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "2e455e957e8b53c7a97008b4c638f68cd5a206bce18b8e11854161d64e8b575f",
+      "passed": 116,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:43:55.387Z",
+      "completedAt": "2026-11-02T07:45:32.656Z",
+      "logSha256": "d531812ba95d0fef88ed5ef31c916d5c1ef45419bdaf579d2e9cca512f4b3d96",
+      "tests": 65,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "3b2db6ea47cdc97d4daf109c5934a9e49495a81aaa0334334f0b31ab42f4be47",
+      "passed": 65,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:45:32.733Z",
+      "completedAt": "2026-11-02T07:47:20.668Z",
+      "logSha256": "dcc28a31c4732e65f80a2dd10a1d216b9e122750a4c33949ac0f5493d2de36e9",
+      "tests": 86,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "3edb240393bf1b8ae9871df3eb15419eed2e172c0fbd7e0f61d01653eba2d675",
+      "passed": 86,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:47:20.787Z",
+      "completedAt": "2026-11-02T07:48:56.529Z",
+      "logSha256": "b8792cec565ee6daaccd263352b2a2c8df638d79c4ef647fe8487d5e9bac1e79",
+      "tests": 98,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "b570611c5267e34c4dd31b6c78f1d839e3ebdc3df5c867636ceed5661b52b8d4",
+      "passed": 98,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.spawnSilence.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:48:56.567Z",
+      "completedAt": "2026-11-02T07:49:15.364Z",
+      "logSha256": "f17e2e2bf0caef0c76effebad06320c30ff4922dc87ceea26747f9f5f9713b65",
+      "tests": 25,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "5d2e55c5bc917e78330fd2fd032e9bdcd18026e8253ee01d71af7570dc30ba7d",
+      "passed": 25,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.succession.part2.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:49:15.405Z",
+      "completedAt": "2026-11-02T07:50:49.192Z",
+      "logSha256": "c67bbdb576bf22fa826150890560ddde05df16d423659549fb4254358ad9ce16",
+      "tests": 99,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "9958e6c3e222b34a2a988541ab1c4f9e09915b1b95b9cfb8f1c12602a65679b0",
+      "passed": 99,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.succession.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:50:49.245Z",
+      "completedAt": "2026-11-02T07:52:11.847Z",
+      "logSha256": "39dedccb428ed670d4eaaf1cece7d856c1c9ad0a59a5f8fa38eb3f9512d9fc85",
+      "tests": 30,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "15a31beb2884793b1bd5cfc2303700fb0921adef7e6f8e2452c1edb1a5d6e0e4",
+      "passed": 30,
+      "failureSites": 0
+    },
+    {
+      "file": "src/lib/pipelines/fromConversation.test.ts",
+      "selection": "required",
+      "exitCode": 0,
+      "startedAt": "2026-11-02T07:52:11.887Z",
+      "completedAt": "2026-11-02T07:52:24.026Z",
+      "logSha256": "60dd5a6c93211623bb6d2ce9c4f96bab81aeb3834cec9dda7c3648a46ce740b0",
+      "tests": 44,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "f23cf423dcda5befbf74c24b9bdc363734630a7f8030fd4d3c33e21c07a898c1",
+      "passed": 44,
+      "failureSites": 0
+    }
+  ],
+  "confirmation": {
+    "method": "Project confirmFailures comparator with serialized full-file head/base reruns and fresh isolation for every file.",
+    "completedAt": "2026-11-02T07:52:26.122Z",
+    "sites": [],
+    "runs": []
+  },
+  "diagnosticAudit": {
+    "filesCompared": 36,
+    "normalization": "Checkout paths; generated isolation and fixture identities, commit hashes, revision digests, PIDs and times with equality relationships preserved; explicitly labelled elapsed metrics. Assertion thresholds and their received elapsed values remain unchanged.",
+    "observations": [
+      {
+        "file": "src/lib/pipelines/terminalReap.test.ts",
+        "observation": "Both complete files exit 1 with 86 JUnit cases, 224 assertions, 43 JUnit failures, 34 between-test isolated-socket errors (child exit 143), and 29 surviving-owned-process diagnostic lines. All named assertion failures and their expected/received values match after identity normalization. The baseline additionally logs a successful state.lease SQLite wait in the root-exits-before-helper assertion. Between-test blocks vary in successful SQLite wait messages and in whether one or two owned child identities are listed; those differences remain in the retained raw logs and diagnostic audit. These are matching failing main cases, not passing lifecycle evidence."
+      }
+    ]
+  },
+  "regressionControls": {
+    "main-defect": {
+      "exitCode": 1,
+      "startedAt": "2026-11-01T23:27:23.561Z",
+      "completedAt": "2026-11-01T23:27:25.415Z",
+      "logSha256": "5c75715c29c7aa6182e065dc160d256f2822ac61973ffdf8c23b69eebe37d621",
+      "tests": 109,
+      "junitFailures": 2,
+      "skipped": 107,
+      "junitSha256": "17ed790cab840473a28e2456f864f057094bbe2613f009e61412848bbad21b7c",
+      "passed": 0,
+      "sourceCommit": "2766c7b8ac00cd96d2db3ee9251c6315115519c0",
+      "fixtureOverlays": [
+        "src/lib/pipelines/releaseTagPolicy.test.ts",
+        "src/lib/pipelines/releaseTagPolicy.ts"
+      ],
+      "expectedFailure": true,
+      "fixtureSha256": "e12adabb752b8769b59c1def44eefd142d610ecdaa72530cb69d2cc063497125"
+    },
+    "pre-fix": {
+      "exitCode": 1,
+      "startedAt": "2026-11-01T23:27:25.446Z",
+      "completedAt": "2026-11-01T23:27:58.769Z",
+      "logSha256": "f49e9ba6fa407b294763e46808ad1e2a9c0adc26a501c069ed16b980a8ead30d",
+      "tests": 109,
+      "junitFailures": 14,
+      "skipped": 0,
+      "junitSha256": "e4f043de32faf1ecae4c7875a515f9a8a716ea496896171910c8aa5c18b29680",
+      "passed": 95,
+      "sourceCommit": "692ceadcb804587259afdf283ea81cf517491041",
+      "fixtureOverlays": [
+        "src/lib/pipelines/releaseTagPolicy.test.ts"
+      ],
+      "expectedFailure": true,
+      "fixtureSha256": "e12adabb752b8769b59c1def44eefd142d610ecdaa72530cb69d2cc063497125"
+    },
+    "hook-red3": {
+      "exitCode": 1,
+      "startedAt": "2026-11-02T02:32:12.239Z",
+      "completedAt": "2026-11-02T02:32:37.872Z",
+      "logSha256": "1fac3c8719cd2336337b283f5d0118eb56947c8efb37fae77fda23756a2c3ec9",
+      "tests": 112,
+      "junitFailures": 1,
+      "skipped": 109,
+      "junitSha256": "84718558c2b863e7dca42fcb4d770d19d6d92692ce271c96999e81a81299c0f1",
+      "passed": 2,
+      "sourceCommit": "7c84cd878d77f2c53ac51df5b3c402bcba6c79ff",
+      "fixtureOverlays": [
+        "src/lib/pipelines/releaseTagPolicy.test.ts"
+      ],
+      "fixtureSha256": "56d135afb89a6e8b4843229c8f8d32d10dfd4f1c6c73d059385ef0cb0d679c69",
+      "expectedFailure": true
+    },
+    "hook-green3": {
+      "exitCode": 0,
+      "startedAt": "2026-11-02T02:27:36.435Z",
+      "completedAt": "2026-11-02T02:27:39.654Z",
+      "logSha256": "6d9e590a3588830af29280935ce969107ae92fabf7f0b0857c4db417f9dc975f",
+      "tests": 112,
+      "junitFailures": 0,
+      "skipped": 109,
+      "junitSha256": "8b16769b498902334ab50621421f4777608826b1250d0f863c00520bc736ac03",
+      "passed": 3,
+      "sourceCommit": "7c84cd878d77f2c53ac51df5b3c402bcba6c79ff",
+      "fixtureOverlays": [
+        "src/lib/pipelines/releaseTagPolicy.test.ts",
+        ".githooks/pre-push"
+      ],
+      "fixtureSha256": "56d135afb89a6e8b4843229c8f8d32d10dfd4f1c6c73d059385ef0cb0d679c69",
+      "expectedFailure": false
+    },
+    "binding-loss-red2": {
+      "exitCode": 1,
+      "startedAt": "2026-11-02T05:13:31.855Z",
+      "completedAt": "2026-11-02T05:14:09.731Z",
+      "logSha256": "4771770b23bc645ca1b8a8e761963c9bda7a0b514c018d02aa40320d44326b1a",
+      "tests": 133,
+      "junitFailures": 21,
+      "skipped": 0,
+      "junitSha256": "79e93446945d307ca411e54871025e706ac97873f5b250cb89f9672c4bcb039b",
+      "passed": 112,
+      "sourceCommit": "4dc20f536f7390910c5dd5014c6ad7d80d9daf8f",
+      "fixtureOverlays": [
+        "src/lib/pipelines/releaseTagPolicy.test.ts"
+      ],
+      "fixtureSha256": "99854151b3eaff1a61f9465aae9055378312d1fde8cb0f33d69e3d4228b0eb23",
+      "guardSha256": "0576fe4d868ca01847de013d9e7386381acbc94db4a6b706b0ce3df7f1ed22d4",
+      "expectedFailure": true,
+      "unsafeNativePushCases": 20,
+      "alreadyRefusedDiagnosticCases": 1,
+      "alreadyRefusedDiagnosticCaseNames": [
+        "rechecks custody after the remote read: binding removed"
+      ]
+    },
+    "binding-loss-green": {
+      "exitCode": 0,
+      "startedAt": "2026-11-02T05:19:42.902Z",
+      "completedAt": "2026-11-02T05:20:14.938Z",
+      "logSha256": "5804d41b6a6d9fd3198f538dc2dc4e47bd51e34b44ae761055ce82a574d50569",
+      "tests": 133,
+      "junitFailures": 0,
+      "skipped": 0,
+      "junitSha256": "3e71127dc82a12d2cef67219429db92676dc7abd7c7ebc1a8be3b9f1d8b3ff33",
+      "passed": 133,
+      "sourceCommit": "4dc20f536f7390910c5dd5014c6ad7d80d9daf8f",
+      "fixtureOverlays": [
+        "src/lib/pipelines/releaseTagPolicy.test.ts",
+        "src/lib/git/stageAttemptGuard.ts",
+        "CONTRIBUTING.md"
+      ],
+      "fixtureSha256": "99854151b3eaff1a61f9465aae9055378312d1fde8cb0f33d69e3d4228b0eb23",
+      "guardSha256": "ab8be37165affc6e3596436bec5cc8f166416d60cae12860b087360590da6434",
+      "expectedFailure": false
+    }
+  },
+  "execution": {
+    "testCommand": [
+      "bash",
+      "<installed-gate-slot.sh>",
+      "bun",
+      "run",
+      "test",
+      "<one explicit file>"
+    ],
+    "typecheckCommand": [
+      "bash",
+      "<installed-gate-slot.sh>",
+      "bun",
+      "x",
+      "tsc",
+      "--noEmit"
+    ],
+    "gateSourceCommit": "9eef4f21cc1f",
+    "bunVersion": "1.4.0",
+    "platform": "linux",
+    "environment": "checkEnvironment followed by isolatedEnvironment(createGateSandbox(), env); closed Viewer control URL",
+    "fileExecutionAllowanceMs": 900000
+  },
+  "notes": [
+    "Each explicit file ran in its own owned gate process with fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.",
+    "All 159 files ran in one serialized final-source batch after a cold full-project typecheck. Historical broad runs do not contribute to these totals.",
+    "Every failing head file has a complete full-file baseline result. Matching baseline failures remain visible, and intermittent cases retain full-file confirmation outcomes.",
+    "Totals describe the initial complete selection; confirmation runs are listed separately.",
+    "Recorded-check custody receipts were not used; actual native exits and complete JUnit reports determine the results.",
+    "The original approval and prior-attempt regressions fail on unchanged main guards. The earlier 109-case native guard fixture has 14 failures before the first review fixes; its digest identifies that fixture separately.",
+    "The older 112-case fixture exercises the real repository pre-push and privacy gates. Its three selected hook cases yield two passes and one expected failure before the repository hook fix, then three passes after that fix.",
+    "The final 133-case fixture has 21 failures on the prior custody guard: 20 unsafe successful pushes after lost proof or a replaced worktree, plus one already-refused remote-read case whose refusal diagnostic differs. The same fixture passes all 133 cases with the final guard."
+  ]
+}

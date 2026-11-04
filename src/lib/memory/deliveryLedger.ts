@@ -38,7 +38,7 @@ export interface MemoryEngineStart {
   /** Claude provider starts pass --setting-sources "" and exclude home/project settings. */
   providerAccount?: boolean;
 }
-type Selection = Pick<ReturnType<typeof learnedRulesSnapshot>, "block" | "scopes" | "rules"> & { reason?: string; shadowIds?: string[]; removed?: import("./roleSelection").SelectionRemoval[] };
+type Selection = Pick<ReturnType<typeof learnedRulesSnapshot>, "block" | "scopes" | "rules"> & { reason?: string; shadowIds?: string[]; removed?: import("./roleSelection").SelectionRemoval[]; evidence?: import("./roleSelectionProvider").SelectionEvidence };
 export interface MemoryDelivery {
   schemaVersion: 1;
   conversationId: string;
@@ -51,6 +51,7 @@ export interface MemoryDelivery {
   reason?: string;
   shadowIds?: string[];
   removed?: import("./roleSelection").SelectionRemoval[];
+  evidence?: import("./roleSelectionProvider").SelectionEvidence;
   engineMemory: { kind: "claude-index" | "codex-summary"; hash: string; bytes: number; loadedBytes: number }[];
 }
 const hash = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -226,6 +227,7 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
             // are captured together, including omissions at the byte ceiling.
             const selection = select();
             const row: MemoryDelivery = { schemaVersion: 1, conversationId: start.conversationId, ...(start.attempt ? { attempt: start.attempt } : {}), engine: start.engine, at: new Date().toISOString(), scopes: selection?.scopes ?? [], rules: selection?.rules ?? [], bytes: Buffer.byteLength(selection?.block ?? ""), ...(selection?.reason ? { reason: selection.reason, shadowIds: selection.shadowIds, removed: selection.removed } : {}), engineMemory: files.map(({ kind, hash, bytes, loadedBytes }) => ({ kind, hash, bytes, loadedBytes })) };
+            if (selection?.evidence) row.evidence = selection.evidence;
             const body = JSON.stringify(row);
             if (Buffer.byteLength(body) > 256 * 1024) throw Error("memory delivery metadata exceeds ledger limit");
             const sequence = Number(db.query("INSERT INTO deliveries(body) VALUES (?)").run(body).lastInsertRowid);

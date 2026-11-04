@@ -1,11 +1,90 @@
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
-import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, recordPublicationFailure } from "./publicationHistory";
-import { isStoredPipeline } from "./store";
+import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { isStoredPipeline, loadPipelines, savePipelines } from "./store";
 import { pipelineCompactRow } from "./listProjection";
+import { lockedFixture } from "./fixtures/lockedDependencies";
+import { publishPipelineBranch } from "./git";
+import { realExec, type ExecPort } from "../workflows/provision";
 
 const SHA = "a".repeat(40);
 const DELAYS = [60_000, 300_000, 900_000];
+
+test.each(["current", "serving-publisher", "hook"])("an environment refusal survives history serialization and takeover: %s", shape => {
+  const { pipeline, attempt } = fixture();
+  const result = { error: shape === "current" ? "stage environment: dependency preparation failed: ENOSPC" : "preparing publication dependencies: exit 1",
+    ...(shape !== "current" ? { failure: { step: "preparing publication dependencies",
+      code: 1, signal: null, durationMs: 0, outputTail: shape === "hook" ? "pre-push: frozen install\nEEXIST" : "EEXIST" } } : {}) };
+  expect(publicationEnvironmentFailure(result)).toBe(true);
+  pipeline.delivery!.operation!.result = { ok: false, ...result };
+  const record = recordPublicationFailure(pipeline, attempt, { operationId: "operation-1", epoch: 1,
+    at: "2026-10-29T00:00:00.000Z", cause: "check-failure", detail: result.error, recoverable: false }, DELAYS);
+  expect(record.cause).toBe("environment");
+  expect(record.retryAt).toBeNull();
+  const reloaded = JSON.parse(JSON.stringify(pipeline));
+  expect(isStoredPipeline(reloaded)).toBe(true);
+  expect(mergePublicationRecovery(undefined, reloaded.publicationRecovery)![SHA]!.history).toEqual([record]);
+  expect(publicationEnvironmentFailure({ error: "types failed", failure: { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0, outputTail: "pre-push: types: failed (1)" } })).toBe(false);
+});
+
+test.each([
+  "(pass) a case: PRIVACY GATE: FAIL",
+  "PRE-EXISTING src/work.test.ts: a case: PRIVACY GATE: FAIL",
+  'expected: "PRIVACY GATE: FAIL"',
+  "> PRIVACY GATE: FAIL",
+  "(pass) a case: pre-push: privacy: failed (1)",
+  "PRE-EXISTING src/work.test.ts: pre-push: privacy: refused",
+  '"pre-push: privacy: failed (1)"',
+])("test output retains the actual publication phase and retry: %s", line => {
+  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0, changedFiles: 0,
+    outputTail: `${line}\nNEW src/work.test.ts: named assertion\npre-push: touched tests: failed (1)` };
+  expect(publicationFailurePhase(failure)).toBe("touched tests");
+  expect(recoverablePublication({ error: "touched tests failed", failure })).toBe(true);
+});
+
+test.each(["PRIVACY GATE: FAIL", "pre-push: privacy: failed (1)", "pre-push: privacy: refused",
+  "  PRIVACY GATE: FAIL\r"])("a frozen-install marker cannot erase a decisive privacy refusal: %s", line => {
+  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0, changedFiles: 0,
+    outputTail: `${line}\npre-push: frozen install\nEEXIST` };
+  expect(publicationFailurePhase(failure)).toBe("privacy");
+  expect(publicationEnvironmentFailure({ error: "privacy refused publication", failure })).toBe(false);
+  expect(recoverablePublication({ error: "privacy refused publication", failure })).toBe(false);
+});
+
+test.each(["passed", "passed-phases", "privacy", "privacy-partial"])("publication clipping retains diagnostic provenance: %s", async shape => {
+  const previous = loadPipelines();
+  const f = await lockedFixture();
+  try {
+    const remote = `${f.root}/origin.git`;
+    await f.run(["git", "init", "--bare", "--initial-branch=main", remote]);
+    await f.run(["git", "remote", "add", "origin", remote]);
+    await f.run(["git", "push", "--set-upstream", "origin", "main"]);
+    const marker = "PRIVACY GATE: FAIL";
+    const ending = "\nNEW src/work.test.ts: named assertion\npre-push: touched tests: failed (1)";
+    const passed = shape.startsWith("passed");
+    const earlierPhase = shape === "passed-phases" ? "pre-push: types" : "";
+    const limit = 4000 - (earlierPhase ? earlierPhase.length + 3 : 0);
+    const padding = limit - marker.length - 1 - ending.length + (shape === "privacy-partial" ? 1 : 0);
+    const prefix = earlierPhase ? `${earlierPhase}\n${".".repeat(4000)}\n` : "";
+    const output = `${prefix}${passed ? "(pass) a case: " : "earlier hook output\n"}${marker}\n${".".repeat(padding)}${ending}`;
+    f.pipeline.delivery = { target: { repository: "fixture", remote, branch: `refs/heads/${f.pipeline.branch}` },
+      ownerId: f.pipeline.id, epoch: 1, active: true, disposition: "owner", publish: "enabled", journal: [] };
+    f.pipeline.lastPassedCommit = f.pipeline.baseRef;
+    savePipelines([f.pipeline]);
+    const exec: ExecPort = (command, args, cwd, env, options) => command === "git" && args[0] === "push"
+      ? realExec(process.execPath, ["-e", "process.stdout.write(process.env.PUBLICATION_FIXTURE_OUTPUT); process.exitCode = 1"], cwd,
+        { ...env, PUBLICATION_FIXTURE_OUTPUT: output }, options)
+      : realExec(command, args, cwd, env, options);
+    const result = await publishPipelineBranch(f.pipeline, exec, { acceptedSha: f.pipeline.lastPassedCommit! });
+    expect(result.ok).toBe(false);
+    if (result.ok || !result.failure) throw new Error("expected captured publication refusal");
+    const stored = JSON.parse(JSON.stringify(result));
+    expect(stored.failure.changedFiles).toBe(0);
+    expect(stored.failure.outputTail.length).toBeLessThanOrEqual(4000);
+    expect(publicationFailurePhase(stored.failure)).toBe(passed ? "touched tests" : "privacy");
+    expect(recoverablePublication(stored)).toBe(passed);
+  } finally { savePipelines(previous); f.close(); }
+}, 30_000);
 
 test("App git 403 uses a persisted one-hour window with bounded backoff and a final deadline", () => {
   let { pipeline, attempt } = fixture();
