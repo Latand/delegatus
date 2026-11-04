@@ -741,6 +741,26 @@ test("a duplicate at the checkpoint boundary keeps the host alive", async () => 
   expect(probe.report.refused).toContainEqual(expect.objectContaining({ clause: "events-flushed" }));
 });
 
+test("review zero-cursor duplicate boundary preserves unflushed output", async () => {
+  scratchDirs.push(statePath("structured-host-events", `${SESSION}.jsonl`));
+  const filename = path.join(statePath("structured-host-events"), `${SESSION}.jsonl`);
+  fs.writeFileSync(filename, [
+    JSON.stringify({ kind: "delta", turnId: "settled-turn", text: "unflushed output", seq: 1 }),
+    JSON.stringify({ kind: "session-status", status: "dead", seq: 1 }),
+    JSON.stringify({ kind: "session-status", status: "unhosted", seq: 2 }),
+    "",
+  ].join("\n"));
+
+  const probe = await sweep({
+    durableEventTail: undefined,
+    snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({
+      structuredHost: { ...(entry().structuredHost as object), eventCursor: 0 },
+    }) } }),
+  });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toContainEqual(expect.objectContaining({ clause: "events-flushed" }));
+});
+
 test.each([
   { kind: "delta", turnId: "settled-turn", text: "not checkpointed", seq: 13 },
   { kind: "turn-ended", turnId: "another-turn", status: "completed", seq: 13 },

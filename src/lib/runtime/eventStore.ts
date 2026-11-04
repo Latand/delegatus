@@ -340,6 +340,11 @@ export function durableRuntimeEventFlushTailSeq(
       if (!validEvent(predecessor) || predecessor.seq !== flushedCursor) {
         return undetermined("the runtime event suffix does not follow the flushed cursor");
       }
+    } else if (start + end + 1 !== 0) {
+      // With no checkpoint row, the terminal suffix is safe only when it
+      // begins at the first byte of the ledger. Otherwise an unexamined
+      // prefix may contain output sharing a sequence with a terminal row.
+      return undetermined("the runtime event suffix does not begin at the ledger start");
     }
     if (!sameLedgerIdentity(before, ledgerIdentity(fs.fstatSync(handle)))
       || !sameLedgerIdentity(before, ledgerIdentity(fs.statSync(filename)))) {

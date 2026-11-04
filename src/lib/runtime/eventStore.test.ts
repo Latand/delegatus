@@ -22,6 +22,26 @@ test("retirement exempts only a complete contiguous terminal status suffix, pres
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("zero-cursor retirement requires the terminal suffix to begin at byte zero", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-flush-"));
+  try {
+    fs.writeFileSync(path.join(directory, "settled.jsonl"), [
+      JSON.stringify({ kind: "session-status", status: "dead", seq: 1 }),
+      JSON.stringify({ kind: "session-status", status: "unhosted", seq: 2 }),
+      "",
+    ].join("\n"));
+    expect(durableRuntimeEventFlushTailSeq("settled", 0, directory)).toEqual({ determined: true, value: 0 });
+
+    fs.writeFileSync(path.join(directory, "settled.jsonl"), [
+      JSON.stringify({ kind: "delta", turnId: "turn", text: "unflushed output", seq: 1 }),
+      JSON.stringify({ kind: "session-status", status: "dead", seq: 1 }),
+      JSON.stringify({ kind: "session-status", status: "unhosted", seq: 2 }),
+      "",
+    ].join("\n"));
+    expect(durableRuntimeEventFlushTailSeq("settled", 0, directory).determined).toBe(false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test.each([
   ["torn append", '{"kind":"session-status","status":"unhosted","seq":13}\n{partial'],
   ["invalid event", '{"kind":"session-status","status":"unexpected","seq":13}\n'],
