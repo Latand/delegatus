@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +12,7 @@ import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema, descriptorDigest } from "./wire";
-import { RecordedCheckStore, recordedExecutionState, recordedHostHeld, recordedRootHeld } from "./store";
+import { RecordedCheckStore, RecordedCheckCapacityError, recordedExecutionState, recordedHostHeld, recordedRootHeld, rowSchema } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck, cancelRecordedHost } from "./service";
 import { procBackend } from "@/lib/proc";
 import { RecordedCheckObserver, productionObserverPorts, startRecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
@@ -31,6 +32,7 @@ import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { resolvePipelineRole } from "@/lib/pipelines/roles";
 import { AttemptTempStore, sweepAttemptTemps } from "@/lib/runtime/attemptTempRetention";
+import { attemptReferencesClear } from "@/lib/runtime/attemptTempFilesystem";
 import { attemptTempState } from "@/lib/runtime/attemptTempProduction";
 import { signalFixtureIdentity, stopFixtureIdentity, stopFixtureProcess, ownFixtureTree } from "@/lib/testing/fixtureProcess";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
@@ -55,6 +57,10 @@ const persistence: StructuredHostPersistenceStop[] = [];
 const projections: Array<() => void> = [];
 const controllerIdentities = new WeakMap<ChildProcess, ProcessIdentity>();
 const controllerDiagnostics = new WeakMap<ChildProcess, () => string>();
+// These fixtures create no containers. Keep the native filesystem and socket
+// checks while supplying the fixture's empty container inventory.
+const fixtureReferences: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["references"]> =
+  (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true);
 afterEach(async () => {
   stopRecordedCheckObserver();
   for (const observer of observers.splice(0)) observer.stop();
@@ -99,7 +105,7 @@ async function idle(host: CodexAppServerHost) {
 const detail = (error: unknown) => error instanceof Error ? error.stack ?? error.message : String(error);
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
-async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name: "owned-check", exit: 23 }]) {
+async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name: "owned-check", exit: 23 }], executionMs = 180_000, deadlineOffsetMs = 240_000) {
   projections.push(credentialFreeSocketFixture());
   const sandbox = createGateSandbox(); roots.push(sandbox); gateSandboxes.add(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
@@ -138,13 +144,13 @@ async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name:
 const directory=import.meta.dir;
 fs.appendFileSync(path.join(directory,"executions"),"run\\n");
 fs.writeFileSync(path.join(directory,"started"),"ready");
-await new Promise<void>((resolve,reject)=>{const watcher=fs.watch(directory,()=>check());const timer=setTimeout(()=>{watcher.close();reject(new Error("fixture command deadline"))},180000);function check(){if(fs.existsSync(path.join(directory,"release"))){clearTimeout(timer);watcher.close();resolve()}}check()});
+await new Promise<void>((resolve,reject)=>{const watcher=fs.watch(directory,()=>check());const timer=setTimeout(()=>{watcher.close();reject(new Error("fixture command deadline"))},${executionMs});function check(){if(fs.existsSync(path.join(directory,"release"))){clearTimeout(timer);watcher.close();resolve()}}check()});
 fs.writeFileSync(path.join(directory,"final.patch"),"retained late patch\\n");
 const outcomes=${JSON.stringify(outcomes)};
 fs.writeFileSync(path.join(directory,"complete.tmp"),JSON.stringify({selection:outcomes.map(row=>row.name),visited:outcomes.length,completed:outcomes.length,outcomes}));
 fs.renameSync(path.join(directory,"complete.tmp"),path.join(directory,"complete.json"));
 console.log("RAN_COUNT "+outcomes.length+"/"+outcomes.length);process.exitCode=outcomes.some(row=>row.exit!==0)?23:0;`);
-  const manifest = await buildManifest({ cwd: work, deadline: Date.now() + 240_000, executionMs: 180_000, selection: outcomes.map(row => row.name),
+  const manifest = await buildManifest({ cwd: work, deadline: Date.now() + deadlineOffsetMs, executionMs, selection: outcomes.map(row => row.name),
     executionEnvironment: access.env,
     configurationDigest: digest({ fixture: true }), roots: [{ directory: work, purpose: "evidence" }],
     inputs: [{ root: work, file: "tmp/command.ts" }], outputs: [{ root: work, file: "tmp/final.patch" }], completion: { root: work, file: "tmp/complete.json" } });
@@ -348,7 +354,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
     expect(f.calls()).toBe(2);
     const temps = new AttemptTempStore();
     try {
-      const before = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, scan: () => ({ ownNamespace: null, processes: [] }) });
+      const before = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences, scan: () => ({ ownNamespace: null, processes: [] }) });
       expect(before.removed).toBe(0); expect(fs.existsSync(f.work)).toBeTrue();
       f.lock?.stdin!.end("release\n");
       await observed(f.tmp, () => fs.existsSync(path.join(f.tmp, "started")));
@@ -391,12 +397,13 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       const replayController = await boot();
       await stopFixtureProcess(replayController, 5000, 10_000);
       expect(f.calls()).toBe(3);
-      const store = new RecordedCheckStore();
+      const store = new RecordedCheckStore(undefined, false);
       try {
         const finished = store.get(row.id)!;
         expect(finished.result?.terminal?.wrapperExit).toBe(23);
         expect(finished.result?.terminal?.report?.commandExit).toBe(23);
         expect(finished.result?.terminal?.report?.cleanup).toBe("confirmed");
+        expect(store.capacity()).toEqual([]);
         expect(finished.result?.complete, finished.result?.reason).toBeTrue();
         expect(finished.result?.completed).toBe(1);
         expect(recordedExecutionState(finished)).toBe("completed");
@@ -406,7 +413,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
         expect(recordedRootHeld(f.work)).toBeTrue();
         expect(fs.readFileSync(deliveries, "utf8")).toBe(`recorded-check:${row.id}\n`);
-        const unread = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+        const unread = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
           now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
         expect(unread.removed).toBe(0);
         expect(fs.existsSync(f.work)).toBeTrue();
@@ -421,7 +428,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(store.get(row.id)?.notification?.state).toBe("delivered");
         // The original owner is stopped only after its own terminal receipt.
         await stopFixtureIdentity(nativeOwners.at(-1)!, 5000);
-        const after = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+        const after = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
           now: () => Date.now() + 240_000, scan: () => ({ ownNamespace: null, processes: [] }) });
         expect(after.errors).toBe(0);
         expect(fs.existsSync(f.work)).toBeFalse();
@@ -437,7 +444,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       } finally { store.close(); }
     } finally { temps.close(); }
   } catch (error) {
-    const store = new RecordedCheckStore();
+    const store = new RecordedCheckStore(undefined, false);
     try {
       const row = receiptId ? store.get(receiptId) : null;
       throw new Error(`${detail(error)}\n${JSON.stringify({ result: row?.result?.state, complete: row?.result?.complete,
@@ -463,7 +470,7 @@ test("an unread terminal result retains its production roots through a real scra
     expect(store.get(row.id)?.result?.terminal?.report?.commandExit).toBe(23);
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
     await stopFixtureIdentity(row.binding.host, 5000);
-    const sweep = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+    const sweep = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
       now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(sweep.removed).toBe(0);
     expect(fs.existsSync(f.work)).toBeTrue();
@@ -683,8 +690,8 @@ test("acknowledgement before seat designation keeps one completion recoverable a
       const page = store.evidencePage(row.id, result.revision, cursor); expect(page.length).toBeGreaterThan(0);
       evidence.push(...page); cursor += page.length;
     }
-    // Storage-only copies exercise the bounded completion backlog across
-    // writer restarts; they admit no process and execute no command.
+    // Retained completion deliveries survive writer restarts independently
+    // of native admission slots; these copies execute no command.
     const configuration = path.join(f.root, "ack-cap-input.json"), output = path.join(f.root, "ack-cap-output.json");
     for (const sharedLaunch of [true, false]) {
       const limit = sharedLaunch ? 4 : 128;
@@ -694,8 +701,8 @@ test("acknowledgement before seat designation keeps one completion recoverable a
         const run = fixtureChild(path.resolve("src/lib/recordedChecks/store.process.fixture.ts"), [configuration], process.env);
         const [code] = await once(run.child, "exit"); expect(code, run.errors()).toBe(0);
         const answer = readEnvelope(output) as { count: number; refusal: string | null; rootsHeld: boolean };
-        expect(answer.count).toBe(limit); expect(answer.rootsHeld).toBeFalse();
-        if (start) expect(answer.refusal).toContain("capacity"); else expect(answer.refusal).toBeNull();
+        expect(answer.count).toBe(start + count); expect(answer.rootsHeld).toBeFalse();
+        expect(answer.refusal).toBeNull();
       }
     }
     fs.renameSync(`${f.log}.gate`, `${f.log}.acknowledged`);
@@ -717,6 +724,13 @@ test("acknowledgement before seat designation keeps one completion recoverable a
     const replay = new RecordedCheckObserver(productionObserverPorts); observers.push(replay);
     await replay.start(); await replay.observe(row.id); replay.stop();
     expect(f.calls()).toBe(calls + 1);
+    const durableReplay = await handoffRecordedCheck(f.launch.conversationId, "acknowledged-outbox", f.log, {
+      binding: () => { throw new Error("replay reacquired stage authority"); },
+      verify: () => { throw new Error("replay granted new custody"); },
+      observe: async () => { throw new Error("replay required producer observation"); },
+    });
+    expect(durableReplay.id).toBe(row.id);
+    expect(durableReplay.acknowledgement).toEqual(acknowledged.acknowledgement);
   } finally { store.close(); await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
 }, 90_000);
 
@@ -839,6 +853,23 @@ for (const restart of [false, true]) test(`a temporary proven no-dispatch comple
     await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.noDispatch === true, 30_000, "temporary completion refusal");
     const refused = store.get(row.id)!.notification!;
     expect(refused).toMatchObject({ state: "reserved", operation: null, noDispatch: true });
+    expect(store.pendingForRecipient(refused.conversation).map(candidate => candidate.id)).toContain(row.id);
+    expect(store.pendingForRecipient("foreign-readiness-recipient")).toEqual([]);
+    const queryDb = new Database(store.filename, { readonly: true });
+    try {
+      const plan = queryDb.query<{ detail: string }, [string, string, number]>(
+        "EXPLAIN QUERY PLAN SELECT value FROM recorded_checks WHERE id>? AND json_extract(value,'$.notification.conversation')=? AND json_extract(value,'$.notification.noDispatch')=1 ORDER BY id LIMIT ?",
+      ).all("", refused.conversation, 32);
+      expect(plan.map(entry => entry.detail).join("\n")).toContain("recorded_checks_pending_recipient");
+    } finally { queryDb.close(); }
+    const backlogRead = spyOn(RecordedCheckStore.prototype, "page");
+    await (observer as unknown as { startupWork?: Promise<void> }).startupWork;
+    backlogRead.mockClear();
+    observer.receiptsChanged(undefined, true, "foreign-readiness-recipient");
+    await (observer as unknown as { readinessWork?: Promise<void> }).readinessWork;
+    expect(attempts).toBe(1);
+    expect(backlogRead).not.toHaveBeenCalled();
+    backlogRead.mockRestore();
     // Indexed receipt hints can reconcile the refusal without retrying it.
     for (let index = 0; index < 3; index++) await observer.observe(row.id, false, false);
     expect(attempts).toBe(1);
@@ -887,7 +918,7 @@ test("pending and unread recorded roots measure late files without releasing evi
     { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
   let now = Date.now() + 120_000;
   const temps = new AttemptTempStore(), store = new RecordedCheckStore();
-  const sweep = () => sweepAttemptTemps(temps, { now: () => now, maxRoots: 32, capBytes: 0,
+  const sweep = () => sweepAttemptTemps(temps, { now: () => now, maxRoots: 32, capBytes: 0, references: fixtureReferences,
     state: async () => { throw new Error("held evidence cannot enter retirement admission"); },
     scan: () => { throw new Error("held evidence cannot enter deletion scan"); } });
   const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
@@ -1086,6 +1117,130 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     } finally { store.close(); }
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);
+
+for (const mode of ["restart", "wait", "source-changed"]) test(`native handoff releases abandoned capacity and preserves a live holder: ${mode}`, async () => {
+  const wait = mode !== "restart";
+  const f = await fixture(true);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const template = rowSchema.parse({ id: descriptor.runId, request: digest("native-capacity-template"),
+    binding: callingAttempt(f.launch.conversationId), log: f.log, descriptor, revision: 1,
+    admission: "accepted", reason: "native fixture", result: null, notification: null, acknowledgement: null });
+  const input = path.join(f.root, "capacity-input.json"), output = path.join(f.root, "capacity-ready.json");
+  writeEnvelope(input, { filename: statePath("state.sqlite"), output, row: template, count: wait ? 4 : 128, sharedLaunch: wait, hold: wait });
+  const fill = fixtureChild(path.resolve("src/lib/recordedChecks/capacity.process.fixture.ts"), [input], process.env);
+  const exited = once(fill.child, "exit");
+  if (wait) await observed(f.root, () => fs.existsSync(output));
+  else expect((await exited)[0], fill.errors()).toBe(0);
+  let waited = false;
+  let releaseWork = Promise.resolve();
+  const watch = fs.watch;
+  const barrier = spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof watch>) => {
+    const watcher = watch(...args);
+    if (wait && !waited && args[0] === path.dirname(statePath("state.sqlite"))) {
+      waited = true;
+      releaseWork = f.registry.withOperationLock({ engine: "codex", sessionId: f.host.identity.threadId }, captureProcessIdentity(process.pid), async () => {
+        if (mode === "source-changed") fs.appendFileSync(path.join(f.tmp, "command.ts"), "\n// Source replaced during capacity wait.\n");
+        fill.child.stdin!.write("release\n");
+        expect((await exited)[0], fill.errors()).toBe(0);
+      });
+    }
+    return watcher;
+  }) as typeof watch);
+  try {
+    const row = await handoffRecordedCheck(f.launch.conversationId, "native-capacity-admit", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+    expect(row.admission, row.reason).toBe(mode === "source-changed" ? "refused" : "accepted");
+    if (mode === "source-changed") expect(row.reason).toContain("source changed");
+    else expect(recordedExecutionState(row)).toBe("active");
+    expect(waited).toBe(wait);
+    const store = new RecordedCheckStore();
+    try {
+      expect(store.capacity().map(holder => holder.id).sort()).toEqual([digest(["capacity-holder", 0]), row.id].sort());
+      expect(store.get(digest(["capacity-holder", 1]))?.acknowledgement).toBeNull();
+      expect(store.rootHeld(f.work)).toBeTrue();
+    } finally { store.close(); }
+  } finally { await releaseWork; barrier.mockRestore(); f.cleanup(); }
+}, 60_000);
+
+test("capacity retry answers within an external bound while registry admission stays locked through native close", async () => {
+  const f = await fixture(false, false, undefined, 180_000, 60_000);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const template = rowSchema.parse({ id: descriptor.runId, request: digest("deadline-lock-template"),
+    binding: callingAttempt(f.launch.conversationId), log: f.log, descriptor, revision: 1,
+    admission: "accepted", reason: "native fixture", result: null, notification: null, acknowledgement: null });
+  const input = path.join(f.root, "deadline-lock-capacity-input.json"), output = path.join(f.root, "deadline-lock-capacity-ready.json");
+  writeEnvelope(input, { filename: statePath("state.sqlite"), output, row: template, count: 4, sharedLaunch: true, hold: true });
+  const fill = fixtureChild(path.resolve("src/lib/recordedChecks/capacity.process.fixture.ts"), [input], process.env);
+  const exited = once(fill.child, "exit");
+  await observed(f.root, () => fs.existsSync(output));
+  const retrying = path.join(f.root, "api-retrying.json"), answerFile = path.join(f.root, "api-answer.json");
+  const configuration = path.join(f.root, "api-input.json");
+  writeEnvelope(configuration, { caller: f.launch.conversationId, ticket: f.log, request: "deadline-lock",
+    stateDirectory: path.dirname(statePath("state.sqlite")), retrying, answer: answerFile });
+  const api = fixtureChild(path.resolve("src/lib/recordedChecks/api.process.fixture.ts"), [configuration], process.env);
+  const apiExited = once(api.child, "exit");
+  await observed(f.root, () => fs.existsSync(`${answerFile}.started`));
+  const lockWork = observed(f.root, () => fs.existsSync(retrying), 35_000, "API capacity retry observation")
+    .then(() => f.registry.withOperationLock({ engine: "codex", sessionId: f.host.identity.threadId }, captureProcessIdentity(process.pid), async () => {
+      fs.writeFileSync(path.join(f.tmp, "release"), "release");
+      await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")), 20_000, "real recorder close under registry lock");
+      await observed(f.root, () => fs.existsSync(answerFile), 35_000, "external API response bound");
+      const response = readEnvelope(answerFile) as { result?: { status?: string; retryable?: boolean }; error?: string };
+      expect(response.error).toBeUndefined();
+      expect(response.result).toMatchObject({ status: "waiting", retryable: true });
+      expect(fs.existsSync(path.join(`${f.log}.gate`, "exit"))).toBeTrue();
+      const store = new RecordedCheckStore(statePath("state.sqlite"), false);
+      try {
+        expect(store.byRequest(digest([f.launch.conversationId, "deadline-lock"]))).toBeNull();
+        expect(store.capacity()).toHaveLength(4);
+        expect(store.capacity().every(holder => holder.state === "live-or-unverified")).toBeTrue();
+        expect(store.rootHeld(f.work)).toBeTrue();
+      } finally { store.close(); }
+    }));
+  try {
+    await lockWork;
+    const [code] = await apiExited;
+    expect(code, api.errors()).toBe(0);
+  } finally {
+    if (fill.child.exitCode === null) fill.child.stdin!.write("release\n");
+    if (fill.child.exitCode === null) expect((await exited)[0], fill.errors()).toBe(0);
+    await lockWork.catch(() => {});
+    await stopFixtureProcess(api.child);
+    f.cleanup();
+  }
+}, 60_000);
+
+test("full live custody returns bounded waiting with holders through the API", async () => {
+  const f = await fixture(true);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const template = rowSchema.parse({ id: descriptor.runId, request: digest("live-capacity-template"),
+    binding: callingAttempt(f.launch.conversationId), log: f.log, descriptor, revision: 1,
+    admission: "accepted", reason: "native fixture", result: null, notification: null, acknowledgement: null });
+  const store = new RecordedCheckStore();
+  for (let index = 0; index < 4; index++) {
+    const id = digest(["live-capacity", index]);
+    const { wrapper, descriptorDigest: _digest, ...body } = { ...descriptor, runId: id };
+    await store.write({ ...template, id, request: digest(["live-capacity-request", index]),
+      descriptor: { ...body, wrapper, descriptorDigest: descriptorDigest(body) } }, null);
+  }
+  const put = RecordedCheckStore.prototype.put;
+  let clock: ReturnType<typeof spyOn> | undefined;
+  const admission = spyOn(RecordedCheckStore.prototype, "put").mockImplementation(function (this: RecordedCheckStore, ...args) {
+    try { return put.apply(this, args); }
+    catch (error) {
+      if (error instanceof RecordedCheckCapacityError) clock = spyOn(wire, "custodyClock").mockReturnValue(descriptor.deadlineUptimeMs + 1);
+      throw error;
+    }
+  });
+  try {
+    const answer = await recordedCheck({ action: "handoff", ticket: f.log, clientRequestId: "bounded-live-capacity" }, f.launch.conversationId);
+    expect(answer.status).toBe("waiting"); expect(answer.retryable).toBeTrue();
+    expect(answer.holderCount).toBe(4);
+    expect((answer.holders as Array<{ state: string }>).every(holder => holder.state === "live-or-unverified")).toBeTrue();
+    expect(store.byRequest(digest([f.launch.conversationId, "bounded-live-capacity"]))).toBeNull();
+    expect(store.capacity()).toHaveLength(4); expect(store.rootHeld(f.work)).toBeTrue();
+  } finally { clock?.mockRestore(); admission.mockRestore(); store.close(); f.cleanup(); }
+}, 60_000);
 
 test("a seat revoked during asynchronous receipt-read admission receives no result", async () => {
   const f = await fixture(false);
@@ -1620,7 +1775,7 @@ test("a cancelled check acknowledges retained partial evidence and direct absenc
     const temps = new AttemptTempStore();
     try {
       await stopFixtureIdentity(row.binding.host, 5000);
-      const swept = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+      const swept = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
         now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
       expect(swept.errors).toBe(0); expect(fs.existsSync(f.work)).toBeFalse();
     } finally { temps.close(); }
