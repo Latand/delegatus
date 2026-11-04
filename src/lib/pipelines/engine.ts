@@ -1,3 +1,4 @@
+import { integrationAuthorityRefusal } from "./integrationAuthority";
 import { admitIntegration, creationRequestDigest, integrationAttempt, integrationScope, integrationRequirementRevision, renewIntegrationDecision, INTEGRATION_STAGES, INTEGRATION_REPAIR_LIMIT } from "./integration";
 import { holdsRepositoryResolverCapacity, integrationStages, isRepositoryResolver } from "@/lib/forge/autoRefresh";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
@@ -9706,18 +9707,7 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
 }
 
 function integrationExecutionRefusal(pipeline: Pipeline, ports: PipelinePorts, reconcilePublication = false): string | null {
-  const integration = pipeline.merge?.integration;
-  if (!integration || !pipeline.cursor || !INTEGRATION_STAGES.includes(pipeline.cursor.stageId as typeof INTEGRATION_STAGES[number])) return null;
-  if (!reconcilePublication || pipeline.delivery?.operation?.state !== "running") {
-    const policy = mergeOnReviewSetting(pipeline.project);
-    if (pipeline.workspace && !workspacePrincipalAllows(pipeline.workspace, pipeline.project)
-      || !policy.enabled || policy.changedAt !== integration.decisionRevision || integration.scope !== integrationScope(pipeline)
-      || integration.requirementRevision !== integrationRequirementRevision(pipeline) || integration.ownerEpoch !== pipeline.delivery?.epoch) {
-      return "integration requirements, policy or delivery authority changed; review before continuing";
-    }
-  }
-  return unixMs(ports.now()) >= unixMs(integration.deadline)
-    ? "integration session deadline expired; reconcile the current attempt before retrying" : null;
+  return integrationAuthorityRefusal(pipeline, unixMs(ports.now()), reconcilePublication);
 }
 
 async function holdIntegrationExecution(pipeline: Pipeline, attempt: PipelineStageAttempt | null, ports: PipelinePorts,

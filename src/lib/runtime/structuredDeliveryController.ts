@@ -11,7 +11,7 @@ import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
-import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
+import { assertPipelineTurnAllowed, enforceAccountCreditGuard, pipelineRequiresDispatchGuard, type PipelineDispatchContext } from "./accountCreditGuard";
 import { assertProactiveTaskExecution, proactiveConversationContext, proactiveConversationTaskIds, proactiveTasksRequireDispatchGuard, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
@@ -831,8 +831,8 @@ export async function bindStructuredDeliveryQueue(
     return seatRecipientVerdict(conversationIdsResolvingTo(snapshot, lookup.canonicalConversationId(conversationId as ViewerConversationId)),
       id => lookup.canonicalConversationId(id as ViewerConversationId));
   };
-  const authorizeAccountDispatch = (conversationId: string) => {
-    assertPipelineTurnAllowed(conversationId, registry);
+  const authorizeAccountDispatch = (conversationId: string, dispatch: PipelineDispatchContext) => {
+    assertPipelineTurnAllowed(conversationId, registry, { ...dispatch, now: nativeNow() });
     const conversation = registry.conversation(conversationId as ViewerConversationId);
     try {
       assertProactiveTaskExecution(proactiveConversationTaskIds([conversationId], registry), undefined,
@@ -856,12 +856,13 @@ export async function bindStructuredDeliveryQueue(
   setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
-    requiresDispatchGuard: conversationId => proactiveTasksRequireDispatchGuard(proactiveConversationTaskIds([conversationId], registry)),
-    authorizeDispatch: conversationId => {
+    requiresDispatchGuard: conversationId => pipelineRequiresDispatchGuard(conversationId, registry)
+      || proactiveTasksRequireDispatchGuard(proactiveConversationTaskIds([conversationId], registry)),
+    authorizeDispatch: (conversationId, dispatch) => {
       const verdict = seatRecipient(conversationId);
       if (verdict.kind === "revoked") throw new StructuredSendRefusedError(verdict.reason);
       if (verdict.kind === "unknown") throw new StructuredDispatchDeferredError(verdict.reason);
-      authorizeAccountDispatch(conversationId);
+      authorizeAccountDispatch(conversationId, dispatch);
     },
     resolveHost: hostResolver(registry, hosts),
     /* Off the loop, a hand-off's own row included (C3, A8). */
@@ -1114,7 +1115,7 @@ export async function bindStructuredDeliveryQueue(
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string, conversationId: string) => {
-        authorizeAccountDispatch(conversationId);
+        authorizeAccountDispatch(conversationId, { operationId });
         if (!ownerRelayOperationAuthorized(operationId, conversationId))
           throw new StructuredSendRefusedError("owner relay continuation authorization revoked");
         if (!operationId.startsWith("spawn_message_")) return;
