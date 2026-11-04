@@ -100,3 +100,58 @@ test("a temporary-root alias retains its physical ownership", async () => {
   const link = path.join(alias.root, "temporary-root"); fs.symlinkSync(f.root, link, "dir");
   expect((await runGateCheckTool({ log: path.join(link, "check.log"), reason: "aliased root" }, link, new AbortController().signal)).success).toBe(true);
 });
+
+for (const shape of ["internal-link", "physical-root", "normalized-child"] as const) test(`owned log waits through ${shape}`, async () => {
+  const f = fixture(), alias = fixture(); finish(f.dir, 0);
+  let root = f.root, log = f.log;
+  if (shape === "internal-link") {
+    fs.symlinkSync(f.root, path.join(f.root, "nested"), "dir");
+    log = path.join(f.root, "nested", "check.log");
+  } else if (shape === "physical-root") {
+    root = path.join(alias.root, "alias"); fs.symlinkSync(f.root, root, "dir");
+  } else {
+    fs.mkdirSync(path.join(f.root, "child"));
+    log = `${f.root}/child/../check.log`;
+  }
+  const result = await runGateCheckTool({ log, reason: "owned check" }, root, new AbortController().signal);
+  expect(result.success).toBe(true);
+  expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 0 });
+});
+
+for (const shape of ["absolute", "parent", "symlink", "prefix"] as const) test(`foreign ${shape} log names both paths and stays refused`, async () => {
+  const f = fixture(), other = fixture(); finish(other.dir, 0);
+  const root = f.root; let log = other.log;
+  if (shape === "parent") log = `${f.root}/../${path.basename(other.root)}/check.log`;
+  if (shape === "symlink") {
+    fs.symlinkSync(other.root, path.join(f.root, "foreign"), "dir");
+    log = path.join(f.root, "foreign", "check.log");
+  }
+  if (shape === "prefix") {
+    const sibling = `${f.root}-sibling`; fs.renameSync(other.root, sibling); roots.push(sibling);
+    log = path.join(sibling, "check.log");
+  }
+  const result = await runGateCheckTool({ log, reason: "foreign check" }, root, new AbortController().signal);
+  expect(result.success).toBe(false);
+  expect(result.contentItems[0].text).toContain(`root=${JSON.stringify(root)}`);
+  expect(result.contentItems[0].text).toContain(`log=${JSON.stringify(log)}`);
+  const owned = shape === "prefix" ? log : other.log;
+  expect((await runGateCheckTool({ log: owned, reason: "owner control" }, path.dirname(owned), new AbortController().signal)).success).toBe(true);
+});
+
+test("unknown stage root never adopts a caller-supplied log", async () => {
+  const f = fixture(); finish(f.dir, 0);
+  const result = await runGateCheckTool({ log: f.log, reason: "unknown owner" }, null, new AbortController().signal);
+  expect(result.success).toBe(false);
+  expect(result.contentItems[0].text).toContain("root=null");
+  expect(result.contentItems[0].text).toContain(JSON.stringify(f.log));
+});
+
+test.each(["root", "parent"])("a missing %s diagnoses both paths without waiting", async missing => {
+  const f = fixture();
+  const root = missing === "root" ? path.join(f.root, "absent") : f.root;
+  const log = missing === "parent" ? path.join(f.root, "absent/check.log") : f.log;
+  const result = await runGateCheckTool({ log, reason: "missing path" }, root, new AbortController().signal);
+  expect(result.success).toBe(false);
+  expect(result.contentItems[0].text).toContain(`root=${JSON.stringify(root)}`);
+  expect(result.contentItems[0].text).toContain(`log=${JSON.stringify(log)}`);
+});
