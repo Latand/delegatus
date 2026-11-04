@@ -57,6 +57,25 @@ test("structured owner prompt builders fit escaped history while preserving the 
   expect(JSON.stringify(request)).toBe(original);
 });
 
+test("owner continuation budgets inbound context with optional memory and advances only retained history", async () => {
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const { request, parent, current } = longReplyRequest();
+  request.input.short_term_memory = "optional memory ".repeat(2200);
+  const inboundContext = "[Inbound document context]\n" + "document text ".repeat(60);
+  const owner = { messageId: current.id, text: current.text, requestText: null };
+  const turn = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null }, inboundContext);
+
+  expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+  expect(turn.prompt).toContain(inboundContext);
+  expect(turn.prompt).not.toContain("optional memory");
+  const retained = section(turn.prompt, "conversation") as typeof request.input.conversation;
+  expect(retained.find(message => message.id === current.id)).toEqual(current);
+  expect(retained.find(message => message.id === parent.id)).toEqual(parent);
+  expect(turn.seen).toContain(current.id);
+  expect(turn.seen).toContain(parent.id);
+  expect(turn.seen).not.toContain("earlier-0");
+});
+
 test("mandatory oversized input is refused whole before a prompt can be dispatched", async () => {
   const { ownerRunPrompt } = await import("./ownerRun");
   const { request, current } = longReplyRequest();

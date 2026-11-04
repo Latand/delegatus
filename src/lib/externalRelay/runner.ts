@@ -352,10 +352,12 @@ export async function runClaimedRequest(
           if (!ownerPastWindow() && (leaseUnavailable || callAbort.signal.aborted || error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost"))) {
             leaseUnavailable = true;
             recorder?.annotateV2({ outcome: "lease_lost", drops: answerDrops });
-            return null;
+            if (!ownerExecution) return null;
+            answerDrops.push({part:"attachment",reason:"upload_failed"});
+          } else {
+            answerDrops.push({part:"attachment",reason:"upload_failed"});
+            if (allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
           }
-          answerDrops.push({part:"attachment",reason:"upload_failed"});
-          if (allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
         }
         if (body.outcome === "answered" && !body.answer.text.trim() && !body.answer.attachments?.length) body = failed(body.lease_id, "invalid_answer");
       }
@@ -891,10 +893,14 @@ export async function runClaimedRequest(
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         const ownerTarget = target;
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
-        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation) : conversationTurnPrompt(request, conversation, frame);
+        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, inbound?.prompt) : conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
+        const inboundAlreadyComposed = !!(conversation && owner && rounds === 1 && inbound?.prompt && (conversation.conversationId || usingCloud));
         if (conversation) {
-          const promptBytes = Buffer.byteLength(owner ? conversation.conversationId ? turn!.prompt : ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes) : persistentPrompt);
+          const measuredPrompt = owner
+            ? (conversation.conversationId || usingCloud ? turn!.prompt : ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes, inbound?.prompt))
+            : persistentPrompt;
+          const promptBytes = Buffer.byteLength(measuredPrompt);
           chain = rounds === 1 ? { continued: owner ? !!conversation.conversationId : !!conversation.sessionId, promptBytes }
             : { continued: chain!.continued, promptBytes: chain!.promptBytes + promptBytes };
         }
@@ -902,7 +908,7 @@ export async function runClaimedRequest(
           await releaseConversationAsync(conversation.id, { state: "running", runningRequestId: requestId,
             pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, ownerRelayStoreDeadline(), requestId);
         }
-        const agentPrompt = (conversation ? persistentPrompt : roundPrompt) + (inbound?.prompt ? "\n" + inbound.prompt : "");
+        const agentPrompt = (conversation ? persistentPrompt : roundPrompt) + (inbound?.prompt && !inboundAlreadyComposed ? "\n" + inbound.prompt : "");
         const roundDirectory = loop ? path.join(runDir, `round-${rounds}`) : runDir;
         let inputFile: string | undefined;
         if (!owner && target.engine === "claude" && inbound?.files.length) {
@@ -926,7 +932,7 @@ export async function runClaimedRequest(
           credentials: ownerCredentials,
           onDiagnostic: recordDiagnostic,
           rawDeadlineAt: rawRequest.deadline_at,
-          inboundContext: inbound?.prompt,
+          inboundContext: inboundAlreadyComposed ? undefined : inbound?.prompt,
           request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId, initialPrompt) => {
@@ -992,7 +998,7 @@ export async function runClaimedRequest(
               throw error;
             }
           },
-          authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || owner && (Date.now() >= executionDeadline || !ownerRelayAuthorized(relay.id, target.id, requestId))) throw new Error("relay authorization revoked or execution deadline expired"); },
+          authorize: () => { if ((leaseUnavailable && !owner) || callAbort.signal.aborted || (owner && (Date.now() >= executionDeadline || !ownerRelayAuthorized(relay.id, target.id, requestId)))) throw new Error("relay authorization revoked or execution deadline expired"); },
           onProgress: steps?.observe,
           ...(owner ? { decode: (text: string) => {
             let value: unknown;

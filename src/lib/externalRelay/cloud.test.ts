@@ -66,6 +66,7 @@ import { runClaimedRequest } from "./runner";
 import { readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { contextRequest } from "./request.fixture";
 import { startTestRelay } from "./testRelay";
+import { cloneReceipt } from "./clone.fixture";
 import { readAnswerRecord } from "./answers";
 import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
@@ -264,6 +265,50 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
     expect(cloudCalls).toBe(1); expect(localCalls).toBe(failCloud ? 1 : 0);
     expect(select).toHaveBeenCalledTimes(failCloud ? 1 : 0);
   } finally { select.mockRestore(); repository.close(); await server.close(); }
+});
+
+test("owner Cloud execution completes after heartbeat lease loss and delivers once", async () => {
+  let lost!: () => void;
+  const leaseLost = new Promise<void>(resolve => { lost = resolve; });
+  const sends: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat") && (body as { seq: number }).seq > 1) {
+      lost();
+      return { status: 409, body: { error: { code: "lease_lost" } } };
+    }
+    if (req.url?.endsWith("/send")) { sends.push(body); return { body: cloneReceipt() }; }
+    return { body: { status: "ok" } };
+  });
+  const relay: PairedRelay = { id: "owner_cloud_lease_lost", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
+    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
+      project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const repository = seedRepository(); relay.targets[0]!.project = repository.project;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const request = { ...contextRequest, request_id: "owner_cloud_lease_loss_answer", liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null },
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  let cloudCalls = 0, localCalls = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false,
+      cloudTransport: async input => {
+        cloudCalls++;
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => reject(new Error("Cloud turn aborted"));
+          input.signal.addEventListener("abort", onAbort, { once: true });
+          void leaseLost.then(() => { input.signal.removeEventListener("abort", onAbort); resolve(); });
+        });
+        await new Promise(resolve => setTimeout(resolve, 25));
+        return JSON.stringify({ action: "reply", text: "Cloud owner answer", reply_to: "m1" });
+      },
+      ownerPorts: { launch: async () => { localCalls++; return { status: 202, body: {} }; }, observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud owner answer" } });
+    expect(cloudCalls).toBe(1); expect(localCalls).toBe(0); expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ text: "Cloud owner answer", reply_to_message_id: 51 });
+  } finally { repository.close(); await server.close(); }
 });
 
 test("an answer environment never grants owner access to an unrelated repository", () => {

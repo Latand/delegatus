@@ -144,8 +144,11 @@ function ownerStaticSections(request: ExternalRelayRequest) {
     ["tools", compactToolIndex(request)] ]
     .map(([name, value]) => `<${name}>\n${json(value)}\n</${name}>`).join("\n");
 }
-export function ownerContinuationPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>) {
-  return boundedOwnerPrompt(request, owner, (value, instruction) => ownerContinuationPromptText(value, instruction, hardCapMinutes, record), record.seen).result;
+export function ownerContinuationPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>, suffix = "") {
+  return boundedOwnerPrompt(request, owner, (value, instruction) => {
+    const result = ownerContinuationPromptText(value, instruction, hardCapMinutes, record);
+    return { ...result, prompt: result.prompt + (suffix ? "\n" + suffix : "") };
+  }, record.seen).result;
 }
 function ownerContinuationPromptText(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>) {
   const sections = ownerStaticSections(request);

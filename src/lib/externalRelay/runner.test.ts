@@ -4245,18 +4245,20 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
 });
 
 
-test.each(["claude","codex"])("owner %s returns rich text, buttons and a document through the real MCP binding", async engine=>{
+test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s returns rich text, buttons and a document through the real MCP binding (lease loss=%s)", async (engine, leaseLost)=>{
   const { richRequest }=await import("./rich.fixture");
   const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
   const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
   fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
   const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
-  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}`;
+  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}`;
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
-  const events:string[]=[];
-  const server=await startTestRelay((req)=>{
-    if(req.method==="PUT") {events.push("upload");return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"text/markdown",filename:"report.md",byte_size:8,sha256:req.headers["delegatus-relay-sha256"],expires_at:new Date(Date.now()+60_000).toISOString()}};}
+  if (leaseLost) request.owner_delivery={chat_id:-1000000000101,reply_to_message_id:51,message_thread_id:null};
+  const events:string[]=[], lateSends:unknown[]=[];
+  const server=await startTestRelay((req,body)=>{
+    if(req.method==="PUT") {events.push("upload");return leaseLost ? {status:409,body:{error:{code:"lease_lost"}}} : {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"text/markdown",filename:"report.md",byte_size:8,sha256:req.headers["delegatus-relay-sha256"],expires_at:new Date(Date.now()+60_000).toISOString()}};}
     if(req.url?.endsWith("/complete"))events.push("complete");
+    if(req.url?.endsWith("/send")){events.push("send");lateSends.push(body);return {body:cloneReceipt()};}
     return {body:{status:"ok"}};
   });
   const paired=relay(`${server.origin}/v1`);paired.targets[0]={...paired.targets[0]!,ownerTier:true,engine};
@@ -4264,7 +4266,7 @@ test.each(["claude","codex"])("owner %s returns rich text, buttons and a documen
   const conversationId=`conversation_owner_rich_${engine}`;
   const binding=(via?:{deputy:string},kind="agent")=>viewerMcpBindings(undefined,{get:async()=>({}),post:async()=>({})},{...productionDomainDependencies,callerAttribution:()=>({kind,conversationId,role:null,...(via?{via}:{})})} as never);
   const own=binding();let observedError:unknown;
-  const text=("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  const text=leaseLost ? "Owner reply" : ("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
   try {
     const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
       launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
@@ -4277,8 +4279,21 @@ test.each(["claude","codex"])("owner %s returns rich text, buttons and a documen
         return {state:"ended",finalText:text};
       },stop:async()=>{},pollMs:1}});
     if(observedError)throw observedError;
-    expect(result).toMatchObject({outcome:"answered",answer:{text,format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open"}]],attachments:[{kind:"document",caption:"Report"}]}});
-    expect(events).toEqual(["upload","complete"]);
+    expect(result).toMatchObject({outcome:"answered",answer:{text}});
+    if (leaseLost) {
+      expect(events).toEqual(["upload","send"]);
+      expect(lateSends).toHaveLength(1);
+      expect(lateSends[0]).toMatchObject({text:"Owner reply\n\n[Files were produced; late delivery supports text only, so files are omitted.]",reply_to_message_id:51});
+      expect(result).toMatchObject({answer:{format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open"}]],attachments:[{kind:"document",caption:"Report"}]}});
+      await expect(runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
+        launch:async()=>{throw new Error("duplicate owner execution")},observe:async()=>({state:"failed"}),stop:async()=>{},
+      }})).resolves.toMatchObject({outcome:"answered",answer:{text:"Owner reply"}});
+      expect(events).toEqual(["upload","send"]);
+      expect(lateSends).toHaveLength(1);
+    } else {
+      expect(result).toMatchObject({answer:{format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open"}]],attachments:[{kind:"document",caption:"Report"}]}});
+      expect(events).toEqual(["upload","complete"]);
+    }
     await expect(own.relay_answer({format:"plain"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
   }finally{await server.close(); if(oldHome===undefined)delete process.env.HOME;else process.env.HOME=oldHome; if(oldState===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=oldState;fs.rmSync(ownerHome,{recursive:true,force:true});}
 });
