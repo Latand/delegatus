@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { gateSnapshot, logTail, waitForGate } from "./gate-wait";
+import { waitForGateCompletion, gateSnapshot, logTail, waitForGate } from "./gate-wait";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
@@ -159,9 +159,11 @@ async function observe(root: string, ready: () => boolean) {
 function background(args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
   const child = spawn("/bin/bash", [wrapper, ...args], { env, cwd, stdio: ["ignore", "pipe", "pipe"] }); children.push(child);
   let stdout = "", stderr = "";
-  child.stdout!.on("data", data => { stdout += data; }); child.stderr!.on("data", data => { stderr += data; });
+  let started!: () => void;
+  const ticketReady = new Promise<void>(resolve => { started = resolve; });
+  child.stdout!.on("data", data => { stdout += data; if (stdout.includes("recording started")) started(); }); child.stderr!.on("data", data => { stderr += data; });
   const closed = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
-  return { child, closed, output: () => ({ stdout, stderr }) };
+  return { child, closed, ticketReady, output: () => ({ stdout, stderr }) };
 }
 
 function portableEnvironment(f: ReturnType<typeof fixture>) {
@@ -183,7 +185,7 @@ test.skipIf(process.platform !== "linux")("demonstration: a real queued gate fin
   await once(lock.stdout!, "data");
   const recording = background(["--record", f.log, "/bin/bash", "-c", 'printf "done\\n"; exit 17'], env);
   await once(recording.child.stdout!, "data");
-  expect(recording.output().stdout).toBe("gate-slot: recording started\n");
+  expect(recording.output().stdout).toStartWith("gate-slot: recording started\n");
   await observe(f.root, () => fs.readFileSync(f.log, "utf8").includes("gate-slot: Waiting"));
   // The recorder persists the reason even when unrelated diagnostics fill
   // the tail. Observe that checkpoint before adding the noise.
@@ -203,6 +205,30 @@ test.skipIf(process.platform !== "linux")("demonstration: a real queued gate fin
   const duplicate = background(["--record", f.log, "/bin/true"], env);
   expect(await duplicate.closed).toBe(2); expect(fs.readFileSync(f.log, "utf8")).toBe(original);
 }, 30_000);
+
+test.skipIf(process.platform !== "linux")("one native completion hold spans queue, progress and nonzero exit without model polls", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const lock = spawn("/bin/bash", ["-c", 'exec 9>"$1"; /usr/bin/flock 9; echo ready; read -r release', "holder", path.join(f.root, "llv-heavy-gate.slot1.lock")], { stdio: ["pipe", "pipe", "ignore"] });
+  children.push(lock); const lockClosed = once(lock, "close");
+  await once(lock.stdout!, "data");
+  const recording = background(["--record", f.log, "/bin/bash", "-c", 'printf "done\\n"; exit 37'], env);
+  await recording.ticketReady;
+  let settled = false;
+  const held = waitForGateCompletion(f.log).then(result => { settled = true; return result; });
+  for (let i = 0; i < 100; i++) fs.appendFileSync(f.log, `progress ${i}\n`);
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  lock.stdin!.end("release\n"); await lockClosed;
+  expect(await recording.closed).toBe(37);
+  expect((await held).code).toBe(37);
+  // A second reader sees the durable result after its recorder exits.
+  expect((await waitForGateCompletion(f.log)).code).toBe(37);
+}, 30_000);
+
+test("an unregistered gate cannot supply a completion result", async () => {
+  const f = fixture(); ticket(f);
+  await expect(waitForGateCompletion(f.log)).rejects.toThrow();
+});
 
 test.skipIf(process.platform !== "linux")("a running record forwards cancellation and publishes only after gate cleanup", async () => {
   const f = fixture(), env = portableEnvironment(f);

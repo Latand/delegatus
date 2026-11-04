@@ -39,7 +39,7 @@ export function newestDecisionsFirst(decisions: readonly OperatorDecisionView[])
 
 /** How many decisions wait in a project: the page's one poll already counts them. */
 export function useOpenDecisionCount(project: string): number {
-  return usePrototypeNoticesFor(project).length;
+  return usePrototypeNoticesFor(project).filter(notice => !notice.undelivered).length;
 }
 
 export function DecisionList({ project, active = true, focus, touch = false, initial }: {

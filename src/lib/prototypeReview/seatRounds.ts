@@ -5,6 +5,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import { PrototypeError, PROTOTYPE_LIMITS } from "./input";
 import type { PrototypeReviewRound } from "./types";
+import { prototypeDeliverySettled } from "./deliveryPolicy";
 
 /*
  * The seat's own questions (docs/design/operator-decision-forms.md §2.2): a
@@ -121,7 +122,7 @@ export function mutateSeatRound<T>(reviewId: string, change: (round: PrototypeRe
   });
 }
 
-/** Store a new seat round. Past the limit the oldest delivered rounds leave,
+/** Store a new seat round. Past the limit the oldest delivered or retired rounds leave,
     and their ids come back so their media goes with them; a collection full of
     unresolved decisions takes no further one. */
 export function insertSeatRound(round: PrototypeReviewRound): string[] {
@@ -132,7 +133,7 @@ export function insertSeatRound(round: PrototypeReviewRound): string[] {
   let count = held.length + 1;
   for (const old of held) {
     if (count <= SEAT_ROUNDS_LIMIT) break;
-    if (old.decision?.delivery.state !== "sent") continue;
+    if (!old.decision || !prototypeDeliverySettled(old.decision.delivery)) continue;
     removed.push(old.id); count--;
   }
   if (count > SEAT_ROUNDS_LIMIT) throw new PrototypeError(`the orchestrator already has ${SEAT_ROUNDS_LIMIT} questions waiting; nothing was published`, 409);
