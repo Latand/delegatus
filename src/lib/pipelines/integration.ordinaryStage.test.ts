@@ -1,3 +1,5 @@
+import { spyOn } from "bun:test";
+import { StructuredDispatchDeferredError } from "@/lib/runtime/engineHost";
 import { test, expect, savePipelines } from "./engine.fixture";
 import { buildPipeline } from "./store";
 import type { PipelineStageAttempt } from "./types";
@@ -19,5 +21,8 @@ test("an ordinary pipeline can use an integration-like stage name without becomi
   try {
     expect(()=>assertPipelineTurnAllowed(f.conversation.id,f.registry,{operationId:"ordinary-message",origin:{kind:"agent",role:"pipeline"}})).not.toThrow();
     expect(pipelineRequiresDispatchGuard(f.conversation.id,f.registry)).toBe(false);
+    const unavailable=spyOn(f.registry,"conversationMemberships").mockImplementation(()=>{throw new Error("fixture authority read is busy");});
+    try {expect(()=>pipelineRequiresDispatchGuard(f.conversation.id,f.registry)).toThrow(StructuredDispatchDeferredError);}
+    finally {unavailable.mockRestore();}
   } finally {await f.cleanup();}
 });

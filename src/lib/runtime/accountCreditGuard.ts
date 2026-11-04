@@ -52,13 +52,17 @@ export interface PipelineDispatchContext {
 /** Keep revocable integration input in our journal, outside the provider's
  * automatic queue. Membership and candidate-owner reads are keyed. */
 export function pipelineRequiresDispatchGuard(conversationId: string, registry: AgentRegistry): boolean {
-  return registry.conversationMemberships(conversationId as ViewerConversationId).some(m => {
-    if (m.kind !== "pipeline" || !INTEGRATION_STAGES.includes(m.stageId as typeof INTEGRATION_STAGES[number])) return false;
-    const pipeline = findPipelineRecord(m.containerId);
-    // A missing owner remains fenced. An ordinary pipeline may legitimately
-    // use this stage name without ever having an integration reservation.
-    return !pipeline || !!pipeline.merge?.integration || !!pipeline.merge?.refresh;
-  });
+  try {
+    return registry.conversationMemberships(conversationId as ViewerConversationId).some(m => {
+      if (m.kind !== "pipeline" || !INTEGRATION_STAGES.includes(m.stageId as typeof INTEGRATION_STAGES[number])) return false;
+      const pipeline = findPipelineRecord(m.containerId);
+      // A missing owner remains fenced. An ordinary pipeline may legitimately
+      // use this stage name without ever having an integration reservation.
+      return !pipeline || !!pipeline.merge?.integration || !!pipeline.merge?.refresh;
+    });
+  } catch {
+    throw new StructuredDispatchDeferredError("pipeline queue authority is temporarily unreadable");
+  }
 }
 
 /** A stopped attempt retains its checkout until its controller replaces it.
