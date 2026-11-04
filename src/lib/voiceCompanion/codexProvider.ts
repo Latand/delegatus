@@ -14,7 +14,7 @@ import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
 import { mapAppServerRateLimits } from "@/lib/limits";
 import { CodexAppServerClient, codexAccountBinary, type AppServerNotification, type AppServerRateLimits, type CodexAppServerChild } from "@/lib/accounts/codexAppServer";
 import type { CompanionPlan, Locale, PlanWindow } from "./contract";
-import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler } from "./provider";
+import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler, type SpeechOutcome } from "./provider";
 import { ADDED_TOOL_RULES, BACKEND_INSTRUCTIONS, LIVE_BACKEND_MODEL, interfaceLanguage, liveInstructions } from "./sessionConfig";
 import { codexSnapshotTool, EMPTY_VOICE_TOOLS, snapshotCodexTools, type VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 import { COMPANION_TOOL_REGISTRY } from "./tools";
@@ -61,16 +61,16 @@ export function codexVoiceEnvironment(home: string, source: NodeJS.ProcessEnv): 
   return { ...Object.fromEntries(Object.entries(source).filter(([name]) => !/_API_KEY$/i.test(name) && !/^(OPENAI_|CHATGPT_)/i.test(name))), NODE_ENV: source.NODE_ENV, CODEX_HOME: home };
 }
 /** `dynamicTools` exist only at thread start (design §2.1), so a call's added tools are fixed with it: one namespace per server. */
-export function codexVoiceThread(cwd: string, compactPrompt = true, memory = "", locale: Locale = "en", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS) {
+export function codexVoiceThread(cwd: string, compactPrompt = true, memory = "", locale: Locale = "en", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS, clock = "") {
   const added = tools.servers.length > 0;
-  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread") + (added ? ` ${ADDED_TOOL_RULES}` : "") + `\n\n${interfaceLanguage(locale)}` + (memory ? `\n\n${memory}` : "");
+  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread") + (added ? ` ${ADDED_TOOL_RULES}` : "") + `\n\n${interfaceLanguage(locale)}` + (clock ? `\n\n${clock}` : "") + (memory ? `\n\n${memory}` : "");
   return { model: LIVE_BACKEND_MODEL, cwd, approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
     dynamicTools: [...COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })), ...snapshotCodexTools(tools)],
     developerInstructions: instructions, ...(compactPrompt ? { environments: [], baseInstructions: instructions } : {}) };
 }
-export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS) {
+export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS, clock = "") {
   return { threadId, version: "v3", model: "gpt-live-1-codex", outputModality: "audio", transport: { type: "webrtc", sdp: sdp.replace(/\r?\n/g, "\r\n") },
-    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName, memory, tools), voice };
+    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName, memory, tools, clock), voice };
 }
 export function codexVoiceContext(threadId: string, text: string) {
   return { threadId, items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }] };
@@ -80,6 +80,7 @@ export function codexVoiceToolResult(result: unknown) {
   return { contentItems: [{ type: "inputText", text: JSON.stringify(result) },
     ...((result as SpeechReadResult | null)?.[VOICE_IMAGES] ?? []).map(image => ({ type: "inputImage", imageUrl: `data:${image.mime};base64,${image.data}` }))], success: true };
 }
+interface QueuedSpeech { text: string; settled?(outcome: SpeechOutcome): void }
 interface Call {
   client: CodexAppServerClient; account: VoiceAccount; cwd: string; id: string; createdAt: number; locale: Locale;
   events: unknown[]; event?(value: unknown): void; lost?(): void; tool?: LiveToolHandler;
@@ -90,7 +91,7 @@ interface Call {
   reachedMarker?: boolean;
   transcriptAdapter: CodexVoiceTranscript;
   writing: Promise<void>;
-  speech: string[]; speaking: boolean; awaitingSpeech: boolean;
+  speech: QueuedSpeech[]; speaking: boolean; awaitingSpeech: boolean;
   backingTurns: Set<string>; awaitingBackingSpeech: boolean;
   /** The limit sentence: waiting for the voice to be free, sent, then voiced to its end. */
   limitSpeech?: "pending" | "sent" | "done";
@@ -109,7 +110,7 @@ export class CodexLiveProvider implements LiveProvider {
   private readonly now: () => number;
   constructor(private readonly options: CodexVoiceOptions = {}) { this.now = options.now ?? Date.now; }
 
-  async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS) {
+  async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS, clock = "") {
     const account = selectVoiceAccount((this.options.accounts ?? listCodexAccounts)(), (this.options.observations ?? (() => agentRegistry().quotaObservations("codex")))(),
       (this.options.bindings ?? accountProjectBindings)(), project ?? null, this.now());
     const directory = statePath("scratch", "voice-codex"); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -136,7 +137,7 @@ export class CodexLiveProvider implements LiveProvider {
         } });
       if ((await client.readAccount()).account?.type !== "chatgpt") throw new CodexVoiceError("CODEX_AUTH_REQUIRED");
       // The window the call starts from is read beside the thread, so it costs the start no time.
-      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt, memory, locale, tools)).then(jsonObject),
+      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt, memory, locale, tools, clock)).then(jsonObject),
         client.request("account/rateLimits/read").then(jsonObject, () => null)]);
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");
@@ -170,7 +171,7 @@ export class CodexLiveProvider implements LiveProvider {
           if (!active.sdpReceived) { rejectSdp(new CodexVoiceError("CODEX_LIMIT_REACHED", limit.resetsAt)); return; }
           // Reports not yet said stay unsaid: the limit sentence is the call's last.
           active.limitReached = true;
-          active.speech.length = 0;
+          for (const item of active.speech.splice(0)) item.settled?.("withdrawn");
           active.limitSpeech = "pending";
           this.emit(active, { type: "codex.limitReached", resetsAt: limit.resetsAt });
           this.flushSpeech(active);
@@ -191,10 +192,10 @@ export class CodexLiveProvider implements LiveProvider {
         }
       });
       try {
-        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice, memory, tools));
+        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice, memory, tools, clock));
         const answerSdp = await answer;
         if (active.failed || active.stopping) throw new CodexVoiceError("PROVIDER_ERROR");
-        return { id, sdp: answerSdp };
+        return { id, sdp: answerSdp, timelineStart: active.createdAt };
       } catch (error) {
         if (error instanceof CodexVoiceError && error.message === "PROVIDER_ERROR") {
           const reading = jsonObject(await client.request("account/rateLimits/read").catch(() => null));
@@ -257,7 +258,7 @@ export class CodexLiveProvider implements LiveProvider {
       }
       if (turn?.status !== "completed") {
         call.awaitingBackingSpeech = false;
-        if (turn?.status === "failed") this.queueSpeech(call, "The board could not be read just now.");
+        if (turn?.status === "failed") this.queueSpeech(call, { text: "The board could not be read just now." });
         else this.flushSpeech(call);
       }
     }
@@ -305,7 +306,7 @@ export class CodexLiveProvider implements LiveProvider {
         if (command.type === "session.commentary.append") {
           // A call that has failed or is stopping cannot voice it: refuse, so the caller keeps it owed.
           if (call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
-          this.queueSpeech(call, text);
+          this.queueSpeech(call, { text });
         }
         else call.writing = call.writing.then(async () => {
           if (call.stopping || call.failed) return;
@@ -313,14 +314,24 @@ export class CodexLiveProvider implements LiveProvider {
           if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendText", codexVoiceText(id, text));
         }).catch(() => { call.failed = true; call.lost?.(); });
       }
+    }, speak: (text, settled) => {
+      if (call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
+      const item: QueuedSpeech = { text, settled };
+      this.queueSpeech(call, item);
+      return { withdraw: () => {
+        const at = call.speech.indexOf(item);
+        if (at >= 0) call.speech.splice(at, 1);
+        return at >= 0;
+      } };
     }, dispose: () => {
       call.event = undefined; call.lost = undefined; call.tool = undefined;
       // Session recovery retains the open flag until hangup confirms reaping.
       void this.hangup(id, "").catch(() => {});
     } };
   }
-  private queueSpeech(call: Call, text: string): void {
-    if (!call.limitReached) call.speech.push(text);
+  private queueSpeech(call: Call, item: QueuedSpeech): void {
+    if (call.limitReached) item.settled?.("withdrawn");
+    else call.speech.push(item);
     this.flushSpeech(call);
   }
   /** Standalone speech can be lost while a backing answer is being voiced.
@@ -329,13 +340,15 @@ export class CodexLiveProvider implements LiveProvider {
   private flushSpeech(call: Call): void {
     if (call.stopping || call.failed || call.speaking || call.awaitingSpeech || call.backingTurns.size || call.awaitingBackingSpeech) return;
     // After the limit only its own sentence is said, once, on the same pacing as a report.
-    const text = call.limitReached ? call.limitSpeech === "pending" ? LIMIT_SPEECH[call.locale] : undefined : call.speech.shift();
-    if (text === undefined) return;
+    const item: QueuedSpeech | undefined = call.limitReached ? call.limitSpeech === "pending" ? { text: LIMIT_SPEECH[call.locale] } : undefined : call.speech.shift();
+    if (item === undefined) return;
     if (call.limitReached) call.limitSpeech = "sent";
     call.awaitingSpeech = true;
     call.writing = call.writing.then(async () => {
-      if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text });
-    }).catch(() => { call.failed = true; call.lost?.(); });
+      if (call.stopping || call.failed) { item.settled?.("withdrawn"); return; }
+      await call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text: item.text });
+      item.settled?.("handed");
+    }).catch(() => { item.settled?.("uncertain"); call.failed = true; call.lost?.(); });
   }
   async hangup(id: string, _key: string): Promise<void> {
     void _key;

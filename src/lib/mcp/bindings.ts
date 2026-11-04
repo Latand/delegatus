@@ -1,3 +1,7 @@
+import { conversationProjectKey } from "@/lib/accounts/conversationProject";
+import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
+import { assertWorkspaceMcpCall, workspaceGuardedBindings } from "./workspaceFence";
+import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
@@ -256,7 +260,7 @@ import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
-import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";
+import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, pipelineStageRuntimeSetting, setPipelineStageRuntime, validPipelineStageRuntime, type EffectiveReportTelegram } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -448,6 +452,7 @@ async function requestViewerControl(
   let lastFailure = "connection failed";
   let uncertainPriorPost = init.method === "POST" && context.priorAttemptUncertain === true;
   while (Date.now() < expiresAt) {
+    assertWorkspaceMcpCall();
     if (context.signal?.aborted) throw context.signal.reason;
     if (init.method === "POST") context.assertCaller?.();
     attempts += 1;
@@ -633,6 +638,9 @@ async function postViewerControl(
       field: text(result.field) || "reviewId",
       ...(Array.isArray(result.candidates) ? { candidates: result.candidates.filter(value => typeof value === "string").slice(0, 8) } : {}),
     });
+    if (pathname === "/api/forge/app-connect") throw new McpToolRefusal(message, {
+      code: text(result.code) || "app_connection_unavailable", status: response.status, retryable: response.status >= 500,
+    });
     const operationId = text(result.operationId);
     if (operationId) {
       throw new McpToolRefusal(message, {
@@ -696,6 +704,7 @@ async function dispatchViewerControl(
   context.assertCaller?.();
   if (context.dispatch) context.dispatch.attempted = true;
   while (true) {
+    assertWorkspaceMcpCall();
     context.assertCaller?.();
     attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
       scheduler,
@@ -807,22 +816,22 @@ export function productionViewerControlDependencies(
   scheduler: DeadlineScheduler = systemScheduler,
 ): ViewerControlDependencies {
   return {
-    get: (pathname, context) => getViewerControl(pathname, context, pinConfiguredEndpoint),
-    post: (pathname, body, headers, context) => postViewerControl(
+    get: (pathname, context) => { assertWorkspaceMcpCall(); return getViewerControl(pathname, context, pinConfiguredEndpoint); },
+    post: (pathname, body, headers, context) => { assertWorkspaceMcpCall(); return postViewerControl(
       pathname,
       body,
       headers,
       context,
       pinConfiguredEndpoint,
-    ),
-    dispatch: (pathname, body, headers, context) => dispatchViewerControl(
+    ); },
+    dispatch: (pathname, body, headers, context) => { assertWorkspaceMcpCall(); return dispatchViewerControl(
       pathname,
       body,
       headers,
       context,
       pinConfiguredEndpoint,
       scheduler,
-    ),
+    ); },
   };
 }
 
@@ -841,7 +850,7 @@ function viewerControlForCall(
   if (!context) return control;
   const timed = async (run: () => Promise<Record<string, unknown>>) => {
     const startedAt = performance.now();
-    try { return await run(); }
+    try { assertWorkspaceMcpCall(); return await run(); }
     finally { context.recordTiming?.("http", performance.now() - startedAt); }
   };
   return {
@@ -864,6 +873,9 @@ interface TargetedConversationOptions extends McpToolCallContext {
 }
 
 export interface ViewerMcpDomainDependencies {
+  workspaceProject?(identity: string): string | null;
+  /** Keyed workspace authority reads; never decode the installation registry. */
+  workspaceConversation?(identity: string): import("@/lib/agent/registry").RegistryConversation | null;
   listFiles(options?: Parameters<typeof listFiles>[0]): Promise<FileEntry[]>;
   targetedFileEntry?(pathname: string, options?: TargetedConversationOptions): Promise<TargetedConversationRead | FileEntry | undefined>;
   /** Descriptor-pinned transcript read used by conversation_messages. */
@@ -1454,6 +1466,17 @@ async function productionVoiceUtteranceContext(work: VoiceWorkLookupIdentity | n
 /** Exported for the isolated evidence driver, which runs the REAL production
     dependency set and overrides only the caller-authority seam per scenario. */
 export const productionDomainDependencies: ViewerMcpDomainDependencies = {
+  workspaceProject: identity => {
+    const registry = agentRegistry();
+    const receipt = identity.startsWith("spawn:") ? registry.spawnReceipt(identity.slice(6)) : null;
+    const conversation = receipt ? registry.conversation(receipt.conversationId)
+      : identity.startsWith("conversation_") ? registry.conversation(identity as `conversation_${string}`) : registry.conversationForPath(identity);
+    return conversationProjectKey(conversation?.projectOwnership, conversation?.generations.at(-1)?.launchProfile ?? receipt?.launchProfile,
+      { project: conversationCatalogEntry(identity)?.project });
+  },
+  workspaceConversation: identity => identity.startsWith("conversation_")
+    ? agentRegistry().conversation(identity as `conversation_${string}`)
+    : agentRegistry().conversationForPath(identity),
   listFiles,
   targetedFileEntry: targetedFileEntry,
   pinnedTranscript: openPinnedTranscript,
@@ -1721,7 +1744,8 @@ function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dep
     if (dependencies && caller?.conversationId && !caller.via) {
       allowed = caller.kind === "gateway" || (caller.kind === "manager"
         && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
-          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && canonicalProject(seat.project) === project));
+          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && project !== null
+            && canonicalProject(seat.project) === canonicalProject(project)));
     }
   } catch { /* Unavailable caller or seat evidence grants no deployment authority. */ }
   if (!allowed) {
@@ -1804,18 +1828,21 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
     ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
   });
+  const terminalFailure = ["failed", "conflict"].includes(result.state as string);
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
-    || !["starting", "path-pending", "settled"].includes(result.state as string)
-    || !["pending", "queued", "delivered"].includes(result.initialMessage as string)
+    || !["starting", "path-pending", "settled", "failed", "conflict"].includes(result.state as string)
+    || !["pending", "queued", "delivered", "failed"].includes(result.initialMessage as string)
     || (result.ok !== undefined && result.ok !== true)
     || (result.launched !== undefined && typeof result.launched !== "boolean")
-    || (result.retrySafe !== undefined && result.retrySafe !== false)
+    || (result.retrySafe !== undefined && result.retrySafe !== (result.state === "failed"))
     || (result.path !== undefined && result.path !== null && !text(result.path))
     || (result.initialMessage === "delivered" && result.launched === false)
     || (result.state === "starting" && result.initialMessage !== "pending")
-    || (result.state === "settled" && result.initialMessage !== "delivered")) {
+    || (result.state === "settled" && result.initialMessage !== "delivered")
+    || (terminalFailure && (result.initialMessage !== "failed" || result.launched !== false || !text(result.error)))
+    || (!terminalFailure && result.initialMessage === "failed")) {
     throw new McpDispatchUncertainError("the spawn response lacks consistent acceptance evidence; recover the original request from its durable receipt");
   }
   return {
@@ -1826,6 +1853,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(typeof result.launched === "boolean" ? { launched: result.launched } : {}),
+    ...(terminalFailure ? { outcome: "settled", reason: result.error, error: result.error, retrySafe: result.retrySafe } : {}),
     ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
     /* Whether a brief still needs its own "report back" line. Only a
@@ -2248,6 +2277,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
   const result = await waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
+    assertWorkspaceMcpCall(typeof input.project === "string" ? input.project : undefined);
     let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
@@ -2262,6 +2292,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
       assertMaintenanceWrite(maintainer, { note: input.note ?? null }, prior);
       matchedFields = changedFieldNames(fieldValues(prior), outcome.task);
     }
+    if (outcome.ok) assertWorkspaceMcpCall(outcome.task.project);
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -2290,10 +2321,12 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const taskId = typeof args.taskId === "string" && args.taskId.trim() ? args.taskId.trim() : null;
   const changes: Record<string, string[]> = {};
   const result = await mutateTasksAsync((tasks) => {
+    assertWorkspaceMcpCall();
     const before = new Map(tasks.map(task => [task.id, fieldValues(task)]));
     const outcome = refineTask(tasks, { callerConversationId: caller.conversationId!, taskId, text });
     if (outcome.ok) for (const entry of outcome.refined) {
       const task = outcome.tasks.find(task => task.id === entry.taskId)!;
+      assertWorkspaceMcpCall(task.project);
       changes[entry.taskId] = changedFieldNames(before.get(entry.taskId) ?? new Map(), task);
     }
     return { tasks: outcome.ok && outcome.refined.some((entry) => entry.result === "applied") ? outcome.tasks : undefined, result: outcome };
@@ -2355,6 +2388,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   }
   const result = await mutateTasksAsync((tasks) => {
     prior = tasks.find(task => task.id === taskId);
+    assertWorkspaceMcpCall(prior?.project);
     const pipelines = maintainer ? dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [] : [];
     const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));
     if (maintainer && closingOrHiding && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
@@ -2517,6 +2551,9 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
      conversation, and the create's `src` creator when attribution names none. */
   const briefer = { kind: "agent" as const, conversationId: dependencies ? attributionOf(dependencies).conversationId : null };
   const result = await createPipelineFromRequest(request as CreatePipelineRequest, undefined, {
+    workspace: dependencies?.workspaceConversation
+      ? conversationWorkspacePrincipal(dependencies.workspaceConversation, briefer.conversationId) ?? undefined
+      : undefined,
     creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: requestDigest("create_pipeline", request) },
     queueWhenBusy: true,
     briefer,
@@ -2615,8 +2652,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (action === "retry-stage") retryStageLaunch(request, before ?? null);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
   const result = action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
-    ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
-    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
+    ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies), assertWorkspaceMcpCall)
+    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertWorkspaceMcpCall);
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
     if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
@@ -2760,6 +2797,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     attempt: result.attempt,
     replaced: result.replaced ?? false,
     report: stageReportAcknowledgement(result.report),
+    ...(result.report.excludedRecordedChecks?.length ? { excludedRecordedChecks: result.report.excludedRecordedChecks } : {}),
     ...stageLessonRequest(result, dependencies),
   };
 }
@@ -2840,6 +2878,8 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
   /* The task lock is taken before the callback runs, so a busy refusal here
      proves the assignment was never written (#1766). */
   const result = await refuseBusyBeforeAdmission((admitted) => dependencies.mutateTasks((tasks) => {
+    assertWorkspaceMcpCall(tasks.find(task => task.id === taskId)?.project);
+    assertWorkspaceMcpCall(pipeline.project);
     admitted();
     const before = fieldValues(tasks.find(task => task.id === taskId));
     const outcome = applyAssignmentPatches(tasks, taskId, [{
@@ -4611,7 +4651,7 @@ async function namedLaunchProject(args: McpToolArgs, dependencies: ViewerMcpDoma
   const directory = field === "cwd" ? spawnCwd(args) : path.resolve(required(args, field));
   const project = await resolveOrchestratorToolProject(text(args.project), dependencies);
   const canonical = projectForCwd(directory);
-  if (project !== canonical) throw new McpToolRefusal(`project contradicts the canonical project of ${field}; omit it or name the launch directory's own project`, {
+  if (project !== (canonical ? canonicalProject(canonical) : null)) throw new McpToolRefusal(`project contradicts the canonical project of ${field}; omit it or name the launch directory's own project`, {
     code: "invalid_request", status: 400, canonicalProject: canonical,
   });
   return { ...args, project };
@@ -4863,6 +4903,50 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   });
 }
 
+/** Runtime changes use live, validated designations, including before receipt replay. */
+function projectRuntimeAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string {
+  const caller = authorityOf(dependencies);
+  if (caller.kind === "root") return "operator";
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const callerSeat = caller.kind === "worker" ? seats.find(seat => seat.conversationId === caller.conversationId) : undefined;
+  const project = text(args.project) || callerSeat?.project || (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject()) || "";
+  if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
+    && canonicalProject(seat.project) === canonicalProject(project))) return caller.conversationId;
+  throw new McpToolRefusal("Project stage runtime requires the operator or this project's designated seat", { code: "project_runtime_refused", status: 403 });
+}
+
+async function projectRuntimeTarget(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+  const project = text(args.project) ? await resolveOrchestratorToolProject(text(args.project), dependencies, false)
+    : (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+      .find(seat => seat.conversationId === attributionOf(dependencies).conversationId)?.project
+      ?? (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject());
+  if (!project) throw new Error("project is required for the stage runtime setting");
+  return canonicalProject(project);
+}
+
+function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): McpToolBinding {
+  const tick = orchestratorProjectBinding(dependencies, args => seatTickSettingsTool(args, dependencies), true);
+  const targets = new WeakMap<McpToolArgs, string>();
+  const runtime = async (args: McpToolArgs) => {
+    let project = targets.get(args);
+    if (!project) {
+      project = await projectRuntimeTarget(args, dependencies);
+      targets.set(args, project);
+    }
+    const actor = projectRuntimeAuthority({ ...args, project }, dependencies);
+    return { project, actor };
+  };
+  return Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
+    if (args.pipelineStageRuntime === undefined) return tick(args, context);
+    const { project } = await runtime(args);
+    return seatTickSettingsTool({ ...args, project }, dependencies);
+  }, {
+    prepareAdmission: async (args: McpToolArgs) => { if (args.pipelineStageRuntime === undefined) await tick.prepareAdmission?.(args); },
+    authorizeReceipt: async (args: McpToolArgs) => { if (args.pipelineStageRuntime !== undefined) await runtime(args); },
+    receiptScope: async (args: McpToolArgs) => args.pipelineStageRuntime === undefined ? null : JSON.stringify(await runtime(args)),
+  });
+}
+
 /**
  * seat_tick_settings: read, and change, one project's seat tick (#1275).
  *
@@ -4916,6 +5000,19 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   }
   // Explicit input was resolved by the binding before its receipt was claimed.
   const project = text(args.project) || canonicalOrchestratorProject(requested);
+  if (args.pipelineStageRuntime !== undefined) {
+    const runtimeActor = projectRuntimeAuthority({ ...args, project }, dependencies);
+    const extra = Object.keys(args).filter(key => !["project", "pipelineStageRuntime", "clientRequestId", "verbose", "full", "nativeCallerProof"].includes(key));
+    if (extra.length) throw new Error("change pipelineStageRuntime separately from seat tick settings");
+    if (args.pipelineStageRuntime === null) {
+      const setting = pipelineStageRuntimeSetting(project);
+      return { project, pipelineStageRuntime: setting.runtime, pipelineStageRuntimeSetting: setting };
+    }
+    if (!validPipelineStageRuntime(args.pipelineStageRuntime)) throw new Error("pipelineStageRuntime must be local or codex-cloud");
+    if (!setPipelineStageRuntime(project, args.pipelineStageRuntime, runtimeActor)) throw new Error("could not persist project stage runtime");
+    const setting = pipelineStageRuntimeSetting(project);
+    return { project, changed: true, changedFields: ["pipelineStageRuntime"], pipelineStageRuntime: setting.runtime, pipelineStageRuntimeSetting: setting };
+  }
 
   const readSettings = dependencies.readTickSettings ?? readSeatTickSettings;
   const writeSettings = dependencies.writeTickSettings ?? writeSeatTickSettings;
@@ -7289,6 +7386,8 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
     const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
     const path = lookup.conversation(conversationId as `conversation_${string}`)?.generations.at(-1)?.path;
     if (!path) {
+      const launch = spawnConversationForCaller(conversationId, {}, dependencies);
+      if (launch) return { kind: "conversation", path: `spawn:${launch.launchId}` };
       const reasonId = text(named?.reasonId);
       const launchPath = reasonId.startsWith("spawn:") && reasonId.endsWith(":launch-failed") ? reasonId.slice(0, -":launch-failed".length) : null;
       throw new McpToolRefusal(
@@ -7300,6 +7399,12 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
       );
     }
     return { kind: "conversation", path };
+  }
+  if (named?.kind === "conversation" && text(named.path).startsWith("spawn:")) {
+    const receipt = dependencies.registrySnapshot().receipts?.[text(named.path).slice(6)];
+    if (!receipt || !spawnConversationForCaller(receipt.conversationId, {}, dependencies)) {
+      throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+    }
   }
   if (!isFocusTarget(value)) throw new Error(describeFocusTargetRejection(value));
   return value;
@@ -7324,6 +7429,14 @@ async function focusTargetProject(
   if (isGeometricTarget(target)) return target.project;
   switch (target.kind) {
     case "conversation": {
+      if (target.path.startsWith("spawn:")) {
+        const receipt = dependencies.registrySnapshot().receipts?.[target.path.slice(6)];
+        const launch = receipt && spawnConversationForCaller(receipt.conversationId, {}, dependencies);
+        if (!receipt || !launch) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        const project = launch.project ?? projectForCwd(receipt.cwd);
+        if (!project) throw new McpToolRefusal("launch project is unavailable", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        return canonicalProject(project);
+      }
       const targeted = await entryForPath(target.path, dependencies, {}, knownTranscript);
       if (!targeted) throw new McpToolRefusal("no conversation on the board has that transcript path; use a registered conversationId, a transcript .jsonl path on the board, or spawn:<launchId> from a failed-launch row", { code: "CONVERSATION_NOT_FOUND", retryable: false });
       return targeted.entry.project;
@@ -8015,7 +8128,8 @@ function spawnTargetProject(args: McpToolArgs, cwd: string): string | null {
   const supplied = text(args.project).trim();
   if (!supplied) return canonical;
   const explicit = validExplicitProject(supplied);
-  if (!explicit || explicit !== canonical) {
+  // The scanner key can precede a trusted rename or project succession.
+  if (!explicit || !canonical || canonicalProject(explicit) !== canonicalProject(canonical)) {
     throw new McpToolRefusal(
       "project contradicts the canonical project of cwd; omit it or name the launch directory's own project",
       { code: "invalid_request", status: 400, ...(canonical ? { canonicalProject: canonical } : {}) },
@@ -8391,6 +8505,7 @@ export function viewerMcpBindings(
       if (!seat?.project) throw new McpToolRefusal("only the project's currently designated orchestrator seat may grant agent browser access", {
         code: "agent_browser_seat_required", retryable: false,
       });
+      assertWorkspaceMcpCall(seat.project);
       return { conversationId: seat.conversationId, project: seat.project };
     };
     try { return await agentBrowserAccess(args, requireSeat, write); }
@@ -8406,7 +8521,7 @@ export function viewerMcpBindings(
       const { conversations, nextCursor, ...meta } = payload;
       return { rows: (conversations ?? []) as Record<string, unknown>[], meta, upstream: typeof nextCursor === "string" ? nextCursor : null };
     }, fullAnswer(args));
-  return {
+  return workspaceGuardedBindings({
     grant_agent_browser_access: Object.assign(async (args: McpToolArgs) => browserAccess(args, true), {
       authorizeReceipt: async (args: McpToolArgs) => { await browserAccess(args, false); },
       receiptScope: async (args: McpToolArgs) => {
@@ -8574,7 +8689,7 @@ export function viewerMcpBindings(
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
     get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
-    seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
+    seat_tick_settings: seatTickSettingsBinding(domainDependencies),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     codex_cloud_environment: Object.assign(orchestratorProjectBinding(domainDependencies, async (args, context) => {
@@ -8621,8 +8736,16 @@ export function viewerMcpBindings(
     },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
+    github_app_connect: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("Only a project's designated seat or the operator's own session asks to connect a repository.", { code: "not_permitted", status: 403, retryable: false });
+      return viewerControlForCall(controlDependencies, context).post("/api/forge/app-connect", args, { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    }, { authorizeReceipt: async () => {
+      const caller = attributionOf(domainDependencies);
+      if (!caller.conversationId || caller.via || !["manager", "gateway"].includes(caller.kind)) throw new McpToolRefusal("Only a project's designated seat or the operator's own session asks to connect a repository.", { code: "not_permitted", status: 403, retryable: false });
+    }, receiptScope: async () => `forge-connect:${attributionOf(domainDependencies).conversationId}` }),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
-  };
+  });
 }
 
 function resolvePrototypeReviewId(...args: Parameters<typeof resolveStoredReviewId>): ReturnType<typeof resolveStoredReviewId> {

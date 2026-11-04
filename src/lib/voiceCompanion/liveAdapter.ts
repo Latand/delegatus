@@ -2,6 +2,7 @@
 
 import type { CompanionCommand, CompanionEvent, CompanionUsage, Locale, Payload, ResumableCall, VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
+import { clientTimeZone } from "@/lib/i18n";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
 import type { RetainedCall } from "./callHistoryTypes";
 import { BrowserCompanionMedia, type CompanionMedia, type MediaCallbacks } from "./media";
@@ -114,7 +115,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     try {
       const sdp = await media.open();
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
-      const result = await this.request({ action: "start", ...options, sdp, requestId: this.requestId });
+      const result = await this.request({ action: "start", ...options, ...clientTimeZone(), sdp, requestId: this.requestId });
       if (typeof result.sessionId !== "string" || typeof result.sdp !== "string") throw new Error("PROVIDER_ERROR");
       if (epoch !== this.epoch) { await this.request({ action: "close", sessionId: result.sessionId }); throw new Error("SESSION_CLOSED"); }
       this.sessionId = result.sessionId;
@@ -169,6 +170,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
         if (value.type === "delegation.delivery.settled" && value.status === "failed") this.pendingDeliveries.delete(value.delivery.clientMessageId);
         if (value.type === "orchestrator.answer" && value.status !== "progress") this.pendingDeliveries.delete(value.delivery.clientMessageId);
         this.emit(value, value);
+        if (value.type === "timer.fired") this.cues.timer();
         if (value.type === "transcript.snapshot" && value.speaker === "companion") this.arrived(value.itemId);
         if (value.type === "session.closed") {
           this.disconnected();

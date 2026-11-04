@@ -181,6 +181,8 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
    what the head and its words cover is measured over real rows. `history` opens as after a reload, with no call of
    its own and `sampleCallHistory`'s three retained calls, which the conversation panel's picker opens (GitHub #2975). */
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
+const timerToastsWaiting = Array.from({ length: VOICE_SCENE === "timer-burst" ? 5 : 1 }, (_, index) => `vt_012345678${index}abcdef`);
+Object.assign(window, { timerToastsWaiting });
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 const VOICE_DEVICES = new URLSearchParams(location.search).has("dev");
@@ -226,7 +228,7 @@ if (VOICE_SCENE === "drop") {
       Object.assign(phoneVoice, { lose: () => callbacks.lost("PROVIDER_ERROR") });
       return { open: async () => "v=0\r\n", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
     },
-    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, dispose: () => {} },
+    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, timer: () => undefined, dispose: () => {} },
   }));
 }
 function voiceFeed(feed: string): string {
@@ -702,6 +704,8 @@ const ASKS_SCENE = new URLSearchParams(location.search).has("asks");
 const asksSetting = { enabled: ASKS_SCENE };
 const asksLines: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }> = [];
 const STAGE_AGENT = new URLSearchParams(location.search).get("stage-agent");
+/* `?stage-place=1`: «lane-decision» ran «implement» in the cloud, and «review» moved to this machine with its cause. */
+const STAGE_PLACE = new URLSearchParams(location.search).has("stage-place");
 /* `?launch=1`: the phone launches an agent from a draft. The spawn route answers a
    structured receipt, and the scan swaps the launch window for the agent's
    transcript once the driver asks (`evidence.materializeLaunch()`). The running
@@ -814,6 +818,20 @@ if (KANBAN) {
             `/repo/${"unbroken-path-segment".repeat(8)}`, "End of the question. Кінець питання."].join("\n"), provenance: { head: null, branch: "fixture", uncommitted: [], pullRequest: null, outputs: [] } },
       },
     ] }];
+  }
+  if (STAGE_PLACE) {
+    const current = kanbanPipelines[0]!;
+    const base = current.runs[0]!.attempts[0]!;
+    const reviewPath = kanbanConversation("Mobile data · review", "working", 300);
+    const runtime = { runtime: "claude-cloud" as const };
+    current.stages = current.stages.map((stage) => ({ ...stage, ...runtime }));
+    current.state = "running";
+    current.cursor = { stageId: "review", state: "running", input: null, activatedBy: null };
+    current.runs = [
+      { stageId: "implement", attempts: [{ ...base, state: "passed", verdict: { status: "pass", findings: [] }, definition: runtime, cloud: { phase: "completed" } } as never] },
+      { stageId: "review", attempts: [{ ...base, state: "running", verdict: null, completedAt: null, agentPath: reviewPath, conversationId: idOf(reviewPath), definition: runtime,
+        cloud: { phase: "failed", fallback: { at: iso(300), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } } as never] },
+    ];
   }
   kanbanPipelines.push(kanbanLane("lane-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
   kanbanLinks.pipelines["lane-decision"] = { links: [], noPr: true };
@@ -1450,6 +1468,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The voice head's scenes: the companion on in the settings, and no session route at all. */
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/settings") {
     return json({ enabled: true, backend: "api", monthlyCapUsd: 20, keySource: "file", keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0.4, reservedUsd: 0, incomplete: false, uncertainSession: false });
+  }
+  /* The voice timer toast's scenes: one timer fired, or five at once, each with the server's one claim. */
+  if ((VOICE_SCENE === "timer" || VOICE_SCENE === "timer-burst") && url.pathname === "/api/voice-companion/timers") {
+    if (method === "GET") return json({ claimable: timerToastsWaiting, nextInMs: null });
+    const asked = JSON.parse(String(init?.body)) as { action: string; id: string };
+    if (asked.action === "showing") return json({ showing: true });
+    if (asked.action === "shown") return json({ shown: true });
+    const at = timerToastsWaiting.indexOf(asked.id);
+    if (at < 0) return json({ claimed: false });
+    timerToastsWaiting.splice(at, 1);
+    const words = await (await serverFetch("/evidence/timer-words")).json() as Record<"en" | "uk", string>;
+    return json({ claimed: true, lease: 1, title: "", text: words[localStorage.getItem("llv_lang") === "uk" ? "uk" : "en"] });
   }
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/session") {
     phoneVoice.sessionRequests += 1;

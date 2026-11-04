@@ -9,6 +9,7 @@ import { hostedConversationsFromSnapshot } from "./mcp/bindings";
 import { scanProcesses } from "./tempSweep";
 import { agentLivenessSnapshot, type AgentLivenessSources } from "./lifecycle/liveness";
 import { blockingWaitRole, recordBlockingWait, registryWaitCallSite, resetBlockingWaitsForTests } from "./blockingWaits";
+import { assertOperationLease } from "./operationLease";
 
 /* Execute the shipped entry-point bodies with fixture ports. In particular,
  * importing runtime-host/main would start listeners and release succession.
@@ -69,6 +70,7 @@ test.each([
     const start = bind(expressions(file, name)[0]!, {
       withViewerOperation: h.operation, host, TIMER: symbol, sweepHost: host, retirementHost: host,
       tempSweepMaxAgeMs: () => 1, tempSweepMode: () => "dry-run",
+      registerDiskPressureSweep: () => () => {},
       FIRST_RECONCILE_DELAY_MS: 30_000, FIRST_SWEEP_DELAY_MS: 60_000,
       STRUCTURED_HOST_RETIREMENT_INTERVAL_MS: 300_000,
       ATTENTION_RECONCILE_INTERVAL_MS: 60_000, ASKS_SWEEP_INTERVAL_MS: 15_000, TEMP_SWEEP_INTERVAL_MS: 3_600_000,
@@ -287,6 +289,7 @@ test.each(["viewer", "runtime-host", "mcp"])("%s transaction holds identify thei
       let at = 0;
       const warnings: unknown[][] = [];
       const transaction = bind(expressions("src/lib/state/sqliteStateStore.ts", "withImmediateTransaction")[0]!, {
+        assertOperationLease,
         stateLockAttempt: (_site: string, work: () => unknown) => work(),
         performance: { now: () => at }, process, blockingWaitRole,
         injectWriteFault() {}, noteStateCommit() {}, rollbackQuietly() {},

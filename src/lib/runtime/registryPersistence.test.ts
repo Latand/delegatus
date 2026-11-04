@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,7 @@ import type { HostState } from "./engineHost";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, DEFAULT_CURSOR_DEBOUNCE_MS, type StructuredHostPersistenceOptions, type StructuredHostPersistenceStop } from "./registry";
 import { beginLegacySpawnReceiptFixture } from "@/lib/agent/registryTestFixtures";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { OperationLease } from "@/lib/operationLease";
 
 const KEY = { engine: "codex" as const, sessionId: "coalesced-host" };
 
@@ -157,13 +159,17 @@ const drainCheckpoints = () => new Promise<void>(resolve => setImmediate(resolve
 function checkpointClock() {
   let now = 0;
   type Timer = ReturnType<typeof setTimeout>;
-  const pending = new Map<Timer, { at: number; run(): void }>();
+  const pending = new Map<Timer, { at: number; run(): void; resource: AsyncResource }>();
   const timer = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay = 0) => {
     const handle = { unref() {} } as unknown as Timer;
-    pending.set(handle, { at: now + delay, run });
+    const resource = new AsyncResource("checkpoint-timer");
+    pending.set(handle, { at: now + delay, run: () => resource.runInAsyncScope(run), resource });
     return handle;
   }) as typeof setTimeout);
-  const clear = spyOn(globalThis, "clearTimeout").mockImplementation((handle) => { pending.delete(handle as Timer); });
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
+    pending.get(handle as Timer)?.resource.emitDestroy();
+    pending.delete(handle as Timer);
+  });
   const time = spyOn(performance, "now").mockImplementation(() => now);
   return {
     async advance(ms: number) {
@@ -173,13 +179,15 @@ function checkpointClock() {
         if (!next || next[1].at > until) break;
         now = next[1].at;
         pending.delete(next[0]);
-        next[1].run();
+        try { next[1].run(); } finally { next[1].resource.emitDestroy(); }
         await drainCheckpoints();
       }
       now = until;
       await drainCheckpoints();
     },
     restore() {
+      for (const timer of pending.values()) timer.resource.emitDestroy();
+      pending.clear();
       timer.mockRestore();
       clear.mockRestore();
       time.mockRestore();
@@ -188,6 +196,74 @@ function checkpointClock() {
 }
 
 for (const [engine, bind] of binders) {
+  for (const replacement of ["none", "owner", "epoch"] as const) {
+    test(`${engine} initial checkpoint retry survives pass expiry with replacement=${replacement}`, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "host-retry-lease-"));
+      const filename = path.join(directory, "registry.json");
+      const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+      const host = new RecordingHost();
+      const key = { ...KEY, engine: engine === "Codex" ? "codex" as const : "claude" as const };
+      const keyId = `${key.engine}:${key.sessionId}`;
+      registry.upsert({ key, artifactPath: "/sessions/retry.jsonl", cwd: "/repo", accountId: null,
+        status: "idle", host: null, claimOwner: "writer", claimEpoch: 7, pendingAction: null,
+        structuredHost: { kind: engine === "Codex" ? "codex-app-server" : "claude-broker", endpoint: "stdio:4242", process: null,
+          eventCursor: 0, writerClaimEpoch: 7, protocolVersion: "1", activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+      host.emit({ eventCursor: 8, status: "active", activeTurnRef: "retry-turn" });
+      const original = registry.setStructuredHostClaimed.bind(registry);
+      let busy = true;
+      const writes = spyOn(registry, "setStructuredHostClaimed").mockImplementation((...args) => {
+        if (busy) { busy = false; throw new RegistryWriterBusyError("registry.host-checkpoint"); }
+        return original(...args);
+      });
+      const clock = checkpointClock();
+      const lease = new OperationLease();
+      let stop: StructuredHostPersistenceStop | undefined;
+      try {
+        stop = await lease.run(() => bind(registry, host, { checkpointRetryMs: 10 }));
+        expect(writes).toHaveBeenCalledTimes(1);
+        expect(registry.readOnlySnapshot().entries[keyId]?.structuredHost?.eventCursor).toBe(0);
+        lease.expire();
+        const superseded = replacement !== "none";
+        const successor = { claimOwner: replacement === "owner" ? "successor" : "writer",
+          claimEpoch: replacement === "epoch" ? 8 : 7,
+          structuredHost: { eventCursor: 20, writerClaimEpoch: replacement === "epoch" ? 8 : 7 } };
+        if (superseded) {
+          const current = registry.readOnlySnapshot().entries[keyId]!;
+          registry.upsert({ ...current, ...successor, structuredHost: { ...current.structuredHost!, ...successor.structuredHost } });
+        }
+        await clock.advance(10);
+        expect(registry.readOnlySnapshot().entries[keyId]).toMatchObject(superseded
+          ? successor
+          : { claimOwner: "writer", structuredHost: { eventCursor: 8, activeTurnRef: "retry-turn" } });
+        expect(host.releaseCalls).toBe(superseded ? 1 : 0);
+        busy = !superseded;
+        lease.run(() => host.emit({ eventCursor: 9, status: "unhosted", pid: null, processStartIdentity: null }));
+        await drainCheckpoints();
+        if (!superseded) {
+          expect(registry.readOnlySnapshot().entries[keyId]).toMatchObject({ claimOwner: "writer", structuredHost: { eventCursor: 8 } });
+          await clock.advance(10);
+        }
+        expect(registry.readOnlySnapshot().entries[keyId]).toMatchObject(superseded
+          ? successor
+          : { status: "unhosted", claimOwner: null, structuredHost: { eventCursor: 9, process: null } });
+        await stop();
+        registry.close();
+        const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+        try {
+          expect(reopened.readOnlySnapshot().entries[keyId]).toMatchObject(superseded
+            ? successor
+            : { status: "unhosted", claimOwner: null, structuredHost: { eventCursor: 9 } });
+        } finally { reopened.close(); }
+      } finally {
+        await stop?.();
+        clock.restore();
+        writes.mockRestore();
+        registry.close();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
   for (const outcome of ["busy", "success"] as const) {
     for (const terminal of [false, true]) {
       test(`${engine} coalesces queued material checkpoints after ${outcome} admission with terminal=${terminal}`, async () => {

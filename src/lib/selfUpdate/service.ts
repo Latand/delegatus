@@ -1,3 +1,4 @@
+import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
 import { resolveTrackedRevision } from "./git";
 import { prepareLauncherCredentials, releaseLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
@@ -194,6 +195,7 @@ export class SelfUpdateService {
   private checking: Promise<void> | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private retaining = false;
+  private stopPressureSweep?: () => void;
   private retentionChecking = false;
   private retentionAbort: AbortController | null = null;
   private runner: RunnerPort | null = null;
@@ -287,6 +289,7 @@ export class SelfUpdateService {
 
   /** Called only by the release-owning web process after its fence is active. */
   startAuto(): void {
+    this.stopPressureSweep ??= registerDiskPressureSweep("releases", () => { void this.retentionTick(); });
     if (this.autoTimer) return;
     // Restore durable custody before startup hands pending stages or seats to
     // their controllers, even when future automatic updates are switched off.
@@ -1895,7 +1898,8 @@ export class SelfUpdateService {
       const at = new Date(this.deps.now()).toISOString();
       saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? request.revision ?? target, revision: target,
         phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
-        health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
+        health: [], error: null, ...(alreadyServing ? { servingProgress: "Already serving the requested revision; nothing was restarted." } : {}),
+        owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
       try { if (!alreadyServing) {
         const started = this.startCheckout(record, revision, "seat", deploymentId);
         if (!started.ok) throw new Error(started.error);
@@ -2357,6 +2361,7 @@ export class SelfUpdateService {
   }
 
   stop(): void {
+    this.stopPressureSweep?.(); this.stopPressureSweep = undefined;
     this.stopped = true;
     this.retentionAbort?.abort();
     if (this.comparisonRefreshTimer) clearTimeout(this.comparisonRefreshTimer);

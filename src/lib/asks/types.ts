@@ -31,6 +31,7 @@ export interface ReportLogAsk {
 
 /** What the setting row draws: the switch, the key, and this month's spend. */
 export interface AsksYouSettingView {
+  provider?: "openrouter" | "openai";
   enabled: boolean;
   /** Where the OpenRouter key comes from, never the key itself. */
   keySource: "env" | "file" | null;

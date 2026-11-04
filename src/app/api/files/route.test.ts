@@ -3675,6 +3675,42 @@ test("crowned and manually created projects flow through the files payload", asy
   }
 });
 
+test("project presentation overrides derived labels and archive reads preserve the saved choice", async () => {
+  const { setProjectPresentation } = await import("@/lib/projects/presentation");
+  const { projectPresentation } = await import("@/lib/projects/presentation");
+  const project = "repo";
+  scannedFiles = [file("/sessions/presentation.jsonl")];
+  scannedProjectCatalog = [{ project, displayName: "Derived label", smt: 1, conversations: 1 }];
+  const actualProject = scannedFiles[0]!.project;
+  expect(actualProject).toBe(project);
+  const projectResponse = async () => (await buildFilesResponse(new Request("http://127.0.0.1/api/files"), {
+    listFilesWithProjectCatalog: async () => ({ files: scannedFiles.map(row => ({ ...row })), projectCatalog: scannedProjectCatalog.map(row => ({ ...row })), complete: true }),
+  })).json();
+  await setProjectPresentation(project, { name: "Chosen label", archived: true }, "operator");
+  const first = await (await GET(new Request("http://127.0.0.1/api/files"))).json();
+  expect(first.projectDisplayNames[project]).toBe("Chosen label");
+  expect(first.projectCatalog.find((row: { project: string }) => row.project === project)?.displayName).toBe("Chosen label");
+  expect(first.files[0].projectName).toBe("Chosen label");
+  expect(first.archivedProjects).toContain(project);
+  await setProjectPresentation(project, { name: "Updated label" }, "operator");
+  const renamed = await (await GET(new Request("http://127.0.0.1/api/files"))).json();
+  expect(renamed.projectDisplayNames[project]).toBe("Updated label");
+  const beforeRead = fs.readFileSync(path.join(stateDir, "project-presentation.json"), "utf8");
+  scannedFiles = [{ ...scannedFiles[0]!, activity: "live", proc: "running" }];
+  const active = await projectResponse();
+  expect(active.archivedProjects).toContain(project);
+  expect(fs.readFileSync(path.join(stateDir, "project-presentation.json"), "utf8")).toBe(beforeRead);
+  expect(projectPresentation(project).archived?.value).toBe(true);
+  await setProjectPresentation(project, { archived: false }, "operator");
+  expect((await projectResponse()).archivedProjects).not.toContain(project);
+  expect(projectPresentation(project).archived?.value).toBe(false);
+  scannedFiles = [{ ...scannedFiles[0]!, activity: "recent", proc: null }];
+  expect((await projectResponse()).archivedProjects).not.toContain(project);
+  await setProjectPresentation(project, { name: null, folderName: "Original folder" }, "operator");
+  const reset = await projectResponse();
+  expect(reset.projectDisplayNames[project]).toBe("Original folder");
+});
+
 /** The production seat resolver: the registry's own alias chain, exactly as
     `/api/files` and the MCP relay both take their seat identities through. */
 const registrySeatIdentity = seatIdentityResolver((id) => agentRegistry().canonicalConversationId(id));
@@ -3761,6 +3797,42 @@ test("full and summary files representations never share ETags or cached bodies"
   expect((await summary.json()).readProjection).toBe("board-summary");
   const fullAgain = await GET(new Request("http://localhost/api/files"));
   expect((await fullAgain.json()).readProjection).toBeUndefined();
+});
+
+test("summary clears only attempt scaffolds while full reads retain frozen provenance", async () => {
+  const role = { roleId: "builder" as const, engine: "codex" as const, model: "model", effort: "high", access: "read-write" as const, promptScaffold: "Stage instructions" };
+  const lane = buildPipeline({ id: "summary-history", task: "Task", project: "project", repoDir: "/fixture",
+    srcPath: null, srcConversationId: null, now: "2026-11-03T00:00:00Z",
+    stages: [{ id: "build", kind: "run", prompt: "Editable prompt", next: null, effectiveRole: role }] });
+  lane.runs = [{ stageId: "build", attempts: [{
+    n: 1, state: "failed", effectiveRole: { ...role, model: "historical-model", promptScaffold: "Frozen attempt instructions" },
+    input: "Full input", output: "Full output", error: "Full failure", verdict: { status: "fail", findings: ["Full finding"] },
+    launchId: "original-launch", conversationId: "conversation_history", sessionId: null, agentPath: "/fixture/history",
+    paneId: null, flowId: null, activatedBy: null, startedAt: "2026-11-03T00:00:00Z", completedAt: "2026-11-03T00:01:00Z",
+  }] }];
+  const original = structuredClone(lane);
+  pipelinesStore = () => [lane];
+  pipelineVisibility = (rows) => rows;
+  const full = await (await GET(new Request("http://localhost/api/files"))).json();
+  for (const protocol of ["1", "2"]) {
+    const request = (headers = {}) => new Request("http://localhost/api/files?view=summary", {
+      headers: { "x-llv-board-protocol": protocol, ...headers },
+    });
+    const summary = await GET(request());
+    const data = await summary.json();
+    expect(data.pipelines[0].stages).toEqual(full.pipelines[0].stages);
+    expect(data.pipelines[0].runs[0].attempts[0]).toEqual({
+      ...full.pipelines[0].runs[0].attempts[0], input: null, output: null,
+      effectiveRole: { ...full.pipelines[0].runs[0].attempts[0].effectiveRole, promptScaffold: null },
+    });
+    expect((await GET(request({ "if-none-match": summary.headers.get("etag")! }))).status).toBe(304);
+    const reset = await GET(request({ "if-none-match": "expired", "x-llv-files-delta": "1" }));
+    expect(await reset.json()).toEqual(data);
+  }
+  const fullAgain = await (await GET(new Request("http://localhost/api/files"))).json();
+  expect(fullAgain.pipelines).toEqual(full.pipelines);
+  expect(fullAgain.pipelines[0].runs[0].attempts[0].effectiveRole.promptScaffold).toBe("Frozen attempt instructions");
+  expect(lane).toEqual(original);
 });
 
 /* A task's prototype review belongs to its project, and this read has no

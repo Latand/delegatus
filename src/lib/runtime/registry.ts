@@ -4,6 +4,7 @@ import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnap
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { withoutOperationLease } from "@/lib/operationLease";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
@@ -224,7 +225,10 @@ async function bindStructuredHostPersistence(
   columnsFromState: (state: HostState, writerClaimEpoch: number) => StructuredHostColumns,
   options: StructuredHostPersistenceOptions,
 ): Promise<StructuredHostPersistenceStop> {
-  host.setWriterFence(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch));
+  // A launched host outlives the controller pass that admitted it. Its
+  // callbacks keep the durable writer claim as their authority; they must not
+  // inherit that pass's revocable scheduling lease.
+  host.setWriterFence(() => withoutOperationLease(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch)));
   const initialState = await host.health();
   /* Whether the tree holding the row is the one this host's own stop
      captured. Another stop's capture is that stop's to finish, so this
@@ -299,7 +303,7 @@ async function bindStructuredHostPersistence(
      (#2790). That capture refuses a successor once the child is gone. A row
      recording another live process cannot take it; a refusal keeps the
      child running under its own fence. */
-  host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
+  host.setTerminationCapture?.((rootPid, tree) => withoutOperationLease(() => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
     let entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     let root = entry?.structuredHost?.process ?? null;
     /* The first checkpoint may still be deferred over a pending row or the
@@ -329,12 +333,14 @@ async function bindStructuredHostPersistence(
     if (!failed && entry.claimOwner === claimOwner && entry.claimEpoch === writerClaimEpoch
       && (!prior || capture.added.length > 0)) ownCapture = true;
     return true;
-  }));
+  })));
 
   let updates = Promise.resolve();
   let checkpointQueued = false;
   const enqueue = (write: () => Promise<void>) => {
-    const next = updates.then(write);
+    // The durable writer claim owns every checkpoint, including the initial
+    // write and its retry timers, beyond the pass that bound this host.
+    const next = withoutOperationLease(() => updates.then(write));
     updates = next.catch(() => {});
     return next;
   };
@@ -469,7 +475,7 @@ async function bindStructuredHostPersistence(
         settleTimer.unref?.();
       });
   };
-  const stop = () => enqueue(async () => {
+  const stop = () => withoutOperationLease(() => enqueue(async () => {
     if (stopped) return;
     /* The held terminal write releases the claim once the tree is gone. */
     if (heldTerminal !== null) {
@@ -498,7 +504,7 @@ async function bindStructuredHostPersistence(
     unsubscribe();
     await releaseClaim();
     stopped = true;
-  });
+  }));
 
   // Queue the initial write before subscribing; subscription emits synchronously,
   // and later states must stay behind it while admission waits.
@@ -517,7 +523,7 @@ async function bindStructuredHostPersistence(
     }
   });
 
-  unsubscribe = host.onStateChange((observed) => {
+  unsubscribe = host.onStateChange((observed) => withoutOperationLease(() => {
     if (failed || stopped) return;
     const state = structuredClone(observed);
     const terminal = state.status === "unhosted" || (state.status === "dead" && state.pid === null);
@@ -537,7 +543,7 @@ async function bindStructuredHostPersistence(
       clearCursorTimer();
       queueCheckpoint();
     } else continuePending();
-  });
+  }));
   try {
     await initialWrite;
   } catch (error) {
@@ -550,7 +556,9 @@ async function bindStructuredHostPersistence(
     throw error;
   }
   if (stopped) unsubscribe();
-  const binding = Object.assign(stop, { flush: () => enqueue(persistPending) });
+  const binding = Object.assign(stop, {
+    flush: () => withoutOperationLease(() => enqueue(() => withoutOperationLease(persistPending))),
+  });
   hostPersistence.set(host, binding);
   host.setPersistenceFlush?.(binding.flush);
   return binding;
@@ -757,8 +765,11 @@ async function terminateVerifiedStructuredOrphan(
   dependencies: StructuredOrphanStopDependencies = {},
 ): Promise<boolean> {
   if (claimOwnerBlocksOrphanReap(claimOwner)) return false;
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+  const custody = structuredCustodyIdentity(entry);
   return endRecordedStructuredTree(registry, key, processIdentity, "structured-orphan-stop",
-    (current) => !claimOwnerBlocksOrphanReap(current?.claimOwner ?? null), dependencies);
+    (current) => structuredCustodyIdentity(current) === custody
+      && !claimOwnerBlocksOrphanReap(current?.claimOwner ?? null), dependencies);
 }
 
 /** Ends the process a row records and every process captured beside it,
@@ -779,7 +790,6 @@ async function endRecordedStructuredTree(
   if (!startIdentity || !bootEpoch) return false;
   const engine = key.engine;
   if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
-  const { terminateStructuredHostTree } = await import("./structuredHostControl");
   const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
   const targetScope = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
   const recordedDomain = startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost?.signalDomain;
@@ -796,6 +806,8 @@ async function endRecordedStructuredTree(
     if (!mayEnd(current)) return { status: 409, error: "a live writer claim owns this process" };
     return null;
   };
+  const { terminateStructuredHostTree } = await import("./structuredHostControl");
+  if (authorize()) return false;
   const outcome = await terminateStructuredHostTree({
     kind: "structured", pid: root.pid, startIdentity, bootEpoch, engine, sessionId: key.sessionId, conversationId: null,
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
@@ -831,14 +843,16 @@ async function endRecordedStructuredTree(
 
 /** Test seams for the termination ladder an orphan stop runs. */
 export type StructuredOrphanStopDependencies = Pick<StructuredHostTerminationDependencies,
-  "signal" | "sleep" | "graceMs" | "deadlineMs" | "protectedPids">;
+  "signal" | "sleep" | "graceMs" | "deadlineMs" | "protectedPids" | "stopScope">;
 
 /** Stops the engine process a terminal row still records, and everything it
     started, once no live writer claim owns that row, so a claim refused over
     it can be asked again (#2790). The row says its stream is gone: nothing
     can deliver to that process, and a successor started beside it would be a
     second writer in its worktree. True only when every captured process is
-    proven gone; survivors stay on the row and refuse the claim. */
+    proven gone; survivors stay on the row and refuse the claim. A nonterminal
+    row left by a lost Viewer can use the same scope retirement only when its
+    recorded engine is already proven dead. */
 export async function stopTerminalStructuredOrphan(
   registry: AgentRegistry,
   key: SessionKey,
@@ -846,7 +860,8 @@ export async function stopTerminalStructuredOrphan(
 ): Promise<boolean> {
   const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const orphan = entry?.structuredHost?.process ?? null;
-  if (!entry || !orphan || (entry.status !== "dead" && entry.status !== "unhosted")) return false;
+  if (!entry || !orphan || (entry.status !== "dead" && entry.status !== "unhosted"
+    && !processIdentityProvenDead(orphan))) return false;
   return terminateVerifiedStructuredOrphan(registry, key, orphan, entry.claimOwner ?? null, dependencies);
 }
 

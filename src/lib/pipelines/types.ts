@@ -101,13 +101,16 @@ export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion
     many rounds of it the source reviews, and what happens once those are spent.
     Cycles live exclusively on fail edges; the pass graph stays acyclic so
     every pass path terminates. */
+/** Where a run stage executes. A cloud runtime names its provider's hosted session. */
+export type PipelineStageRuntime = "local" | "codex-cloud" | "claude-cloud";
+
 export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: PipelineFailEdgeExhaustion };
 
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
   /** Omitted stages inherit the project default when the definition is created. */
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
@@ -260,7 +263,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -331,6 +334,8 @@ export type PipelineStageReport = {
   summary: string | null;
   result?: string;
   taskSummary?: TaskSummaryContent;
+  /** Unusable recorded checks excluded from this intent, never passing evidence. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;
@@ -411,6 +416,14 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** Setup evidence stays with this attempt across failures and explicit retries. */
+  setup?: {
+    /** Resolved execution cwd; the approved recipe keeps its relative cwd. */
+    command: string[]; cwd: string; hash: string;
+    state: "running" | "passed" | "failed";
+    startedAt: string; completedAt: string | null; code: number | null;
+    stdout: string; stderr: string;
+  };
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
   cloud?: import("./cloudStage").CloudStageAttempt;
@@ -445,6 +458,8 @@ export type PipelineStageAttempt = {
     clientAttemptId: string;
     startedAt: string;
     fence: string;
+    /** Admission begins after deferred input preparation; survives owner recovery. */
+    admissionStartedAt?: string;
     owner?: import("@/lib/processIdentity").ProcessIdentity;
     replay?: boolean;
     /** The reserved prompt still needs asynchronous artifact preparation. */
@@ -560,16 +575,28 @@ export type PipelineStageAttempt = {
   /** Controller-observed head before committing a read-only stage's declared outputs. */
   outputBaseHead?: string;
   /** Bounded wait for a structured delivery controller that is between
-      publications (#1191). `startedAt` is wall-clock from the first sighting,
-      so the budget covers the time a failing spawn attempt spent inside
-      `spawnAgent` as well as the backoff; `retryAfter` is when the next
-      activation may run. Persisted because the wait is spent between ticks —
+      publications (#1191). `retryAfter` gates the next activation. Admission
+      uses the phase counters below; other waits use wall-clock from
+      `startedAt`. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
   controllerWait?: PipelineBoundedWait & {
     /** Cut whose chain owns an incomplete-history confirmation wait, before
         providerWait can open. The reader must prove closure before clearing it. */
     providerCutAt?: number;
+  };
+  /** Active spawn time and observed contention, excluding CPU/update holds.
+      Kept on the attempt across activation replacement and controller restart. */
+  spawnAdmissionBudget?: {
+    spent: { host: number; writer: number; controller: number };
+    kind: "host" | "writer" | "controller";
+    /** Pre-counter retries retain their original shared allowance. */
+    legacyLimitMs?: number;
+    waitingSince?: string;
+    inFlightSince?: string;
+    inFlightKind?: "host" | "writer";
+    lastFailure?: string;
+    lastWriterFailure?: string;
   };
   outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
   memoryWait?: PipelineBoundedWait;
@@ -711,6 +738,9 @@ export type PipelineStageAttempt = {
     stageId: string;
     attempt: number;
     commitStartedHead?: string;
+    /** Dead-producer custody pins the branch and staged tree before committing.
+        An unchanged intent can retry; a moved head needs the controller receipt. */
+    commitCustody?: { branch: string; tree: string; paths: string[] };
     committedSha?: string;
     republishQueued?: true;
     reviewRequired?: boolean;
@@ -769,6 +799,9 @@ export type PipelineStageAttempt = {
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
+  /** Exclusions revalidated at final settlement, including fenced fallback
+      verdicts that have no explicit stage report. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   /** Persisted before switching away from a stage-created branch, so a
       controller restart must finish adopting this head before acceptance. */
   branchAdoption?: { branch: string; head: string; target: string; adoptedHead?: string };
@@ -1159,6 +1192,8 @@ export type PipelineConversationSource = {
 };
 
 export type Pipeline = {
+  /** Server-attributed member scope, retained across stage retries and restart. */
+  workspace?: import("@/lib/accounts/migration/contracts").LaunchProfile["workspace"];
   /** Receipt-owned invention provenance, retained across attachment edits. */
   proactiveTaskIds?: string[];
   /** Historical context only; never grants creator or spawn authority. */
@@ -1369,9 +1404,11 @@ export type PipelineMerge = {
   /** `reviewedHead`, then each head the runner's own updates produced. The PR
       head must be in it. */
   chain: string[];
-  /** One entry per `update-branch`; `head` stays null until the update's
+  /** One entry per base update: an older runner's `update-branch`, or the
+      runner's own merge of the base tip `base` into the chain tip, the exact
+      `commit` it recorded before pushing. `head` stays null until the update's
       commit is seen on the PR and admitted to the chain. */
-  updates: Array<{ requestedAt: string; head: string | null }>;
+  updates: Array<{ requestedAt: string; head: string | null; commit?: string; base?: string }>;
   /** Every check name seen on any head of this PR, a union. */
   seenChecks: string[];
   /** The head the check clock runs for, when it was first seen, and the check
@@ -1538,7 +1575,7 @@ export type PatchPipelineRequest = {
       running the attempt. An attempt another conversation runs by then answers
       409 `STAGE_CHANGED` before any runtime or definition is changed. */
   expectedConversationId?: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;
