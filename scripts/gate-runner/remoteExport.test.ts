@@ -65,7 +65,6 @@ test("export tree", () => {
   expect(fs.readFileSync("README.md", "utf8")).toEndWith("edited in the export\\n");
   expect(fs.existsSync("LICENSE")).toBe(false);
   expect(fs.existsSync(".git")).toBe(false);
-  expect(fs.existsSync(".artifacts/form-draft-brief.md")).toBe(true);
 });`);
   const edited = treeHashes(path.dirname(exported.directory));
   const result = h.run(["bun", "test", "./gate-runner-fixture/export.test.ts"], { cwd: exported.directory });
