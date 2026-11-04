@@ -725,6 +725,22 @@ test.each([1, 2])("a settled recorded-shape host retires with %s terminal status
   expect(store.load(SESSION)).toEqual(before);
 });
 
+test("a duplicate at the checkpoint boundary keeps the host alive", async () => {
+  const store = retirementLedger();
+  const filename = path.join(statePath("structured-host-events"), `${SESSION}.jsonl`);
+  fs.appendFileSync(filename, [
+    JSON.stringify({ kind: "delta", turnId: "settled-turn", text: "unflushed", seq: 13 }),
+    JSON.stringify({ kind: "session-status", status: "dead", seq: 13 }),
+    JSON.stringify({ kind: "session-status", status: "unhosted", seq: 14 }),
+    "",
+  ].join("\n"));
+
+  expect(() => store.load(SESSION)).toThrow();
+  const probe = await sweep({ durableEventTail: undefined });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toContainEqual(expect.objectContaining({ clause: "events-flushed" }));
+});
+
 test.each([
   { kind: "delta", turnId: "settled-turn", text: "not checkpointed", seq: 13 },
   { kind: "turn-ended", turnId: "another-turn", status: "completed", seq: 13 },

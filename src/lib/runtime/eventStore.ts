@@ -327,6 +327,20 @@ export function durableRuntimeEventFlushTailSeq(
       end = newline;
       if (end < 0 && expected > flushedCursor) return undetermined("the runtime event suffix does not reach the flushed cursor");
     }
+    /* The terminal suffix is safe only when it begins immediately after the
+       actual checkpoint row. Checking only the suffix lets a duplicate
+       sequence at the boundary hide an unflushed event (for example delta(13),
+       dead(13), unhosted(14) with cursor 12). */
+    if (flushedCursor > 0) {
+      const newline = end > 0 ? buffer.lastIndexOf(0x0a, end - 1) : -1;
+      if (newline < 0 && start > 0) return undetermined("the runtime event suffix boundary exceeds its read budget");
+      let predecessor: unknown;
+      try { predecessor = JSON.parse(buffer.subarray(newline + 1, end).toString("utf8")); }
+      catch { return undetermined("the runtime event suffix boundary is not JSON"); }
+      if (!validEvent(predecessor) || predecessor.seq !== flushedCursor) {
+        return undetermined("the runtime event suffix does not follow the flushed cursor");
+      }
+    }
     if (!sameLedgerIdentity(before, ledgerIdentity(fs.fstatSync(handle)))
       || !sameLedgerIdentity(before, ledgerIdentity(fs.statSync(filename)))) {
       return undetermined("the runtime event suffix changed while being read");

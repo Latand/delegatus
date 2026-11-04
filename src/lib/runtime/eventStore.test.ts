@@ -28,6 +28,12 @@ test.each([
   ["unknown kind", '{"kind":"future-event","seq":13}\n'],
   ["sequence gap", '{"kind":"session-status","status":"dead","seq":13}\n{"kind":"session-status","status":"unhosted","seq":15}\n'],
   ["missing prefix", '{"kind":"session-status","status":"unhosted","seq":14}\n'],
+  ["duplicate sequence at checkpoint boundary", [
+    { kind: "turn-ended", turnId: "turn", status: "completed", seq: 12 },
+    { kind: "delta", turnId: "turn", text: "unflushed", seq: 13 },
+    { kind: "session-status", status: "dead", seq: 13 },
+    { kind: "session-status", status: "unhosted", seq: 14 },
+  ].map(event => JSON.stringify(event)).join("\n") + "\n"],
   ["empty record", '\n{"kind":"session-status","status":"unhosted","seq":14}\n'],
   ["read budget", JSON.stringify({ kind: "session-status", status: "unhosted", seq: 13, padding: "x".repeat(65_536) }) + "\n"],
 ] as const)("retirement refuses an undetermined %s suffix", (_reason, contents) => {
