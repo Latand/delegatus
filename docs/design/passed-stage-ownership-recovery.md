@@ -1,9 +1,10 @@
 # Passed-stage ownership recovery
 
-Cause on main `39f64aec`: `src/lib/pipelines/engine.ts:13476` caps the
+Cause on main `d8e59e3cb`: `src/lib/pipelines/engine.ts:13494` caps the
 preparation retry delay at one minute without bounding elapsed time or rounds.
-`src/lib/pipelines/stageBranch.ts:74` includes every peer's branch authority in
-the ownership token. A peer authority change during settlement cancels adoption
+`src/lib/pipelines/stageBranch.ts:74` refuses a changed authority revision, and
+line 76 includes every peer's branch authority in the ownership token.
+A peer authority change during settlement cancels adoption
 and records another retry. Continuing changes can repeat that cancellation
 forever, across controller restarts. The running lane cannot use `retry-stage`
 because that action requires a stage awaiting a decision.
@@ -45,30 +46,36 @@ Its replacement-controller cases start a fresh process against the persisted
 wait, test the original deadline, and retry without relaunching the producer.
 They cover uncommitted output, a pending push and a verified push, alongside
 controls for recovery before the deadline and changes that supersede the old
-selection. The restart regression fails on main `39f64aec` with the lane still
+selection. The restart regression fails on main `d8e59e3cb` with the lane still
 `running` where `needs_decision` is required.
 
-## Verification checkpoint
+## Verification
 
-The implementation is committed in `7b156dd8f`. The final tree also merges
-main `8b47916eb`; that merge changes timeline presentation and leaves the
-settlement source unchanged.
+The implementation is committed in `7b156dd8f`. Verification resumed after
+merging main `d8e59e3cb` with a merge commit. The task's source diff remains
+limited to settlement preparation and its regression tests.
 
-- On main `39f64aec`, the focused restart regression reports one passing
+- On main `d8e59e3cb`, the focused restart regression reports one passing
   recovery control and one failure: expected `needs_decision`, received
-  `running` after the replacement controller reaches the original deadline.
-- With the fix, `bun test --timeout=60000
+  `running` after the replacement controller reaches the original deadline
+  (exit 1, 22 assertions). The same regression was red on main `39f64aec`
+  before the refresh.
+- `bunx tsc --noEmit` passes after the main merge (exit 0), through
+  `scripts/gate-slot.sh` in a fresh export with shared, unchanged dependencies.
+- After the merge, `bun test --timeout=60000
   src/lib/pipelines/engine.settlementPreparation.test.ts` passes all 31 tests
-  and 543 assertions in an isolated export. This includes fresh processes,
-  retained output, manual retry, dispatch refusal and failed task notes.
-- `bunx tsc --noEmit` passes in a fresh export of the implementation before
-  the timeline merge. The commit's whitespace, privacy and ESLint hooks pass.
-- The final tree's `.githooks/pre-push` run passes publication privacy but has
-  no complete test/typecheck verdict. Recorded-check handoff is refused with
+  and 543 assertions through the gate in a fresh isolated export (exit 0).
+  The file includes replacement-controller processes, retained output, manual
+  retry, dispatch refusal and failed task notes.
+- The earlier pre-push attempt passed publication privacy but had no complete
+  test/typecheck verdict. Recorded-check handoff was refused with
   `recorded check custody capacity is full`. The owned recorder is cancelled;
   its durable exit is 143 and its service close report confirms cleanup.
 
-Resume the committed attempt when custody capacity is available and finish
-pre-push verification. The pipeline publishes and opens the pull request;
-the hosted `privacy-tracker-audit` and `runtime-gate` checks belong to that
-publication.
+The continuation authorizes direct, fully isolated checks, one command at a
+time through `scripts/gate-slot.sh`, with explicit exit-code records and no
+recorded-check handoff. The pre-push rehearsal uses the committed tree in a
+scratch checkout with its own Git metadata and shared dependencies. The
+pipeline publishes and opens the pull request; the hosted
+`privacy-tracker-audit` and `runtime-gate` checks belong to that publication.
+No performance improvement is claimed.
