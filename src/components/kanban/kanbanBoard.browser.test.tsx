@@ -42694,7 +42694,19 @@ describe("a task card without inline conversations", () => {
           await page.waitForSelector('[data-stages-sheet="p-upload"] .pane', { timeout: 10_000 });
           await page.click("[data-expand-all]");
           await settle(page);
-          await page.waitForTimeout(600);
+          /* Read once every pane is open, one has drawn its agent's prose, and
+             the lane's width has held still for two frames. */
+          await page.waitForFunction(() => {
+            const element = document.querySelector<HTMLElement>(".gsheet .lane");
+            const store = window as unknown as { __laneWidths?: number[] };
+            if (!element) return false;
+            const panes = [...element.querySelectorAll<HTMLElement>(".pane[data-stage]")];
+            const ready = panes.length > 0 && panes.every((pane) => pane.dataset.collapsed === "0")
+              && element.querySelector('.pane[data-collapsed="0"] [data-tts-message]') !== null;
+            const widths = ready ? [...(store.__laneWidths ?? []), element.scrollWidth].slice(-3) : [];
+            store.__laneWidths = widths;
+            return widths.length === 3 && widths.every((width) => width === widths[0]);
+          }, undefined, { polling: "raf", timeout: 30_000 });
           const lane = await page.evaluate(() => {
             const element = document.querySelector<HTMLElement>(".gsheet .lane")!;
             const probe = (host: Element) => {

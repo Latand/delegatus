@@ -5,41 +5,205 @@
       "onCards": 0,
       "onTask": 0,
       "chat": "Re-running the rebuild with traffic@ defaultworking 6:42·Opus 5.5·stage 3/4",
+      "sheet": {
+        "screen": "pipeline",
+        "message": "[The previous stage output will be inserted here]\n\nMerge once the alias swap is verified under traffic.\n\nPinned task:\nRestore search results after the index rebuild\n\nPinned specification and acceptance criteria:\nNo separate pinned specification was supplied.\n\nRole preset: cleaner (claude/opus, high).\nAccess: read-write. Work only inside this pipeline's dedicated worktree and commit-ready scope.\nHost access: full. Network, SSH, installed command-line tools and the pipeline worktree are available.\nThis pipeline's worktree started from commit main on main.\nPipeline branch: pipeline/p-search. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.\nCommit your changes on pipeline/p-search (or its already checked-out owned delivery branch). Edit, stage and commit only in this stage worktree. Scratch exports are for builds, tests, probes and renders; never create commits in another checkout and import them. Never push; the pipeline publishes. This controller instruction overrides any instruction to work or commit in a scratch checkout or to push in the brief, pinned specification, relayed input or role scaffold.\nPipeline nesting is forbidden. Never create or start another pipeline from this stage.\nDelegatus mechanics. Earlier answers (rule 3): run a few search_transcripts and search_memory queries in different phrasings, project-scoped first, then unscoped; open transcript hits with conversation_messages at their transcript path and memory hits with search_memory by id. Asking (rules 4 and 7): your way to ask is the verdict needs_decision. Scratch: $TMPDIR is this stage's own scratch directory and is removed when the stage settles; export, render and probe there, never in the live worktree, never against the operator's running Delegatus, never in a directory you name under /tmp or /var/tmp.\nUse the project's test command from its instruction files or package scripts, selecting test files by explicit path. Gate wrapper availability and its installed path are resolved when this stage launches.\n\nReport this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.\nAdd result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.\nThis stage can finish its lane. With a pass, also add taskSummary { headline, text, left? } for the person who returns to the task: headline one line (120 characters at most), text two or three sentences (600 at most) on what was done and how it works now, left one line on what remains (200 at most, omitted when nothing does). It describes the whole task as it now stands, in the operator's language, and replaces the task's summary when the lane completes.\nThe server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.\nThe call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.\nVerdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.\n\nFallback, only when the stage_report call returned an error or the tool is absent from this session: quote that error, then end the turn with one fenced JSON object as the final block, with nothing after it.\n```json\n{\"status\":\"pass\",\"findings\":[]}\n```\nIts status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
+        "graph": 0,
+        "scrollWidth": 390,
+        "firstLine": {
+          "top": 529,
+          "bottom": 543
+        },
+        "whole": [
+          {
+            "selector": "[data-mobile2-sheet=\"stage\"] h2",
+            "text": "Configure · Merge",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-prompt-label]",
+            "text": "Stage prompt",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-edit]",
+            "text": "",
+            "cut": false
+          }
+        ]
+      },
+      "editor": {
+        "whole": [
+          {
+            "selector": "[data-evidence-field-label]",
+            "text": "Stage prompt",
+            "cut": false
+          }
+        ],
+        "field": {
+          "disabled": false,
+          "inside": true
+        }
+      },
       "pipeline": {
         "screen": "pipeline",
         "graph": 0,
         "scrollWidth": 390
-      }
+      },
+      "fromRow": true
     },
     "390-uk-light": {
       "onCards": 0,
       "onTask": 0,
       "chat": "Re-running the rebuild with traffic@ defaultпрацює 6:42·Opus 5.5·етап 3/4",
+      "sheet": {
+        "screen": "pipeline",
+        "message": "[The previous stage output will be inserted here]\n\nMerge once the alias swap is verified under traffic.\n\nPinned task:\nRestore search results after the index rebuild\n\nPinned specification and acceptance criteria:\nNo separate pinned specification was supplied.\n\nRole preset: cleaner (claude/opus, high).\nAccess: read-write. Work only inside this pipeline's dedicated worktree and commit-ready scope.\nHost access: full. Network, SSH, installed command-line tools and the pipeline worktree are available.\nThis pipeline's worktree started from commit main on main.\nPipeline branch: pipeline/p-search. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.\nCommit your changes on pipeline/p-search (or its already checked-out owned delivery branch). Edit, stage and commit only in this stage worktree. Scratch exports are for builds, tests, probes and renders; never create commits in another checkout and import them. Never push; the pipeline publishes. This controller instruction overrides any instruction to work or commit in a scratch checkout or to push in the brief, pinned specification, relayed input or role scaffold.\nPipeline nesting is forbidden. Never create or start another pipeline from this stage.\nDelegatus mechanics. Earlier answers (rule 3): run a few search_transcripts and search_memory queries in different phrasings, project-scoped first, then unscoped; open transcript hits with conversation_messages at their transcript path and memory hits with search_memory by id. Asking (rules 4 and 7): your way to ask is the verdict needs_decision. Scratch: $TMPDIR is this stage's own scratch directory and is removed when the stage settles; export, render and probe there, never in the live worktree, never against the operator's running Delegatus, never in a directory you name under /tmp or /var/tmp.\nUse the project's test command from its instruction files or package scripts, selecting test files by explicit path. Gate wrapper availability and its installed path are resolved when this stage launches.\n\nReport this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.\nAdd result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.\nThis stage can finish its lane. With a pass, also add taskSummary { headline, text, left? } for the person who returns to the task: headline one line (120 characters at most), text two or three sentences (600 at most) on what was done and how it works now, left one line on what remains (200 at most, omitted when nothing does). It describes the whole task as it now stands, in the operator's language, and replaces the task's summary when the lane completes.\nThe server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.\nThe call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.\nVerdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.\n\nFallback, only when the stage_report call returned an error or the tool is absent from this session: quote that error, then end the turn with one fenced JSON object as the final block, with nothing after it.\n```json\n{\"status\":\"pass\",\"findings\":[]}\n```\nIts status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
+        "graph": 0,
+        "scrollWidth": 390,
+        "firstLine": {
+          "top": 529,
+          "bottom": 543
+        },
+        "whole": [
+          {
+            "selector": "[data-mobile2-sheet=\"stage\"] h2",
+            "text": "Налаштування · Merge",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-prompt-label]",
+            "text": "Промпт стадії",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-edit]",
+            "text": "",
+            "cut": false
+          }
+        ]
+      },
+      "editor": {
+        "whole": [
+          {
+            "selector": "[data-evidence-field-label]",
+            "text": "Промпт стадії",
+            "cut": false
+          }
+        ],
+        "field": {
+          "disabled": false,
+          "inside": true
+        }
+      },
       "pipeline": {
         "screen": "pipeline",
         "graph": 0,
         "scrollWidth": 390
-      }
+      },
+      "fromRow": true
     },
     "390-en-dark": {
       "onCards": 0,
       "onTask": 0,
       "chat": "Re-running the rebuild with traffic@ defaultworking 6:42·Opus 5.5·stage 3/4",
+      "sheet": {
+        "screen": "pipeline",
+        "message": "[The previous stage output will be inserted here]\n\nMerge once the alias swap is verified under traffic.\n\nPinned task:\nRestore search results after the index rebuild\n\nPinned specification and acceptance criteria:\nNo separate pinned specification was supplied.\n\nRole preset: cleaner (claude/opus, high).\nAccess: read-write. Work only inside this pipeline's dedicated worktree and commit-ready scope.\nHost access: full. Network, SSH, installed command-line tools and the pipeline worktree are available.\nThis pipeline's worktree started from commit main on main.\nPipeline branch: pipeline/p-search. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.\nCommit your changes on pipeline/p-search (or its already checked-out owned delivery branch). Edit, stage and commit only in this stage worktree. Scratch exports are for builds, tests, probes and renders; never create commits in another checkout and import them. Never push; the pipeline publishes. This controller instruction overrides any instruction to work or commit in a scratch checkout or to push in the brief, pinned specification, relayed input or role scaffold.\nPipeline nesting is forbidden. Never create or start another pipeline from this stage.\nDelegatus mechanics. Earlier answers (rule 3): run a few search_transcripts and search_memory queries in different phrasings, project-scoped first, then unscoped; open transcript hits with conversation_messages at their transcript path and memory hits with search_memory by id. Asking (rules 4 and 7): your way to ask is the verdict needs_decision. Scratch: $TMPDIR is this stage's own scratch directory and is removed when the stage settles; export, render and probe there, never in the live worktree, never against the operator's running Delegatus, never in a directory you name under /tmp or /var/tmp.\nUse the project's test command from its instruction files or package scripts, selecting test files by explicit path. Gate wrapper availability and its installed path are resolved when this stage launches.\n\nReport this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.\nAdd result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.\nThis stage can finish its lane. With a pass, also add taskSummary { headline, text, left? } for the person who returns to the task: headline one line (120 characters at most), text two or three sentences (600 at most) on what was done and how it works now, left one line on what remains (200 at most, omitted when nothing does). It describes the whole task as it now stands, in the operator's language, and replaces the task's summary when the lane completes.\nThe server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.\nThe call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.\nVerdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.\n\nFallback, only when the stage_report call returned an error or the tool is absent from this session: quote that error, then end the turn with one fenced JSON object as the final block, with nothing after it.\n```json\n{\"status\":\"pass\",\"findings\":[]}\n```\nIts status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
+        "graph": 0,
+        "scrollWidth": 390,
+        "firstLine": {
+          "top": 529,
+          "bottom": 543
+        },
+        "whole": [
+          {
+            "selector": "[data-mobile2-sheet=\"stage\"] h2",
+            "text": "Configure · Merge",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-prompt-label]",
+            "text": "Stage prompt",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-edit]",
+            "text": "",
+            "cut": false
+          }
+        ]
+      },
+      "editor": {
+        "whole": [
+          {
+            "selector": "[data-evidence-field-label]",
+            "text": "Stage prompt",
+            "cut": false
+          }
+        ],
+        "field": {
+          "disabled": false,
+          "inside": true
+        }
+      },
       "pipeline": {
         "screen": "pipeline",
         "graph": 0,
         "scrollWidth": 390
-      }
+      },
+      "fromRow": true
     },
     "390-uk-dark": {
       "onCards": 0,
       "onTask": 0,
       "chat": "Re-running the rebuild with traffic@ defaultпрацює 6:42·Opus 5.5·етап 3/4",
+      "sheet": {
+        "screen": "pipeline",
+        "message": "[The previous stage output will be inserted here]\n\nMerge once the alias swap is verified under traffic.\n\nPinned task:\nRestore search results after the index rebuild\n\nPinned specification and acceptance criteria:\nNo separate pinned specification was supplied.\n\nRole preset: cleaner (claude/opus, high).\nAccess: read-write. Work only inside this pipeline's dedicated worktree and commit-ready scope.\nHost access: full. Network, SSH, installed command-line tools and the pipeline worktree are available.\nThis pipeline's worktree started from commit main on main.\nPipeline branch: pipeline/p-search. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.\nCommit your changes on pipeline/p-search (or its already checked-out owned delivery branch). Edit, stage and commit only in this stage worktree. Scratch exports are for builds, tests, probes and renders; never create commits in another checkout and import them. Never push; the pipeline publishes. This controller instruction overrides any instruction to work or commit in a scratch checkout or to push in the brief, pinned specification, relayed input or role scaffold.\nPipeline nesting is forbidden. Never create or start another pipeline from this stage.\nDelegatus mechanics. Earlier answers (rule 3): run a few search_transcripts and search_memory queries in different phrasings, project-scoped first, then unscoped; open transcript hits with conversation_messages at their transcript path and memory hits with search_memory by id. Asking (rules 4 and 7): your way to ask is the verdict needs_decision. Scratch: $TMPDIR is this stage's own scratch directory and is removed when the stage settles; export, render and probe there, never in the live worktree, never against the operator's running Delegatus, never in a directory you name under /tmp or /var/tmp.\nUse the project's test command from its instruction files or package scripts, selecting test files by explicit path. Gate wrapper availability and its installed path are resolved when this stage launches.\n\nReport this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.\nAdd result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.\nThis stage can finish its lane. With a pass, also add taskSummary { headline, text, left? } for the person who returns to the task: headline one line (120 characters at most), text two or three sentences (600 at most) on what was done and how it works now, left one line on what remains (200 at most, omitted when nothing does). It describes the whole task as it now stands, in the operator's language, and replaces the task's summary when the lane completes.\nThe server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.\nThe call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.\nVerdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.\n\nFallback, only when the stage_report call returned an error or the tool is absent from this session: quote that error, then end the turn with one fenced JSON object as the final block, with nothing after it.\n```json\n{\"status\":\"pass\",\"findings\":[]}\n```\nIts status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
+        "graph": 0,
+        "scrollWidth": 390,
+        "firstLine": {
+          "top": 529,
+          "bottom": 543
+        },
+        "whole": [
+          {
+            "selector": "[data-mobile2-sheet=\"stage\"] h2",
+            "text": "Налаштування · Merge",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-prompt-label]",
+            "text": "Промпт стадії",
+            "cut": false
+          },
+          {
+            "selector": "[data-evidence-edit]",
+            "text": "",
+            "cut": false
+          }
+        ]
+      },
+      "editor": {
+        "whole": [
+          {
+            "selector": "[data-evidence-field-label]",
+            "text": "Промпт стадії",
+            "cut": false
+          }
+        ],
+        "field": {
+          "disabled": false,
+          "inside": true
+        }
+      },
       "pipeline": {
         "screen": "pipeline",
         "graph": 0,
         "scrollWidth": 390
-      }
+      },
+      "fromRow": true
     }
   },
   "failures": []
