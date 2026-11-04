@@ -7828,7 +7828,8 @@ async function installPingMain(): Promise<void> {
       const saved = await (await fetch(`${baseUrl}/api/telemetry`)).json();
       if (saved.enabled !== false) report.failures.push(`${lang}-${width}: switch did not persist`);
       await page.reload();
-      await page.waitForSelector("[data-telemetry-notice]");
+      /* The phone brings its open sheet back, and the notice stands aside while the window is up. */
+      await page.waitForSelector("[data-telemetry-notice], [data-mobile2-sheet='settings']");
       await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
       await page.locator("[data-telemetry-settings]").waitFor();
       if (await page.locator("[data-telemetry-ping]").isChecked()) report.failures.push(`${lang}-${width}: reload lost opt-out`);
