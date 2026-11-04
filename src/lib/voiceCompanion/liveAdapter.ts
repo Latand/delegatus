@@ -201,7 +201,14 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
         if (resumedId) {
           Object.assign(error as object, { resumeSessionId: resumedId });
           void this.end(true, code === "AUDIO_REFUSED" ? "audio-refused" : this.attemptCause ?? failureCause, true);
-        } else { this.requestId = null; this.stopObserver(); }
+        } else {
+          // A transport failure after both same-key requests leaves the mint
+          // outcome unknown. Keep its key so End can close a part the server
+          // created; closeRequest is harmless when no part exists.
+          const mintUnanswered = !signal?.aborted && !(error instanceof Error && /^[A-Z_]{1,40}$/.test(error.message));
+          if (!mintUnanswered) this.requestId = null;
+          this.stopObserver();
+        }
       } else await this.close();
       if (!options.resume) this.emit({ type: "error", code, recoverable: false, ...(typeof resetsAt === "number" ? { resetsAt } : {}) });
       throw error;
@@ -387,8 +394,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     const drop = code === "PROVIDER_ERROR";
     this.stopPlayback("closed");
     this.disconnected();
+    const ending = this.end(drop || this.resuming, cause);
     this.emit({ type: "error", code: drop ? "CONNECTION_LOST" : code, recoverable: false });
-    void this.end(drop || this.resuming, cause).catch(() => undefined);
+    void ending.catch(() => undefined);
   }
   reconnect(status: "trying" | "tick" | "gave-up" | "cancelled"): void {
     if (status === "tick") this.cues.tick?.();

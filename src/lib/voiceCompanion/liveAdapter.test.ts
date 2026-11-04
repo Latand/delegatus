@@ -664,7 +664,7 @@ for (const lost of [false, true]) test(`returning to the acknowledged project ke
 
 
 /** Loss occurs after the real service minted. Other requests, especially close, still reach it. */
-async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; holdOffer?: boolean; closeAfterLost?: boolean; loseClose?: boolean; refusal?: string; contentClose?: boolean } = {}) {
+async function reconnecting(options: { lostAnswers?: number; failBeforeMint?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; holdOffer?: boolean; closeAfterLost?: boolean; loseClose?: boolean; refusal?: string; contentClose?: boolean } = {}) {
   const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
   const { CompanionStorage } = await import("./storage");
   const { CompanionAdmission } = await import("./admission");
@@ -681,7 +681,7 @@ async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boo
     resolveProject: current => current!, review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } }),
     provider, { now: () => now, key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
   let callbacks!: MediaCallbacks;
-  let opens = 0, peers = 0, muted = false, failures = options.lostAnswers ?? 0, failPoll = false;
+  let opens = 0, peers = 0, muted = false, failures = options.lostAnswers ?? 0, preMintFailures = options.failBeforeMint ?? 0, failPoll = false;
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   const requests: Record<string, unknown>[] = [];
@@ -703,6 +703,7 @@ async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boo
       try {
         if (body.action === "start") {
           if (body.resume && options.refusal) return Response.json({ code: options.refusal }, { status: 409 });
+          if (body.resume && preMintFailures-- > 0) throw new TypeError("start request did not reach service");
           const answer = await service.start(body);
           if (body.resume && options.contentClose) {
             options.contentClose = false;
@@ -735,7 +736,7 @@ async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boo
   const flush = async () => { for (let i = 0; i < 200; i++) await Promise.resolve(); };
   return { adapter, store, service, provider, storage, requests, sounds, liveAtMint, first, release,
     get callbacks() { return callbacks; }, get opens() { return opens; }, get muted() { return muted; },
-    async drop(poll = false) { if (poll) { failPoll = true; jest.advanceTimersByTime(100_000); } else callbacks.lost("PROVIDER_ERROR", "ice-failed"); await flush(); },
+    async drop(poll = false, cause: "ice-failed" | "channel-closed" = "ice-failed") { if (poll) { failPoll = true; jest.advanceTimersByTime(100_000); } else callbacks.lost("PROVIDER_ERROR", cause); await flush(); },
     async tick(ms: number) { now += ms; jest.advanceTimersByTime(ms); await flush(); },
     async dispose() { release(); await store.stop(); disconnect(); await flush(); },
   };
@@ -846,6 +847,23 @@ test("End behind an unanswered mint closes it as operator and cancels all later 
   } finally { await f.dispose(); }
 });
 
+test("End during backoff closes the latest part after both start answers are lost", async () => {
+  const f = await reconnecting({ lostAnswers: 2 });
+  try {
+    await f.drop(); await f.tick(150);
+    const unanswered = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(unanswered.closed).toBe(false);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(3);
+    await f.store.stop();
+    expect(f.service.admission.transcriptRecord(unanswered.id).entries.find(row => row.kind === "session_end")?.data.reason).toBe("operator");
+    expect(f.requests.filter(row => row.action === "close" && row.requestId === unanswered.mintRequestId)).toHaveLength(1);
+    await f.tick(60_000);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(3);
+    expect(f.service.resumable({ operator: true })).toBeNull();
+    expect(f.store.get().resumable).toBeNull();
+  } finally { await f.dispose(); }
+});
+
 test("a manual reconnect losing both answers sends no close; the next tap follows the unanswered part", async () => {
   const f = await reconnecting({ lostAnswers: 2 });
   try {
@@ -861,7 +879,7 @@ test("a manual reconnect losing both answers sends no close; the next tap follow
   } finally { await f.dispose(); }
 });
 
-test("a same-key replay after its part closed retries from that part; End in backoff leaves the drop offered", async () => {
+test("a same-key replay after its part closed retries from that part", async () => {
   const f = await reconnecting({ lostAnswers: 1, closeAfterLost: true });
   try {
     await f.drop(); await f.tick(150);
@@ -870,11 +888,15 @@ test("a same-key replay after its part closed retries from that part; End in bac
     expect(f.store.get().reconnected).toBe(true);
     expect(f.provider.sessions).toHaveLength(3);
   } finally { await f.dispose(); }
-  const stopped = await reconnecting({ lostAnswers: 8 });
+});
+
+test("End in backoff with no minted part leaves the drop offered", async () => {
+  const stopped = await reconnecting({ failBeforeMint: 2 });
   try {
     await stopped.drop(); await stopped.tick(150); await stopped.store.stop();
     await stopped.tick(60_000);
     expect(stopped.requests.filter(row => row.action === "start")).toHaveLength(3);
+    expect(Object.values(stopped.storage.read().sessions)).toHaveLength(1);
     expect(stopped.store.get().resumable?.sessionId).toBe(stopped.first.id);
   } finally { await stopped.dispose(); }
 });
@@ -915,13 +937,16 @@ test("an uncertain provider mint stops the loop without creating a second replac
   } finally { await f.dispose(); }
 });
 
-test("six automatic reconnects in ten minutes cap a flapping call; the final disconnect precedes give-up", async () => {
+for (const cause of ["ice-failed", "channel-closed"] as const) test(`six automatic reconnects in ten minutes keep ${cause} at give-up`, async () => {
   const f = await reconnecting();
   try {
     for (let i = 0; i < 6; i++) { await f.drop(); await f.tick(150); expect(f.store.get().reconnected).toBe(true); }
-    await f.drop(); await f.tick(60_000);
+    await f.drop(false, cause); await f.tick(60_000);
     expect(f.provider.sessions).toHaveLength(7); expect(f.store.get().error).toBe("RECONNECT_GAVE_UP");
     expect(f.sounds.slice(-2)).toEqual(["disconnect", "give-up"]);
+    const capped = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(f.service.admission.transcriptRecord(capped.id).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause });
+    expect(f.sounds.filter(row => row === "give-up")).toHaveLength(1);
     await f.store.start({ project: "fixture", locale: "en" });
     const fresh = Object.values(f.storage.read().sessions).at(-1)!;
     f.provider.replay(fresh.providerId!, { type: "session.output_transcript.delta", event_id: "fresh-reply", delta: "The next check passed.", start_ms: 0, end_ms: 1000 });

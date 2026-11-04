@@ -242,9 +242,13 @@ export function createCompanionStore(adapter: VoiceCompanionAdapter, options: { 
     command: (value) => adapter.command(value),
     stop: async () => {
       const pending = snapshot.awaitingReady;
+      const reconnecting = !pending && snapshot.state.phase === "reconnecting" && !!snapshot.state.resumable;
       automatic = false; cancelLoop(); snapshot = { ...snapshot, awaitingReady: false, resuming: null };
       change({ phase: "offline", reconnected: false, resumable: pending ? null : snapshot.state.resumable });
       await adapter.close();
+      if (reconnecting && adapter.resumable) {
+        try { change({ resumable: await adapter.resumable() }); } catch { /* Keep the last known offer if reconciliation is unavailable. */ }
+      }
     },
     refresh: () => adapter.refresh?.() ?? Promise.resolve(),
   };
