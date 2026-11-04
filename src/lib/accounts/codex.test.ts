@@ -19,6 +19,37 @@ const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
 const { retiredAccountArchive } = await import("./removal");
 const { resetAccountCollectionsForTests } = await import("./accountsStore");
 const { persistedAccountRegistry, persistedAccountState, seedAccountRegistry } = await import("./accountsStoreFixture");
+const { setCodexAccountSpendCredits, codexAccountSpendsCredits, hideLegacyCodexAccount, restoreLegacyCodexAccount } = await import("./codex");
+
+test("paid spending defaults off, round-trips real writes, and stays scoped to one listed account", () => {
+  const first = createManagedCodexAccount("Credit fixture A");
+  const second = createManagedCodexAccount("Credit fixture B");
+  expect(listCodexAccounts().every(account => account.spendCredits === false)).toBe(true);
+  setCodexAccountSpendCredits(first.id, true);
+  resetAccountCollectionsForTests();
+  expect(codexAccountSpendsCredits(first.id)).toBe(true);
+  const child = Bun.spawnSync([process.execPath, "-e", `import { codexAccountSpendsCredits } from ${JSON.stringify(path.resolve("src/lib/accounts/codex.ts"))}; process.stdout.write(JSON.stringify([codexAccountSpendsCredits(${JSON.stringify(first.id)}), codexAccountSpendsCredits(${JSON.stringify(second.id)})]));`], { env: process.env });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString())).toEqual([true, false]);
+  expect(codexAccountSpendsCredits(second.id)).toBe(false);
+  expect(codexAccountSpendsCredits("default")).toBe(false);
+  setActiveCodexAccount(second.id);
+  expect(listCodexAccounts().find(account => account.id === first.id)?.spendCredits).toBe(true);
+  setCodexAccountSpendCredits("default", true);
+  setCodexAccountSpendCredits(first.id, false);
+  expect(codexAccountSpendsCredits("default")).toBe(true);
+  expect(codexAccountSpendsCredits(first.id)).toBe(false);
+  expect(() => setCodexAccountSpendCredits("missing", true)).toThrow(UnknownAccountError);
+  hideLegacyCodexAccount();
+  restoreLegacyCodexAccount();
+  expect(codexAccountSpendsCredits("default")).toBe(false);
+  const registry = persistedAccountRegistry("codex");
+  seedAccountRegistry("codex", { ...registry, spendCredits: "true" });
+  expect(codexAccountSpendsCredits("default")).toBe(false);
+  seedAccountRegistry("codex", { ...registry, spendCredits: ["future-account"] });
+  const future = createManagedCodexAccount("Future account", { id: "future-account" });
+  expect(codexAccountSpendsCredits(future.id)).toBe(false);
+});
 
 beforeEach(() => {
   closeAgentRegistryForTests();
