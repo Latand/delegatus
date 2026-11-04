@@ -153,6 +153,7 @@ async function sweep(over: StructuredHostRetirementDependencies = {}): Promise<S
     processMemory: () => new Map([[HOST_PID, { rssBytes: 110 * 1024 * 1024, swapBytes: 332 * 1024 * 1024 }]]),
     ppidMap: () => new Map([[HOST_PID, 1]]),
     owned: () => true,
+    flushEvents: async () => {},
     record: () => {},
     now: () => NOW,
     idleMs: IDLE_MS,
@@ -703,6 +704,95 @@ test("a pending registry action blocks retirement", async () => {
 
 test("an unflushed event tail blocks retirement", async () => {
   await refusedBy("events-flushed", { durableEventTail: () => determined(19) });
+});
+
+function retirementLedger() {
+  scratchDirs.push(statePath("structured-host-events", `${SESSION}.jsonl`));
+  const store = new FileRuntimeEventStore();
+  store.append(SESSION, { kind: "turn-ended", turnId: "settled-turn", status: "completed", seq: 12 });
+  return store;
+}
+
+test.each([1, 2])("a settled recorded-shape host retires with %s terminal status events past its checkpoint", async gap => {
+  const store = retirementLedger();
+  if (gap === 2) store.append(SESSION, { kind: "session-status", status: "dead", seq: 13 });
+  store.append(SESSION, { kind: "session-status", status: "unhosted", seq: 12 + gap });
+  const before = store.load(SESSION);
+  const probe = await sweep({ durableEventTail: undefined });
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired).toHaveLength(1);
+  expect(probe.terminated).toHaveLength(1);
+  expect(store.load(SESSION)).toEqual(before);
+});
+
+test.each([
+  { kind: "delta", turnId: "settled-turn", text: "not checkpointed", seq: 13 },
+  { kind: "turn-ended", turnId: "another-turn", status: "completed", seq: 13 },
+  { kind: "attention", id: "pending-question", method: "question", attention: {}, seq: 13 },
+  { kind: "session-status", status: "active", seq: 13 },
+  { kind: "session-status", status: "idle", seq: 13 },
+  { kind: "session-status", status: "dead", activeFlags: ["protected"], seq: 13 },
+] as const)("a genuine unflushed $kind event behind terminal metadata refuses retirement", async event => {
+  const store = retirementLedger();
+  store.append(SESSION, structuredClone(event) as Parameters<typeof store.append>[1]);
+  store.append(SESSION, { kind: "session-status", status: "unhosted", seq: 14 });
+  await refusedBy("events-flushed", { durableEventTail: undefined });
+});
+
+test("a live checkpoint writer advances before retirement and its await rechecks an opened turn", async () => {
+  const store = retirementLedger();
+  store.append(SESSION, { kind: "session-status", status: "unhosted", seq: 13 });
+  for (const busy of [false, true]) {
+    let current = snapshot();
+    let flushed = 0;
+    const probe = await sweep({ durableEventTail: undefined, snapshot: () => current,
+      flushEvents: async id => {
+        expect(id).toBe(CONVERSATION);
+        await Promise.resolve();
+        flushed++;
+        current = snapshot({ entries: { [`claude:${SESSION}`]: entry({ structuredHost: {
+          ...(entry().structuredHost as object), eventCursor: 13, activeTurnRef: busy ? "new-turn" : null,
+        } }) } });
+      },
+    });
+    expect(flushed).toBe(1);
+    expect(current.entries[`claude:${SESSION}`]!.structuredHost!.eventCursor).toBe(13);
+    expect(probe.terminated).toHaveLength(busy ? 0 : 1);
+    if (busy) expect(probe.report.refused[0]).toMatchObject({ clause: "turn-settled", changed: true });
+  }
+});
+
+test("a refused checkpoint flush keeps the host and records its reason", async () => {
+  retirementLedger().append(SESSION, { kind: "session-status", status: "unhosted", seq: 13 });
+  const probe = await sweep({ durableEventTail: undefined, flushEvents: async () => { throw new Error("checkpoint unavailable"); } });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.failed).toEqual([expect.objectContaining({ error: "checkpoint unavailable" })]);
+});
+
+test("a real unflushed event arriving during the writer flush still blocks retirement", async () => {
+  const store = retirementLedger();
+  store.append(SESSION, { kind: "session-status", status: "unhosted", seq: 13 });
+  await refusedBy("events-flushed", { durableEventTail: undefined, flushEvents: async () => {
+    await Promise.resolve();
+    store.append(SESSION, { kind: "delta", turnId: "new-turn", text: "still pending", seq: 14 });
+  } });
+});
+
+test.each([
+  ["seat-free", { orchestratorSeatConversations: () => determined(new Set([CONVERSATION])) }],
+  ["turn-settled", { snapshot: () => snapshot({ conversations: { [CONVERSATION]: conversation({ turn: { state: "busy" } }) } }) }],
+  ["attention-settled", { snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({ structuredHost: { ...(entry().structuredHost as object), pendingAttention: ["question"] } }) } }) }],
+  ["no-active-flags", { snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({ structuredHost: { ...(entry().structuredHost as object), activeFlags: ["protected"] } }) } }) }],
+  ["no-open-operation", { snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({ pendingAction: "spawn" }) } }) }],
+  ["no-realtime-binding", { realtimeBound: () => determined(true) }],
+  ["resumable", { transcriptStat: () => determined(null) }],
+  ["transcript-idle", { transcriptStat: () => determined({ mtimeMs: NOW }) }],
+  ["process-identity", { processIdentity: () => determined("replacement-process") }],
+] satisfies [StructuredHostRetirementClause, StructuredHostRetirementDependencies][])("terminal-only lag keeps %s in force", async (clause, over) => {
+  retirementLedger().append(SESSION, { kind: "session-status", status: "unhosted", seq: 13 });
+  let flushes = 0;
+  await refusedBy(clause, { durableEventTail: undefined, flushEvents: async () => { flushes++; }, ...over });
+  expect(flushes).toBe(0);
 });
 
 test("an unreadable event ledger blocks retirement", async () => {
@@ -1450,7 +1540,12 @@ test("a retired conversation still opens and resumes from its transcript", async
   const before = fs.readFileSync(transcript);
 
   const tree = await spawnFixtureHostTree();
+  const events = retirementLedger();
+  events.append(SESSION, { kind: "session-status", status: "dead", seq: 13 });
+  events.append(SESSION, { kind: "session-status", status: "unhosted", seq: 14 });
+  const retainedEvents = events.load(SESSION);
   const retired = await sweep({
+    durableEventTail: undefined,
     snapshot: () => snapshot({
       entries: {
         [`claude:${SESSION}`]: entry({
@@ -1503,7 +1598,7 @@ test("a retired conversation still opens and resumes from its transcript", async
   const resumed = await ClaudeStreamBrokerHost.adopt(SESSION, {
     cwd,
     claudeProjectsDir: projects,
-    eventStore: new FileRuntimeEventStore(path.join(home, "events")),
+    eventStore: events,
     deliveryLedger: ledger,
     shutdownGraceMs: 50,
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
@@ -1525,6 +1620,7 @@ test("a retired conversation still opens and resumes from its transcript", async
     expect(argv).not.toContain("--session-id");
     expect(confirmed).toEqual([{ entryId: "delivery-1", engineMessageId: messageId }]);
     expect((await resumed.health()).status).toBe("idle");
+    expect(events.load(SESSION).slice(0, retainedEvents.length)).toEqual(retainedEvents);
   } finally {
     await resumed.release();
   }

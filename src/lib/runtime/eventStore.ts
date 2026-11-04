@@ -287,6 +287,58 @@ export function durableRuntimeEventTailSeq(
   }
 }
 
+/** The tail retirement must see checkpointed. Terminal status notices carry
+ * no turn output or pending work. Cleanup can append them after the writer
+ * claim has ended, so waiting for that writer to checkpoint them never ends.
+ * Prove the entire suffix contiguous and terminal before exempting it. The
+ * ledger stays intact for replay; every other event still needs its writer.
+ * Work is bounded to 64 KiB of the suffix, independent of session history. */
+export function durableRuntimeEventFlushTailSeq(
+  threadId: string,
+  flushedCursor: number,
+  directory: string = statePath("structured-host-events"),
+): Determinable<number> {
+  if (!Number.isSafeInteger(flushedCursor) || flushedCursor < 0) return undetermined("the flushed event cursor is invalid");
+  const tail = durableRuntimeEventTailSeq(threadId, directory);
+  if (!tail.determined || tail.value <= flushedCursor) return tail;
+  const filename = path.join(directory, `${encodeURIComponent(threadId)}.jsonl`);
+  let handle: number | undefined;
+  try {
+    handle = fs.openSync(filename, "r");
+    const before = ledgerIdentity(fs.fstatSync(handle));
+    const length = Math.min(64 * 1024, before.size);
+    const start = before.size - length;
+    const buffer = Buffer.allocUnsafe(length);
+    if (fs.readSync(handle, buffer, 0, length, start) !== length || buffer.at(-1) !== 0x0a) {
+      return undetermined("the runtime event suffix is incomplete");
+    }
+    let end = length - 1;
+    let expected = tail.value;
+    while (expected > flushedCursor) {
+      const newline = end > 0 ? buffer.lastIndexOf(0x0a, end - 1) : -1;
+      if (newline < 0 && start > 0) return undetermined("the runtime event suffix exceeds its read budget");
+      let event: unknown;
+      try { event = JSON.parse(buffer.subarray(newline + 1, end).toString("utf8")); }
+      catch { return undetermined("the runtime event suffix is not JSON"); }
+      if (!validEvent(event) || event.seq !== expected) return undetermined("the runtime event suffix has an invalid sequence or event");
+      if (event.kind !== "session-status" || (event.status !== "dead" && event.status !== "unhosted")
+        || (event.activeFlags?.length ?? 0) > 0) return tail;
+      expected--;
+      end = newline;
+      if (end < 0 && expected > flushedCursor) return undetermined("the runtime event suffix does not reach the flushed cursor");
+    }
+    if (!sameLedgerIdentity(before, ledgerIdentity(fs.fstatSync(handle)))
+      || !sameLedgerIdentity(before, ledgerIdentity(fs.statSync(filename)))) {
+      return undetermined("the runtime event suffix changed while being read");
+    }
+    return determined(flushedCursor);
+  } catch (error) {
+    return undetermined(`the runtime event suffix could not be read (${(error as NodeJS.ErrnoException).code ?? "unknown"})`);
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+}
+
 /** A transcript frame the Claude host recorded: the `uuid` is the one the CLI
     gives the same record in the transcript. */
 export interface HostTurnFrame {

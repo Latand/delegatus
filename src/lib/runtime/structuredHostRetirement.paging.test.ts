@@ -22,6 +22,23 @@ async function sweep(directory: string, scenario: string) {
 
 const session = (index: number) => ["00000000", "0000", "0000", "0000", String(index).padStart(12, "0")].join("-");
 
+test("gone native hosts with retained scope custody retire over terminal-only lag and stay retired after restart", async () => {
+  const directory = root();
+  const first = await sweep(directory, "terminal-suffix-gone");
+  expect(first.report.refused).toEqual([]);
+  expect(first.report.retired).toHaveLength(6);
+  expect(first.terminated).toHaveLength(6);
+  expect(first.remaining).toEqual([]);
+  expect(first.retainedEvents.map((events: { seq: number }[]) => events.map(event => event.seq)))
+    .toEqual(Array.from({ length: 6 }, () => [12, 13, 14]));
+  expect(first.retainedTranscripts).toEqual(Array(6).fill("retained conversation history\n"));
+  const second = await sweep(directory, "terminal-suffix-gone");
+  expect(second.report.evaluated).toBe(0);
+  expect(second.terminated).toEqual([]);
+  expect(second.retainedEvents).toEqual(first.retainedEvents);
+  expect(second.retainedTranscripts).toEqual(first.retainedTranscripts);
+});
+
 test("batch-deferred healthy hosts progress past permanently refused attempts on both 512-row pages after restart", async () => {
   const directory = root();
   const first = await sweep(directory, "batch-progress");

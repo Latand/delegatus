@@ -17,7 +17,8 @@ import type { StructuredHostKillRef } from "@/lib/resources";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "@/lib/types";
 
 import { determined, mapDeterminable, undetermined, type Determinable } from "./determinable";
-import { durableRuntimeEventTailSeq } from "./eventStore";
+import { durableRuntimeEventFlushTailSeq } from "./eventStore";
+import { flushStructuredHostPersistence } from "./registry";
 import type { HandoffRow } from "./handoffQueue";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
@@ -293,8 +294,8 @@ export interface StructuredHostRetirementSubject {
   openOperations: number;
   /** The registry's persisted cursor: the flushed one. */
   eventCursor: number;
-  /** The ledger's durable tail: the session's own cursor. Undetermined when the
-      ledger exists but could not be read to its last complete record. */
+  /** The durable tail requiring a checkpoint. A proven suffix of terminal
+      status notices needs none; all output and other events still do. */
   durableEventTail: Determinable<number>;
   /** Undetermined when this process cannot establish whether a live transport
       is bound — a state the sweep refuses on rather than reads as "no call". */
@@ -647,7 +648,9 @@ export interface StructuredHostRetirementDependencies {
   /** Undetermined when the queue could not be read: silence is not a drained
       queue, and reading it as one strands the message it still holds. */
   handoffRows?: () => Determinable<readonly HandoffRow[]>;
-  durableEventTail?: (sessionId: string) => Determinable<number>;
+  durableEventTail?: (sessionId: string, flushedCursor: number) => Determinable<number>;
+  /** Use an existing writer when it can still checkpoint; never reclaim one. */
+  flushEvents?: (conversationId: string) => Promise<void>;
   realtimeBound?: (conversationId: string) => Determinable<boolean>;
   /** Undetermined when the durable seat store could not be established — the
       sweep refuses rather than reading silence as "no seats". */
@@ -1021,7 +1024,7 @@ function retirementInputs(sources: RetirementSources, nowMs: number, keys: reado
     durable store. Every one is re-read on the re-check, because every one of
     them can change under it. */
 interface RetirementReaders {
-  durableEventTail: (sessionId: string) => Determinable<number>;
+  durableEventTail: (sessionId: string, flushedCursor: number) => Determinable<number>;
   realtimeBound: (conversationId: string) => Determinable<boolean>;
   transcriptStat: (pathname: string) => Determinable<{ mtimeMs: number } | null>;
   processIdentity: (pid: number) => Determinable<string>;
@@ -1121,7 +1124,7 @@ function retirementSubject(
       (index) => index.count(keyId, conversationId)),
     openOperations: inputs.openOperations.count(keyId, conversationId),
     eventCursor: columns.eventCursor,
-    durableEventTail: readers.durableEventTail(key.sessionId),
+    durableEventTail: readers.durableEventTail(key.sessionId, columns.eventCursor),
     realtimeBound: conversationId === null
       ? undetermined("the host names no conversation, so no realtime binding can be looked up")
       : readers.realtimeBound(conversationId),
@@ -1226,7 +1229,7 @@ export async function runStructuredHostRetirementSweep(
     revokedConversations: dependencies.revokedSeatConversations ?? defaultRevokedSeatConversations,
   };
   const readers: RetirementReaders = {
-    durableEventTail: dependencies.durableEventTail ?? ((sessionId: string) => durableRuntimeEventTailSeq(sessionId)),
+    durableEventTail: dependencies.durableEventTail ?? durableRuntimeEventFlushTailSeq,
     realtimeBound: dependencies.realtimeBound ?? defaultRealtimeBound,
     transcriptStat: dependencies.transcriptStat ?? transcriptStat,
     processIdentity: dependencies.processIdentity ?? ((pid: number) => {
@@ -1243,6 +1246,10 @@ export async function runStructuredHostRetirementSweep(
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
+  const flushEvents = dependencies.flushEvents ?? (async (conversationId: string) => {
+    const host = structuredDeliveryHostForConversation(conversationId);
+    if (host) await flushStructuredHostPersistence(host);
+  });
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
     const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
     const scope = recordedAgentScope(observed?.structuredHost);
@@ -1417,6 +1424,15 @@ export async function runStructuredHostRetirementSweep(
   for (const planning of qualified) {
     const publication = publicationState();
     if (publication !== "ready") { report.standDown = publication; break; }
+    if (planning.conversationId && owned(planning.key)) {
+      try { await flushEvents(planning.conversationId); }
+      catch (error) {
+        report.failed.push({ key: planning.keyId, conversationId: planning.conversationId, error: safeReason(error), remaining: [] });
+        continue;
+      }
+      const afterFlush = publicationState();
+      if (afterFlush !== "ready") { report.standDown = afterFlush; break; }
+    }
     // Kernel PSS accounting may be slow. Do it off the event loop and re-prove
     // every live fact after the await, before handing any authority to a stop.
     parents ??= ppids();

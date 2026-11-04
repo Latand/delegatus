@@ -4,8 +4,61 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 
 import type { RuntimeEvent } from "./engineHost";
-import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
+import { durableRuntimeEventFlushTailSeq, durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
 import { streamingVoiceDelivery } from "./voiceDelivery";
+
+test("retirement exempts only a complete contiguous terminal status suffix, preserving replay and the actual tail", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-flush-"));
+  try {
+    const store = new FileRuntimeEventStore(directory);
+    store.append("settled", { kind: "turn-ended", turnId: "turn", status: "completed", seq: 12 });
+    store.append("settled", { kind: "session-status", status: "dead", seq: 13 });
+    store.append("settled", { kind: "session-status", status: "unhosted", seq: 14 });
+    expect(durableRuntimeEventFlushTailSeq("settled", 12, directory)).toEqual({ determined: true, value: 12 });
+    expect(durableRuntimeEventTailSeq("settled", directory)).toEqual({ determined: true, value: 14 });
+    expect(store.load("settled").map(event => event.seq)).toEqual([12, 13, 14]);
+    expect(durableRuntimeEventFlushTailSeq("settled", 11, directory)).toEqual({ determined: true, value: 14 });
+    expect(durableRuntimeEventFlushTailSeq("missing", 0, directory)).toEqual({ determined: true, value: 0 });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["torn append", '{"kind":"session-status","status":"unhosted","seq":13}\n{partial'],
+  ["invalid event", '{"kind":"session-status","status":"unexpected","seq":13}\n'],
+  ["unknown kind", '{"kind":"future-event","seq":13}\n'],
+  ["sequence gap", '{"kind":"session-status","status":"dead","seq":13}\n{"kind":"session-status","status":"unhosted","seq":15}\n'],
+  ["missing prefix", '{"kind":"session-status","status":"unhosted","seq":14}\n'],
+  ["empty record", '\n{"kind":"session-status","status":"unhosted","seq":14}\n'],
+  ["read budget", JSON.stringify({ kind: "session-status", status: "unhosted", seq: 13, padding: "x".repeat(65_536) }) + "\n"],
+] as const)("retirement refuses an undetermined %s suffix", (_reason, contents) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-flush-"));
+  try {
+    fs.writeFileSync(path.join(directory, "settled.jsonl"), contents);
+    expect(durableRuntimeEventFlushTailSeq("settled", 12, directory).determined).toBe(false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("retirement refuses a ledger replaced or appended during the suffix read", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-flush-"));
+  const filename = path.join(directory, "settled.jsonl");
+  for (const replace of [false, true]) {
+    fs.writeFileSync(filename, '{"kind":"session-status","status":"unhosted","seq":13}\n');
+    const read = fs.readSync;
+    let reads = 0;
+    const probe = spyOn(fs, "readSync").mockImplementation((...args: unknown[]) => {
+      const result = Reflect.apply(read, fs, args);
+      // Two boundary reads and the raw record precede the suffix read.
+      if (++reads === 4) {
+        if (replace) { fs.renameSync(filename, filename + ".old"); fs.writeFileSync(filename, '{"kind":"session-status","status":"unhosted","seq":13}\n'); }
+        else fs.appendFileSync(filename, '{"kind":"delta","turnId":"new","text":"pending","seq":14}\n');
+      }
+      return result;
+    });
+    try { expect(durableRuntimeEventFlushTailSeq("settled", 12, directory).determined).toBe(false); }
+    finally { probe.mockRestore(); }
+  }
+  fs.rmSync(directory, { recursive: true, force: true });
+});
 
 test("runtime event store durably replays ordered events and ignores a partial tail", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-events-"));

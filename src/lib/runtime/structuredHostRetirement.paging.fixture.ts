@@ -5,6 +5,9 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
 import { determined } from "./determinable";
+import { FileRuntimeEventStore } from "./eventStore";
+import { stopAgentScope } from "./agentScope";
+import { terminateStructuredHostTree } from "./structuredHostControl";
 import { codexHostColumns } from "./registry";
 import { runStructuredHostRetirementSweep, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
 import { projectRetirementStatus } from "./structuredHostRetirementStatus";
@@ -14,10 +17,11 @@ const session = (index: number) => ["00000000", "0000", "0000", "0000", String(i
 const filename = statePath("fixture-registry.json");
 const scenario = process.argv[2]!;
 const gone = scenario.startsWith("gone");
+const terminalSuffix = scenario === "terminal-suffix-gone";
 const batchScenario = scenario.startsWith("batch-");
 const paging = scenario === "paging" || batchScenario;
 const refuses = (index: number) => scenario === "batch-wrap" || index <= 8 || index >= 513 && index <= 520;
-if (!fs.existsSync(filename)) {
+if (!fs.existsSync(filename) && !(terminalSuffix && fs.existsSync(filename.replace(/\.json$/, ".sqlite")))) {
   const entries: Record<string, unknown> = {};
   const conversations: Record<string, unknown> = {};
   const count = scenario === "batch-progress" ? 1024 : scenario === "batch-wrap" ? 32 : scenario === "paging" ? 524 : 6;
@@ -36,6 +40,17 @@ if (!fs.existsSync(filename)) {
     }, 1);
     // Production host builder supplies all columns; fix its kernel-domain fact.
     columns.process!.bootEpoch = "fixture-boot";
+    if (terminalSuffix) {
+      columns.scope = { unit: `delegatus-agent-retirement-fixture-${index}.scope`, bootEpoch: "fixture-boot" };
+      columns.eventCursor = 12;
+      columns.activeTurnRef = null;
+      columns.activeFlags = [];
+      const store = new FileRuntimeEventStore();
+      store.append(id, { kind: "turn-ended", turnId: `turn-${index}`, status: "completed", seq: 12 });
+      store.append(id, { kind: "session-status", status: "dead", seq: 13 });
+      store.append(id, { kind: "session-status", status: "unhosted", seq: 14 });
+      fs.writeFileSync(pathname, "retained conversation history\n");
+    }
     entries[key] = { key: { engine: "codex", sessionId: id }, artifactPath: pathname, cwd: "/fixture",
       status: "idle", host: null, structuredHost: columns, claimEpoch: 1, claimOwner: null,
       accountId: null, pendingAction: null, structuredHostOperationId: null,
@@ -77,8 +92,8 @@ if (gone && scenario !== "gone") {
 }
 const dependencies: StructuredHostRetirementDependencies = {
   publicationState: () => publication, handoffRows: () => determined([]),
-  durableEventTail: () => determined(12), realtimeBound: () => determined(false),
-  orchestratorSeatConversations: () => determined(new Set(paging ? [] : ["conversation_fixture_3"])),
+  durableEventTail: terminalSuffix ? undefined : () => determined(12), realtimeBound: () => determined(false),
+  orchestratorSeatConversations: () => determined(new Set(paging || terminalSuffix ? [] : ["conversation_fixture_3"])),
   revokedSeatConversations: () => determined(new Set()),
   transcriptStat: () => determined({ mtimeMs: NOW - 24 * 3_600_000 }),
   processIdentity: pid => determined(`fixture:${pid - 2_000_000_000}`), bootEpoch: () => determined("fixture-boot"),
@@ -86,6 +101,19 @@ const dependencies: StructuredHostRetirementDependencies = {
   ppidMap: () => new Map(), owned: () => true, now: () => NOW,
   terminate: async ref => {
     attempted.push(ref.sessionId!);
+    if (terminalSuffix) {
+      const outcome = await terminateStructuredHostTree(ref, {
+        bootEpoch: () => "fixture-boot", pidAlive: () => false,
+        terminateOwnedHost: async () => false,
+        signal: () => { throw new Error("a gone host must receive no signal"); },
+        stopScope: (scope, options) => stopAgentScope(scope, { ...options, command: async args => {
+          if (args[0] !== "show") throw new Error("an absent scope must receive no stop command");
+          return "not-found";
+        } }),
+      });
+      if (outcome.ok) terminated.push(ref.sessionId!);
+      return outcome;
+    }
     if (batchScenario && refuses(Number(ref.sessionId!.split("-").at(-1)))) {
       return { ok: false, status: 409, error: "fixture termination refused", remaining: [ref.pid], survivors: [] };
     }
@@ -95,7 +123,7 @@ const dependencies: StructuredHostRetirementDependencies = {
     return { ok: true, via: "runtime", pids: [ref.pid] };
   },
   // Bun runs this fixture against the base too; unknown dependency fields are inert there.
-  ...{ pidAlive: scenario === "gone" ? undefined : (pid: number) => determined(!gone || revived && pid === 2_000_000_001),
+  ...{ pidAlive: scenario === "gone" ? undefined : (pid: number) => determined(!terminalSuffix && (!gone || revived && pid === 2_000_000_001)),
     treePss: () => ({ bytes: 60, measuredProcesses: 1 }) },
 };
 const report = await runStructuredHostRetirementSweep(dependencies);
@@ -107,6 +135,8 @@ const status = projectRetirementStatus({ project: "fixture-project" }, {
   },
 });
 console.log(JSON.stringify({ report, terminated, attempted,
+  retainedEvents: terminalSuffix ? Array.from({ length: 6 }, (_, index) => new FileRuntimeEventStore().load(session(index + 1))) : [],
+  retainedTranscripts: terminalSuffix ? Array.from({ length: 6 }, (_, index) => fs.readFileSync(path.join(path.dirname(filename), `${session(index + 1)}.jsonl`), "utf8")) : [],
   status: status.status,
   remaining: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process).map(entry => sessionKeyId(entry.key)) }));
 registry.close();
