@@ -115,6 +115,21 @@ export function terminalAttemptBinding(row: CheckRow): Binding {
 }
 
 export async function handoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
+  // An immutable admission is replayable from the ledger after its producer
+  // sidecar is retired. Resolve it before touching any producer-owned files.
+  if (!preparingId) {
+    const request = digest([conversation, requestKey]);
+    const store = await openRecordedChecks(undefined, 30_000);
+    let prior: CheckRow | null;
+    try { prior = store.byRequest(request); } finally { store.close(); }
+    if (prior && prior.admission !== "preparing") {
+      if (prior.binding.conversation !== conversation || prior.log !== path.resolve(ticket)) throw new Error("recorded check request belongs to another admission");
+      if (prior.acknowledgement) return prior;
+      await ports.observe(prior.id);
+      const current = await openRecordedChecks(undefined, 30_000);
+      try { return current.get(prior.id)!; } finally { current.close(); }
+    }
+  }
   // Pin the budget before the first await. Capacity retries release registry,
   // host, temp-sweep and database locks, then reacquire and revalidate all proof.
   const initial = descriptorSchema.parse(readEnvelope(path.join(`${path.resolve(ticket)}.gate`, "descriptor.json")));

@@ -713,6 +713,13 @@ test("acknowledgement before seat designation keeps one completion recoverable a
     const replay = new RecordedCheckObserver(productionObserverPorts); observers.push(replay);
     await replay.start(); await replay.observe(row.id); replay.stop();
     expect(f.calls()).toBe(calls + 1);
+    const durableReplay = await handoffRecordedCheck(f.launch.conversationId, "acknowledged-outbox", f.log, {
+      binding: () => { throw new Error("replay reacquired stage authority"); },
+      verify: () => { throw new Error("replay granted new custody"); },
+      observe: async () => { throw new Error("replay required producer observation"); },
+    });
+    expect(durableReplay.id).toBe(row.id);
+    expect(durableReplay.acknowledgement).toEqual(acknowledged.acknowledgement);
   } finally { store.close(); await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
 }, 90_000);
 
@@ -1144,8 +1151,8 @@ for (const mode of ["restart", "wait", "source-changed"]) test(`native handoff r
   } finally { await releaseWork; barrier.mockRestore(); f.cleanup(); }
 }, 60_000);
 
-test("capacity retry returns waiting when registry admission remains locked through native close", async () => {
-  const f = await fixture(true, false, undefined, 7_000, 5_000);
+test("capacity retry answers within an external bound while registry admission stays locked through native close", async () => {
+  const f = await fixture(false, false, undefined, 180_000, 60_000);
   const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
   const template = rowSchema.parse({ id: descriptor.runId, request: digest("deadline-lock-template"),
     binding: callingAttempt(f.launch.conversationId), log: f.log, descriptor, revision: 1,
@@ -1155,35 +1162,41 @@ test("capacity retry returns waiting when registry admission remains locked thro
   const fill = fixtureChild(path.resolve("src/lib/recordedChecks/capacity.process.fixture.ts"), [input], process.env);
   const exited = once(fill.child, "exit");
   await observed(f.root, () => fs.existsSync(output));
-  let locked = false;
-  let releaseWork = Promise.resolve();
-  const watch = fs.watch;
-  const barrier = spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof watch>) => {
-    const watcher = watch(...args);
-    if (!locked && args[0] === path.dirname(statePath("state.sqlite"))) {
-      locked = true;
-      releaseWork = f.registry.withOperationLock({ engine: "codex", sessionId: f.host.identity.threadId }, captureProcessIdentity(process.pid), async () => {
-        fill.child.stdin!.write("release\n");
-        expect((await exited)[0], fill.errors()).toBe(0);
-        await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")), 20_000, "real recorder close while registry lock is held");
-      });
-    }
-    return watcher;
-  }) as typeof watch);
-  const before = performance.now();
+  const retrying = path.join(f.root, "api-retrying.json"), answerFile = path.join(f.root, "api-answer.json");
+  const configuration = path.join(f.root, "api-input.json");
+  writeEnvelope(configuration, { caller: f.launch.conversationId, ticket: f.log, request: "deadline-lock",
+    stateDirectory: path.dirname(statePath("state.sqlite")), retrying, answer: answerFile });
+  const api = fixtureChild(path.resolve("src/lib/recordedChecks/api.process.fixture.ts"), [configuration], process.env);
+  const apiExited = once(api.child, "exit");
+  await observed(f.root, () => fs.existsSync(`${answerFile}.started`));
+  const lockWork = observed(f.root, () => fs.existsSync(retrying), 35_000, "API capacity retry observation")
+    .then(() => f.registry.withOperationLock({ engine: "codex", sessionId: f.host.identity.threadId }, captureProcessIdentity(process.pid), async () => {
+      fs.writeFileSync(path.join(f.tmp, "release"), "release");
+      await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")), 20_000, "real recorder close under registry lock");
+      await observed(f.root, () => fs.existsSync(answerFile), 35_000, "external API response bound");
+      const response = readEnvelope(answerFile) as { result?: { status?: string; retryable?: boolean }; error?: string };
+      expect(response.error).toBeUndefined();
+      expect(response.result).toMatchObject({ status: "waiting", retryable: true });
+      expect(fs.existsSync(path.join(`${f.log}.gate`, "exit"))).toBeTrue();
+      const store = new RecordedCheckStore(statePath("state.sqlite"), false);
+      try {
+        expect(store.byRequest(digest([f.launch.conversationId, "deadline-lock"]))).toBeNull();
+        expect(store.capacity()).toHaveLength(4);
+        expect(store.capacity().every(holder => holder.state === "live-or-unverified")).toBeTrue();
+        expect(store.rootHeld(f.work)).toBeTrue();
+      } finally { store.close(); }
+    }));
   try {
-    const answer = await recordedCheck({ action: "handoff", ticket: f.log, clientRequestId: "deadline-lock" }, f.launch.conversationId);
-    expect(answer.status).toBe("waiting"); expect(answer.retryable).toBeTrue();
-    expect(performance.now() - before).toBeLessThan(6_000);
-    expect(locked).toBeTrue();
-    const store = new RecordedCheckStore();
-    try {
-      expect(store.byRequest(digest([f.launch.conversationId, "deadline-lock"]))).toBeNull();
-      expect(store.capacity().filter(holder => holder.state === "live-or-unverified")).toHaveLength(1);
-      expect(store.capacity().filter(holder => holder.state === "abandoned")).toHaveLength(3);
-      expect(store.rootHeld(f.work)).toBeTrue();
-    } finally { store.close(); }
-  } finally { await releaseWork; barrier.mockRestore(); f.cleanup(); }
+    await lockWork;
+    const [code] = await apiExited;
+    expect(code, api.errors()).toBe(0);
+  } finally {
+    if (fill.child.exitCode === null) fill.child.stdin!.write("release\n");
+    if (fill.child.exitCode === null) expect((await exited)[0], fill.errors()).toBe(0);
+    await lockWork.catch(() => {});
+    await stopFixtureProcess(api.child);
+    f.cleanup();
+  }
 }, 60_000);
 
 test("full live custody returns bounded waiting with holders through the API", async () => {
