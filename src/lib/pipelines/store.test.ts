@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
-import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
+import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, pipelineIntegrationResolverCandidates, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
@@ -125,6 +125,38 @@ test("adopted integration receipts replay through the keyed SQLite index", async
     expect(plans.some(({ sql, plan }) => sql.includes("pipeline_adopted_creation_request")
       && plan.some(row => row.detail.includes("pipeline_adopted_creation_request") && row.detail.includes("<expr>=?")))).toBe(true);
     console.info("integration receipt lookup plans", JSON.stringify(plans.map(item => item.plan)));
+  } finally { capture.mockRestore(); }
+}));
+
+test("resolver capacity reads only active writers from its repository index", async () => isolatedDelivery(async () => {
+  const records = ["active", "parked", "foreign", "reviewer"].map((id, i) => {
+    const pipeline = deliveryFixture(`capacity-${id}`);
+    const stageId = id === "reviewer" ? "review" : "refresh";
+    pipeline.stages[0]!.id = stageId;
+    pipeline.runs[0]!.stageId = stageId;
+    pipeline.cursor = { stageId, state: "pending", input: null, activatedBy: null };
+    pipeline.state = id === "parked" ? "needs_decision" : "running";
+    pipeline.refreshOf = { pipelineId: "original-outcome", base: "b".repeat(40) };
+    pipeline.delivery = { target: { ...deliveryTarget, repository: id === "foreign" ? "another-repository" : deliveryTarget.repository,
+      branch: `refs/heads/${id}`, pr: i + 1 }, disposition: "owner", publish: "enabled", active: true, ownerId: pipeline.id, epoch: 1, journal: [] };
+    return pipeline;
+  });
+  savePipelines(records);
+  const observed: Array<{ db: Database; sql: string }> = [];
+  const original = Database.prototype.query;
+  const capture = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+    if (sql.includes("INDEXED BY pipeline_repository_resolver_capacity")) observed.push({ db: this, sql });
+    return original.call(this, sql);
+  });
+  try {
+    expect(pipelineIntegrationResolverCandidates(deliveryTarget.repository).map(p => p.id)).toEqual(["capacity-active"]);
+    expect(pipelineIntegrationResolverCandidates("missing-repository")).toEqual([]);
+    expect(observed).toHaveLength(2);
+    for (const { db, sql } of observed) {
+      const plan = original.call(db, `EXPLAIN QUERY PLAN ${sql}`).all(deliveryTarget.repository) as Array<{ detail: string }>;
+      expect(plan.some(row => row.detail.includes("SEARCH") && row.detail.includes("pipeline_repository_resolver_capacity") && row.detail.includes("<expr>=?"))).toBe(true);
+      expect(plan.some(row => row.detail.startsWith("SCAN"))).toBe(false);
+    }
   } finally { capture.mockRestore(); }
 }));
 

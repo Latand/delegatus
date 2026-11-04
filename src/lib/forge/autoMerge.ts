@@ -11,7 +11,7 @@ import { yieldToRuntime } from "@/lib/cooperative";
 import { withControllerPipelineScope } from "@/lib/pipelines/controllerScope";
 import os from "node:os";
 import { BaseUpdateError, planBaseUpdate, pushBaseUpdate, type BaseUpdatePlan, type BaseUpdatePush, type BaseUpdateRequest } from "./baseUpdate";
-import { deliveryOwnership, refreshAdmission, refreshRequest, refreshReservation, refreshTupleKey, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
+import { deliveryOwnership, holdsRepositoryResolverCapacity as holdsRefreshCapacity, refreshAdmission, refreshRequest, refreshReservation, refreshTupleKey, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
@@ -1290,26 +1290,6 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
 /** The slot covers the refresh attempt's preparation and execution, until
     its verdict: once the update from main is finished, settlement, publication,
     parks, seat resumes and later stages own no slot. */
-function holdsRefreshCapacity(pipeline: Pipeline): boolean {
-  const integration = pipeline.merge?.integration;
-  const integrationStage = pipeline.cursor?.stageId;
-  if (integration && integrationStage && ["integration-resolve", "integration-fix"].includes(integrationStage)) {
-    if (pipeline.state === "provisioning") return true;
-    const attempt = pipeline.runs.find(run => run.stageId === integrationStage)?.attempts.filter(a => !a.historical).at(-1);
-    return pipeline.state === "running" && !attempt?.providerWait
-      && (!attempt || ["pending", "spawning", "running"].includes(attempt.state));
-  }
-  if (!pipeline.refreshOf || pipeline.cursor?.stageId !== "refresh") return false;
-  // Creation returns before checkout preparation and first-stage dispatch.
-  // Keep that admitted refresh from spawning peers before its host starts.
-  if (pipeline.state === "provisioning") return true;
-  if (pipeline.state !== "running") return false;
-  const attempt = pipeline.runs.find(run => run.stageId === "refresh")?.attempts.filter(attempt => !attempt.historical).at(-1);
-  // Retry intent is durable before tickRunStage replaces the terminal attempt.
-  if (pipeline.cursor.state === "pending") return true;
-  return Boolean(attempt && ["spawning", "running", "reviewing"].includes(attempt.state));
-}
-
 function refreshLimit(ports: AutoMergePorts): number {
   return Math.max(1, Math.min(2, Math.floor(ports.refreshConcurrency ?? 1) || 1));
 }

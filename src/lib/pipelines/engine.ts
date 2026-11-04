@@ -1,5 +1,5 @@
 import { admitIntegration, creationRequestDigest, integrationAttempt, integrationScope, integrationRequirementRevision, renewIntegrationDecision, INTEGRATION_STAGES, INTEGRATION_REPAIR_LIMIT } from "./integration";
-import { integrationStages } from "@/lib/forge/autoRefresh";
+import { holdsRepositoryResolverCapacity, integrationStages, isRepositoryResolver } from "@/lib/forge/autoRefresh";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
@@ -9637,24 +9637,21 @@ async function tickRunStage(
   persist: () => void | Promise<void>,
   recoveryAccountingDeadline: number,
 ): Promise<void> {
-  const integration = pipeline.merge?.integration;
-  const stageIsResolver = pipeline.cursor?.stageId === "integration-resolve" || pipeline.cursor?.stageId === "integration-fix";
-  if (integration && stageIsResolver && pipeline.cursor?.state === "pending") {
-    const peerHoldsSlot = pipelineIntegrationResolverCandidates(pipeline.merge!.repository).some(peer => {
-      const peerIntegration = peer.merge?.integration;
-      if (peer.id === pipeline.id || !peerIntegration
-        || !["integration-resolve", "integration-fix"].includes(peer.cursor?.stageId ?? "")) return false;
-      if (peer.state === "provisioning") return true;
-      if (peer.state !== "running") return false;
-      const active = currentAttempt(peer, peer.cursor!.stageId);
-      return !active?.providerWait && (!active || ["pending", "spawning", "running"].includes(active.state));
-    });
+  if (isRepositoryResolver(pipeline) && pipeline.cursor?.state === "pending") {
+    const repository = pipeline.delivery?.target.repository;
+    if (!repository) {
+      await park(pipeline, "repository resolver delivery identity is unavailable");
+      return;
+    }
+    const peerHoldsSlot = pipelineIntegrationResolverCandidates(repository)
+      .some(peer => peer.id !== pipeline.id && holdsRepositoryResolverCapacity(peer, false));
     if (peerHoldsSlot) {
-      pipeline.stateDetail = `waiting for repository resolver capacity held by another integration item`;
+      pipeline.stateDetail = `waiting for repository resolver capacity held by another integration or legacy refresh`;
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
       ports.scheduleTick?.(1_000);
       return;
     }
+    if (pipeline.stateDetail?.startsWith("waiting for repository resolver capacity")) pipeline.stateDetail = null;
   }
   const canSpendRecoveryCheck = () => ports.monotonicNow() < recoveryAccountingDeadline;
   const prior = currentAttempt(pipeline, stage.id);

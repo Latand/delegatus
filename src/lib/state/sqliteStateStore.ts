@@ -417,10 +417,11 @@ const stateSchema = [
     ON state_rows(collection, json_extract(value_json, '$.adoptedCreationRequest.key'))
     WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
       AND json_extract(value_json, '$.adoptedCreationRequest.key') IS NOT NULL`,
-  `CREATE INDEX IF NOT EXISTS pipeline_integration_resolver_capacity
-    ON state_rows(json_extract(value_json, '$.merge.repository'), json_extract(value_json, '$.cursor.stageId'))
+  `CREATE INDEX IF NOT EXISTS pipeline_repository_resolver_capacity
+    ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.cursor.stageId'))
     WHERE collection = 'pipelines' AND json_valid(value_json)
-      AND json_extract(value_json, '$.merge.integration') IS NOT NULL`,
+      AND json_extract(value_json, '$.state') IN ('running', 'provisioning')
+      AND (json_extract(value_json, '$.merge.integration') IS NOT NULL OR json_extract(value_json, '$.refreshOf') IS NOT NULL)`,
   `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_insert AFTER INSERT ON state_rows
     WHEN NEW.collection IN ('pipelines', 'pipelines_archive') AND json_valid(NEW.value_json)
     BEGIN
@@ -2130,11 +2131,12 @@ export class SqliteStateCollection<T> {
 
   pipelineIntegrationResolverCandidates(repository: string): T[] {
     if (this.options.collection !== "pipelines") throw new Error("integration resolver lookup requires the pipeline collection");
-    const rows = this.readDb.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_integration_resolver_capacity
+    const rows = this.readDb.query<{ value_json: string }, [string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_repository_resolver_capacity
       WHERE collection = 'pipelines' AND json_valid(value_json)
-        AND json_extract(value_json, '$.merge.integration') IS NOT NULL
-        AND json_extract(value_json, '$.merge.repository') = ?
-        AND json_extract(value_json, '$.cursor.stageId') IN (?, ?)`).all(repository, "integration-resolve", "integration-fix");
+        AND json_extract(value_json, '$.state') IN ('running', 'provisioning')
+        AND (json_extract(value_json, '$.merge.integration') IS NOT NULL OR json_extract(value_json, '$.refreshOf') IS NOT NULL)
+        AND json_extract(value_json, '$.delivery.target.repository') = ?
+        AND json_extract(value_json, '$.cursor.stageId') IN ('integration-resolve', 'integration-fix', 'refresh', 'fix')`).all(repository);
     return rows.map(row => {
       const decoded = this.decodeRow(row.value_json, this.readDb);
       if (!decoded) throw new Error("invalid indexed integration resolver row");
