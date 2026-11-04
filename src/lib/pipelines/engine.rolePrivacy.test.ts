@@ -12,11 +12,14 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { StructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryQueue";
 import type { QueueEntry } from "@/lib/runtime/engineHost";
-import type { SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
-import type { RuntimeSendCommand } from "@/lib/runtime/contracts";
+import { StructuredInitialMessageTimeoutError, type SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { runtimeHostKindForEngine, type RuntimeSendCommand } from "@/lib/runtime/contracts";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { OperationLease, OperationLeaseExpiredError } from "@/lib/operationLease";
+import { claudeTranscriptPath } from "@/lib/agent/transcript";
+import type { PipelineStageAttempt } from "./types";
 
 const oldRule = "Preserve fixtureword receipts until the owning operation completes";
 const newRule = "Verify silver orchard evidence before the operation completes";
@@ -29,9 +32,12 @@ function write(rule: string) {
 }
 afterEach(shutdownTaskPageWorker);
 
-test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling"] as const)(
+test.each(["before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
+  "replay-codex", "replay-claude", "replay-native-codex", "replay-native-claude",
+  "before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling"] as const)(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
-  const timing = scenario.startsWith("before-handoff") ? "before-handoff" : scenario;
+  const timing = scenario.startsWith("before-handoff") || scenario.startsWith("replay") ? "before-handoff" : scenario;
+  const engine = scenario.endsWith("claude") ? "claude" : "codex";
   if (process.env.LLV_PRIVACY_TEST_CASE !== scenario) {
     // Registry and membership caches are process-wide. Each production launch
     // scenario starts with its own handles, including when run by itself.
@@ -50,13 +56,14 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
   setSystemTime(new Date("2026-10-29T00:00:00Z"));
   savePipelines([]);
   write(oldRule);
-  let nextId = 100 + ["before-dispatch", "before-handoff", "after-handoff"].indexOf(timing) * 1000;
+  let nextId = 100 + Math.max(0, ["before-dispatch", "before-handoff", "after-handoff"].indexOf(timing)) * 1000;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`);
   const root = path.join(process.env.LLV_STATE_DIR!, `persisted-privacy-launch-${timing}`);
   fs.mkdirSync(root, { recursive: true });
-  const previousCodexHome = process.env.LLV_CODEX_HOME;
-  process.env.LLV_CODEX_HOME = path.join(root, "codex");
-  const transcriptRoot = path.join(process.env.LLV_CODEX_HOME, "sessions");
+  const homeName = engine === "codex" ? "LLV_CODEX_HOME" : "LLV_CLAUDE_HOME";
+  const previousHome = process.env[homeName];
+  process.env[homeName] = path.join(root, engine);
+  const transcriptRoot = path.join(process.env[homeName]!, engine === "codex" ? "sessions" : "projects");
   fs.mkdirSync(transcriptRoot, { recursive: true });
   const registry = new AgentRegistry(path.join(root, "registry.json"));
   setAgentRegistryForTests(registry);
@@ -71,7 +78,17 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
   const launches: string[] = [];
   const hosts = new Map<string, SpawnedStructuredHost>();
   let termination: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
+  let activation: PipelineStageAttempt["activation"];
   let changed = false;
+  const beginDelivery = registry.beginDeliveryAttemptOffLoop.bind(registry);
+  const deliveryClaim = spyOn(registry, "beginDeliveryAttemptOffLoop").mockImplementation(async (...args) => {
+    const result = await beginDelivery(...args);
+    if (scenario.startsWith("before-authorization") && !changed && result.acquired && result.value) {
+      changed = true;
+      write(newRule);
+    }
+    return result;
+  });
   let originalEffect: string | undefined;
   let originalCommand: RuntimeSendCommand | undefined;
   let held = false;
@@ -176,16 +193,19 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
   } as RuntimeHostClient;
   const runtime = spyOn(clientModule, "runtimeHostClient").mockReturnValue(client);
   const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
-    engine: "codex", accountId: "fixture-account", kind: "managed", home: process.env.LLV_CODEX_HOME!, transcriptRoot, env: { NODE_ENV: "test" },
+    engine, accountId: "fixture-account", kind: "managed", home: process.env[homeName]!, transcriptRoot, env: { NODE_ENV: "test" },
   }});
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    activation ??= structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation);
     launches.push(input.receipt.launchId);
     const sessionId = ["00000000", "0000", "4000", "8000", String(launches.length).padStart(12, "0")].join("-");
-    const artifact = path.join(transcriptRoot, `${sessionId}.jsonl`);
+    const artifact = engine === "codex" ? path.join(transcriptRoot, `${sessionId}.jsonl`)
+      : input.spec.transcript ?? claudeTranscriptPath(input.spec.cwd, sessionId, transcriptRoot);
+    fs.mkdirSync(path.dirname(artifact), { recursive: true });
     let dead = false;
     const host: SpawnedStructuredHost = {
-      identity: { threadId: sessionId, path: artifact },
+      identity: { threadId: sessionId, sessionId, path: artifact },
       supportsSteer: false,
       health: async () => ({ status: dead ? "dead" : "idle", sessionKey: sessionId, endpoint: "fixture", pid: process.pid,
         processStartIdentity: "privacy-fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null,
@@ -197,7 +217,8 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
         authorize?.();
         if (!sent.some(previous => previous.id === entry.id)) sent.push(entry);
         fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n"
-          + JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: entry.text } }) + "\n");
+          + JSON.stringify(engine === "codex" ? { type: "event_msg", payload: { type: "user_message", message: entry.text } }
+            : { type: "user", message: { role: "user", content: entry.text } }) + "\n");
         if (timing === "after-handoff") throw new Error("request timed out: thread/read");
         return { outcome: "turn-started", turnId: "privacy-current-turn" };
       },
@@ -205,28 +226,45 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     hosts.set(input.receipt.conversationId, host);
     try { return await realSpawn(input, {
       startHost: async () => host,
+      ...(scenario.startsWith("staged") && launches.length === 1 ? {
+        deliverFirst: async (staged, artifactPath) => {
+          await enqueueStructuredMessage({ path: artifactPath, conversationId: staged.receipt.conversationId,
+            clientMessageId: `spawn_${staged.receipt.launchId}`, operationId: `spawn_message_${staged.receipt.launchId}`,
+            launchId: staged.receipt.launchId, text: staged.prompt, roleMemoryRevision: staged.roleMemoryRevision }, {
+            client: () => staged.client, registry: () => staged.registry, enabled: () => true,
+            authorizeDispatch: staged.authorize,
+          });
+          if (scenario.includes("native")) fs.writeFileSync(artifactPath, JSON.stringify(engine === "codex"
+            ? { type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_started" } }
+            : { type: "user", timestamp: new Date().toISOString(), message: { role: "user", content: "Build safely" } }) + "\n");
+          throw new StructuredInitialMessageTimeoutError("initial message observation timed out");
+        },
+      } : {}),
       bindHost: async (target, key, _host, owner, epoch) => {
-        target.setStructuredHostClaimed(key, { kind: "codex-app-server", endpoint: "fixture",
+        target.setStructuredHostClaimed(key, { kind: runtimeHostKindForEngine(engine), endpoint: "fixture",
           process: { pid: process.pid, startIdentity: "privacy-fixture" }, eventCursor: 0, protocolVersion: "fixture",
           writerClaimEpoch: epoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] }, "idle", owner, epoch);
         journal.append({ scope: { type: "session", id: input.receipt.conversationId }, kind: "session-status", payload: {
           conversationId: input.receipt.conversationId, sessionKey: key, artifactPath: artifact, cwd: input.spec.cwd,
-          hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+          hostKind: runtimeHostKindForEngine(engine), host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
         } });
-        return () => {};
+        return () => {
+          const current = target.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]?.structuredHost;
+          if (dead && current) target.setStructuredHostClaimed(key, { ...current, process: null }, "dead", owner, epoch, true);
+        };
       },
       publishHost: async () => async () => {},
       processIdentity: () => ({ pid: process.pid, startIdentity: "privacy-fixture" }),
     }); } finally {
-      if (scenario === "before-handoff-settling" && launches.length === 1) {
+      if ((scenario === "before-handoff-settling" || scenario.startsWith("replay")) && launches.length === 1) {
         const receipt = registry.spawnReceipt(input.receipt.launchId)!;
-        const entry = registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+        const entry = registry.readOnlySnapshot().entries[`${engine}:${receipt.key!.sessionId}`]!;
         registry.upsert({ ...entry, structuredTerminationSurvivors: [captureProcessIdentity(termination!.pid)] });
       }
     }
   });
   try {
-    if (scenario === "before-handoff-settling") {
+    if (scenario === "before-handoff-settling" || scenario.startsWith("replay")) {
       termination = Bun.spawn([process.execPath, "-e", "process.stdin.resume(); console.log('ready')"], {
         stdin: "pipe", stdout: "pipe", stderr: "pipe",
       });
@@ -235,12 +273,15 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
       finally { reader.releaseLock(); }
     }
     const h = harness();
+    if (scenario.startsWith("staged")) h.advanceWallClock(Date.now() - Date.parse(h.ports.now()));
     const defaults = defaultPipelinePorts();
     h.ports.spawnAgent = defaults.spawnAgent;
     h.ports.spawnReceipt = defaults.spawnReceipt;
     h.ports.claimSpawnRetry = defaults.claimSpawnRetry;
     h.ports.durableTurnEvidence = defaults.durableTurnEvidence;
-    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build safely", next: null }] as never, { repoDir: root });
+    h.ports.recoverStagedLaunch = defaults.recoverStagedLaunch;
+    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, engine,
+      ...(engine === "claude" ? { model: "fable" } : {}), prompt: "Build safely", next: null }] as never, { repoDir: root });
     h.ports.sourcePathAllowed = defaults.sourcePathAllowed;
     await tickPipelines([], h.ports);
     fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
@@ -249,6 +290,57 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
     expect(launches).toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
+    if (scenario.startsWith("replay")) {
+      const lane = loadPipelines()[0]!;
+      const attempt = lane.runs[0]!.attempts[0]!;
+      expect(activation).toBeDefined();
+      attempt.activation = { ...activation!, phase: "reserved", replay: true };
+      delete attempt.activation.owner;
+      delete attempt.roleMemoryDispatchWait;
+      delete attempt.controllerWait;
+      attempt.state = "spawning";
+      lane.cursor!.state = "spawning";
+      const receipt = registry.spawnReceipt(launches[0]!)!;
+      if (scenario.includes("native")) fs.writeFileSync(receipt.artifactPath!, JSON.stringify(engine === "codex"
+        ? { type: "event_msg", timestamp: h.ports.now(), payload: { type: "task_started" } }
+        : { type: "user", timestamp: h.ports.now(), message: { role: "user", content: "Build safely" } }) + "\n");
+      savePipelines([lane]);
+      await tickPipelines([], h.ports);
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.roleMemoryDispatchWait).toBeDefined();
+      expect(launches).toHaveLength(1);
+      termination!.stdin.end(); await termination!.exited;
+      for (let tick = 0; tick < 6; tick++) { h.advanceWallClock(1_000); await tickPipelines([], h.ports); }
+      expect(launches).toHaveLength(scenario.includes("native") ? 1 : 2);
+      expect(sent).toHaveLength(scenario.includes("native") ? 0 : 1);
+      expect(loadPipelines()[0]!.state).toBe("running");
+      return;
+    }
+    if (scenario.startsWith("staged")) {
+      expect(registry.spawnReceipt(launches[0]!)!.state).toBe("path-pending");
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.roleMemoryDispatchWait).toBeUndefined();
+      for (let tick = 0; tick < 6; tick++) {
+        h.advanceWallClock(1_000); setSystemTime(new Date(h.ports.now())); await tickPipelines([], h.ports);
+      }
+      expect(registry.spawnReceipt(launches[0]!)!.error).toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+      expect(launches).toHaveLength(scenario.includes("native") ? 1 : 2);
+      expect(sent).toHaveLength(scenario.includes("native") ? 0 : 1);
+      expect(loadPipelines()[0]!.state).toBe("running");
+      return;
+    }
+    if (scenario.startsWith("before-authorization")) {
+      expect(journal.operationResult(originalId)).toBeNull();
+      expect(registry.spawnReceipt(launches[0]!)!.error).toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+      expect(Object.values(registry.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
+      expect(defaults.spawnReceipt(launches[0]!)?.roleMemoryRetrySafe).toBe(true);
+      for (let tick = 0; tick < 6; tick++) { h.advanceWallClock(1_000); await tickPipelines([], h.ports); }
+      expect(launches).toHaveLength(2);
+      expect(sent.map(entry => entry.id)).toEqual([`spawn_message_${launches[1]}`]);
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(journal.operationResult(originalId)).toBeNull();
+      return;
+    }
     if (timing === "after-handoff") {
       expect(journal.operationResult(originalId)?.receipt.status).toBe("uncertain");
       expect(defaults.spawnReceipt(launches[0]!)?.roleMemoryRetrySafe).not.toBe(true);
@@ -334,13 +426,13 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     expect(roleMemoryRevisionToken()).not.toBe(JSON.parse(originalEffect!).payload.roleMemoryRevision);
   } finally {
     if (termination) { if (termination.exitCode === null) termination.stdin.end(); await termination.exited; }
-    spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
+    deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
     ids.mockRestore();
     setSystemTime();
     setAgentRegistryForTests(null);
     journal.close();
-    if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
-    else process.env.LLV_CODEX_HOME = previousCodexHome;
+    if (previousHome === undefined) delete process.env[homeName];
+    else process.env[homeName] = previousHome;
   }
 }, 30_000);
 
@@ -476,11 +568,15 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
         await tickPipelines([], pending.ports);
         const deferred = loadPipelines()[0]!;
         expect(deferred.state).toBe("running");
-        expect(deferred.stateDetail).toContain("role-memory dispatch waiting for original launch settlement");
-        expect(deferred.runs[0]!.attempts.at(-1)?.roleMemoryDispatchWait).toBeDefined();
-        expect(deferred.runs[0]!.attempts.at(-1)?.retiredLaunches ?? []).toHaveLength(0);
+        expect(deferred.stateDetail).toContain("original launch retired");
+        expect(deferred.runs[0]!.attempts.at(-1)?.roleMemoryDispatchWait).toBeUndefined();
+        expect(deferred.runs[0]!.attempts.at(-1)?.retiredLaunches ?? []).toHaveLength(1);
         expect(sent).toHaveLength(0);
         changing = false;
+        for (let tick = 0; tick < 6; tick++) { pending.advanceWallClock(1_000); await tickPipelines([], pending.ports); }
+        expect(sent).toHaveLength(1);
+        expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+        expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(1);
       }
     }
   } finally {

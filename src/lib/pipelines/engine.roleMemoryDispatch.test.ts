@@ -5,13 +5,32 @@ import crypto from "node:crypto";
 import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { AgentRegistry, defaultPipelinePorts, loadPipelines, reserveActivationOnly,
-  setAgentRegistryForTests, tickPipelines } from "./engine.fixture";
+  savePipelines, setAgentRegistryForTests, tickPipelines } from "./engine.fixture";
 import { RoleMemoryChanged } from "@/lib/memory/privacy";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
-const cleanups: Array<() => void> = [];
-afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); setSystemTime(); setAgentRegistryForTests(null); });
+const cleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); setSystemTime(); setAgentRegistryForTests(null); });
+
+function nativeStart(engine: "codex" | "claude", pathname: string, now: string) {
+  fs.appendFileSync(pathname, JSON.stringify(engine === "codex"
+    ? { type: "event_msg", timestamp: now, payload: { type: "task_started" } }
+    : { type: "assistant", timestamp: now, message: { role: "assistant", stop_reason: "tool_use",
+      content: [{ type: "tool_use", id: "native-start-tool", name: "Read", input: { file_path: "fixture.txt" } }] } }) + "\n");
+}
+
+async function ownedIdleChild() {
+  const child = Bun.spawn([process.execPath, "-e", "process.stdin.resume(); console.log('ready')"], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  cleanups.push(async () => { if (child.exitCode === null) child.stdin.end(); await child.exited; });
+  const reader = child.stdout.getReader();
+  try { expect(new TextDecoder().decode((await reader.read()).value).trim()).toBe("ready"); }
+  finally { reader.releaseLock(); }
+  return child;
+}
 
 async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "codex" | "claude" = "codex") {
   setSystemTime(new Date("2026-11-03T12:00:00Z"));
@@ -29,7 +48,10 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "c
   cleanups.push(() => registry.close());
   setAgentRegistryForTests(registry);
   const production = defaultPipelinePorts();
-  h.ports.spawnReceipt = production.spawnReceipt;
+  // The fixture producer bypasses spawnAgent's production cache invalidation.
+  // Each observation therefore uses a fresh production projection, including
+  // reservations created after a previous launch's retirement.
+  h.ports.spawnReceipt = launchId => defaultPipelinePorts().spawnReceipt(launchId);
   h.ports.claimSpawnRetry = production.claimSpawnRetry;
   h.ports.sourcePathAllowed = production.sourcePathAllowed;
   for (const key of ["LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
@@ -469,7 +491,7 @@ test("late delivery with a mismatched claimed generation cannot adopt or retire 
   expect(f.replacements).toHaveLength(0);
 });
 
-async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, transcriptPath?: string, operations = "matched") {
+async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, transcriptPath?: string, operations = "matched", active = true) {
     const child = Bun.spawn([process.execPath, "-e", `
       const { setMachineCpuPressureForTests } = await import("./src/lib/runtime/cpuPressure");
       setMachineCpuPressureForTests(null);
@@ -483,7 +505,7 @@ async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, tr
       await tickPipelines([], { ...defaultPipelinePorts(), now: () => process.env.LLV_MEMORY_DISPATCH_NOW,
         exec: async () => ({ code: 0, stdout: "", stderr: "" }), scheduleTick: () => {},
         cpuPressureHold: () => null, drainHold: () => null, worktreePresent: () => true,
-        conversationAgentActive: async () => true,
+        conversationAgentActive: async () => process.env.LLV_MEMORY_DISPATCH_ACTIVE === "true",
         ...(process.env.LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH ? {
           originalLaunchOperations: async () => process.env.LLV_MEMORY_DISPATCH_OPERATIONS,
         } : {}),
@@ -492,11 +514,12 @@ async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, tr
       });
       const lane = loadPipelines()[0];
       const attempt = lane.runs[0].attempts[0];
-      console.log(JSON.stringify({ state: lane.state, attemptState: attempt.state, detail: lane.stateDetail, wait: attempt.roleMemoryDispatchWait,
+      console.log(JSON.stringify({ state: lane.state, attemptState: attempt.state, verdict: attempt.verdict, detail: lane.stateDetail, wait: attempt.roleMemoryDispatchWait,
         launchId: attempt.launchId, agentPath: attempt.agentPath, retiredLaunches: attempt.retiredLaunches, spawns }));
       registry.close();
     `], { env: { ...process.env, LLV_MEMORY_DISPATCH_REGISTRY: f.registryFile, LLV_MEMORY_DISPATCH_NOW: now,
       LLV_MEMORY_DISPATCH_OPERATIONS: operations,
+      LLV_MEMORY_DISPATCH_ACTIVE: String(active),
       ...(transcriptPath ? { LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH: transcriptPath } : {}) },
       stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -585,6 +608,99 @@ test("a fresh controller adopts a delivered original after its own retry claim",
   expect(recovered.retiredLaunches).toBeUndefined();
   expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim?.claimId).toBe(claimId);
   expect(f.launches).toHaveLength(1);
+});
+
+for (const engine of ["codex", "claude"] as const) test.each([
+  { native: false, survivor: false }, { native: true, survivor: false },
+  { native: false, survivor: true }, { native: true, survivor: true },
+])(`${engine} recovers a failed receipt without a saved role wait (native=$native, survivor=$survivor)`, async ({ native, survivor }) => {
+  const f = await fixture(`${engine}-no-wait-${native}-${survivor}`, undefined, engine);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  if (native) {
+    nativeStart(engine, entry.artifactPath, f.h.ports.now());
+    expect(f.production.spawnReceipt(f.launches[0]!)?.roleMemoryRetrySafe).toBe(true);
+  }
+  const child = survivor ? await ownedIdleChild() : null;
+  if (child) f.registry.upsert({ ...entry, structuredTerminationSurvivors: [captureProcessIdentity(child.pid)] });
+  const lane = loadPipelines()[0]!;
+  delete lane.runs[0]!.attempts[0]!.roleMemoryDispatchWait;
+  delete lane.runs[0]!.attempts[0]!.controllerWait;
+  savePipelines([lane]);
+  f.h.ports.originalLaunchOperations = async () => "unknown";
+  f.h.ports.spawnAgent = f.normalSpawn;
+  if (native || survivor) {
+    expect(await childTick(f, f.h.ports.now(), entry.artifactPath, "unknown"))
+      .toMatchObject({ state: "running", attemptState: "spawning", launchId: f.launches[0], spawns: 0 });
+  }
+  if (child) { child.stdin.end(); await child.exited; }
+  for (let i = 0; i < 6; i++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
+  expect(f.replacements).toHaveLength(native ? 0 : 1);
+  if (native) expect(f.attempt().launchId).toBe(f.launches[0]!);
+});
+
+for (const engine of ["codex", "claude"] as const) test.each([false, true] as const)(
+  `${engine} manual retry reconciles the second launch without replacing native work (native=%s)`, async native => {
+  const f = await fixture(`${engine}-manual-second-${native}`, undefined, engine);
+  f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  for (let i = 0; i < 6 && f.launches.length < 2; i++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
+  expect(f.launches).toHaveLength(2);
+  const original = f.launches[1]!;
+  const entry = f.stage("unhosted", original);
+  f.registry.failSpawn(original, new RoleMemoryChanged().message);
+  let survivor: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
+  if (native) {
+    nativeStart(engine, entry.artifactPath, f.h.ports.now());
+    expect(f.h.ports.spawnReceipt(original)?.roleMemoryRetrySafe).toBe(true);
+  } else {
+    survivor = await ownedIdleChild();
+    f.registry.upsert({ ...entry, structuredTerminationSurvivors: [captureProcessIdentity(survivor.pid)] });
+  }
+  f.h.ports.originalLaunchOperations = async () => "unknown";
+  f.h.ports.spawnAgent = f.normalSpawn;
+  f.h.advanceWallClock(11 * 60_000);
+  await tickPipelines([], f.h.ports);
+  const before = loadPipelines()[0]!;
+  expect(before.state).toBe("needs_decision");
+  const { patchPipeline } = await import("./engine");
+  for (let i = 0; i < 2; i++) {
+    const held = await patchPipeline(before.id, { action: "retry-stage" }, f.h.ports);
+    expect(held).toMatchObject({ status: 409 });
+    expect(held.error).toContain("original launch retained");
+    expect(loadPipelines()[0]).toEqual(before);
+  }
+  if (!native) {
+    survivor!.stdin.end();
+    await survivor!.exited;
+    const retry = await patchPipeline(before.id, { action: "retry-stage" }, f.h.ports);
+    expect(retry.error).toBeUndefined();
+    for (let i = 0; i < 6; i++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
+  }
+  expect(f.replacements).toHaveLength(native ? 0 : 1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  if (native) expect(f.attempt().launchId).toBe(original);
+});
+
+for (const engine of ["codex", "claude"] as const) test.each([false, true] as const)(
+  `${engine} takes its original report during a role wait (fresh controller=%s)`, async restart => {
+  const f = await fixture(`${engine}-report-wait-${restart}`, undefined, engine);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  nativeStart(engine, entry.artifactPath, f.h.ports.now());
+  f.h.ports.originalLaunchOperations = async () => "unknown";
+  f.h.ports.conversationAgentActive = async () => false;
+  const { reportStageCompletion } = await import("./engine");
+  expect((await reportStageCompletion({ verdict: "pass", findings: [], summary: "Original completed" },
+    { kind: "agent", role: "builder", conversationId: f.attempt().conversationId! }, f.h.ports)).error).toBeUndefined();
+  if (restart) {
+    expect(await childTick(f, f.h.ports.now(), entry.artifactPath, "unknown", false))
+      .toMatchObject({ verdict: { status: "pass" }, spawns: 0 });
+  } else await tickPipelines([], f.h.ports);
+  expect(f.attempt().verdict?.status).toBe("pass");
+  expect(f.attempt().roleMemoryDispatchWait).toBeUndefined();
+  expect(f.replacements).toHaveLength(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
 });
 
 test("role-memory dispatch deadlines round-trip and malformed waits are refused", async () => {
