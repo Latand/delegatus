@@ -9,15 +9,17 @@ import { emptySelectionEvidence, configuredRoleSelectionProvider, RoleSelectionP
 
 export const MEMORY_SELECTION_DEADLINE_MS = 3_000;
 export const SHADOW_BLOCK_MAX_BYTES = 24_000;
+export const ROLE_SELECTION_THRESHOLD = 0.02;
 const BM25_SCORE_BATCH_SIZE = 16;
-type Scopes = readonly { scope: string; rules: readonly RoleMemoryRule[] }[];
+export type SelectionScopes = readonly { scope: string; rules: readonly RoleMemoryRule[] }[];
+type Scopes = SelectionScopes;
 export interface ShadowSelection { selector: "whole" | "bm25" | "jev"; selectorVersion: string; reason: string; scores: [string, number][]; shadowIds: string[]; evidence?: SelectionEvidence }
 type Options = { apiKey?: string | null; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; now?: () => Date; provider?: RoleSelectionProvider };
 const stop = new Set("the and for with from this that before after when then into every only its any are not all one each has was have than your you of to in on at by is it as an a or be do".split(" "));
 const terms = (text: string) => (text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter(term => !stop.has(term));
 const points = (text: string) => [...text].length;
 const failure = (reason: string): ShadowSelection => ({ selector: "whole", selectorVersion: "1", reason, scores: [], shadowIds: [] });
-function alwaysOn(rules: readonly RoleMemoryRule[]): Set<string> {
+export function alwaysOn(rules: readonly RoleMemoryRule[]): Set<string> {
   let reserved = 0;
   return new Set(rules.filter(rule => {
     const length = points(ruleLine(rule)) + (reserved ? 1 : 0);
@@ -59,7 +61,7 @@ async function bm25(rules: readonly RoleMemoryRule[], brief: string, signal: Abo
   return scores;
 }
 
-async function pack(scopes: Scopes, rules: RoleMemoryRule[], scores: number[], threshold: number, signal: AbortSignal): Promise<Pick<ShadowSelection, "scores" | "shadowIds">> {
+export async function packRoleSelection(scopes: Scopes, rules: RoleMemoryRule[], scores: number[], threshold: number, signal: AbortSignal): Promise<Pick<ShadowSelection, "scores" | "shadowIds">> {
   // Layers arrive in slice 3; operator-kept rules already exist today.
   const protectedIds = alwaysOn(rules);
   const selected = new Set(protectedIds);
@@ -108,20 +110,27 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
     const bounded = async <T>(work: () => Promise<T>, observe?: (value: T) => void): Promise<T> => { checkDeadline(); const result = await Promise.race([work(), expired]); observe?.(result); checkDeadline(); return result; };
     const evaluate = async (): Promise<ShadowSelection> => {
       try {
-        if (process.env.LLV_ROLE_MEMORY_SHADOW === "off") return failure("whole");
-        if (!brief.trim()) return failure("no-brief");
         checkDeadline();
         const rules = scopes.flatMap(scope => [...scope.rules]);
         const protectedIds = alwaysOn(rules);
         const candidates = rules.filter(rule => !protectedIds.has(rule.id));
-        const candidateScores = await bm25(candidates, brief, signal);
-        const byId = new Map(candidates.map((rule, i) => [rule.id, candidateScores[i]]));
-        const scores = rules.map(rule => byId.get(rule.id) ?? 0);
-        evidence.allScores = candidates.map((rule, i) => [rule.id, candidateScores[i]]);
-        phase("pack-bm25");
-        const fallback = await pack(scopes, rules, scores, -Infinity, signal);
-        const suffix = scores.some(score => score > 0) ? "bm25" : "bm25-no-match";
-        const result = (reason: string): ShadowSelection => ({ selector: "bm25", selectorVersion: "bm25-1", reason: `${reason},${suffix}`, ...fallback });
+        let fallback: Pick<ShadowSelection, "scores" | "shadowIds"> | undefined;
+        let suffix = "bm25-no-match";
+        try {
+          const candidateScores = await bm25(candidates, brief, signal);
+          const byId = new Map(candidates.map((rule, i) => [rule.id, candidateScores[i]]));
+          const scores = rules.map(rule => byId.get(rule.id) ?? 0);
+          evidence.allScores = candidates.map((rule, i) => [rule.id, candidateScores[i]]);
+          phase("pack-bm25");
+          fallback = await packRoleSelection(scopes, rules, scores, -Infinity, signal);
+          suffix = scores.some(score => score > 0) ? "bm25" : "bm25-no-match";
+        } catch {
+          // A local scoring defect must not bypass a working Decisions path.
+          checkDeadline();
+        }
+        const result = (reason: string): ShadowSelection => fallback
+          ? { selector: "bm25", selectorVersion: "bm25-1", reason: `${reason},${suffix}`, ...fallback }
+          : failure(`${reason},bm25-error`);
         if (points(candidates.map(ruleLine).join("\n")) > 120_000) return result("jev-pool");
         if (!candidates.length) return result("jev-empty");
         let reservation: Awaited<ReturnType<typeof reserveSelectionSpend>> = null;
@@ -174,11 +183,12 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
             }
           }
           if (probabilities.length !== candidates.length || probabilities.some(value => !Number.isFinite(value) || value < 0 || value > 1)) throw new RoleSelectionProviderError("shape");
+          await authorize();
           evidence.allScores = candidates.map((rule, i) => [rule.id, probabilities[i]]);
           evidence.scoreSource = "jev";
           const jevScores = new Map(evidence.allScores);
           phase("pack-jev");
-          return { selector: "jev", selectorVersion: `${provider.model}-1`, reason: "jev", ...await pack(scopes, rules, rules.map(rule => jevScores.get(rule.id) ?? 0), 0.3, signal) };
+          return { selector: "jev", selectorVersion: `${provider.model}-v2`, reason: "jev", ...await packRoleSelection(scopes, rules, rules.map(rule => jevScores.get(rule.id) ?? 0), ROLE_SELECTION_THRESHOLD, signal) };
         } catch (error) {
           return result(signal.aborted ? "jev-timeout" : error instanceof RoleSelectionProviderError ? `jev-${error.message}` : error instanceof SyntaxError ? "jev-shape" : "jev-network");
         }

@@ -1,7 +1,12 @@
 # Role memory layers: a larger store in levels, role-wide rules for every role, write-quality checks, and selection under one hard maximum
 
-Status: design with decisions recorded on 2026-10-22; slice 1 implements
-frozen whole-scope delivery and shadow measurement. The research was written against
+Implementation update, 2026-11-03: selected delivery is enabled, the shadow
+switch is retired, and connected keys choose the default Decisions provider.
+See [current behavior and replay](role-memory-selector-observations.md) and
+the [evaluation table](../../evals/role-selection/README.md). The shadow pilot,
+rollbacks and future slices below describe the historical design.
+
+Status: design with decisions recorded on 2026-10-22. The research was written against
 `main` at `f5fd6a2c0`; file and line references are to that commit. Revised
 twice the same day after critiques: when the second revision was finished
 `main` stood at `ee990fcfc`, four commits later, and none of them touches a
