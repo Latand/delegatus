@@ -5,12 +5,21 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { createEngineAccountsStore } from "@/hooks/useEngineAccounts";
 import { setLocale, translate } from "@/lib/i18n";
-import { AccountSpendCredits, formatPaidBalance } from "./AccountSpendCredits";
+import type { ReconciledQuota } from "@/lib/rateLimit";
+import { AccountSpendCredits, formatPaidBalance, limitLeftPercent } from "./AccountSpendCredits";
 import { formatReadClock } from "./rateLimit";
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node,
   HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement, Event: dom.Event, MouseEvent: dom.MouseEvent });
+const quotaLeft = (session: number | null, weekly: number | null = null): ReconciledQuota => {
+  const window = (left: number | null) => left === null ? null
+    : { value: { usedPercent: 100 - left, resetsAt: null, windowMinutes: null }, observedAt: null, stale: false, source: "account" } as never;
+  return { session: window(session), weekly: window(weekly), tiers: [], plan: null };
+};
+/** 3% left: inside the band where the credits block shows. */
+const LOW = quotaLeft(3);
+const HELD = { balance: "12.50", checkedAt: null };
 const cleanup: Array<() => void> = [];
 afterEach(() => { cleanup.splice(0).forEach(fn => fn()); document.body.replaceChildren(); });
 
@@ -25,7 +34,7 @@ test.each(["en", "uk"] as const)("paid spending flips before the reply and rolls
   await store.refresh();
   function Harness() {
     const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-    return <>{snapshot.accounts.map(account => <AccountSpendCredits key={account.id} account={account} state={{ ...store, ...snapshot, engine: "codex" }} />)}</>;
+    return <>{snapshot.accounts.map(account => <AccountSpendCredits quota={LOW} key={account.id} account={account} state={{ ...store, ...snapshot, engine: "codex" }} />)}</>;
   }
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
@@ -62,14 +71,13 @@ test.each(["en", "uk"] as const)("paid spending flips before the reply and rolls
   expect(host.querySelector('[role="alert"]')).toBeNull();
 });
 
-test.each(["en", "uk"] as const)("an account with no paid balance shows one line in %s", locale => {
+test.each(["en", "uk"] as const)("an account with no paid balance and the switch on names it in %s", locale => {
   setLocale(locale);
-  const account = { id: "account-c", label: "C", authPresent: true, spendCredits: false, paidCredits: { balance: null, checkedAt: null } } as never;
+  const account = { id: "account-c", label: "C", authPresent: true, spendCredits: true, paidCredits: { balance: null, checkedAt: null } } as never;
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
-  flushSync(() => root.render(<AccountSpendCredits account={account} state={{ engine: "codex" } as never} />));
-  expect(host.querySelectorAll("p")).toHaveLength(1);
-  expect(host.querySelector("p")!.textContent).toBe(translate(locale, "accounts.paidNone"));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={{ engine: "codex" } as never} />));
+  expect(host.querySelector("p.text-muted")!.textContent).toBe(translate(locale, "accounts.paidNone"));
 });
 
 test("a failed save scrolls its alert into view at the nearest edge", () => {
@@ -78,13 +86,13 @@ test("a failed save scrolls its alert into view at the nearest edge", () => {
   const proto = dom.HTMLElement.prototype as unknown as { scrollIntoView?: (options?: unknown) => void };
   proto.scrollIntoView = options => { calls.push(options); };
   cleanup.push(() => { delete proto.scrollIntoView; });
-  const account = { id: "account-d", label: "D", authPresent: true, spendCredits: false } as never;
+  const account = { id: "account-d", label: "D", authPresent: true, spendCredits: false, paidCredits: HELD } as never;
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
   const state = { engine: "codex" } as never;
-  flushSync(() => root.render(<AccountSpendCredits account={account} state={state} />));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={state} />));
   expect(calls).toEqual([]);
-  flushSync(() => root.render(<AccountSpendCredits account={{ ...(account as object), spendCreditsError: true } as never} state={state} />));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={{ ...(account as object), spendCreditsError: true } as never} state={state} />));
   expect(calls).toEqual([{ block: "nearest" }]);
 });
 
@@ -111,11 +119,11 @@ test("queued clicks survive a poll and only the failed intent is rolled back", a
 test.each(["en", "uk"] as const)("blank space beside the label never flips the switch in %s", locale => {
   setLocale(locale);
   const flips: boolean[] = [];
-  const account = { id: "account-e", label: "E", authPresent: true, spendCredits: false } as never;
+  const account = { id: "account-e", label: "E", authPresent: true, spendCredits: false, paidCredits: HELD } as never;
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
   const state = { engine: "codex", setSpendCredits: async (_id: string, next: boolean) => { flips.push(next); return true; } } as never;
-  flushSync(() => root.render(<AccountSpendCredits account={account} state={state} />));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={state} />));
   const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
   const label = document.getElementById(toggle.getAttribute("aria-labelledby")!)!;
   expect(label.textContent).toBe(translate(locale, "accounts.spendCredits"));
@@ -146,8 +154,8 @@ test.each(["en", "uk"] as const)("the row shows a fractional, a sub-credit and a
   const shown = (balance: string) => {
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
-    const account = { id: "account-w", label: "W", authPresent: true, spendCredits: false, paidCredits: { balance, checkedAt: null } } as never;
-    flushSync(() => root.render(<AccountSpendCredits account={account} state={{ engine: "codex" } as never} />));
+    const account = { id: "account-w", label: "W", authPresent: true, spendCredits: true, paidCredits: { balance, checkedAt: null } } as never;
+    flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={{ engine: "codex" } as never} />));
     return host.querySelector("p.text-muted")!.textContent!;
   };
   const grouped = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(49696);
@@ -168,14 +176,14 @@ test("turning the switch on brings the warning and the balance into view, once",
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
   const state = { engine: "codex" } as never;
-  flushSync(() => root.render(<AccountSpendCredits account={off} state={state} />));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={off} state={state} />));
   expect(shown).toEqual([]);
-  flushSync(() => root.render(<AccountSpendCredits account={{ ...(off as object), spendCredits: true } as never} state={state} />));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={{ ...(off as object), spendCredits: true } as never} state={state} />));
   expect(shown).toHaveLength(1);
   expect(shown[0]!.options).toEqual({ block: "nearest" });
   expect(shown[0]!.text).toContain(translate("en", "accounts.spendCreditsOn"));
   expect(shown[0]!.text).toContain("49,696");
-  flushSync(() => root.render(<AccountSpendCredits account={{ ...(off as object), spendCredits: true, label: "again" } as never} state={state} />));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={{ ...(off as object), spendCredits: true, label: "again" } as never} state={state} />));
   expect(shown).toHaveLength(1);
 });
 
@@ -187,7 +195,7 @@ test("an account already on does not scroll when it first appears", () => {
   cleanup.push(() => { delete proto.scrollIntoView; });
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
-  flushSync(() => root.render(<AccountSpendCredits account={{ id: "g", label: "G", authPresent: true, spendCredits: true } as never} state={{ engine: "codex" } as never} />));
+  flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={{ id: "g", label: "G", authPresent: true, spendCredits: true } as never} state={{ engine: "codex" } as never} />));
   expect(shown).toEqual([]);
 });
 
@@ -202,7 +210,7 @@ test.each([["en", false], ["en", true], ["uk", false], ["uk", true]] as const)("
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
     const account = { id: "account-r", label: "R", authPresent: true, spendCredits: true, paidCredits: { balance: "49390.66", checkedAt: checkedAt.toISOString() } } as never;
-    flushSync(() => root.render(<AccountSpendCredits account={account} state={{ engine: "codex" } as never} phone={phone} />));
+    flushSync(() => root.render(<AccountSpendCredits quota={LOW} account={account} state={{ engine: "codex" } as never} phone={phone} />));
     return host.querySelector("p.text-muted")!.textContent!;
   };
   const clockOf = (d: Date) => d.toLocaleTimeString(locale === "uk" ? "uk-UA" : "en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -221,4 +229,37 @@ test("a reading is dated by calendar day, not by age", () => {
   expect(formatReadClock(justBeforeMidnight, now)).toMatch(/\d.*23:50/);
   expect(formatReadClock(justBeforeMidnight, now)).not.toBe("23:50");
   expect(formatReadClock(new Date(2026, 10, 3, 0, 5).toISOString(), now)).toBe("00:05");
+});
+
+test.each(["en", "uk"] as const)("the credits block shows only with paid credits and 5 percent or less left, or while the switch is on, in %s", locale => {
+  setLocale(locale);
+  const shown = (account: Record<string, unknown>, quota: ReconciledQuota | null) => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+    flushSync(() => root.render(<AccountSpendCredits account={{ id: "account-v", label: "V", authPresent: true, spendCredits: false, ...account } as never} quota={quota} state={{ engine: "codex" } as never} />));
+    const block = host.querySelector('[data-account-spend-credits="account-v"]');
+    if (block) expect(block.querySelector('[role="switch"]')).not.toBeNull();
+    else expect(host.textContent).toBe("");
+    return block !== null;
+  };
+  const zero = { balance: "0", checkedAt: null };
+  expect(shown({ paidCredits: HELD }, quotaLeft(75, 75))).toBe(false);
+  expect(shown({ paidCredits: zero }, quotaLeft(3))).toBe(false);
+  expect(shown({ paidCredits: HELD }, quotaLeft(5))).toBe(true);
+  expect(shown({ paidCredits: HELD }, quotaLeft(1))).toBe(true);
+  expect(shown({ paidCredits: HELD }, quotaLeft(6))).toBe(false);
+  expect(shown({ paidCredits: HELD }, quotaLeft(75))).toBe(false);
+  expect(shown({ paidCredits: zero, spendCredits: true }, quotaLeft(75))).toBe(true);
+  expect(shown({ paidCredits: HELD, spendCredits: true }, quotaLeft(75))).toBe(true);
+  // The tighter of the two windows governs, whichever it is.
+  expect(shown({ paidCredits: HELD }, quotaLeft(80, 4))).toBe(true);
+  expect(shown({ paidCredits: HELD }, quotaLeft(4, 80))).toBe(true);
+  expect(shown({ paidCredits: HELD }, quotaLeft(80, 20))).toBe(false);
+  // No credits data or no limit reading hides the block unless the switch is on.
+  expect(shown({}, quotaLeft(3))).toBe(false);
+  expect(shown({ paidCredits: { balance: null, checkedAt: null } }, quotaLeft(3))).toBe(false);
+  expect(shown({ paidCredits: HELD }, null)).toBe(false);
+  expect(shown({ paidCredits: HELD }, quotaLeft(null, null))).toBe(false);
+  expect(shown({ spendCredits: true }, null)).toBe(true);
+  expect(limitLeftPercent(quotaLeft(80, 4))).toBe(4);
 });
