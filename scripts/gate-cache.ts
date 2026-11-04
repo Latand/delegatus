@@ -92,7 +92,7 @@ const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HO
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
   "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR"]);
 /** What a check may read, so its value is part of the key. */
-const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIONS|BUN_[A-Z0-9_]+|CI|CHROME_BIN|PLAYWRIGHT_BROWSERS_PATH|GIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM)|LLV_GATE_(?:BUN|CHECK_ENV))$/;
+const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIONS|BUN_[A-Z0-9_]+|CI|CHROME_BIN|PLAYWRIGHT_BROWSERS_PATH|GIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM)|LLV_GATE_(?:BUN|CHECK_ENV|TEST_WORKERS))$/;
 /** A commit identity that reaches a check is keyed by presence. Pre-push
  * checks receive none: the Viewer publishing a lane need not carry one, and
  * hosted CI has none either. */

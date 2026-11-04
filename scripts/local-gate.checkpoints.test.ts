@@ -73,6 +73,20 @@ serviceTest("an incomplete head run retains only complete green files across fre
   expect(f.samples()).toEqual({ a: 2, b: 3 });
 }, 60_000);
 
+serviceTest("changing the worker limit invalidates complete head checkpoints", () => {
+  const f = fixture();
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
+  f.git("add", "b.test.ts"); f.git("commit", "-m", "Complete concurrency fixture");
+  const serial = { LLV_GATE_TEST_WORKERS: "1" };
+  expect(f.run(serial).status).toBe(0);
+  expect(f.run(serial).status).toBe(0);
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+  const changed = f.run({ LLV_GATE_TEST_WORKERS: "2" });
+  expect(changed.status, changed.output).toBe(0);
+  expect(changed.output).not.toContain("reused complete green head file");
+  expect(f.samples()).toEqual({ a: 2, b: 2 });
+}, 60_000);
+
 serviceTest("head checkpoints invalidate environment and ignored inputs, and refuse corrupt receipts", () => {
   const f = fixture();
   writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
@@ -115,7 +129,7 @@ try { await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${J
   { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) { console.error(String(error)); process.exitCode = 1; }
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
-    { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
+    { cwd: f.repo, env: { ...process.env, LLV_GATE_TEST_WORKERS: "8" }, encoding: "utf8", timeout: 30_000 });
   const stopped = run("expire");
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(1);
   expect(stopped.stderr).toContain("test run exceeded");

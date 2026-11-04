@@ -421,6 +421,15 @@ files per side. Both sides settle before evidence is judged, including when
 one refuses. Duplicate names retain their occurrence identities; filtering one name can still execute
 its other occurrences. The rounds share a five-minute budget across all
 candidate files and both sides, including baseline checkout and dependency setup.
+`LLV_GATE_TEST_WORKERS=1` lowers concurrency for a busy machine. Values 1–8
+are accepted; the limit applies to the initial head and to each baseline or
+retry side, whose existing maximum remains three. The setting is bound into
+check receipts. Defaults, selections, deadlines and failure rules stay intact.
+This bounds file concurrency only. To bound the combined CPU and memory of a
+campaign, place its parent and check services in one private systemd slice via
+`LLV_GATE_SLICE` and `LLV_OWNED_RUN_CPU_SLICE`, set aggregate CPU and memory
+limits on that slice, and verify its kernel controls. `LLV_GATE_MEM` caps each
+service separately and cannot cap the combined campaign.
 Counts on a `FLAKY` row stop at its classification. Each child command is capped
 by the remaining budget; exhausting it blocks with a gate error. This adds at most
 five minutes of subprocess execution/setup, plus ordinary report parsing and
