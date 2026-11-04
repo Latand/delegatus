@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 import { Window } from "happy-dom";
@@ -61,6 +61,17 @@ const tick = async () => {
   for (let turn = 0; turn < 8; turn += 1) await new Promise((resolve) => setTimeout(resolve, 1));
 };
 
+async function observed(promise: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([promise, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Composer event was not observed")), 5_000);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* Attachment submissions are kept in IndexedDB before they reach the wire. */
 const composerStorage = installComposerStorageForTests();
 afterAll(() => composerStorage.uninstall());
@@ -114,12 +125,13 @@ function fileFor(conversationId: string): FileEntry {
   } as FileEntry;
 }
 
-test("a mid-flight queued admission settles the generation and the stale timeout cannot resurrect it", async () => {
+for (const holdStorage of [false, true]) test(`a mid-flight queued admission settles the generation and the stale timeout cannot resurrect it (storage: ${holdStorage ? "held" : "ready"})`, async () => {
   setLocale("en");
   const conversationId = "conv-hang-admission";
   const prompt = "annotate the production screenshot";
   const sentKeys: string[] = [];
   const sentImageCounts: number[] = [];
+  const sends = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
   let resolveHung!: (response: Response) => void;
   globalThis.fetch = (async (input, init) => {
     if (String(input) === "/api/tmux/targets") {
@@ -129,6 +141,7 @@ test("a mid-flight queued admission settles the generation and the stale timeout
     const body = JSON.parse(String(init?.body)) as { clientMessageId: string; images?: unknown[] };
     sentKeys.push(body.clientMessageId);
     sentImageCounts.push(body.images?.length ?? 0);
+    sends[sentKeys.length - 1]?.resolve();
     if (sentKeys.length === 1) {
       /* The runtime host hangs: the response settles long after the durable
          admission has already reached the client on the receipt stream. */
@@ -194,7 +207,7 @@ test("a mid-flight queued admission settles the generation and the stale timeout
     /* Queue-first (round-1 P1#1): the submit snapshots this generation's image
        into the durable outbox bubble and clears the composer + tray at once. */
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
-    for (let attempt = 0; attempt < 100 && sentImageCounts.length === 0; attempt += 1) await tick();
+    await observed(sends[0]!.promise);
     expect(sentImageCounts).toEqual([1]);
     expect(textarea.value).toBe("");
     await untilPreviews(0);
@@ -239,12 +252,32 @@ test("a mid-flight queued admission settles the generation and the stale timeout
     expect(textarea.value).toBe("next ask");
 
     /* The next generation goes out under a fresh key with only its own image. */
-    flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
-    await tick();
-    expect(sentKeys).toHaveLength(2);
-    expect(sentKeys[1]).not.toBe(sentKeys[0]);
-    expect(sentImageCounts[1]).toBe(1);
-    expect(textarea.value).toBe("");
+    const retaining = Promise.withResolvers<void>();
+    const releaseStorage = Promise.withResolvers<void>();
+    const originalRetain = composerSubmissionPayloads.retain.bind(composerSubmissionPayloads);
+    const retain = spyOn(composerSubmissionPayloads, "retain").mockImplementation(async (...args) => {
+      retaining.resolve();
+      if (holdStorage) await releaseStorage.promise;
+      return originalRetain(...args);
+    });
+    try {
+      flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+      if (holdStorage) {
+        await observed(retaining.promise);
+        expect(outboxOf(conversationId).find(entry => entry.id !== firstKey)?.preparing).toBe(true);
+        expect(sentKeys).toHaveLength(1);
+        releaseStorage.resolve();
+      }
+      // Saving and sealing attachments can outlast any fixed number of ticks.
+      await observed(sends[1]!.promise);
+      expect(sentKeys).toHaveLength(2);
+      expect(sentKeys[1]).not.toBe(sentKeys[0]);
+      expect(sentImageCounts[1]).toBe(1);
+      expect(textarea.value).toBe("");
+    } finally {
+      releaseStorage.resolve();
+      retain.mockRestore();
+    }
   } finally {
     flushSync(() => root.unmount());
     publishReceipts([]);

@@ -466,12 +466,12 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
   merge.seenChecks = [...new Set([...merge.seenChecks, ...names])].sort();
   if (view.mergeStateStatus === "DIRTY" || view.mergeable === "CONFLICTING") return { kind: "block", reason: MERGE_REASONS.conflict };
   const red = view.checks.find((check) => check.verdict === "red");
-  if (red) return { kind: "block", reason: checkFailedReason(red.name) };
   const age = now - Date.parse(merge.headSeenAt ?? iso(now));
   if (outstanding) {
     /* The update was accepted and its commit has not reached the PR yet. */
-    return age >= MERGE_WAIT_LIMIT_MS ? { kind: "block", reason: MERGE_REASONS.checksTimeout } : { kind: "wait", state: "updating", reason: null };
+    return age >= MERGE_WAIT_LIMIT_MS ? { kind: "block", reason: MERGE_REASONS.checksTimeout } : { kind: "wait", state: "updating", reason: red ? checkFailedReason(red.name) : null };
   }
+  if (red) return { kind: "block", reason: checkFailedReason(red.name) };
   if (view.mergeStateStatus === "BEHIND") return { kind: "refresh" };
   const present = new Set(names);
   const requiredNames = new Set(required);
@@ -680,19 +680,20 @@ function baseUpdateHolder(ports: AutoMergePorts, read: Pipeline, base: string): 
   return merging ? ownerReason(merging) : null;
 }
 
-/** A PR only BEHIND its base, in the lane's own repository and branch, whose
+/** An outdated PR, in the lane's own repository and branch, whose
     finished lane still owns the delivery: merge the base tip into its head,
     record that exact commit, then push it. False leaves the refresh-lane path
     to the caller (a conflict, or a PR the runner may not update). */
 async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: PullRequestView, ports: AutoMergePorts, now: number,
-  bookkeeping: (live: PipelineMerge) => void, mayMerge: boolean, queueReason: string | null): Promise<boolean> {
+  bookkeeping: (live: PipelineMerge) => void, mayMerge: boolean, queueReason: string | null,
+  failedBase?: { base: string; reason: string }): Promise<boolean> {
   const target = baseUpdateTarget(read);
   const updateBase = ports.updateBase;
   if (!target || !updateBase || read.proactiveTaskIds?.length || view.isCrossRepository !== false
     || view.headRefName !== target.branch.replace(/^refs\/heads\//, "")
     || !deliveryOwnership(read, ports.loadPipelines(), ports.setting(read.project))) return false;
   const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
-  const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
+  const base = failedBase?.base ?? (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
   if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
   const held = () => baseUpdateHolder(ports, read, base) ?? (mayMerge ? null : queueReason ?? "waiting for the queue head");
   const wait = async (reason: string | null) => {
@@ -709,7 +710,11 @@ async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: Pull
   const plan = await updateBase.plan({ ...target, head: view.headRefOid, base, at: iso(now) });
   if (plan.kind === "conflict") return false;
   // The head already contains the base: GitHub has not caught up yet.
-  if (plan.kind === "current") return wait(null);
+  if (plan.kind === "current") {
+    if (!failedBase) return wait(null);
+    await commit(ports, read, live => { bookkeeping(live); block(live, failedBase.reason, now); });
+    return true;
+  }
   let recorded = false;
   const changed = await commit(ports, read, (live, current) => {
     bookkeeping(live);
@@ -724,12 +729,13 @@ async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: Pull
     // PR head equal to it is admitted as the runner's own.
     live.updates = [...merge.updates, { requestedAt: iso(now), head: null, commit: plan.commit, base }];
     live.state = "updating";
-    live.reason = null;
+    live.reason = failedBase?.reason ?? null;
     live.headSeenAt = null;
     live.nextReadAt = iso(now + MERGE_POLL_MS);
     recorded = true;
   });
   if (!changed || !recorded) return true;
+  if (failedBase) ports.log?.(`[auto merge] ${read.id}: ${failedBase.reason} on ${view.headRefOid}; recorded base update ${plan.commit} from ${base}`);
   if (!baseUpdatePushOwned(read, ports, plan.commit)) return true;
   try {
     await updateBase.push({ ...target, commit: plan.commit });
@@ -885,6 +891,11 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
           await commit(ports, read, (live) => block(live, MERGE_REASONS.refreshSameBase, now));
           return;
         }
+        // A failed check can mask BEHIND, including under soft protection.
+        // The immutable comparison above admits the same mechanical update;
+        // the new head still goes through its own checks and merge admission.
+        if (failedCheck && await updateBehindBase(read, merge, view, ports, now, bookkeeping, mayMerge, queueReason,
+          { base, reason: refreshRefusal })) return;
         const reserved = await commit(ports, read, (live, current) => {
           const pipelines = ports.loadPipelines();
           if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }

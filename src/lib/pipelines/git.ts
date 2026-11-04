@@ -4,6 +4,7 @@ import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./work
 import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
+export { preparePipelineSetup } from "./setupRecipe";
 import { publicationEnvironmentFailure, publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";

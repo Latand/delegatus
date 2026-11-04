@@ -27,6 +27,7 @@ for (const [name, directory] of Object.entries(isolatedEnvironment)) {
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { RuntimeJournal } = await import("@/runtime-host/journal");
+const { settleNativeQueueEntry } = await import("./nativeQueueSettlement");
 const { NativeQueueExecutor } = await import("./nativeQueueExecutor");
 const { NativeCodexQueue } = await import("./nativeCodexQueue");
 const { CodexAppServerHost } = await import("./codexAppServerHost");
@@ -64,10 +65,7 @@ function journalClient(journal: () => RuntimeJournalType): RuntimeHostClient {
 /** The two registry ports exactly as the structured delivery controller wires them. */
 function registryPorts(registry: AgentRegistryType) {
   return {
-    settled: (entry: NativeQueueRecord) => {
-      registry.recordDeliveryOutcomeForOperation(entry.conversationId as ViewerConversationId, entry.entryId,
-        entry.state === "removed" ? "failed" : "delivered", entry.state === "removed" ? "delivery-discarded" : null);
-    },
+    settled: (entry: NativeQueueRecord) => settleNativeQueueEntry(registry, entry),
     binding: (conversationId: string) => {
       const conversation = registry.readOnlySnapshot().conversations[conversationId];
       const generation = conversation?.generations.at(-1);

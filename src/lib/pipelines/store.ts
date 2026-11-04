@@ -1,7 +1,7 @@
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
-import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
+import { cloudStageConfigurationError, isCloudRuntime, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -303,11 +303,26 @@ function isTerminalOutputPublication(value: unknown): boolean {
     && /^[0-9a-f]{40}$/i.test(publication[key] as string));
 }
 
+function isSetupResult(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const setup = value as Record<string, unknown>;
+  return Array.isArray(setup.command) && setup.command.length > 0 && setup.command.length <= 32
+    && setup.command.every(arg => typeof arg === "string" && arg.length <= 2048)
+    && typeof setup.cwd === "string" && typeof setup.hash === "string" && /^[a-f0-9]{64}$/.test(setup.hash)
+    && ["running", "passed", "failed"].includes(String(setup.state))
+    && typeof setup.startedAt === "string" && Number.isFinite(Date.parse(setup.startedAt))
+    && isNullableString(setup.completedAt) && (setup.code === null || Number.isInteger(setup.code))
+    && (setup.state !== "passed" || setup.code === 0 && typeof setup.completedAt === "string")
+    && typeof setup.stdout === "string" && setup.stdout.length <= 16_000
+    && typeof setup.stderr === "string" && setup.stderr.length <= 16_000;
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
   return (
-    attempt.n === index + 1 &&
+    attempt.n === index + 1 && isSetupResult(attempt.setup) &&
     (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
     (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
@@ -495,7 +510,7 @@ function isAttemptDefinition(value: unknown): boolean {
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const definition = value as Record<string, unknown>;
   const role = definition.role;
-  return (definition.runtime === undefined || definition.runtime === "local" || definition.runtime === "codex-cloud")
+  return (definition.runtime === undefined || definition.runtime === "local" || isCloudRuntime(definition.runtime))
     && validAgentMemoryMax(definition.agentMemoryMaxBytes)
     && typeof definition.boundAt === "string"
     && typeof definition.stageDigest === "string"
@@ -1592,6 +1607,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
@@ -2099,6 +2115,7 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
 
 export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
   requireOwner?: boolean;
+  assertAuthority?: () => void;
   /** Outside the lease; repeated after contention before another create attempt. */
   prepare?: () => Promise<void>;
   /** Synchronous creation-only freshness guard under the writer lease. */
@@ -2108,6 +2125,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   onReplay?: () => void;
 } = {}): Promise<Pipeline> {
   const replay = (tx: StateBoundedTransaction<Pipeline>) => {
+    options.assertAuthority?.();
     if (pipeline.creationRequest) {
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {

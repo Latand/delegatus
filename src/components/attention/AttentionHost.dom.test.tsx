@@ -984,14 +984,14 @@ test("a directed request whose target is gone records no focus entry", async () 
 /* Only the arrival timeout is controlled; polling, transport, React and the
    navigation boundary continue to run normally against the real store. */
 let arrivalClockCleanup: (() => void) | undefined;
-function arrivalClock() {
+function arrivalClock(timeoutMs = 8_000) {
   let clock = Date.now();
   const originalTimeout = globalThis.setTimeout;
   const originalClear = globalThis.clearTimeout;
   const callbacks: Array<{ deadline: number; callback: () => void; cancelled: boolean; fired: boolean }> = [];
   const dateSpy = spyOn(Date, "now").mockImplementation(() => clock);
   const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number, ...args: unknown[]) => {
-    if (delay !== 8_000) return originalTimeout(callback, delay, ...args);
+    if (delay !== timeoutMs) return originalTimeout(callback, delay, ...args);
     const entry = { deadline: clock + delay, callback, cancelled: false, fired: false };
     callbacks.push(entry);
     return entry;
@@ -1220,6 +1220,7 @@ function landedCard(): HTMLElement {
 const CARD_SELECTOR = '.card[data-id="task:landed"]';
 
 test("an arrival marks the card it landed on, and the mark takes itself off", async () => {
+  const clock = arrivalClock(30);
   const card = landedCard();
   const { bus } = board({ [ANCHOR]: LIVE_RECT }, "demo", { [ANCHOR]: CARD_SELECTOR });
   raise();
@@ -1233,7 +1234,9 @@ test("an arrival marks the card it landed on, and the mark takes itself off", as
      it the paint order without moving it. */
   expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("lift");
 
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await clock.advance(29);
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("lift");
+  await clock.advance(1);
 
   /* Temporarily, the operator said: nothing was clicked and it is gone. */
   expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();

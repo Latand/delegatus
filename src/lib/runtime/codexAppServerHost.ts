@@ -13,10 +13,12 @@ import type { NativeQueueInput } from "./nativeCodexQueue";
 import { StructuredAnswerError, StructuredSendRefusedError } from "./engineHost";
 import type { FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
+import os from "node:os";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
+import { gateCheckTool, runGateCheckTool } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -432,6 +434,9 @@ const DELIVERY_HISTORY_BYTES = MAX_STRUCTURED_IMAGE_ENCODED_BYTES + 16 * 1024 * 
 // Single-item frames retain the nominal item coverage of 128 pages of 32
 // items. The byte budget and existing caller deadline still bound the read.
 const DELIVERY_HISTORY_PAGES = 128 * 32;
+// Recent durable engine items can prove consumption while history RPCs are
+// unavailable. Older items still use the bounded canonical-history reader.
+const NATIVE_QUEUE_EVENT_PROOF_LIMIT = 128;
 /**
  * A `thread/resume` (or `thread/read`) response replays the whole thread
  * history as one JSONL frame, and history the operator legally accumulated can
@@ -1279,6 +1284,9 @@ function threadStatus(value: unknown): ThreadStatus | null {
 /** One app-server connection with durable callbacks and event replay. */
 export class CodexAppServerHost implements EngineHost, TierCapableHost {
   readonly identity: CodexThreadIdentity;
+  private gateCheckRoot = "";
+  private readonly gateCheckAbort = new AbortController();
+  private readonly gateCheckRequests = new Map<string | number, { turnId: unknown; abort: AbortController }>();
 
   private readonly child: CodexTransport;
   private readonly requestTimeoutMs: number;
@@ -1422,6 +1430,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private writerFence: (() => boolean) | null = null;
   private persistenceFlush: (() => Promise<void>) | null = null;
   private ledgerFailed = false;
+  // Notifications retained by a predecessor may have lost a canonical
+  // rejection at handoff or on a failed append. Only this owner's canonical
+  // validation can make those immutable identities eligible for fallback.
+  private nativeQueueRequiresCanonicalValidation = false;
+  // Keep identities beyond the notification payload window. If their bounded
+  // index fills, uncertainty requires this owner's canonical validation.
+  private readonly nativeQueueObservedItems = new Map<string, string>();
+  private readonly nativeQueueCanonicalItems = new Map<string, string>();
+  private readonly nativeQueueRejectedItems = new Set<string>();
+  private nativeQueueRejectionCapacityReached = false;
   private failure: Error | null = null;
   private readonly reapedPromise: Promise<void>;
   private resolveReaped!: () => void;
@@ -1591,6 +1609,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw error;
     }
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
+    provisional.gateCheckRoot = childEnv.TMPDIR ?? os.tmpdir();
+    provisional.nativeQueueRequiresCanonicalValidation = threadId !== null;
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;
     try {
@@ -1690,6 +1710,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         })
         : await provisional.rpc("thread/start", {
           cwd: options.cwd,
+          ...(protocol.hasRequestField("thread/start", "dynamicTools") ? { dynamicTools: [gateCheckTool] } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...launchAccess,
@@ -1919,8 +1940,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
-        const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
-          candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
+        const history = await this.readNativeQueueHistory(entries);
         return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
       },
       sendWithdrawn: async (entry, expectedTurnId) => {
@@ -1988,8 +2008,106 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
     if (entry.binding.threadId !== this.identity.threadId) return null;
-    const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
+    const history = snapshot ?? await this.readNativeQueueHistory([entry], true);
+    // A successful canonical read takes precedence over retained notifications,
+    // including absence or conflicting input for this exact client identity.
+    // Keep delayed-receipt recovery from the durable ledger when RPCs fail;
+    // invalid history or a different thread identity never enables that fallback.
+    if (history.state === "unknown" && (history.reason === "transport" || history.reason === "deadline")) {
+      // Retained events belong to this writer's view. A canonical proof can
+      // still settle a delayed receipt after the writer has handed over.
+      if (this.ledgerFailed || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return null;
+      return this.nativeQueueProof(entry, this.nativeQueueEventHistory());
+    }
     return this.nativeQueueProof(entry, history);
+  }
+
+  private async readNativeQueueHistory(entries: NativeQueueRecord[], stopAtMatch = false): Promise<CodexDeliveryHistoryResult> {
+    const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
+      candidate => {
+        const observedClientIds = new Set<string>();
+        for (const turn of candidate.turns) for (const item of turn.items) {
+          if (item.type === "userMessage" && typeof item.clientId === "string") observedClientIds.add(item.clientId);
+        }
+        let proven = false;
+        for (const entry of entries) {
+          if (entry.binding.threadId !== this.identity.threadId || !observedClientIds.has(entry.clientUserMessageId)) continue;
+          const proof = this.nativeQueueProof(entry, candidate);
+          if (proof) {
+            this.validateNativeQueueEventEvidence(proof);
+            proven = true;
+          } else this.rejectNativeQueueEventEvidence(entry, candidate);
+        }
+        return proven || (stopAtMatch && observedClientIds.has(entries[0]!.clientUserMessageId));
+      });
+    if (history.state === "complete") {
+      for (const entry of entries) {
+        const proof = this.nativeQueueProof(entry, history);
+        if (proof) this.validateNativeQueueEventEvidence(proof);
+        else this.rejectNativeQueueEventEvidence(entry, history);
+      }
+    }
+    return history;
+  }
+
+  private rejectNativeQueueEventEvidence(entry: NativeQueueRecord,
+    history: Extract<CodexDeliveryHistoryResult, { state: "observed" | "complete" }>): void {
+    if (entry.binding.threadId !== this.identity.threadId || this.nativeQueueRejectionCapacityReached) return;
+    const identities = new Set([...this.nativeQueueObservedItems, ...this.nativeQueueCanonicalItems]
+      .filter(([, clientId]) => clientId === entry.clientUserMessageId).map(([key]) => key));
+    // The canonical item may precede its notification entirely.
+    for (const turn of history.turns) for (const item of turn.items) {
+      if (item.type !== "userMessage") continue;
+      if (item.clientId !== entry.clientUserMessageId) continue;
+      identities.add(this.nativeQueueItemIdentity(turn.id, item.id, item.clientId));
+    }
+    let rejected = false;
+    for (const key of identities) {
+      if (this.nativeQueueRejectedItems.has(key)) continue;
+      this.nativeQueueCanonicalItems.delete(key);
+      // Never evict a rejection and thereby make its replay eligible. Once
+      // the bounded set fills, this host requires canonical proof for all items.
+      if (this.nativeQueueRejectedItems.size >= NATIVE_QUEUE_EVENT_PROOF_LIMIT) this.nativeQueueRejectionCapacityReached = true;
+      else this.nativeQueueRejectedItems.add(key);
+      rejected = true;
+    }
+    if (!rejected || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
+    this.emit({ kind: "native-queue-changed", threadId: this.identity.threadId, evidenceRejectedFor: entry.clientUserMessageId });
+  }
+
+  private nativeQueueItemIdentity(turnId: string, itemId: string, clientId: string): string {
+    return JSON.stringify([this.identity.threadId, turnId, itemId, clientId]);
+  }
+
+  private validateNativeQueueEventEvidence(proof: NonNullable<ReturnType<CodexAppServerHost["nativeQueueProof"]>>): void {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
+    const key = this.nativeQueueItemIdentity(proof.turnId, proof.itemId, proof.clientUserMessageId);
+    this.nativeQueueRejectedItems.delete(key);
+    this.nativeQueueCanonicalItems.delete(key);
+    this.nativeQueueCanonicalItems.set(key, proof.clientUserMessageId);
+    if (this.nativeQueueCanonicalItems.size > NATIVE_QUEUE_EVENT_PROOF_LIMIT) {
+      this.nativeQueueCanonicalItems.delete(this.nativeQueueCanonicalItems.keys().next().value!);
+    }
+  }
+
+  private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
+    if (!this.identity.path) return { state: "unknown", reason: "identity" };
+    const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
+    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
+      if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
+      if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
+      const item = record(event.item);
+      if (item?.type !== "userMessage" || !stringField(item, "id") || !stringField(item, "clientId")
+        || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
+      const key = this.nativeQueueItemIdentity(event.turnId, item.id as string, item.clientId as string);
+      if (this.nativeQueueRejectedItems.has(key)) continue;
+      if (this.nativeQueueRejectionCapacityReached
+        || this.nativeQueueRequiresCanonicalValidation && !this.nativeQueueCanonicalItems.has(key)) continue;
+      turns.push({ id: event.turnId, itemsView: "full", items: [{ ...item, id: item.id as string, type: "userMessage" }] });
+    }
+    // Only a positive, exact payload match is evidence. Missing, started and
+    // conflicting items leave the original operation owed to reconciliation.
+    return { state: "observed", identity: { threadId: this.identity.threadId, path: this.identity.path }, turns, pages: [], bytes: 0 };
   }
 
   private nativeQueueProof(entry: NativeQueueRecord, history: CodexDeliveryHistoryResult) {
@@ -3395,6 +3513,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async releaseTransportFenced(): Promise<void> {
     if (this.released) return;
+    this.gateCheckAbort.abort();
     this.settleArmedTierCut("host-gone");
     if (this.reconnecting) {
       this.disconnectSocketConnection();
@@ -3671,6 +3790,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     this.events.push(sequenced);
+    if (event.kind === "item" && event.phase === "completed" && event.turnId
+      && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
+      const item = record(event.item);
+      if (item?.type === "userMessage" && stringField(item, "id") && stringField(item, "clientId")) {
+        const key = this.nativeQueueItemIdentity(event.turnId, item.id as string, item.clientId as string);
+        if (this.nativeQueueObservedItems.has(key) || this.nativeQueueObservedItems.size < NATIVE_QUEUE_EVENT_PROOF_LIMIT) {
+          this.nativeQueueObservedItems.set(key, item.clientId as string);
+        } else this.nativeQueueRequiresCanonicalValidation = true;
+      }
+    }
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();
@@ -4368,6 +4497,30 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!method) return this.fail(new Error("Codex app-server message has no method"));
     const params = record(message.params) ?? {};
     if (typeof id === "number" || typeof id === "string") {
+      if (method === "item/tool/call" && params.tool === gateCheckTool.name) {
+        if (this.gateCheckRequests.has(id)) return;
+        const waitAbort = new AbortController();
+        this.gateCheckRequests.set(id, { turnId: params.turnId, abort: waitAbort });
+        const current = () => !this.dead && !this.released && !this.releasing
+          && params.threadId === this.identity.threadId && params.turnId === this.activeTurnId && this.writerFenceAllowsActuation();
+        const answer = async () => {
+          let result;
+          try {
+            decodeCodexServerRequest(this.protocol, id, method, params);
+            if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
+            result = await runGateCheckTool(params.arguments, this.gateCheckRoot, AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]));
+          } catch (error) {
+            result = { success: false, contentItems: [{ type: "inputText", text: safeError(error) }] };
+          }
+          if (!this.dead && !this.released && !this.releasing && this.writerFenceAllowsActuation()) {
+            if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: "gate wait owner changed; result unknown" }] };
+            encodeCodexServerResponse(this.protocol, method, result, params);
+            this.write({ jsonrpc: "2.0", id, result });
+          }
+        };
+        void answer().catch(error => this.fail(new Error(safeError(error)))).finally(() => this.gateCheckRequests.delete(id));
+        return;
+      }
       const identity = codexRequestIdentity(this.callbackGeneration, method, id, params);
       const existing = [...this.callbackReceipts].find(([, receipt]) => sameCodexRequest(receipt.identity, identity));
       const requestDigest = codexRequestDigest(params);
@@ -4627,6 +4780,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
+        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+          ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
       });
@@ -4638,6 +4793,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     if (method === "turn/completed" && turnId) {
+      for (const wait of this.gateCheckRequests.values()) if (wait.turnId === turnId) wait.abort.abort();
       const turn = record(params.turn);
       const status = terminalStatus(turn?.status);
       if (reconcileBufferedLifecycle) this.bufferedTerminalTurnIds.add(turnId);
@@ -4687,6 +4843,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private fail(error: Error, activeFlags: string[] = []): void {
+    this.gateCheckAbort.abort();
     if (this.dead || this.released) return;
     this.clearVoiceStreamTimers();
     this.dead = true;

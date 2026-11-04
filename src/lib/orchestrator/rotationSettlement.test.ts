@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 
 import { POST as rotateRoute } from "@/app/api/orchestrator/rotate/route";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { reconcileSeatTick } from "@/lib/monitor/seatTickController";
 import { DEFAULT_SEAT_TICK_POLICY } from "@/lib/monitor/seatTick";
 import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
@@ -76,6 +77,8 @@ interface Answer {
 let sandbox = "";
 let previousStateDir: string | undefined;
 let previousOrchestratorCwd: string | undefined;
+let previousRegistry: AgentRegistry;
+let registry: AgentRegistry;
 let listener: ReturnType<typeof Bun.serve> | null = null;
 let origin = "";
 
@@ -116,10 +119,13 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  previousRegistry = agentRegistry();
   previousStateDir = process.env.LLV_STATE_DIR;
   previousOrchestratorCwd = process.env.LLV_ORCHESTRATOR_CWD;
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rotation-settlement-"));
   process.env.LLV_STATE_DIR = sandbox;
+  registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
   spawns = [];
   settlement = { kind: "unknown" };
   turnsByConversation = new Map();
@@ -136,6 +142,8 @@ beforeEach(() => {
 
 afterEach(() => {
   setSeatCommandDependenciesForTests(null);
+  setAgentRegistryForTests(previousRegistry);
+  registry.close();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   if (previousOrchestratorCwd === undefined) delete process.env.LLV_ORCHESTRATOR_CWD;

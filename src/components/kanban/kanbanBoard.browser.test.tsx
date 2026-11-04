@@ -1,6 +1,7 @@
-import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
-import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
+import type { BoardTask } from "@/lib/tasks/types";
+import { staleWorkingFixture, staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { describe, expect, test } from "bun:test";
@@ -31,7 +32,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureLaneReviewFrames, captureTaskTimelinePrototype, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -67,6 +68,488 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+describe("GitHub App connection forms", () => {
+  browserTest("GitHub links and confirmation fit the desktop Decisions column", async () => {
+    await withAppConnectBrowserTemp(async () => {
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try { expect(await captureAppConnectForms(browser, path.resolve(".artifacts/forge-app-connect/desktop"), false)).toHaveLength(24); }
+      finally { await browser.close(); }
+    });
+  }, 180_000);
+});
+
+describe("board timeline hybrid", () => {
+  browserTest("real board and phone timeline, folds, zoom, history and empty states in every locale and theme", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const { timelineStorageKey } = await import("./boardTimelineStore");
+    const out = path.resolve(".artifacts/board-timeline"); fs.mkdirSync(out, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const records = (lang: "en" | "uk", mode = "work") => {
+      const titles = lang === "uk" ? ["Експорт CSV на великих проєктах", "Зберегти фільтри пошуку", "Відновити оплату карткою", "Перевірити контраст підказок", "Доставка сповіщень", "Пошук у логах агентів"]
+        : ["CSV export on large projects", "Keep the search filters", "Restore card payments", "Check tooltip contrast", "Notification delivery", "Search agent logs"];
+      const tasks: BoardTask[] = Array.from({ length: 14 }, (_, index) => ({ id: `timeline-task-${index}`, project: "atlas", text: `${titles[index % titles.length]}${index >= titles.length ? ` ${index + 1}` : ""}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(6000), updatedAt: iso(1) }));
+      const beforeWork = mode === "waiting" || mode === "pending";
+      if (beforeWork) tasks.splice(1);
+      const pipelines: Pipeline[] = [];
+      tasks.forEach((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `timeline-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(480 - index * 10), stages });
+        lane.state = beforeWork || index === 1 ? "provisioning" : index === 0 || index === 3 ? "running" : "needs_decision";
+        lane.cursor = { stageId: beforeWork || index === 1 ? "builder" : "fix", state: beforeWork || index === 1 ? "pending" : index === 0 ? "running" : index === 3 ? "reviewing" : "spawning", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          if (mode === "waiting" || ((beforeWork || index === 1) && stageIndex > 0)) return;
+          const state = beforeWork || index === 1 ? "pending" : stageIndex === 0 ? "passed" : stageIndex === 1 ? "failed" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision";
+          run.attempts.push({ n: 1, state, effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: beforeWork || index === 1 ? null : iso(470 - index * 10 - stageIndex * 90), completedAt: beforeWork || index === 1 || (stageIndex === 2 && (index === 0 || index === 3)) ? null : iso(400 - index * 10 - stageIndex * 90),
+            input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        if (index === 0 && !beforeWork) lane.runs[0]!.attempts.push({ ...structuredClone(lane.runs[0]!.attempts[0]!), n: 2, startedAt: iso(399), completedAt: iso(350) });
+        if (index === tasks.length - 1 && !beforeWork) {
+          lane.createdAt = iso(5); lane.state = "running"; lane.cursor = { ...lane.cursor!, stageId: "builder", state: "running" };
+          lane.runs = [lane.runs[0]!]; lane.runs[0]!.attempts[0] = { ...lane.runs[0]!.attempts[0]!, state: "running", startedAt: iso(5), completedAt: null };
+        }
+        pipelines.push(lane);
+        if (index === 0 && !beforeWork) {
+          const old = structuredClone(lane); old.id = "timeline-previous-lane"; old.createdAt = iso(5800); old.state = "completed"; old.cursor = null; old.closedAt = iso(5650);
+          old.runs = [old.runs[0]!]; old.runs[0]!.attempts = [old.runs[0]!.attempts[0]!]; old.runs[0]!.attempts[0]!.startedAt = iso(5790); old.runs[0]!.attempts[0]!.completedAt = iso(5660);
+          pipelines.push(old);
+        }
+      });
+      if (mode === "empty") pipelines.length = 0;
+      if (mode === "unknown") for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) { attempt.startedAt = null; attempt.completedAt = null; }
+      const longAttempt = !beforeWork && mode !== "unknown" && mode !== "empty" ? pipelines.find(lane => lane.id === "timeline-lane-0")?.runs[0]?.attempts[0] : undefined;
+      if (longAttempt) {
+        longAttempt.startedAt = iso(72 * 60 + 36 + 400);
+        pipelines.find(lane => lane.id === "timeline-lane-0")!.createdAt = iso(5000);
+      }
+      // A lifecycle row alone is not native work evidence. Supply explicit
+      // resolved worker turns for the coloured strips exercised by this case.
+      const files: FileEntry[] = [];
+      for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) {
+        if (!attempt.startedAt) continue;
+        const id = `${lane.id}-${run.stageId}-${attempt.n}`;
+        const file = { path: `/fixture/${id}.jsonl`, conversationId: id, project: "atlas", projectName: "Atlas",
+          root: "codex-sessions", name: `${id}.jsonl`, title: id, kind: "session", fmt: "codex", parent: null,
+          engine: attempt.effectiveRole!.engine, model: attempt.effectiveRole!.model, mtime: now / 1000,
+          size: 100, proc: attempt.completedAt ? "done" : "running", activity: attempt.completedAt ? "idle" : "live",
+          pendingQuestion: null, waitingInput: null,
+          lastTurn: { startedAt: attempt === longAttempt ? Date.parse(attempt.completedAt!) - 120_000 : Date.parse(attempt.startedAt), endedAt: attempt.completedAt ? Date.parse(attempt.completedAt) : null },
+          agentActivity: { lastRecordAt: now, checking: false, check: null },
+        } as FileEntry;
+        attempt.conversationId = id; attempt.agentPath = file.path; files.push(file);
+        for (const task of tasks.filter(task => lane.taskIds.includes(task.id)))
+          task.assignments.push({ path: file.path, conversationId: id, panePid: null, state: "linked", error: null, at: iso(1) });
+      }
+      return { ...filesReadSummary([], pipelines), files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: files.length, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    // A short browser-owned temp path avoids the Linux singleton socket limit.
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1024, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        payload = records(lang);
+        const phone = width === 390;
+        const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+        const { page, context, pageErrors } = opened;
+        try {
+          await context.addInitScript(({ lang, theme }) => {
+            localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+            localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+          }, { lang, theme });
+          await page.clock.setFixedTime(new Date(now));
+          await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+          await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+          const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : '[data-board-timeline-toggle]');
+          await toggle.waitFor();
+          const seenRows = new Set<string>();
+          let frozenPaint: Buffer[] = [];
+          const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
+            const name = `${width}-${lang}-${theme}-${state}`;
+            // Row snapping can resize the scroller and schedule another scroll
+            // event. Judge the settled geometry; retain every clipping assertion.
+            await page.evaluate(async () => {
+              let previous = "", stable = 0;
+              for (let frame = 0; frame < 30; frame++) {
+                await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+                const scroll = document.querySelector<HTMLElement>("[data-timeline-scroll]");
+                const current = scroll ? [scroll.scrollTop, scroll.scrollLeft, scroll.clientHeight, scroll.scrollHeight].join(":") : "absent";
+                stable = current === previous ? stable + 1 : 0;
+                previous = current;
+                if (stable >= 3) return;
+              }
+              throw new Error("timeline scroll geometry did not settle");
+            });
+            const geometry = await target.evaluate(element => {
+              const failures: string[] = [];
+              const viewport = element.getBoundingClientRect();
+              const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
+              const scrollBox = scroller?.getBoundingClientRect();
+              const clip = scrollBox && scroller ? { top: scrollBox.top, left: scrollBox.left, right: scrollBox.left + scroller.clientWidth, bottom: scrollBox.top + scroller.clientHeight } : null;
+              const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
+              const axis = element.querySelector<HTMLElement>(".bt-axis")?.offsetHeight ?? 0;
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (!rect.width || !rect.height) continue;
+                  if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + axis || rect.top >= clip.bottom)) continue;
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + axis - 1 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
+                  // Tick labels outside the horizontal view are intentionally scrolled away.
+                  if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
+                  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                    const style = getComputedStyle(parent);
+                    if (/(hidden|clip|auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
+                      const box = parent.getBoundingClientRect();
+                      if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) failures.push(node.textContent);
+                    }
+                  }
+                  if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) failures.push(node.textContent);
+                }
+              }
+              const controls = [...element.querySelectorAll("button")].filter(button => {
+                const box = button.getBoundingClientRect();
+                if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + axis || box.top >= clip.bottom)) return false;
+                return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
+              }).map(button => {
+                const box = button.getBoundingClientRect();
+                return { text: button.getAttribute("aria-label") ?? button.textContent, width: box.width, height: box.height,
+                  hit: [[box.left + box.width / 2, box.top + box.height / 2], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]]
+                    .every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))) };
+              });
+              const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
+              const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
+              const stageRows = [...element.querySelectorAll<HTMLElement>(".bt-stage")].map(row => ({ earlier: row.dataset.earlier === "1",
+                lane: row.querySelector<HTMLElement>(".bt-lane")!.offsetHeight, label: row.querySelector<HTMLElement>(".bt-label")!.offsetHeight, row: row.offsetHeight }));
+              const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
+                const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
+              }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!);
+              const labelRects = [...element.querySelectorAll(".bt-label")].slice(0, 3).map(label => {
+                const box = label.getBoundingClientRect();
+                return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
+              });
+              return { failures: [...new Set(failures)], controls, bars, now, stageRows, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
+                visibleRows, labelRects, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
+            });
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            const paintDifference: number[] = [];
+            // A frozen label must keep its actual painted words when time is
+            // zoomed. DOM rectangles alone miss stale sticky-cell painting.
+            if (["default", "zoom-12", "zoom-6"].includes(state)) {
+              const current = await Promise.all(geometry.labelRects.map(rect => sharp(capture).extract(rect).removeAlpha().raw().toBuffer()));
+              if (state === "default") frozenPaint = current;
+              else for (let index = 0; index < current.length; index++) {
+                const before = frozenPaint[index]!, after = current[index]!;
+                expect(after.length).toBe(before.length);
+                let changed = 0;
+                for (let pixel = 0; pixel < after.length; pixel += 3) if (Math.max(...[0, 1, 2].map(channel => Math.abs(after[pixel + channel]! - before[pixel + channel]!))) > 20) changed++;
+                paintDifference.push(changed / (after.length / 3));
+              }
+            }
+            readings.push({ name, state, width, lang, theme, ...geometry, paintDifference, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            for (const difference of paintDifference) expect(difference).toBeLessThan(0.01);
+            if (state.startsWith("scroll-page-")) for (const row of geometry.visibleRows) seenRows.add(row);
+            expect(pageErrors).toEqual([]);
+            expect(geometry.failures).toEqual([]);
+            expect(geometry.controls.filter(control => !control.hit)).toEqual([]);
+            // A phone stage without a history control stacks its text above a 26px lane; only the 44px control grows the lane.
+            if (phone) for (const stage of geometry.stageRows) { expect(stage.lane).toBe(stage.earlier ? 44 : 26); expect(stage.row).toBeLessThanOrEqual(stage.label + stage.lane + 1); }
+            if (geometry.now !== null) for (const bar of geometry.bars) expect(bar.left + bar.width).toBeLessThanOrEqual(geometry.now + 1);
+            for (const control of geometry.controls) { expect(control.width).toBeGreaterThanOrEqual(phone ? 44 : 24); expect(control.height).toBeGreaterThanOrEqual(phone ? 44 : 24); }
+          };
+          await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'));
+          await toggle.click();
+          const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+          const first = page.locator('[data-timeline-task="timeline-task-0"]');
+          await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
+          expect(await first.locator("[data-timeline-expand]").evaluate(element => getComputedStyle(element).fontWeight)).toBe("600");
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(5);
+          const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
+          expect(strip.every(part => part.height === 4)).toBe(true);
+          expect(new Set(strip.map(part => part.color)).size).toBe(2);
+          expect(strip[0]!.color).toBe(strip[1]!.color);
+          expect(strip[1]!.color).not.toBe(strip[3]!.color);
+          const longStage = chart.locator(`[data-timeline-attempt='${JSON.stringify(["timeline-lane-0", "builder", 1])}']`);
+          await longStage.getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+          await longStage.getByText(translate(lang, "timeline.elapsed", { duration: lang === "uk" ? "72 год 36 хв" : "72h 36m" }), { exact: true }).waitFor();
+          const knownWorkFraction = await longStage.evaluate(row => {
+            const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!;
+            const work = row.querySelector<HTMLElement>("[data-timeline-work]")!;
+            return work.offsetWidth / elapsed.offsetWidth;
+          });
+          expect(knownWorkFraction).toBeLessThan(0.01);
+          const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
+          expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
+          await frame("default");
+          const timeScroll = page.locator("[data-timeline-scroll]");
+          await timeScroll.evaluate(element => {
+            const now = element.querySelector<HTMLElement>(".bt-axis .bt-now")!.offsetLeft;
+            const label = element.querySelector<HTMLElement>(".bt-axis-label")?.offsetWidth ?? 0;
+            element.scrollLeft = now - (element.clientWidth - label) + 16;
+          });
+          await frame("pan-edge");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
+          const recentLeft = await timeScroll.evaluate(element => element.scrollLeft);
+          await page.locator(".bt-earlier").first().click();
+          expect(await timeScroll.evaluate(element => element.scrollLeft)).toBeLessThan(recentLeft);
+          await frame("history");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
+          await first.locator("button").click(); await frame("collapsed");
+          // Two successful agents keep their own inks, including after a
+          // failure becomes a pass. Outcomes cannot erase identity.
+          const reviewer = payload.pipelines.find(lane => lane.id === "timeline-lane-0")!.runs[1]!.attempts[0]!;
+          reviewer.state = "passed";
+          await page.reload(); await chart.waitFor();
+          const passedStrip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => getComputedStyle(part).backgroundColor));
+          expect(passedStrip).toEqual(strip.map(part => part.color));
+          await frame("successful-agents");
+          await page.reload(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          await frame("reloaded");
+          await first.locator("button").click(); await frame("expanded");
+          const zoomIn = page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true });
+          const zoomOut = page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true });
+          const scaleWords: Record<number, string> = { 6: translate(lang, "timeline.hours", { count: 6 }), 12: translate(lang, "timeline.hours", { count: 12 }), 24: translate(lang, "timeline.days", { count: 1 }), 72: translate(lang, "timeline.days", { count: 3 }), 168: translate(lang, "timeline.week") };
+          for (const hours of [12, 6]) { await zoomIn.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); await frame(`zoom-${hours}`); }
+          expect(await zoomIn.isDisabled()).toBe(true);
+          for (const hours of [12, 24, 72, 168]) { await zoomOut.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); if (hours >= 72) await frame(`zoom-${hours}`); }
+          expect(await zoomOut.isDisabled()).toBe(true);
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight / 2);
+          await frame("scroll-middle");
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight);
+          await frame("scroll-end");
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          let lastTop = -1;
+          for (let pageIndex = 1; pageIndex <= 20; pageIndex++) {
+            const top = await timeScroll.evaluate(element => element.scrollTop);
+            if (top === lastTop) break;
+            lastTop = top;
+            await frame(`scroll-page-${pageIndex}`);
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 44);
+          }
+          const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
+          expect([...seenRows].sort()).toEqual(allRows.sort());
+          payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
+          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.elapsed", { duration: translate(lang, "timeline.unknownTime") }), { exact: true }).waitFor();
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
+          payload = records(lang, "pending"); await page.reload(); await chart.waitFor();
+          await chart.locator(".bt-stage").getByText(translate(lang, "kanban.graphState.pending"), { exact: true }).waitFor();
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("pending");
+          payload = records(lang, "waiting"); await page.reload(); await chart.waitFor(); await first.locator("button").click();
+          await chart.getByText(translate(lang, "timeline.waiting"), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage").count()).toBe(0); await frame("waiting");
+          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await page.getByText(translate(lang, "timeline.empty"), { exact: true }).waitFor(); await frame("empty");
+          // Use the real scanner/launch fixture's live FileEntry as a board
+          // assignment, with no pipeline, through both production mounts.
+          const memberDirectory = path.join(out, `member-${width}-${lang}-${theme}`); fs.mkdirSync(memberDirectory, { recursive: true });
+          const live = staleWorkingFixture(memberDirectory, now).live;
+          const agentTask = payload.tasks[0]!;
+          payload.tasks.splice(1);
+          const memberTask = { ...agentTask, assignments: [{ path: live.path, conversationId: live.conversationId, panePid: null,
+            state: "delivered" as const, error: null, at: iso(1) }] };
+          payload = { ...payload, files: [live], tasks: [memberTask], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: now / 1000 }] };
+          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("1");
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          await chart.getByText(translate(lang, "mobile2.kanban.agents", { count: 1 }), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage-name").innerText()).toContain(translate(lang, "dash.agent"));
+          await frame("standalone-agent");
+          const history = records(lang).pipelines[0]!;
+          history.runs = [history.runs[0]!];
+          history.runs[0]!.attempts = [history.runs[0]!.attempts[0]!];
+          const prior = history.runs[0]!.attempts[0]!;
+          prior.startedAt = iso(30); prior.completedAt = iso(10); prior.state = "passed";
+          prior.conversationId = live.conversationId!; prior.agentPath = live.path;
+          for (const state of ["completed", "needs_decision"] as const) {
+            history.state = state;
+            history.cursor = state === "completed" ? null : { stageId: "builder", state: "running", input: null, activatedBy: null };
+            payload.pipelines = [history];
+            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            await first.waitFor();
+            expect(await first.getAttribute("data-expanded")).toBe("1");
+            expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
+            expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
+            // Only the later native turn is known; the old attempt remains an elapsed outline.
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+            await chart.locator('[data-live="0"]').getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
+            const liveRight = await chart.locator('[data-live="1"] [data-timeline-bar]').evaluate(element => (element as HTMLElement).offsetLeft + (element as HTMLElement).offsetWidth);
+            expect(Math.abs(liveRight - await chart.locator(".bt-now").first().evaluate(element => (element as HTMLElement).offsetLeft))).toBeLessThanOrEqual(1);
+            await frame(`resumed-${state}`);
+          }
+          history.state = "running";
+          history.cursor = { stageId: "builder", state: "running", input: null, activatedBy: null };
+          prior.state = "running"; prior.completedAt = null;
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          const runningWord = translate(lang, "kanban.graphState.running"), stoppedWord = translate(lang, "timeline.stopped");
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(runningWord);
+          await frame("running-once");
+          // A running attempt can outlive its native turn or host. Preserve
+          // that lifecycle while proving both idle labels through the mounts.
+          for (const state of ["ended-turn", "dead-host"] as const) {
+            payload.files = [{ ...live, proc: state === "dead-host" ? "killed" : "running", activity: state === "dead-host" ? "live" : "idle",
+              lastTurn: { startedAt: now - 12 * 60_000, endedAt: state === "ended-turn" ? now - 10 * 60_000 : null } }];
+            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            expect(await first.getAttribute("data-expanded")).toBe("0");
+            const idleWord = translate(lang, "timeline.idle");
+            expect(await first.locator(".bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(state === "ended-turn" ? 1 : 0);
+            await frame(`idle-${state}-collapsed`);
+            await first.locator("button").click();
+            expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            if (state === "ended-turn") {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(1);
+              const endFraction = await chart.locator(".bt-stage").evaluate(row => {
+                const work = row.querySelector<HTMLElement>("[data-timeline-work]")!.style;
+                const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!.style;
+                return (parseFloat(work.left) + parseFloat(work.width) - parseFloat(elapsed.left)) / parseFloat(elapsed.width);
+              });
+              // The minimum visible ink width may exceed two minutes at this
+              // zoom; its right edge must still stop ten minutes before now.
+              expect(endFraction).toBeCloseTo(2 / 3, 3);
+            } else {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(0);
+            }
+            await frame(`idle-${state}-expanded`);
+          }
+          history.state = "paused";
+          prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
+          payload.files = [];
+          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          // A confirmed stop reads as stopped in the collapsed row, never as running.
+          expect(await first.locator(".bt-meta").innerText()).toContain(stoppedWord);
+          expect(await first.locator(".bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-collapsed");
+          await first.locator("button").click();
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          const stoppedBounds = await chart.locator("[data-timeline-bar]").getAttribute("style");
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-expanded");
+          await page.clock.setFixedTime(new Date(now + 10 * 60_000));
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").getAttribute("style")).toBe(stoppedBounds);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-later");
+          await page.clock.setFixedTime(new Date(now));
+          payload.pipelines = []; payload.files = [live];
+          // Every line of a permitted long title must be reachable, even
+          // when its row is taller than the entire chart viewport.
+          const longTitle = (lang === "uk" ? "Довга назва задачі з описом роботи " : "Long task title describing the work ").repeat(80);
+          payload.tasks[0]!.text = longTitle;
+          await page.reload(); await chart.waitFor();
+          const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          // A text line of any row is either whole inside the visible chart
+          // area (under the pinned axis, above the bottom edge) or wholly outside it.
+          const clippedLines = () => timeScroll.evaluate(scroller => {
+            const box = scroller.getBoundingClientRect();
+            const visibleTop = box.top + scroller.querySelector<HTMLElement>(".bt-axis")!.offsetHeight, visibleBottom = box.top + scroller.clientHeight;
+            const range = document.createRange(), clipped: { text: string; top: number; bottom: number; visibleTop: number; visibleBottom: number }[] = [];
+            for (const row of scroller.querySelectorAll(".bt-row")) {
+              const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (!rect.height || rect.bottom <= visibleTop + 0.5 || rect.top >= visibleBottom - 0.5) continue;
+                  if (rect.top < visibleTop - 0.5 || rect.bottom > visibleBottom + 0.5) clipped.push({ text: node.textContent.trim().slice(0, 24), top: rect.top, bottom: rect.bottom, visibleTop, visibleBottom });
+                }
+              }
+            }
+            return clipped;
+          });
+          // The chart fits its viewport to text lines once it has mounted; scroll after that.
+          await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height);
+          await settle();
+          await timeScroll.evaluate(element => element.scrollTop = 100);
+          await settle();
+          // The settled position moves to the next text line edge, never into a line.
+          expect(await timeScroll.evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(99);
+          expect(await clippedLines()).toEqual([]);
+          const lines = await first.locator(".bt-disclosure .bt-title").evaluate(element => {
+            const node = element.firstChild!;
+            const scroller = element.closest(".bt-scroll")!;
+            const box = scroller.getBoundingClientRect();
+            const rects = new Map<number, { top: number; bottom: number }>();
+            for (let index = 0; index < node.textContent!.length; index++) {
+              const range = document.createRange(); range.setStart(node, index); range.setEnd(node, index + 1);
+              const rect = range.getBoundingClientRect();
+              rects.set(rect.top, { top: rect.top - box.top + scroller.scrollTop, bottom: rect.bottom - box.top + scroller.scrollTop });
+            }
+            return [...rects.values()];
+          });
+          const reached = new Set<number>();
+          let longPrevious = -1;
+          for (let index = 0; index < 20; index++) {
+            const position = await timeScroll.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
+            if (position.top === longPrevious) break;
+            longPrevious = position.top;
+            expect(await clippedLines()).toEqual([]);
+            lines.forEach((line, lineIndex) => { if (line.top >= position.top + 44 && line.bottom <= position.top + position.height) reached.add(lineIndex); });
+            const name = `${width}-${lang}-${theme}-long-title-${index}`;
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ name, width, lang, theme, state: "long-title", ...position, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 88);
+            await settle();
+          }
+          // Include the beginning after deliberately testing an interior scroll.
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          await settle();
+          expect(await clippedLines()).toEqual([]);
+          const height = await timeScroll.evaluate(element => element.clientHeight);
+          lines.forEach((line, index) => { if (line.top >= 44 && line.bottom <= height) reached.add(index); });
+          expect(reached.size).toBe(lines.length);
+          expect(pageErrors).toEqual([]);
+          if (phone) {
+            expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
+            await page.locator('[data-phone-kanban-tab="assigned"]').click(); expect(await chart.count()).toBe(0);
+          } else { await toggle.click(); expect(await chart.count()).toBe(0); }
+          const stored = await page.evaluate(key => localStorage.getItem(key), timelineStorageKey("atlas")); expect(JSON.parse(stored!).view).toBe("board");
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.mkdirSync("evidence/board-timeline", { recursive: true });
+      const sources = ["src/lib/board/taskTimeline.ts", "src/lib/board/taskTimelineMembers.ts", "src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/board-timeline/frontend.json", JSON.stringify({ source: "board timeline hybrid in kanbanBoard.browser.test.tsx", capturedAt: new Date().toISOString(),
+        command: 'LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"',
+        sources: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), now, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+  }, 600_000);
+});
 
 describe("project default stage runtime", () => {
   browserTest("project menus show the saved runtime and roll back refused choices", async () => {
@@ -522,6 +1005,79 @@ describe("Cloud check execution choices", () => {
     } finally { await browser.close(); server.stop(); }
   });
 
+});
+
+describe("where a stage ran", () => {
+  /* What each surface draws with no hover: the stage's place, its word and mark,
+     and whether every word stays inside the box that holds it and the window. */
+  const readPlaces = (page: Page, scope: string, holder: string) => page.evaluate(({ scope, holder }) => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(`${scope} ${holder}[data-stage]`));
+    return Object.fromEntries(rows.map((row) => {
+      const mark = row.querySelector<HTMLElement>(".iplace");
+      const range = document.createRange();
+      if (mark) range.selectNodeContents(mark);
+      const text = range.getBoundingClientRect(), box = row.getBoundingClientRect();
+      return [row.dataset.stage!, {
+        place: mark?.dataset.stagePlace ?? null, word: mark?.innerText.trim() ?? "", shape: mark?.querySelector("svg")?.innerHTML ?? "",
+        inside: !mark || (text.left >= box.left - 0.5 && text.right <= box.right + 0.5 && text.top >= box.top - 0.5 && text.bottom <= box.bottom + 0.5 && text.right <= innerWidth),
+      }];
+    }));
+  }, { scope, holder });
+
+  browserTest("the cloud and a local fallback read apart with no hover on the card, the graph and the stage pane, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/stage-place");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          const lane = card("t-stage-place");
+          const verify = (surface: string, read: Awaited<ReturnType<typeof readPlaces>>, expected: { cloud: string; local: string }) => {
+            const { implement, review, verify: configured } = read;
+            if (implement?.place !== "cloud" || implement.word !== expected.cloud) failures.push(`${key} ${surface} cloud: ${JSON.stringify(implement)}`);
+            if (review?.place !== "moved-local" || review.word !== expected.local) failures.push(`${key} ${surface} local: ${JSON.stringify(review)}`);
+            if (configured?.place !== "cloud") failures.push(`${key} ${surface} configured: ${JSON.stringify(configured)}`);
+            if (!implement?.shape || implement.shape === review?.shape) failures.push(`${key} ${surface}: the two places draw one mark`);
+            for (const [stage, row] of Object.entries(read)) if (!row.inside) failures.push(`${key} ${surface} ${stage}: the word leaves its box`);
+          };
+          await page.waitForSelector(`${lane} .pb-pills [data-stage="review"]`, { timeout: 10_000 });
+          await page.locator(`${lane} .pb-pills`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          verify("card", await readPlaces(page, `${lane} .pb-pills`, ".pb-pill"), words);
+          await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+
+          /* «Graph» opens the graph full-screen, in the stages view (docs/design/task-card-no-inline-conversations.md §3). */
+          await page.click(`${lane} [data-graph-toggle]`);
+          await page.waitForSelector('.gsheet .gs-graph .pnode[data-stage="review"]', { timeout: 5_000 });
+          verify("graph", await readPlaces(page, ".gsheet .gs-graph", ".pnode"), words);
+          await page.screenshot({ path: path.join(out, `${key}-graph.png`) });
+
+          const line = page.locator('.gsheet .pane[data-stage="review"] [data-stage-place-line]');
+          await line.waitFor({ timeout: 10_000 });
+          const clippedModels = await page.locator(".gsheet .pnode .imodel").evaluateAll((models) => models.filter((model) => model.scrollWidth > model.clientWidth).map((model) => model.textContent));
+          if (clippedModels.length) failures.push(`${key} modal graph clips models: ${clippedModels.join(", ")}`);
+          await line.scrollIntoViewIfNeeded();
+          const cause = await line.evaluate((element) => {
+            const pane = element.closest(".pane")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            return { place: (element as HTMLElement).dataset.stagePlace, text: (element as HTMLElement).innerText, inside: text.left >= pane.left && text.right <= pane.right && text.top >= pane.top && text.bottom <= pane.bottom && text.bottom <= innerHeight };
+          });
+          if (cause.place !== "moved-local" || !cause.text.includes(words.cause) || !cause.text.includes("setup step 2") || !cause.inside) failures.push(`${key} pane cause: ${JSON.stringify(cause)}`);
+          const running = await page.locator('.gsheet .pane[data-stage="implement"] [data-stage-place-line]').getAttribute("data-stage-place");
+          if (running !== "cloud") failures.push(`${key} pane cloud: ${running}`);
+          await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
 });
 
 describe("legacy review follow-up navigation", () => {
@@ -4972,13 +5528,18 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     };
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k5a-${id}-${scheme}.png`) });
 
+    /* «Graph» opens the graph full-screen, in the stages view; the card draws
+       none (docs/design/task-card-no-inline-conversations.md §3). */
+    const GRAPH = ".gsheet .gs-graph";
     const openGraph = async (page: Page, id: string) => {
+      if (await page.locator(".gsheet").count()) {
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => !document.querySelector(".gsheet"));
+      }
       const section = `${card(id)} .pblock`;
       await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "start" }));
-      if (await page.evaluate((selector) => document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") !== "true", section)) {
-        await page.click(`${section} [data-graph-toggle]`);
-      }
-      await page.waitForSelector(`${section} .pnode`, { timeout: 5_000 });
+      await page.click(`${section} [data-graph-toggle]`);
+      await page.waitForSelector(`${GRAPH} .pnode`, { timeout: 5_000 });
       await page.waitForTimeout(250);
     };
 
@@ -4987,7 +5548,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await production(scheme, `retry graph ${scheme}`, async (page) => {
           /* Binding correction 4: every card starts on the summary. The lane
              row (#2072) draws the summary as its chain of pills with no graph
-             slot, and its toggle puts the graph in the chain's place. */
+             slot, and «Graph» opens the graph full-screen, leaving the card as it was. */
           await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
           const view = (selector: string) => page.evaluate((scope) => ({
@@ -4999,12 +5560,12 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           }), selector);
           const fresh = await view(card("t-search"));
           await shot(page, "production", "summary-default", scheme);
-          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
+          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== null || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
           frames[`summary-default-${scheme}`] = { production: fresh };
           await openGraph(page, "t-search");
           const opened = await view(card("t-search"));
-          if (opened.chain !== 0 || opened.graphs !== 1 || opened.pressed !== "true") failures.push(`retry card graph ${scheme}: the graph did not take the summary's place ${JSON.stringify(opened)}`);
-          const graph = await measureGraph(page, card("t-search"));
+          if (JSON.stringify(opened) !== JSON.stringify(fresh)) failures.push(`retry card graph ${scheme}: the card changed under the graph ${JSON.stringify(opened)}`);
+          const graph = await measureGraph(page, ".gsheet");
           await shot(page, "production", "graph-branch-retry", scheme);
           frames[`graph-branch-retry-${scheme}`] = { production: graph };
           if (!graph) {
@@ -5026,11 +5587,11 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           const wires = graph.edges.map((edge) => `${edge.edge}:${edge.dashed ? "dashed" : "solid"}`).join();
           if (wires !== "implement:pass:review:dashed,review:pass:verify:solid,verify:pass:merge:dashed" || graph.edges.some((edge) => /\bback\b/.test(edge.classes))) failures.push(`retry graph ${scheme}: wires ${JSON.stringify(graph.edges)}`);
           if (JSON.stringify(graph.labels) !== JSON.stringify(["1"])) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
-          /* The same toggle brings the summary back, all four stages with it. */
-          await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
-          await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
+          /* Closing the view leaves the card's summary, all four stages with it. */
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector(".gsheet"));
           const back = await view(card("t-search"));
-          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== "false" || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
+          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== null || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
         });
         await prototype("scrollto=t-search", scheme, `prototype retry graph ${scheme}`, async (page) => {
           await page.locator(`${protoCard("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
@@ -5043,9 +5604,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "two-stage graph", async (page) => {
         await openGraph(page, "t-links");
-        await page.locator(`${card("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.waitForTimeout(250);
-        const graph = await measureGraph(page, card("t-links"));
+        const graph = await measureGraph(page, ".gsheet");
         await shot(page, "production", "graph-two-stage", "light");
         frames["graph-two-stage"] = { production: graph };
         if (graph?.dir !== "LR" || graph.nodes.some((node) => node.width !== 176 || node.height !== 76)) failures.push(`two-stage graph: ${JSON.stringify(graph)}`);
@@ -5059,8 +5618,6 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "five review rounds", async (page) => {
         await openGraph(page, "t-rounds");
-        await page.locator(`${card("t-rounds")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.waitForTimeout(250);
         const review = await page.evaluate((selector) => {
           const node = document.querySelector<HTMLElement>(`${selector} .pnode[data-stage="review"]`);
           if (!node) return null;
@@ -5070,7 +5627,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
             return { text: chip.textContent?.trim(), right: Math.round(rect.right), top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
           });
           return { dir: node.closest<HTMLElement>(".pgraph")?.dataset.dir ?? null, right: Math.round(box.right), bottom: Math.round(box.bottom), chips };
-        }, card("t-rounds"));
+        }, GRAPH);
         await shot(page, "production", "five-rounds", "light");
         frames["five-rounds"] = { production: review };
         const inside = review && review.chips.every((chip) => chip.right <= review.right - 1 && chip.bottom <= review.bottom);
@@ -5116,10 +5673,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       });
 
       await production("light", "toggle and node", async (page) => {
-        const section = `${card("t-search")} .pblock`;
+        const section = GRAPH;
         await openGraph(page, "t-search");
         await page.click(`${section} .pnode[data-stage="implement"]`);
-        /* The node opens its conversation in the agent window; the window closes before the toggle is reached. */
+        /* The node opens its conversation in the agent window over the view; closing it comes back to the view. */
         await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
         await page.waitForTimeout(300);
         const node = await page.evaluate((selector) => ({
@@ -5129,8 +5686,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await shot(page, "production", "node-reader", "light");
         await page.keyboard.press("Escape");
         await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
-        await page.click(`${section} [data-graph-toggle]`);
-        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), section);
+        if (!await page.locator(".gsheet").count()) failures.push("node: closing the window left the stages view");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => !document.querySelector(".gsheet"));
+        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), `${card("t-search")} .pblock`);
         /* The historical helper was adopted last; the node opens and marks Implement's own latest attempt. */
         if (node.pressed !== "true" || node.reader !== "conversation_search-impl-2") failures.push(`node: ${JSON.stringify(node)}`);
         if (summary.nodes !== 0 || summary.chips !== 4) failures.push(`toggle back: ${JSON.stringify(summary)}`);
@@ -5139,7 +5698,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "live edge", async (page) => {
         type Hook = { evidence: { addStageAttempt: (pipelineId: string, stageId: string, over: Record<string, unknown>) => void } };
-        const section = `${card("t-search")} .pblock`;
+        const section = GRAPH;
         /* Verify's fail edge is drawn as the strip under Verify; a live mark may land on it or on any wire. */
         const liveMarks = (selector: string) => document.querySelectorAll(`${selector} :is(.pedge, .pelabel, .pstrip).live`).length;
         await openGraph(page, "t-search");
@@ -5415,8 +5974,13 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "stages retry", async (page) => {
         await openStages(page, "t-search");
-        /* The graph's node is the navigation while the graph is shown. */
+        /* The graph's node reaches its pane and opens its conversation in the
+           agent window over the sheet (docs/design/task-card-no-inline-conversations.md §4);
+           closing the window comes back to the sheet on that pane. */
         await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
+        await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
+        await page.keyboard.press("Escape");
+        await page.waitForSelector("[data-agent-window]", { state: "detached" });
         await page.waitForTimeout(700);
         const sheet = await measureSheet(page);
         await shot(page, "production", "stages-retry", "light");
@@ -5443,7 +6007,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel, { timeout: 5_000 });
         await page.locator(panel).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(400);
@@ -5474,7 +6039,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "flow-stage-draft-editing", "light");
         await page.keyboard.press("Control+Enter");
         await page.waitForFunction((selector) => !document.querySelector(`${selector} textarea.draft-edit`), panel, { timeout: 5_000 });
-        await page.waitForTimeout(300);
+        /* The saved stamp follows the guarded read and write. */
+        await page.waitForFunction((selector) => /\d/.test(document.querySelector(`${selector} .bstatus`)?.textContent ?? ""), panel, { timeout: 5_000 }).catch(() => {});
         const saved = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.at(-1) ?? null);
         const status = await page.locator(`${panel} .bstatus`).textContent();
         await shot(page, "production", "flow-stage-draft", "light");
@@ -5496,7 +6062,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
         await page.fill(`${panel} textarea.draft-edit`, "Too late for this one.");
@@ -5512,12 +6079,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         }), panel);
         await shot(page, "production", "flow-stage-started", "light");
         await clickText(page, `${panel} [data-draft-undelivered] button`, "Discard");
-        /* The panel leaves the card and the stage's agent joins the agent window's list. */
-        await page.waitForSelector('.reader-park [data-kanban-reader="conversation_links-review"]', { state: "attached", timeout: 10_000 });
+        /* The first message gives its place in the window to the stage's agent. */
+        await page.waitForSelector('[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="conversation_links-review"]', { timeout: 10_000 });
         await page.waitForTimeout(400);
         const promoted = await page.evaluate((selector) => ({
-          panel: Boolean(document.querySelector(`${selector} [data-stage-detail]`)),
-          reader: document.querySelector<HTMLElement>(".reader-park [data-kanban-reader]")?.dataset.kanbanReader ?? null,
+          panel: Boolean(document.querySelector("[data-stage-detail]")),
+          reader: document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]")?.dataset.kanbanReader ?? null,
           inCard: Boolean(document.querySelector(`${selector} [data-kanban-reader]`)),
         }), card("t-links"));
         await shot(page, "production", "flow-stage-reader", "light");
@@ -5530,7 +6097,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
         await page.fill(`${panel} textarea.draft-edit`, "Mine, typed before the other save landed.");
@@ -5558,7 +6126,10 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "changed elsewhere", async (page) => {
         await openStages(page, "t-upload");
+        /* The node opens the first message in the agent window; closed, the pane edits it. */
         await page.click('.gsheet .gs-graph .pnode[data-stage="docs"]');
+        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
+        await page.waitForSelector("[data-agent-window]", { state: "detached" });
         await page.waitForTimeout(600);
         const pane = '.gsheet .pane[data-stage="docs"]';
         await page.click(`${pane} [data-draft-edit]`);
@@ -5572,6 +6143,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "flow-stage-changed", "light");
         await clickText(page, `${pane} [data-draft-changed] button`, "Keep mine");
         await page.waitForFunction((selector) => !document.querySelector(`${selector} textarea.draft-edit`), pane, { timeout: 5_000 });
+        /* The editor closes at once; the guarded write lands after its read. */
+        await page.waitForFunction((before) => (window as unknown as Hook).evidence.pipelinePatches.length > before, writesBefore, { timeout: 5_000 }).catch(() => {});
         const written = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.at(-1) ?? null);
         flows.changedElsewhere = { changed, writesBefore, written };
         if (changed !== "Changed elsewhere since you began: «Document the resume token and link the migration note.»" || writesBefore !== 0) failures.push(`changed elsewhere: ${JSON.stringify({ changed, writesBefore })}`);
@@ -12665,73 +13238,6 @@ describe("the agent window: a click on the board opens the agent in one window, 
     expect(failures).toEqual([]);
   }, 900_000);
 
-  /* A stage that has not started still opens its panel on the card, and the
-     panel folds to its head and one line of the stage's first message: one
-     row, cut with an ellipsis, in the secondary ink, at both widths. */
-  browserTest("a stage's panel folded on its card is its head and one ellipsised line", async () => {
-    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
-    const out = path.resolve(".artifacts/agent-window-folded");
-    fs.mkdirSync(out, { recursive: true });
-    fs.mkdirSync(pngDir, { recursive: true });
-    const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
-    const readings: Record<string, unknown> = {};
-    const failures: string[] = [];
-    const MERGE = `${card("t-search")} .pb-pills [data-stage="merge"]`;
-    try {
-      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
-        const label = `folded-${viewport.width}-${lang}-${scheme}`;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
-        try {
-          await page.waitForSelector(`${MERGE} >> visible=true`, { timeout: 30_000 });
-          await page.locator(MERGE).click();
-          const panel = page.locator(`${card("t-search")} [data-stage-detail]`);
-          await panel.waitFor();
-          await panel.locator("[data-panel-fold]").click();
-          await page.waitForSelector(`${card("t-search")} [data-stage-detail][data-collapsed="1"]`);
-          await page.mouse.move(viewport.width / 2, 12);
-          await page.waitForTimeout(300);
-          const reading = await panel.evaluate((node) => {
-            const line = node.querySelector<HTMLElement>(":scope > .rlatest")!;
-            const style = getComputedStyle(line);
-            const ink = document.createElement("span");
-            ink.style.color = "var(--color-secondary)";
-            line.append(ink);
-            const secondary = getComputedStyle(ink).color;
-            ink.remove();
-            const shown = [...node.children].filter((child) => getComputedStyle(child).display !== "none").map((child) => child.className);
-            return {
-              panel: Math.round(node.getBoundingClientRect().height),
-              gap: getComputedStyle(node).rowGap,
-              paddingBottom: getComputedStyle(node).paddingBottom,
-              line: { height: Math.round(line.getBoundingClientRect().height), whiteSpace: style.whiteSpace, textOverflow: style.textOverflow, overflow: style.overflowX, color: style.color, secondary, cut: line.scrollWidth > line.clientWidth },
-              shown,
-            };
-          });
-          await panel.screenshot({ path: path.join(pngDir, `${label}.png`) });
-          readings[label] = { ...reading, pageErrors };
-          if (reading.line.whiteSpace !== "nowrap" || reading.line.textOverflow !== "ellipsis" || reading.line.overflow !== "hidden") failures.push(`${label}: the folded line wraps (${JSON.stringify(reading.line)})`);
-          if (reading.line.height > 24) failures.push(`${label}: the folded line stands ${reading.line.height} px tall, more than one row`);
-          if (reading.line.color !== reading.line.secondary) failures.push(`${label}: the folded line is ${reading.line.color}, the secondary ink is ${reading.line.secondary}`);
-          if (reading.gap !== "2px" || reading.paddingBottom !== "6px") failures.push(`${label}: the folded panel spaces its rows ${reading.gap} apart over ${reading.paddingBottom}`);
-          if (reading.shown.length !== 2) failures.push(`${label}: the folded panel shows ${JSON.stringify(reading.shown)}`);
-          /* 70 px is what the folded panel measured before the agent window (a4e0477e6), at both faces. */
-          if (reading.panel !== 70) failures.push(`${label}: the folded panel stands ${reading.panel} px tall, 70 before the agent window`);
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } finally {
-          await context.close();
-        }
-      }
-    } finally {
-      await browser.close();
-      server.stop();
-    }
-    fs.mkdirSync("evidence/agent-window", { recursive: true });
-    fs.writeFileSync("evidence/agent-window/folded-panel.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-    expect(failures).toEqual([]);
-  }, 300_000);
-
   /* A link (#c=) opens its agent in the window and gives the reader the
      keyboard. Nobody has pressed a key, on a page just loaded or on one the
      link changed later, so the reader shows no focus ring; a key pressed
@@ -18192,7 +18698,7 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
     const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
     try {
       for (const lang of ["en", "uk"] as const) {
-        /* The desktop board: each card's graph, opened. */
+        /* The desktop board: no card draws a graph; «Graph» opens each one in the Stages sheet. */
         const { context, page, pageErrors } = await openFixture(browser, base, { width: 1440, height: 2400 }, "light", lang);
         try {
           await context.addInitScript(seatFolded);
@@ -18200,17 +18706,11 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
           await page.waitForSelector(`${card("t-loops-done")} [data-pipeline]`, { timeout: 30_000 });
           await page.waitForTimeout(600);
           for (const lane of LANES) {
-            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).evaluate((element) => (element as HTMLElement).click());
+            if (await page.locator(`${card(lane.task)} .pgraph`).count()) failures.push(`card-${lane.pipeline}-1440-${lang}: the card draws a graph`);
           }
-          await page.waitForTimeout(600);
+          /* The Stages sheet draws the lanes left to right. */
           for (const lane of LANES) {
-            const label = `card-${lane.pipeline}-1440-${lang}`;
-            gate(label, await page.evaluate(measureGraph(card(lane.task), lane.ended)) as GraphReading | null, lane, "TB");
-            await page.locator(card(lane.task)).screenshot({ path: path.join(pngDir, `${label}.png`) });
-          }
-          /* The Stages sheet draws the same lanes left to right. */
-          for (const lane of LANES) {
-            await page.locator(`${card(lane.task)} [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
+            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
             await page.waitForSelector(`[data-stages-sheet="${lane.pipeline}"] .gs-graph .pgraph`, { timeout: 10_000 });
             await page.waitForTimeout(400);
             const label = `sheet-${lane.pipeline}-1440-${lang}`;
@@ -18841,25 +19341,9 @@ describe("model glyphs in place of the stage dot", () => {
         }
         if (lang === "uk" || !moving) return;
 
-        /* Every lane's own graph on the card: the node's state row, where the
-           state word stands beside the glyph and no badge is drawn. The
-           graphs stand taller than a column, so the window grows to hold them. */
-        await page.setViewportSize({ width: 1440, height: 4200 });
-        for (const holder of [RUN, REST, LIVE]) {
-          const toggles = page.locator(`${holder} [data-graph-toggle]`);
-          for (let index = 0; index < await toggles.count(); index++) await toggles.nth(index).click();
-        }
-        await page.waitForTimeout(500);
-        gate(`desktop-card-graphs-running-${scheme}`, await readGlyphs(page, `${RUN} .pgraph`), WANT.running, { labels: true, dot: true });
-        gate(`desktop-card-graph-waiting-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)} .pgraph`), WANT.waiting, { labels: true, dot: true });
-        for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
-        for (const lane of LIVE_LANES) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${LIVE} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
-        for (const [holder, name] of [[RUN, "running"], [REST, "waiting-settled"], [LIVE, "live"]] as const) {
-          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await shot(page.locator(holder), `desktop-card-graphs-${name}-${scheme}`);
-        }
-        await page.setViewportSize({ width: 1440, height: 1200 });
-        await page.waitForTimeout(300);
+        /* No card draws a graph of its own (docs/design/task-card-no-inline-conversations.md §3): its
+           nodes are the Stages sheet's, read below. */
+        for (const holder of [RUN, REST, LIVE]) if (await page.locator(`${holder} .pgraph`).count()) failures.push(`desktop ${scheme}: ${holder} draws a graph on the card`);
 
         /* The Stages sheet: its graph, its pane heads, then its chips. */
         const sheets = [["waiting", WAIT, REST], ["settled", SETTLED_LANE, REST], ["settled-more", SETTLED_MORE, REST], ["reviewing", "p-glyphs-review", LIVE], ["running", "p-glyph-fable", RUN]] as const;
@@ -37134,71 +37618,106 @@ describe("pipeline repository initialization", () => {
 describe("saved decision delivery", () => {
   browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
     const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
-    const served = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
     const readings: unknown[] = [];
+    const savedIds = [`pr_${"e".repeat(32)}`, `pr_${"d".repeat(32)}`, `pr_${"c".repeat(32)}`];
     try {
       for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const phone = width === 390;
+        const served = await serveEvidenceFixture(out);
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=undelivered`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
         try {
-          if (phone) { await page.locator("[data-mobile2-seat-open]").click(); await page.locator("[data-decision-strip]").click(); }
-          const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
-          const column = page.locator(scope);
-          await column.locator('[data-decision-list="3"]').waitFor();
-          expect(await column.locator("[data-decision-tab-count]").textContent()).toBe("3");
-          expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
-          const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator('[data-decision-pointer] [data-decision-card="answered"]').first().waitFor();
+          } else {
+            await page.locator("[data-kanban-board] .card[data-id]").first().waitFor({ state: "attached" });
+            await page.locator("[data-kanban-seat] [data-orchestrator-panel]").waitFor({ state: "attached" });
+            await page.locator('[data-kanban-seat] [data-feed-state="items"]').waitFor();
+          }
+          expect(await page.locator("[data-decision-strip]").count()).toBe(0);
+          expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
           const snapshot = await page.evaluate(async () => (await fetch("/api/projects/decisions?project=atlas")).json());
+          expect(snapshot.decisions.map((entry: { id: string }) => entry.id).sort()).toEqual([...savedIds].sort());
           const frames: string[] = [];
-          for (const [index, id] of ids.entries()) {
-            const folded = column.locator(`[data-decision-row="${id}"]`);
-            if (await folded.count()) await folded.click();
-            const record = column.locator(`[data-decision-card="answered"][data-decision-review="${id}"]`);
-            await record.waitFor();
+          if (phone) {
+            const pointer = page.locator('[data-decision-pointer] [data-decision-card="answered"]').first();
+            const record = pointer;
+            await record.scrollIntoViewIfNeeded();
+            expect(await record.locator("[data-decision-record-title]").textContent()).toBeTruthy();
             expect(await record.locator("[data-decision-send]").count()).toBe(0);
-            const retry = record.locator("[data-decision-retry]"); await retry.scrollIntoViewIfNeeded();
+            const retry = record.locator("[data-decision-retry]");
             expect(await retry.isEnabled()).toBe(true);
             expect(await record.textContent()).toContain(lang === "uk" ? "її вже збережено" : "it is already saved");
             expect(await record.evaluate(n => n.scrollWidth - n.clientWidth)).toBeLessThanOrEqual(1);
-            const file = `${lang}-${scheme}-${width}-${index}.png`;
-            await page.screenshot({ path: path.join(out, file) }); frames.push(file);
-          }
-          if (phone) {
-            await column.locator("[data-mobile2-close]").click();
-            const record = page.locator('[data-decision-card="answered"]').first();
-            await record.scrollIntoViewIfNeeded();
-            expect(await record.locator("[data-decision-record-title]").textContent()).toBeTruthy();
+            const reviewId = await record.locator("xpath=ancestor::*[@data-decision-pointer]").getAttribute("data-decision-pointer");
+            expect(reviewId).toBe(savedIds[1]);
+            const previous = snapshot.decisions.find((entry: { id: string }) => entry.id === reviewId);
+            expect(previous).toBeTruthy();
+            expect(await record.locator("[data-decision-delivery]").getAttribute("data-decision-delivery")).toBe(previous.decision.delivery.state);
             const file = `${lang}-${scheme}-${width}-feed.png`;
             await page.screenshot({ path: path.join(out, file) }); frames.push(file);
-            await page.locator("[data-decision-strip]").click();
+            await retry.click();
+            await page.waitForFunction(async ({ project, reviewId }) => {
+              const actual = await (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json();
+              return actual.round.decision.delivery.state === "sent";
+            }, { project: snapshot.project, reviewId });
+            const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+            expect(posts).toHaveLength(1);
+            expect(posts.every(body => (body as { retry?: boolean }).retry === true)).toBe(true);
+            const actual = await page.evaluate(async ({ project, reviewId }) => (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json(), { project: snapshot.project, reviewId });
+            expect(actual.round.decision).toMatchObject({ chosen: previous.decision.chosen, answers: previous.decision.answers,
+              comment: previous.decision.comment, at: previous.decision.at });
           }
-          // Explicit retries keep the answers; the destination receipt clears each obligation.
-          for (const id of ids) {
-            const folded = column.locator(`[data-decision-row="${id}"]`);
-            if (await folded.count()) await folded.click();
-            await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
-            /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
-            await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
-          }
-          await column.locator("[data-decision-list-empty]").waitFor();
-          await column.locator("[data-decision-tab-count]").waitFor({ state: "hidden" });
-          expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
-          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
-          expect(posts).toHaveLength(3);
-          expect(posts.every(body => (body as { retry?: boolean }).retry === true)).toBe(true);
-          for (const previous of snapshot.decisions) {
-            const actual = await page.evaluate(async ({ project, reviewId }) => (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json(), { project: snapshot.project, reviewId: previous.id });
-            expect(actual.round.decision).toMatchObject({ chosen: previous.decision.chosen, answers: previous.decision.answers, comment: previous.decision.comment, at: previous.decision.at });
-            expect(actual.round.decision.delivery.state).toBe("sent");
+          else {
+            await page.locator('[data-decision-column] [data-decision-tab="decisions"]').click();
+            const column = page.locator('[data-decision-column="decisions"]');
+            await column.locator('[data-decision-list="3"]').waitFor();
+            expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
+            expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
+            const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
+            expect(ids).toEqual(savedIds);
+            for (const [index, id] of ids.entries()) {
+              const folded = column.locator(`[data-decision-row="${id}"]`);
+              if (await folded.count()) await folded.click();
+              const record = column.locator(`[data-decision-card="answered"][data-decision-review="${id}"]`);
+              await record.waitFor();
+              expect(await record.locator("[data-decision-send]").count()).toBe(0);
+              const previous = snapshot.decisions.find((entry: { id: string }) => entry.id === id);
+              expect(await record.locator("[data-decision-delivery]").getAttribute("data-decision-delivery")).toBe(previous.decision.delivery.state);
+              const retry = record.locator("[data-decision-retry]"); await retry.scrollIntoViewIfNeeded();
+              expect(await retry.isEnabled()).toBe(true);
+              expect(await record.textContent()).toContain(lang === "uk" ? "її вже збережено" : "it is already saved");
+              expect(await record.evaluate(n => n.scrollWidth - n.clientWidth)).toBeLessThanOrEqual(1);
+              const file = `${lang}-${scheme}-${width}-${index}.png`;
+              await page.screenshot({ path: path.join(out, file) }); frames.push(file);
+            }
+            // Explicit retries keep the answers; the destination receipt clears each obligation.
+            for (const id of ids) {
+              const folded = column.locator(`[data-decision-row="${id}"]`);
+              if (await folded.count()) await folded.click();
+              await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
+              /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
+              await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
+            }
+            await column.locator("[data-decision-list-empty]").waitFor();
+            expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
+            const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+            expect(posts).toHaveLength(3);
+            expect(posts.every(body => (body as { retry?: boolean }).retry === true)).toBe(true);
+            for (const previous of snapshot.decisions) {
+              const actual = await page.evaluate(async ({ project, reviewId }) => (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json(), { project: snapshot.project, reviewId: previous.id });
+              expect(actual.round.decision).toMatchObject({ chosen: previous.decision.chosen, answers: previous.decision.answers, comment: previous.decision.comment, at: previous.decision.at });
+              expect(actual.round.decision.delivery.state).toBe("sent");
+            }
           }
           expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, scheme, count: 3, savedRecords: ids.length, afterRetry: 0, frames });
-        } finally { await context.close(); }
+          readings.push({ width, lang, scheme, waitingCount: 0, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
+        } finally { await context.close(); served.stop(); }
       }
       fs.mkdirSync("evidence/answer-delivery", { recursive: true });
       fs.writeFileSync("evidence/answer-delivery/panel.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); served.stop(); }
+    } finally { await browser.close(); }
   }, 180_000);
 });
 
@@ -39405,6 +39924,20 @@ describe("sound captions", () => {
   }
 });
 
+describe("project setup stage hosts", () => {
+  browserTest("stage sheet shows each setup state as one line, a failure open on its tail", async () => {
+    const out = path.resolve(".artifacts/project-setup/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["stages"],
+        [{ width: 390, height: 844 }, { width: 640, height: 700 }, { width: 1000, height: 700 }, { width: 1220, height: 800 }, { width: 1440, height: 900 }]);
+      fs.mkdirSync("evidence/project-setup", { recursive: true });
+      fs.writeFileSync("evidence/project-setup/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 1_800_000);
+});
+
 describe("retired review history", () => {
   // Defining text is required even when it is wholly outside the scrollport.
   // Hit-test the whole line: a pinned bar can cover only its top or bottom.
@@ -41586,8 +42119,12 @@ describe("start a pipeline from a conversation", () => {
       await shot("conflict", ["[data-draft-changed] .msg-text"], phone(combo) ? ["[data-draft-changed] button"] : []);
       await page.locator("[data-draft-changed] button").first().click();
       await page.locator("[data-draft-changed]").waitFor({ state: "detached" });
-      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. */
+      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. On
+         the board the first message stood in the agent window
+         (docs/design/task-card-no-inline-conversations.md §7): it closes first. */
       if (!phone(combo)) {
+        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
+        await page.locator("[data-agent-window]").waitFor({ state: "detached" });
         await page.locator('.card[data-id="task:t-csv-export"] [data-open-stages="p-export"]').first().click();
         await page.locator("[data-stages-sheet]").waitFor();
       }
@@ -41738,8 +42275,8 @@ describe("start a pipeline from a conversation", () => {
 
 /* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph
    turns only while its agent works, at the applied tier's pace (4 s, 2 s,
-   0.5 s), on the desktop board's pills, an opened card's graph and the Stages
-   sheet, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
+   0.5 s), on the desktop board's pills, the Stages sheet's graph and its
+   panes, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
    and readings go to `.artifacts/model-icon-motion/desktop` unless
    LLV_MODEL_MOTION_OUT names another directory. */
 describe("model icon motion", () => {
@@ -41973,4 +42510,370 @@ describe("create a project by name alone", () => {
       expect(failures).toEqual([]);
     } finally { await browser.close(); server.stop(); }
   }, 900_000);
+});
+
+
+describe("board summary attempt provenance", () => {
+  browserTest("summary and full records render equal history and stage previews in both locales and themes", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const now = Date.parse("2026-11-03T10:00:00Z");
+    const role = { roleId: "builder" as const, engine: "codex" as const, model: "gpt-5.6", effort: "high", access: "read-write" as const, promptScaffold: "Stage instructions remain available." };
+    const lane = buildPipeline({
+      id: "summary-lane", task: "Retained attempt history", project: "atlas", repoDir: "/fixture/atlas",
+      srcPath: null, srcConversationId: null, now: new Date(now - 3600_000).toISOString(),
+      stages: [
+        { id: "build", kind: "run", prompt: "Build the task.", next: "review", effectiveRole: role },
+        { id: "review", kind: "run", prompt: "Review the task.", next: null, effectiveRole: { ...role, access: "read-only" } },
+      ],
+    });
+    lane.taskIds = ["summary-task"]; lane.state = "running";
+    lane.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
+    lane.runs = [{ stageId: "build", attempts: [1, 2].map(n => ({
+      n, state: n === 1 ? "failed" as const : "passed" as const,
+      effectiveRole: { ...role, model: n === 1 ? "gpt-5" : "gpt-5.6", promptScaffold: "Historical execution instructions. ".repeat(1000) },
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      input: null, output: null, activatedBy: null, error: n === 1 ? "The original failure stays visible." : null,
+      verdict: { status: n === 1 ? "fail" as const : "pass" as const, findings: n === 1 ? ["Retained finding"] : [] },
+      startedAt: new Date(now - (4 - n) * 600_000).toISOString(), completedAt: new Date(now - (3 - n) * 600_000).toISOString(),
+    })) }];
+    const tasks: BoardTask[] = [{ id: "summary-task", project: "atlas", text: lane.task, details: "Complete task detail.",
+      status: "assigned", placement: "unplaced", assignments: [], createdAt: lane.createdAt, updatedAt: lane.createdAt }];
+    const payload = (summary: boolean) => ({
+      files: [], tasks, flows: [], workflows: [], pipelines: summary ? filesReadSummary([], [lane]).pipelines : [lane],
+      projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }],
+      projectCwds: { atlas: "/fixture/atlas" },
+    });
+    let summary = false;
+    const out = path.resolve(".artifacts/board-summary-provenance");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/files": () => Response.json(payload(summary)), "/api/tasks": () => Response.json({ tasks }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        let expected: {
+          text: string;
+          controls: { text: string; label: string | null; disabled: boolean; attempt: string | null; pressed: string | null }[];
+        } | undefined;
+        for (const projected of [false, true]) {
+          summary = projected;
+          const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, theme, lang, "reduce", width === 390);
+          try {
+            await page.clock.setFixedTime(new Date(now));
+            await page.goto(`${server.base}?scenario=board-timeline&cards=open#p=atlas`);
+            if (width === 390) {
+              await page.locator('[data-phone-kanban-tab="assigned"]').click();
+              await page.locator('[data-phone-card="task:summary-task"]').click();
+            }
+            const open = page.locator('[data-open-stages="summary-lane"]').first();
+            await open.waitFor();
+            await open.evaluate(element => (element as HTMLElement).click());
+            const selector = width === 390 ? '[data-mobile2-pipeline="summary-lane"]' : "[data-stages-sheet]";
+            await page.locator(selector).waitFor();
+            if (width !== 390) {
+              await page.locator('[data-stages-sheet] [data-stage="build"] [data-attempt="1"]').click();
+              await page.locator("[data-draft-added] summary").click();
+              expect(await page.locator("[data-draft-added] pre").innerText()).toContain("Stage instructions remain available.");
+            }
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            const rendered = await page.locator(selector).evaluate(element => ({
+              text: (element as HTMLElement).innerText,
+              controls: Array.from(element.querySelectorAll("button")).map(button => ({
+                text: button.textContent, label: button.getAttribute("aria-label"), disabled: button.disabled,
+                attempt: button.getAttribute("data-attempt"), pressed: button.getAttribute("aria-pressed"),
+              })),
+            }));
+            if (!projected) expected = rendered;
+            else {
+              if (expected === undefined) throw new Error("The full-record comparison must run first");
+              expect(rendered).toEqual(expected);
+              const name = `${width}-${lang}-${theme}`;
+              await page.screenshot({ path: path.join(out, name + ".png") });
+              readings.push({ name, equal: true, ...rendered });
+            }
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
+/* docs/design/task-card-no-inline-conversations.md: a task card holds no
+   conversation, no first-message panel and no graph. A click on a stage
+   opens the agent window, the not-started one on its first message; «Graph»
+   opens the stages view with its graph, where a node also opens its stage in
+   the window; and the view's panes are as wide as a conversation column, the
+   lane scrolling sideways. The `stages` scenario at 1920, 1440, 1000 and
+   820 px, en and uk, light and dark, with scrollbars drawn. Frames go to
+   LLV_NO_INLINE_OUT (default `.artifacts/task-card-no-inline-conversations`),
+   the readings to evidence/task-card-no-inline-conversations/rendered.json. */
+describe("a task card without inline conversations", () => {
+  browserTest("every card keeps its geometry, stages open in the agent window, «Graph» opens the stages view, and its panes hold a conversation's measure", async () => {
+    const out = path.resolve(process.env.LLV_NO_INLINE_OUT ?? ".artifacts/task-card-no-inline-conversations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    /* A short browser-owned temp path avoids the Linux singleton socket limit. */
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const SEARCH = card("t-search");
+    const WINDOW_DRAFT = "[data-agent-window] [data-stage-draft-slot] [data-stage-detail]";
+    const WINDOW_READER = "[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]";
+    /* A defining element as the operator reads it: present, its text inside
+       the window and every ancestor that clips it, measured from its text
+       ranges. */
+    const readText = (page: Page, selectors: string[]) => page.evaluate((list) => list.map((selector) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return { selector, missing: true, cut: false, text: "" };
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      const clips: DOMRect[] = [new DOMRect(0, 0, innerWidth, innerHeight)];
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) clips.push(node.getBoundingClientRect());
+      }
+      const cut = !rects.length || rects.some((rect) => clips.some((clip) => rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5 || rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5));
+      return { selector, missing: false, cut, text: element.innerText.replace(/\s+/g, " ").trim() };
+    }), selectors);
+    const boxes = (page: Page) => page.evaluate((selector) => {
+      const root = document.querySelector(selector);
+      if (!root) return null;
+      return [root, ...root.querySelectorAll(":scope > *")].map((element) => {
+        const rect = element.getBoundingClientRect();
+        return `${Math.round(rect.x * 10) / 10},${Math.round(rect.y * 10) / 10},${Math.round(rect.width * 10) / 10},${Math.round(rect.height * 10) / 10}`;
+      }).join(" ");
+    }, SEARCH);
+    const inline = (page: Page) => page.evaluate(() => document.querySelectorAll(".card :is([data-stage-detail], .readers, [data-graph], .pgraph-box, .pgraph, [data-kanban-reader], [data-draft-message])").length);
+    const settle = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 300)))));
+    try {
+      /* LLV_NO_INLINE_WIDTHS narrows a rerun to the widths it names. */
+      const only = (process.env.LLV_NO_INLINE_WIDTHS ?? "").split(",").filter(Boolean).map(Number);
+      for (const [width, height] of [[1920, 1080], [1440, 900], [1000, 800], [820, 1000]] as const) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (only.length && !only.includes(width)) continue;
+        const key = `${width}-${lang}-${theme}`;
+        const t = (name: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, name, params);
+        const fail = (problem: string) => failures.push(`${key}: ${problem}`);
+        const shot = (page: Page, name: string) => page.screenshot({ path: path.join(out, `${key}-${name}.png`) });
+        const cutOf = (read: Awaited<ReturnType<typeof readText>>, step: string) => {
+          for (const entry of read) if (entry.missing || entry.cut) fail(`${step}: ${entry.selector} ${entry.missing ? "is missing" : `is cut («${entry.text.slice(0, 60)}»)`}`);
+        };
+        const reading: Record<string, unknown> = {};
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width, height }, theme, lang, "reduce");
+        try {
+          const pill = (stage: string) => `${SEARCH} .pb-pills [data-stage="${stage}"]`;
+          await page.waitForSelector(pill("merge"), { timeout: 30_000 });
+          await page.locator(pill("merge")).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await settle(page);
+          /* 1. Every card: no conversation, no first message, no graph. */
+          if (await inline(page)) fail(`${await inline(page)} cards hold a conversation, a first message or a graph`);
+          const before = await boxes(page);
+          await shot(page, "card");
+
+          /* 2. A not-started stage opens in the agent window on its first message. */
+          await page.click(pill("merge"));
+          await page.waitForSelector(WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          const draft = await readText(page, [`${WINDOW_DRAFT} .ch-state`, `${WINDOW_DRAFT} .ch-title`, `${WINDOW_DRAFT} [data-draft-message] .btext`, `${WINDOW_DRAFT} [data-draft-edit]`, `${WINDOW_DRAFT} [data-draft-status]`, `${WINDOW_DRAFT} [data-draft-added] summary`]);
+          cutOf(draft, "draft");
+          const words = draft.map((entry) => entry.text);
+          if (words[0] !== t("kanban.draft.state")) fail(`draft head says «${words[0]}»`);
+          if (words[3] !== t("kanban.draft.edit")) fail(`draft Edit says «${words[3]}»`);
+          if (!words[4]?.startsWith(t("kanban.draft.status"))) fail(`draft status says «${words[4]}»`);
+          if (await boxes(page) !== before) fail("the card moved when its waiting stage opened");
+          if (!await page.locator(pill("merge")).evaluate((element) => element.classList.contains("selected"))) fail("the waiting stage's pill is not marked open");
+          if (await inline(page)) fail("a card holds the first message");
+          const row = await page.locator("[data-agent-window] [data-open-agent-jump]").first().getAttribute("aria-label");
+          if (!row?.includes(t("kanban.draft.state"))) fail(`the window's row says «${row}»`);
+          reading.draft = { words, row, focus: await page.evaluate(() => document.activeElement?.closest("[data-stage-detail]") !== null) };
+          await shot(page, "window-draft");
+          /* The window stays modal with a first message on screen. */
+          const escaped: string[] = [];
+          for (let press = 0; press < 24; press++) {
+            await page.keyboard.press("Tab");
+            const inside = await page.evaluate(() => Boolean(document.activeElement?.closest("[data-agent-window-frame]")));
+            if (!inside) escaped.push(await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80) ?? "none"));
+          }
+          if (escaped.length) fail(`Tab left the window: ${escaped.slice(0, 2).join(" | ")}`);
+          /* Edit, Escape cancels the edit and keeps the window; then a save. */
+          await page.click(`${WINDOW_DRAFT} [data-draft-edit]`);
+          await page.waitForSelector(`${WINDOW_DRAFT} textarea.draft-edit`);
+          await settle(page);
+          cutOf(await readText(page, [`${WINDOW_DRAFT} [data-draft-save]`, `${WINDOW_DRAFT} [data-draft-cancel]`]), "editing");
+          await shot(page, "window-draft-editing");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(`${WINDOW_DRAFT} [data-draft-edit]`);
+          if (!await page.locator("[data-agent-window]").count()) fail("Escape in the editor closed the window");
+          await page.click(`${WINDOW_DRAFT} [data-draft-edit]`);
+          await page.fill(`${WINDOW_DRAFT} textarea.draft-edit`, lang === "uk" ? "Злити після перемикання псевдоніма й одного теплого запиту." : "Merge after the alias swap and one warm query.");
+          await page.keyboard.press("Control+Enter");
+          await page.waitForFunction((selector) => /\d/.test(document.querySelector(`${selector} [data-draft-status]`)?.textContent ?? ""), WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          const saved = await readText(page, [`${WINDOW_DRAFT} [data-draft-status]`, `${WINDOW_DRAFT} [data-draft-message] .btext`]);
+          cutOf(saved, "saved");
+          reading.saved = saved.map((entry) => entry.text);
+          await shot(page, "window-draft-saved");
+          await page.locator(`${WINDOW_DRAFT} [data-draft-edit]`).press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          if (await boxes(page) !== before) fail("the card moved after its first message closed");
+
+          /* 3. A passed and a running stage open their conversations in the window. */
+          for (const stage of ["implement", "verify"]) {
+            await page.click(pill(stage));
+            await page.waitForSelector(WINDOW_READER, { timeout: 15_000 });
+            await settle(page);
+            if (await boxes(page) !== before) fail(`the card moved when ${stage} opened`);
+            if (await inline(page)) fail(`a card holds ${stage}'s conversation`);
+            await shot(page, `window-${stage}`);
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          }
+
+          /* 4. «Graph» opens the stages view with its graph shown, at every width. */
+          await page.click(`${SEARCH} [data-graph-toggle]`);
+          await page.waitForSelector(".gsheet .gs-graph .pnode", { timeout: 10_000 });
+          await settle(page);
+          if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") fail("the stages view opened from «Graph» hides its graph");
+          if (await boxes(page) !== before) fail("the card moved under the stages view");
+          cutOf(await readText(page, [".gsheet header h2", '.gsheet .gs-graph .pnode[data-stage="implement"] .pname', '.gsheet .gs-graph .pnode[data-stage="merge"] .pname']), "graph");
+          await shot(page, "graph");
+          /* 5. A node reaches its pane and opens its stage in the window over the view. */
+          await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
+          await page.waitForSelector(WINDOW_READER, { timeout: 15_000 });
+          await settle(page);
+          const over = await page.evaluate(() => {
+            const frame = document.querySelector("[data-agent-window-frame]")!.getBoundingClientRect();
+            const hit = document.elementFromPoint(frame.left + frame.width / 2, frame.top + frame.height / 2);
+            return { sheet: Boolean(document.querySelector(".gsheet")), onTop: Boolean(hit?.closest("[data-agent-window-frame]")) };
+          });
+          if (!over.sheet || !over.onTop) fail(`the node's window does not stand over the view: ${JSON.stringify(over)}`);
+          await shot(page, "graph-node-window");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          const back = await page.evaluate(() => {
+            const lane = document.querySelector(".gsheet .lane")?.getBoundingClientRect();
+            const pane = document.querySelector('.gsheet .pane[data-stage="implement"]')?.getBoundingClientRect();
+            return { sheet: Boolean(document.querySelector(".gsheet")), inView: Boolean(lane && pane && pane.left >= lane.left - 1 && pane.left < lane.right - 40), focus: (document.activeElement as HTMLElement | null)?.dataset.stage ?? null };
+          });
+          if (!back.sheet || !back.inView || back.focus !== "implement") fail(`after the window the view is not on Implement: ${JSON.stringify(back)}`);
+          await shot(page, "graph-after-window");
+          /* A waiting node opens its first message; its pane does not edit it a second time. */
+          await page.click('.gsheet .gs-graph .pnode[data-stage="merge"]');
+          await page.waitForSelector(WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          if (!await page.locator('.gsheet .pane[data-stage="merge"] [data-pane-away]').count()) fail("the waiting pane edits the first message the window shows");
+          await shot(page, "graph-node-draft");
+          await page.locator(WINDOW_DRAFT).press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".gsheet", { state: "detached" });
+
+          /* A parked lane and a completed lane open their graphs the same way. */
+          /* The completed lane's card stands in Done, which the one-column board below 1200 px
+             keeps off screen; it is gated where its column is drawn. */
+          const ended = width >= 1200 ? [["t-compact", "p-compact", "done"]] as const : [];
+          reading.endedLaneGated = ended.length > 0;
+          for (const [task, pipeline, status] of [["t-links", "p-links", "assigned"] as const, ...ended]) {
+            const toggle = page.locator(`${card(task)} [data-graph-toggle="${pipeline}"]`);
+            /* Where the board shows one column at a time, the card's column is a tab (the attention toast can stand over it). */
+            if (!await page.locator(card(task)).count()) await page.locator(`[role="tab"][data-tab="${status}"]`).evaluate((element) => (element as HTMLElement).click());
+            if (!await page.waitForSelector(card(task), { timeout: 10_000 }).then(() => true, () => false)) {
+              fail(`${pipeline}: its card is not on the ${status} tab`);
+              await shot(page, `tab-${status}`);
+              continue;
+            }
+            if (!await toggle.count()) {
+              /* A folded done card shows its lane once it is opened. */
+              await page.locator(`${card(task)} button.icon-btn.fold[aria-expanded="false"]`).first().click().catch(() => {});
+            }
+            await toggle.first().scrollIntoViewIfNeeded();
+            await toggle.first().click();
+            await page.waitForSelector(`[data-stages-sheet="${pipeline}"] .gs-graph .pnode`, { timeout: 10_000 });
+            await settle(page);
+            if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") fail(`${pipeline}: the stages view hides its graph`);
+            await shot(page, `graph-${pipeline}`);
+            await page.keyboard.press("Escape");
+            await page.waitForSelector(".gsheet", { state: "detached" });
+          }
+
+          /* 6. «Expand all» on an eight-stage lane: wide panes, a sideways lane, a conversation's measure. */
+          if (!await page.locator(card("t-upload")).count()) await page.locator('[role="tab"][data-tab="assigned"]').evaluate((element) => (element as HTMLElement).click());
+          await page.locator(`${card("t-upload")} [data-graph-toggle]`).scrollIntoViewIfNeeded();
+          await page.click(`${card("t-upload")} [data-graph-toggle]`);
+          await page.waitForSelector('[data-stages-sheet="p-upload"] .pane', { timeout: 10_000 });
+          await page.click("[data-expand-all]");
+          await settle(page);
+          /* Read once every pane is open, one has drawn its agent's prose, and
+             the lane's width has held still for two frames. */
+          await page.waitForFunction(() => {
+            const element = document.querySelector<HTMLElement>(".gsheet .lane");
+            const store = window as unknown as { __laneWidths?: number[] };
+            if (!element) return false;
+            const panes = [...element.querySelectorAll<HTMLElement>(".pane[data-stage]")];
+            const ready = panes.length > 0 && panes.every((pane) => pane.dataset.collapsed === "0")
+              && element.querySelector('.pane[data-collapsed="0"] [data-tts-message]') !== null;
+            const widths = ready ? [...(store.__laneWidths ?? []), element.scrollWidth].slice(-3) : [];
+            store.__laneWidths = widths;
+            return widths.length === 3 && widths.every((width) => width === widths[0]);
+          }, undefined, { polling: "raf", timeout: 30_000 });
+          const lane = await page.evaluate(() => {
+            const element = document.querySelector<HTMLElement>(".gsheet .lane")!;
+            const probe = (host: Element) => {
+              const span = document.createElement("span");
+              span.style.cssText = "position:absolute;visibility:hidden;width:68ch;white-space:nowrap";
+              host.appendChild(span);
+              const measure = span.getBoundingClientRect().width;
+              span.remove();
+              return measure;
+            };
+            const panes = [...element.querySelectorAll<HTMLElement>('.pane[data-collapsed="0"]')].map((pane) => {
+              const prose = pane.querySelector<HTMLElement>("[data-tts-message]");
+              const draft = pane.querySelector<HTMLElement>("[data-draft-message] .bubble");
+              return {
+                stage: pane.dataset.stage!, width: Math.round(pane.getBoundingClientRect().width),
+                prose: prose ? { width: Math.round(prose.getBoundingClientRect().width), measure: Math.round(probe(prose)) } : null,
+                draft: draft ? Math.round(draft.getBoundingClientRect().width) : null,
+              };
+            });
+            return { panes, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, gutter: element.offsetHeight - element.clientHeight };
+          });
+          reading.lane = lane;
+          if (lane.panes.length < 3) fail(`«Expand all» left ${lane.panes.length} panes open`);
+          for (const pane of lane.panes) {
+            if (pane.width < 600) fail(`the ${pane.stage} pane is ${pane.width} px`);
+            if (pane.prose && pane.prose.width < pane.prose.measure - 1) fail(`the ${pane.stage} pane sets its agent's prose at ${pane.prose.width} px, under 68ch (${pane.prose.measure} px)`);
+          }
+          if (!lane.panes.some((pane) => pane.prose)) fail("no pane drew its agent's prose to measure");
+          if (lane.scrollWidth <= lane.clientWidth) fail(`the lane does not scroll sideways (${lane.scrollWidth} ≤ ${lane.clientWidth})`);
+          if (lane.gutter < 8) fail(`the lane draws no scrollbar (${lane.gutter} px)`);
+          /* The lane opened on the running stage; from its start, the first pane reads whole. */
+          await page.evaluate(() => { document.querySelector<HTMLElement>(".gsheet .lane")!.scrollLeft = 0; });
+          await settle(page);
+          cutOf(await readText(page, [".gsheet header h2", ".gsheet [data-expand-all]", '.gsheet .pane[data-stage="plan"] .pname']), "expanded");
+          await shot(page, "expanded");
+          await page.evaluate(() => { const element = document.querySelector<HTMLElement>(".gsheet .lane")!; element.scrollLeft = element.scrollWidth; });
+          await settle(page);
+          await shot(page, "expanded-end");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(out, `${key}-failed.png`) }).catch(() => {});
+        } finally { await context.close(); }
+        readings[key] = reading;
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      if (fd !== null) fs.closeSync(fd);
+    }
+    fs.mkdirSync("evidence/task-card-no-inline-conversations", { recursive: true });
+    fs.writeFileSync("evidence/task-card-no-inline-conversations/rendered.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
 });

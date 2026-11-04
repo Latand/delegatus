@@ -1,3 +1,5 @@
+@import "../components/kanban/boardTimeline.css";
+
 /* Keep image CSS inputs within src/. Repository prose, hooks and evidence
    must not add utilities to the application or require a Docker rebuild. */
 @import "tailwindcss" source("..");
