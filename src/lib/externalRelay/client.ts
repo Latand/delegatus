@@ -56,12 +56,12 @@ async function target(input: string, options: { query?: boolean; detailedErrors?
 }
 /** A publication deadline covers name resolution as well as the socket. Late
  * DNS completion cannot prepare a body or start an HTTP request. */
-async function targetWithSignal(input: string, signal?: AbortSignal, detailedErrors = false) {
-  if (!signal) return target(input, { detailedErrors });
+async function targetWithSignal(input: string, signal?: AbortSignal, detailedErrors = false, query = false) {
+  if (!signal) return target(input, { detailedErrors, query });
   signal.throwIfAborted();
   let onAbort: (() => void) | undefined;
   try {
-    return await Promise.race([target(input, { detailedErrors }), new Promise<never>((_resolve, reject) => {
+    return await Promise.race([target(input, { detailedErrors, query }), new Promise<never>((_resolve, reject) => {
       onAbort = () => reject(signal.reason);
       signal.addEventListener("abort", onAbort, { once: true });
     })]);
@@ -259,8 +259,9 @@ export async function relayDownloadMedia<T>(apiBase: string, requestId: string, 
  * `query` admits and sends a query string, for an image the relay hands out
  * as a signed or parameterized URL; the relay's own documents are read without.
  */
-export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, options: { query?: boolean } = {}): Promise<Buffer> {
-  const { url, address } = await target(urlInput, options);
+export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, options: { query?: boolean; signal?: AbortSignal } = {}): Promise<Buffer> {
+  const { url, address } = await targetWithSignal(urlInput, options.signal, false, options.query);
+  options.signal?.throwIfAborted();
   const transport = url.protocol === "https:" ? https : http;
   return await new Promise<Buffer>((resolve, reject) => {
     const request = transport.request(
@@ -273,6 +274,7 @@ export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, 
         path: url.pathname + (options.query ? url.search : ""),
         method: "GET",
         agent: false,
+        signal: options.signal,
         headers: { host: url.host, "Delegatus-Relay-Version": "1" },
       },
       (response) => {
@@ -301,8 +303,8 @@ export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, 
   });
 }
 /** Bounded JSON transport with DNS pinning and redirect refusal, without credentials. */
-export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
-  const bytes = await readRelayBytesUrl(urlInput);
+export async function readRelayJsonUrl(urlInput: string, options: { signal?: AbortSignal } = {}): Promise<unknown> {
+  const bytes = await readRelayBytesUrl(urlInput, 1_048_576, options);
   try {
     return JSON.parse(bytes.toString("utf8"));
   } catch {

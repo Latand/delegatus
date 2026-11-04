@@ -20,6 +20,7 @@ import { startTestRelay } from "@/lib/externalRelay/testRelay";
 import { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } from "./service";
 import { FakeBotTransport, fakeBotToken, ok } from "./fakeTransport";
 import { outboundState } from "./outbound";
+import { telegramBotTokenPath } from "./transport";
 import type { ClonePostingPort } from "./clone";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "clone-methods-")), prior = process.env.LLV_STATE_DIR;
@@ -106,6 +107,32 @@ test("PDF and photo use the clone with exact bytes, topic, reply, silence and re
   expect(descriptors).toBe(1); expect(rightsReads).toBe(1);
   expect(await document()).toMatchObject({ alreadySent: true }); expect(sends).toHaveLength(2);
   expect(await restartDocument("pdf")).toMatchObject({ result: { alreadySent: true, messageIds: [101] }, calls: [] });
+});
+test("a pairing alone sends files without a local bot token", async () => {
+  fs.rmSync(telegramBotTokenPath());
+  const before = bot.calls.length;
+  expect(await document()).toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" } });
+  expect(await media()).toMatchObject({ messageIds: [102], sentBy: { name: "Report clone" } });
+  expect(bot.calls).toHaveLength(before); expect(sends).toHaveLength(2);
+});
+test("without the feature, a pairing-only file send retains its disconnected refusal", async () => {
+  fs.rmSync(telegramBotTokenPath()); relay.features = [];
+  await expect(document()).rejects.toMatchObject({ code: "bot_not_connected" });
+  expect(sends).toEqual([]); expect(descriptors).toBe(0); expect(rightsReads).toBe(0);
+  expect(await service.send({ ...common("legacy-pairing-text"), text: "Legacy" })).toMatchObject({ sentBy: { name: "Report clone" } });
+});
+test.each(["approve", "revoke"] as const)("pairing-only file confirmation can %s under current clone custody", async mode => {
+  fs.rmSync(telegramBotTokenPath());
+  const filename = path.join(path.dirname(path.dirname(pdf)), "outside.md"); fs.writeFileSync(filename, "Fixture report");
+  let id = "";
+  try { await service.sendDocument({ ...common("pairing-confirmation"), document: { path: filename } }); }
+  catch (error) { id = (error as { extra: { confirmation: { id: string } } }).extra.confirmation.id; }
+  expect(id).not.toBe(""); expect(sends).toEqual([]);
+  const confirmation = service.fileConfirmation(id);
+  if (mode === "revoke") relay.paused = true;
+  const decision = service.decideFileConfirmation(id, confirmation.digest, true, () => {});
+  if (mode === "approve") { expect(await decision).toMatchObject({ sentBy: { name: "Report clone" } }); expect(sends).toHaveLength(1); }
+  else { await expect(decision).rejects.toMatchObject({ code: "bot_not_connected" }); expect(sends).toEqual([]); }
 });
 test("album receipts keep Telegram order and rich-message media are JSON", async () => {
   answer = () => ({ body: { ...cloneReceipt(107), message_ids: [107, 103] } });

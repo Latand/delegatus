@@ -9,6 +9,7 @@ import {
   ExternalRelayError,
   fetchRelayTargets,
   relayCall,
+  readRelayJsonUrl,
 } from "./client";
 import {
   startRelayPairing,
@@ -338,6 +339,20 @@ test("publication cancellation settles while DNS is held and late DNS cannot emi
     release([{ address: "127.0.0.1", family: 4 }]);
     await Promise.resolve();
     expect(prepared).toBe(false);
+  } finally { release([]); lookup.mockRestore(); }
+});
+
+test("descriptor cancellation covers held DNS and prevents a late request", async () => {
+  let release!: (addresses: Array<{ address: string; family: number }>) => void;
+  const held = new Promise<Array<{ address: string; family: number }>>(resolve => { release = resolve; });
+  const lookup = spyOn(dns, "lookup").mockImplementation((() => held) as unknown as typeof dns.lookup);
+  const controller = new AbortController();
+  try {
+    const read = readRelayJsonUrl("https://fixture.invalid/.well-known/delegatus-relay.json", { signal: controller.signal }).catch(error => error);
+    controller.abort(new Error("descriptor deadline"));
+    expect(await read).toMatchObject({ message: "descriptor deadline" });
+    release([{ address: "127.0.0.1", family: 4 }]);
+    await Promise.resolve();
   } finally { release([]); lookup.mockRestore(); }
 });
 
