@@ -1204,7 +1204,7 @@ export async function runClaimedRequest(
     }
     if (callAbort.signal.aborted) return null;
     if (cloud && boundedOwnerTurn && Date.now() >= executionDeadline) { run?.cancel(); return await finishOwnerTimeout(deadline.receivedAt); }
-    if (error instanceof CloudOwnerDirectoryError && !owner) return await finish({ lease_id: leaseId, outcome: "failed", reason: "configuration_error", detail: null });
+    if (error instanceof CloudOwnerDirectoryError && (!owner || !run)) return await finish({ lease_id: leaseId, outcome: "failed", reason: "configuration_error", detail: error.message });
     if (!diagnostic) {
       // Record, journal and hand the first failure to durable owner custody
       // before cancelling: the stop below may wait for host confirmation.

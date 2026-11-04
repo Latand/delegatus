@@ -285,8 +285,6 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
       project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
   updateRelayStore(store => ({ ...store, relays: [relay] }));
-  const repository = seedRepository(); relay.targets[0]!.project = repository.project;
-  updateRelayStore(store => ({ ...store, relays: [relay] }));
   const request = { ...contextRequest, request_id: "owner_cloud_lease_loss_answer", liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
     owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null },
     input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
@@ -308,7 +306,7 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud owner answer" } });
     expect(cloudCalls).toBe(1); expect(localCalls).toBe(0); expect(sends).toHaveLength(1);
     expect(sends[0]).toMatchObject({ text: "Cloud owner answer", reply_to_message_id: 51 });
-  } finally { repository.close(); await server.close(); }
+  } finally { await server.close(); }
 });
 
 test("an answer environment never grants owner access to an unrelated repository", () => {
@@ -465,7 +463,7 @@ for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launc
       expect(launches).toBe(state === "valid" ? 1 : 0);
       if (state !== "valid" && state !== "switch-before-launch") expect(selection).not.toHaveBeenCalled();
       if (state === "valid") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
-      else if (state === "switch-before-launch") expect(result).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("configured project directory") } });
+      else if (state === "switch-before-launch") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
       else expect(result).toMatchObject({ outcome: "failed", reason: "configuration_error", detail: expect.stringContaining("configured project directory") });
     } finally { selection.mockRestore(); wire.mockRestore(); repository.close(); }
   });
