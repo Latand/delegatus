@@ -2,6 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { statePath } from "@/lib/configDir";
+import { caseSensitiveAppFixture } from "./appWrite.fixture";
 
 import { FORGE_APP_TOKEN_MARGIN_MS, ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, forgeWriter, mintForgeAppToken } from "./appWrite";
 
@@ -12,6 +14,34 @@ const REPO = "acme/widgets";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "forge-app-write-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const source: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: root, PATH: process.env.PATH, GH_CONFIG_DIR: path.join(root, "operator-gh"), GITHUB_TOKEN: "inherited", GH_ENTERPRISE_TOKEN: "inherited" };
+
+describe.skipIf(process.platform === "win32")("Viewer minting outside a checkout", () => {
+  test.each(["Acme/Widgets", "acme/widgets", "ACME/WIDGETS", "aCmE/wIdGeTs"])("finds the declared credential for %s", async repository => {
+    const fixture = caseSensitiveAppFixture(fs.mkdtempSync(path.join(root, "case-")));
+    const declaration = statePath("forge-app-repositories.json");
+    fs.mkdirSync(path.dirname(declaration), { recursive: true });
+    fs.writeFileSync(declaration, JSON.stringify([fixture.repository]));
+    try {
+      expect(fixture.source.LLV_AGENT_FORGE_REPOSITORIES).toBeUndefined();
+      expect(fs.existsSync(path.join(fixture.cwd, ".git"))).toBe(false);
+      expect(await mintForgeAppToken(repository, fixture.source)).toEqual({ token: "fixture", expiresAt: "2030-01-01T01:00:00Z" });
+      expect(fixture.lookups().at(-1)?.at(-1)).toBe(fixture.repository);
+      expect(fixture.requests()).toHaveLength(3);
+    } finally { fs.unlinkSync(declaration); }
+  });
+
+  test.each(["other/widgets", "acme/other"])("never borrows the declared credential for %s", async repository => {
+    const fixture = caseSensitiveAppFixture(fs.mkdtempSync(path.join(root, "refuse-")));
+    const declaration = statePath("forge-app-repositories.json");
+    fs.mkdirSync(path.dirname(declaration), { recursive: true });
+    fs.writeFileSync(declaration, JSON.stringify([fixture.repository]));
+    try {
+      await expect(mintForgeAppToken(repository, fixture.source)).rejects.toThrow(`Delegatus refused this GitHub write to ${repository}: no GitHub App credential is available for it.`);
+      expect(fixture.lookups().map(args => args.at(-1))).toEqual([repository]);
+      expect(fixture.requests()).toEqual([]);
+    } finally { fs.unlinkSync(declaration); }
+  });
+});
 
 describe("the token the engine holds", () => {
   test("is minted once, reused while it is good, and minted again before it expires", async () => {
