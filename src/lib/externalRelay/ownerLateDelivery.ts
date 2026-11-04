@@ -1,10 +1,31 @@
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { cloneClientKey, sendAsClone, type CloneSendInput } from "./cloneSend";
-import { ownerDeliverySchema, type ExternalRelayCompletion } from "./protocol";
+import { ownerDeliverySchema, requestSchema, type ExternalRelayCompletion } from "./protocol";
 import { changeRunAsync, ownerRelayStoreDeadline, ownerStopPending, type PairedRelay, type RunRecord } from "./store";
 import type { StagedAttachment } from "./attachments";
 import type { RelayAnswerDelivery } from "./answers";
 import { relayRequestInFlight } from "./activity";
+import { readAnswerRecord } from "./answers";
+import { ownerTierFor } from "./profile";
+import { ownerFailureAnswer } from "./ownerRun";
+import { isDeepStrictEqual } from "node:util";
+
+/** Older custody rows retained the input in the answer record. Reconstruct only
+ * from that record and the already verified owner request, never from chat text. */
+export function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknown | null {
+  if (run.ownerTurn?.rawRequest) return run.ownerTurn.rawRequest;
+  const record = readAnswerRecord(run.relayId, run.targetId, run.requestId);
+  if (!record?.profile?.owner || !run.ownerTurn?.request) return null;
+  const parsed = requestSchema.safeParse({ request_id: run.requestId, lease_id: run.leaseId,
+    kind: "answer", target_id: run.targetId, claimed_at: record.claimedAt ?? run.startedAt,
+    features: record.features, ...(record.chatKey ? { chat: { key: record.chatKey } } : {}),
+    input: record.input, answer: { max_chars: relay.limits.max_answer_chars, progress: "none" },
+    liveness: { poll_freshness_s: 60, claim_window_s: 5, ack_window_s: 10, heartbeat_interval_s: 10, stall_window_s: 45 } });
+  if (!parsed.success) return null;
+  const owner = ownerTierFor({ ownerTier: true }, parsed.data);
+  return owner && owner.text === run.ownerTurn.request.text && owner.requestText === run.ownerTurn.request.requestText
+    ? parsed.data : null;
+}
 
 type LateAnswer = NonNullable<NonNullable<RunRecord["ownerTurn"]>["lateAnswer"]>;
 const RETRY_MS = 30_000;
@@ -52,22 +73,43 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
     await changeRunAsync(requestId, row => {
       if (!row.ownerTurn || row.relayId !== relay.id || !authorize()) return row;
       targetId = row.targetId;
-      const pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
+      let pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
         files: row.ownerTurn.lateAnswer?.files ?? files };
-      pending.clientKey ??= cloneClientKey(relay.id, "owner-late-answer", requestId, 0);
       if (row.ownerTurn.completionAttempt) return row;
-      if (!pending.parts) {
-        // Retain the exact payload of an older possibly delivered attempt. A
-        // definite unused-key refusal (no firstAttemptAt) can be recomposed.
-        const payloads = pending.payload && pending.firstAttemptAt !== undefined ? [pending.payload]
-          : payloadsFor(pending, relay.id, requestId, row.ownerTurn.delivery);
-        pending.parts = payloads?.map((payload, index) => ({ payload,
-          ...(index === 0 && pending.firstAttemptAt !== undefined ? { firstAttemptAt: pending.firstAttemptAt } : {}) }));
+      if (row.ownerTurn.failureReply) {
+        const request = requestSchema.safeParse(ownerRecoveryRequest(row, relay));
+        const owner = request.success && (row.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request.data));
+        const answer = request.success && owner && ownerFailureAnswer(request.data, owner,
+          row.ownerTurn.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay.credential]);
+        if (!answer || pending.body.outcome !== "answered") return row;
+        const clean: LateAnswer = { body: { ...pending.body, answer }, files: [] };
+        const payloads = payloadsFor(clean, relay.id, requestId, row.ownerTurn.delivery);
+        const changed = !isDeepStrictEqual(pending.body, clean.body) || pending.files.length > 0
+          || pending.payload !== undefined && !isDeepStrictEqual(pending.payload, payloads?.[0])
+          || pending.parts !== undefined && !isDeepStrictEqual(pending.parts.map(part => part.payload), payloads);
+        if (changed) {
+          // An old payload may already be visible. Never resend its internal
+          // text or substitute a new payload under its uncertain key.
+          const attempted = pending.firstAttemptAt !== undefined || pending.parts?.some(part => part.firstAttemptAt !== undefined || part.receipt)
+            || ["uncertain", "retry-expired"].includes(pending.status ?? "");
+          pending = attempted ? { ...pending, status: "uncertain" } : clean;
+        }
       }
-      pending.payload = pending.parts?.[0]?.payload ?? pending.payload;
-      if (!pending.parts) {
-        missingContextAlarm = pending.status !== "pending-delivery-context";
-        pending.status = "pending-delivery-context";
+      if (pending.status !== "uncertain") {
+        pending.clientKey ??= cloneClientKey(relay.id, "owner-late-answer", requestId, 0);
+        if (!pending.parts) {
+          // Retain the exact payload of an older possibly delivered attempt. A
+          // definite unused-key refusal (no firstAttemptAt) can be recomposed.
+          const payloads = pending.payload && pending.firstAttemptAt !== undefined ? [pending.payload]
+            : payloadsFor(pending, relay.id, requestId, row.ownerTurn.delivery);
+          pending.parts = payloads?.map((payload, index) => ({ payload,
+            ...(index === 0 && pending.firstAttemptAt !== undefined ? { firstAttemptAt: pending.firstAttemptAt } : {}) }));
+        }
+        pending.payload = pending.parts?.[0]?.payload ?? pending.payload;
+        if (!pending.parts) {
+          missingContextAlarm = pending.status !== "pending-delivery-context";
+          pending.status = "pending-delivery-context";
+        }
       }
       prepared.pending = pending;
       return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
@@ -75,12 +117,14 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
     }, ownerRelayStoreDeadline());
     let pending = prepared.pending;
     if (!pending || !authorize()) return { body, delivery: "refused" };
+    body = pending.body;
+    if (pending.status === "uncertain") return { body, delivery: "unconfirmed" };
     if (!pending.parts) {
       if (missingContextAlarm) console.error("ALARM: Owner relay late delivery pending-delivery-context; answer retained without execution reservation", JSON.stringify({ requestId }));
       return { body, delivery: "unconfirmed" };
     }
     if (pending.parts.every(part => part.receipt)) return { body, delivery: "accepted" };
-    if (["uncertain", "retry-expired", "refused"].includes(pending.status ?? "") || (pending.nextAttemptAt ?? 0) > Date.now())
+    if (["retry-expired", "refused"].includes(pending.status ?? "") || (pending.nextAttemptAt ?? 0) > Date.now())
       return { body, delivery: "unconfirmed" };
     for (let index = 0; index < pending.parts.length; index++) {
       const part = pending.parts[index]!;

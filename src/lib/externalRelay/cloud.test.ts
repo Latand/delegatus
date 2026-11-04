@@ -271,10 +271,18 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
 test("owner Cloud execution completes after heartbeat lease loss and delivers once", async () => {
   let lost!: () => void;
   const leaseLost = new Promise<void>(resolve => { lost = resolve; });
+  let received!: () => void, release!: () => void;
+  const heartbeatReceived = new Promise<void>(resolve => { received = resolve; });
+  const heartbeatReply = new Promise<void>(resolve => { release = resolve; });
   const sends: unknown[] = [];
-  const server = await startTestRelay((req, body) => {
+  const heartbeat = spyOn(console, "info").mockImplementation((message, frame) => {
+    // Resume Cloud after the runner's synchronous heartbeat handler returns.
+    if (message === "External relay heartbeat" && frame.phase === "failed" && frame.status === 409 && frame.code === "lease_lost") queueMicrotask(lost);
+  });
+  const server = await startTestRelay(async (req, body) => {
     if (req.url?.endsWith("/heartbeat") && (body as { seq: number }).seq > 1) {
-      lost();
+      received();
+      await heartbeatReply;
       return { status: 409, body: { error: { code: "lease_lost" } } };
     }
     if (req.url?.endsWith("/send")) { sends.push(body); return { body: cloneReceipt() }; }
@@ -291,7 +299,7 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
     input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
   let cloudCalls = 0, localCalls = 0;
   try {
-    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false,
+    const running = runClaimedRequest(relay, request, undefined, { leaseWorker: false,
       cloudTransport: async input => {
         cloudCalls++;
         await new Promise<void>((resolve, reject) => {
@@ -299,15 +307,18 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
           input.signal.addEventListener("abort", onAbort, { once: true });
           void leaseLost.then(() => { input.signal.removeEventListener("abort", onAbort); resolve(); });
         });
-        await new Promise(resolve => setTimeout(resolve, 25));
         return JSON.stringify({ action: "reply", text: "Cloud owner answer", reply_to: "m1" });
       },
       ownerPorts: { launch: async () => { localCalls++; return { status: 202, body: {} }; }, observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
     });
+    await heartbeatReceived;
+    expect(cloudCalls).toBe(1);
+    release();
+    const result = await running;
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud owner answer" } });
     expect(cloudCalls).toBe(1); expect(localCalls).toBe(0); expect(sends).toHaveLength(1);
     expect(sends[0]).toMatchObject({ text: "Cloud owner answer", reply_to_message_id: 51 });
-  } finally { await server.close(); }
+  } finally { release(); heartbeat.mockRestore(); await server.close(); }
 });
 
 test("owner Cloud trims duplicated optional history and sends one bounded turn", async () => {
