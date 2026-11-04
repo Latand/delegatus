@@ -93,3 +93,16 @@ If resolving a conflict would change either side's behaviour, run git merge --ab
     ],
   };
 }
+
+
+/** Integration is another attempt of the outcome that already owns delivery. */
+export function integrationStages(lane: Pipeline): CreatePipelineRequest["stages"] {
+  const ids: Record<string, string> = { refresh: "integration-resolve", review: "integration-review", fix: "integration-fix" };
+  return refreshRequest(lane).stages.map(stage => ({
+    ...stage, id: ids[stage.id]!, next: stage.next ? ids[stage.next]! : null,
+    ...(stage.onFail ? { onFail: { ...stage.onFail, to: ids[stage.onFail.to]!, onExhausted: "park" as const } } : {}),
+    "prompt": stage.id === "review"
+      ? `Review integration onto ${lane.merge!.refresh!.base}. Preserve the feature review as historical evidence of its original head. Inspect the integrated tree and ALL base changes since that reviewed head, including transitive contracts, consumers, defaults, configuration, schema, generators, lockfiles, toolchain and policy. Unchanged feature diff does not establish applicability. Require project checks against this exact tree. Unknown impact requires a conservative integration review. Report through this stage's ordinary stage_report.`
+      : `${stage.prompt}\nThis is integration work in the existing outcome. Its reservation is ${lane.merge!.refresh!.key}. Work only on this item's branch under the current delivery epoch; do not create another pipeline.`,
+  }));
+}

@@ -218,6 +218,16 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   };
 
   return {
+    enableIntegration: () => {
+      Object.assign(ports, { startIntegration: async (expected: Pipeline) => {
+        const { admitIntegration } = await import("@/lib/pipelines/integration");
+        const { integrationStages } = await import("./autoRefresh");
+        const current = pipelines.get(expected.id)!;
+        const stages = integrationStages(expected).map(s => ({ ...s, effectiveRole: s.id === "integration-review" ? REVIEWER : BUILDER })) as Pipeline["stages"];
+        const error = admitIntegration(current, expected, stages, iso(clock));
+        return error ? { error } : { pipeline: structuredClone(current) };
+      } });
+    },
     creates,
     byKey,
     ports,
@@ -2991,4 +3001,177 @@ test("refresh stages defer tier and account selection to live launch capacity", 
     expect(stage.serviceTier).toBeUndefined();
   }
   expect(request.stages.map(stage => stage.role?.roleId)).toEqual(["merger", "reviewer", "merger"]);
+});
+
+
+test("durable integration keeps the original outcome when conflict work starts", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  h.enableIntegration();
+  await h.sweep();
+  expect(h.creates).toHaveLength(0);
+  expect(h.merge("finished")?.integration?.outcomeId).toBe("finished");
+});
+
+test("durable integration adopts an unstarted reservation without a successor", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  h.enableIntegration();
+  h.setCreateMode("throw");
+  await h.sweep();
+  h.setCreateMode("ok");
+  await h.sweep();
+  expect(h.creates).toHaveLength(0);
+  expect(h.ports.loadPipelines()).toHaveLength(1);
+});
+
+
+function completeIntegration(h: ReturnType<typeof harness>, id: string, head: string) {
+  const p = h.pipeline(id), i = p.merge!.integration!;
+  p.state = "completed"; p.cursor = null; p.closedAt = iso(T0); p.lastPassedCommit = head;
+  p.delivery!.active = false;
+  i.integratedHead = head; i.reviewedHead = head; i.state = "checking";
+  i.binding = { stageId: "integration-review", attempt: i.cycles, launchId: `launch-${i.cycles}`, conversationId: `conversation_${i.cycles}` };
+  p.merge!.chain.push(head); p.merge!.state = "queued"; p.merge!.head = null; p.merge!.nextReadAt = null;
+  delete p.merge!.refresh;
+  const run = p.runs.find(r => r.stageId === "integration-review")!;
+  run.attempts.push({ n: i.cycles, state: "passed", reviewHeadSha: head } as Pipeline["runs"][number]["attempts"][number]);
+}
+
+test("durable integration twenty base changes and duplicate events keep one outcome and feature history", async () => {
+  await mergeOwnerRestart("durable integration twenty base changes and duplicate events keep one outcome and feature history", async () => {
+    const h = harness({ lanes: [finished()], prs: [conflicting()] }); h.enableIntegration();
+    await h.sweep(); return h;
+  }, async h => {
+    h.enableIntegration();
+    const history = structuredClone(h.pipeline("finished").runs.filter(r => ["build", "review"].includes(r.stageId)));
+    const key = h.merge("finished")!.integration!.reservationKey;
+    for (let n = 1; n <= 20; n++) {
+      const head = n.toString(16).padStart(40, "0");
+      completeIntegration(h, "finished", head);
+      h.prs.get(11)!.head = head;
+      h.setBase((n + 100).toString(16).padStart(40, "0"));
+      h.advance(MERGE_POLL_MS);
+      await h.sweep(); await h.sweep();
+      expect(h.ports.loadPipelines()).toHaveLength(1);
+      expect(h.merge("finished")!.integration!.reservationKey).toBe(key);
+      expect(h.merge("finished")!.integration!.cycles).toBe(n + 1);
+    }
+    expect(h.creates).toHaveLength(0);
+    expect(h.pipeline("finished").runs.slice(0, history.length)).toEqual(history);
+  });
+});
+
+test("durable integration resolves two batch items sequentially and a clean item can pass", async () => {
+  const h = queuedRefreshes(undefined, 3); h.enableIntegration();
+  h.prs.get(13)!.mergeable = "MERGEABLE"; h.prs.get(13)!.mergeStateStatus = "CLEAN";
+  await h.sweep();
+  expect(h.pipeline("queued-0").state).toBe("provisioning");
+  expect(h.pipeline("queued-1").state).toBe("completed");
+  await h.run(8 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merges().map(args => args[2])).toEqual(["13"]);
+  completeIntegration(h, "queued-0", MAIN_2);
+  Object.assign(h.prs.get(11)!, { head: MAIN_2, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: [{ name: "ci", status: "IN_PROGRESS" }] });
+  await h.run(4 * MERGE_POLL_MS, () => h.pipeline("queued-1").state === "provisioning");
+  expect(h.pipeline("queued-1").state).toBe("provisioning");
+  expect(h.merge("queued-1")!.integration!.batch.owner).toBe("queued-0");
+  expect(h.merge("queued-0")!.integration!.batch.cursor).toBeGreaterThanOrEqual(1);
+  expect(h.creates).toHaveLength(0);
+});
+
+test("durable integration waits for a named predecessor while an independent item lands", async () => {
+  const h = queuedRefreshes(undefined, 3); h.enableIntegration();
+  const predecessor = h.pipeline("queued-0");
+  predecessor.delivery!.target.branch = "refs/heads/predecessor";
+  h.prs.get(12)!.base = "predecessor";
+  for (const n of [12, 13]) { h.prs.get(n)!.mergeable = "MERGEABLE"; h.prs.get(n)!.mergeStateStatus = "CLEAN"; }
+  await h.run(12 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merges().map(args => args[2])).toEqual(["13"]);
+  expect(h.merge("queued-1")!.reason).toContain("predecessor PR #11");
+});
+
+test("durable integration retains historical feature review but withholds landing on an unreviewed integrated tree", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] }); h.enableIntegration();
+  await h.sweep();
+  completeIntegration(h, "finished", MAIN_2);
+  h.merge("finished")!.integration!.reviewedHead = null;
+  Object.assign(h.prs.get(11)!, { head: MAIN_2, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" });
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merges()).toHaveLength(0);
+  expect(h.merge("finished")!.state).toBe("blocked");
+  expect(h.pipeline("finished").runs.find(r => r.stageId === "review")!.attempts[0]!.state).toBe("passed");
+});
+
+
+test("durable integration a transitive base contract change on a CLEAN PR requires review despite identical feature diff", async () => {
+  // The old boolean mock remains green after access() starts returning an
+  // object. Different files merge cleanly; only current-base ancestry reveals
+  // that the original review did not cover the changed contract.
+  const feature = (access: () => unknown) => Boolean(access());
+  expect(feature(() => false)).toBe(false);
+  expect(feature(() => ({ allowed: false }))).toBe(true);
+  const h = harness({ lanes: [finished()], prs: [openPr(11, { checks: [green("ci")] })], mergeBase: MAIN_1 });
+  h.enableIntegration(); h.setBase(MAIN_2);
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(0);
+  expect(h.pipeline("finished").state).toBe("provisioning");
+  expect(h.merge("finished")!.integration!.desiredBase).toBe(MAIN_2);
+  expect(h.merge("finished")!.integration!.reviewedHead).toBeNull();
+  expect(h.merges()).toHaveLength(0);
+});
+
+
+test("durable integration resumes a compatible batch after a real process restart", async () => {
+  await mergeOwnerRestart("durable integration resumes a compatible batch after a real process restart", async () => {
+    const h = queuedRefreshes(undefined, 2); h.enableIntegration();
+    await h.sweep();
+    h.pipeline("queued-0").state = "needs_decision";
+    h.merge("queued-0")!.integration!.state = "blocked";
+    return h;
+  }, async h => {
+    h.enableIntegration();
+    await h.run(5 * MERGE_POLL_MS, () => h.pipeline("queued-1").state === "provisioning");
+    expect(h.pipeline("queued-1").state).toBe("provisioning");
+    expect(h.merge("queued-0")!.integration!.batch.cursor).toBe(1);
+    expect(h.creates).toHaveLength(0);
+  });
+});
+
+test("durable integration reconciles a lost merge acknowledgement after restart without another write", async () => {
+  await mergeOwnerRestart("durable integration reconciles a lost merge acknowledgement after restart without another write", async () => {
+    const h = harness({ lanes: [finished()], prs: [conflicting()] }); h.enableIntegration();
+    await h.sweep(); completeIntegration(h, "finished", MAIN_2);
+    Object.assign(h.prs.get(11)!, { head: MAIN_2, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" });
+    const run = h.ports.run, write = h.ports.write;
+    let lost = false;
+    h.ports.run = async args => {
+      if (lost && args[0] === "pr" && args[1] === "view") throw new Error("readback unavailable");
+      return run(args);
+    };
+    h.ports.write = async (args, repo, admit?: () => void) => {
+      admit?.(); await write(args, repo); lost = true; throw new Error("merge acknowledgement lost");
+    };
+    await h.run(6 * MERGE_POLL_MS, () => lost);
+    expect(h.writes).toHaveLength(1);
+    expect(h.merge("finished")!.effectUncertain).toBe(true);
+    return h;
+  }, async h => {
+    h.enableIntegration();
+    await h.run(4 * MERGE_POLL_MS, () => h.merge("finished")!.state === "merged");
+    expect(h.merge("finished")!.state).toBe("merged");
+    expect(h.merge("finished")!.integration!.state).toBe("landed");
+    expect(h.writes).toHaveLength(0);
+    expect(h.creates).toHaveLength(0);
+  });
+});
+
+
+test.each(["main", "release"])("durable integration an unknown main landing fences target %s across scopes", async base => {
+  const h = queuedRefreshes(undefined, 2); h.enableIntegration();
+  h.prs.get(11)!.mergeStateStatus = "CLEAN"; h.prs.get(12)!.mergeStateStatus = "CLEAN";
+  await h.sweep();
+  Object.assign(h.merge("queued-0")!, { state: "blocked", effectUncertain: true, targetBranch: "main", nextReadAt: null });
+  h.pipeline("queued-1").project = "another-project-scope";
+  h.prs.get(12)!.base = base;
+  await h.run(6 * MERGE_POLL_MS);
+  expect(h.merges().map(args => args[2])).toEqual(base === "release" ? ["12"] : []);
+  expect(h.merge("queued-0")!.effectUncertain).toBe(true);
 });

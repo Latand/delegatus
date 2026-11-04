@@ -1,5 +1,9 @@
 # Merge queue: a finished refresh releases its slot, and a trivial base update needs no agent lane
 
+The current runner uses [durable PR integration](durable-pr-integration.md) for
+new work. This document retains the earlier successor-lane design and incident
+evidence; active legacy carriers continue to drain under that design.
+
 Design, 2026-10-31. Architect stage of the lane for the task «Merge queue
 refresh capacity: a parked refresh releases its slot and ready PRs behind base
 do not wait in single file». It builds on

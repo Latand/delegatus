@@ -1,3 +1,5 @@
+import { admitIntegration, integrationAttempt, integrationScope, integrationRequirementRevision, renewIntegrationDecision, INTEGRATION_STAGES, INTEGRATION_REPAIR_LIMIT } from "./integration";
+import { integrationStages } from "@/lib/forge/autoRefresh";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
@@ -188,7 +190,7 @@ import { pipelineRecordRevalidator } from "./revalidation";
 import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
-import { mergeOnReviewEnabled } from "@/lib/projects/settings";
+import { mergeOnReviewEnabled, mergeOnReviewSetting } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
@@ -4019,6 +4021,14 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage): Promise<Pip
   /* One hand launches one attempt; a relaunch the engine makes after it is the engine's. */
   if (pipeline.cursor) delete pipeline.cursor.launchedBy;
   run.attempts.push(attempt);
+  integrationAttempt(pipeline);
+  if (stage.id === "integration-fix" && pipeline.merge?.integration) {
+    if (pipeline.merge.integration.repairs >= INTEGRATION_REPAIR_LIMIT) {
+      await park(pipeline, "integration repair budget exhausted", attempt);
+      return null;
+    }
+    pipeline.merge.integration.repairs++;
+  }
   return attempt;
 }
 
@@ -4556,6 +4566,21 @@ async function advancePipeline(
   }
   if (successor.next === null) {
     await clearEngineTaskNote(pipeline);
+    if (pipeline.merge?.integration && stage.id === "integration-review") {
+      const integration = pipeline.merge.integration;
+      integrationAttempt(pipeline);
+      integration.integratedHead = pipeline.lastPassedCommit;
+      integration.reviewedHead = attempt?.state === "passed" ? pipeline.lastPassedCommit : null;
+      integration.publicationId = pipeline.delivery?.operation?.id ?? null;
+      integration.state = "checking";
+      pipeline.merge.chain = [...new Set([...pipeline.merge.chain, pipeline.lastPassedCommit])];
+      pipeline.merge.state = "queued";
+      pipeline.merge.head = null; pipeline.merge.headSeenAt = null; pipeline.merge.lastChecks = null;
+      pipeline.merge.nextReadAt = null;
+      pipeline.merge.updatedAt = ports.now();
+      // The old reservation is a historical adoption receipt in integration.
+      delete pipeline.merge.refresh;
+    }
     pipeline.cursor = null;
     pipeline.state = "completed";
     pipeline.stateDetail = detail;
@@ -10949,6 +10974,11 @@ async function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvis
   if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
   const fence = provisionFence(pipeline);
   if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
+  if (pipeline.merge?.integration && !outcome.error && outcome.head !== pipeline.merge.integration.expectedRemoteHead) {
+    pipeline.merge.integration.state = "blocked";
+    await park(pipeline, "integration head changed during provisioning; reconcile branch ownership before retrying");
+    return true;
+  }
   if (outcome.base) {
     pipeline.baseBranch = outcome.base.baseBranch;
     pipeline.baseRef = outcome.base.baseRef;
@@ -11037,6 +11067,23 @@ async function tickPipeline(
     await park(pipeline, proactiveError);
     return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
   }
+  const integration = pipeline.merge?.integration;
+  if (integration && pipeline.cursor && INTEGRATION_STAGES.includes(pipeline.cursor.stageId as typeof INTEGRATION_STAGES[number])
+    && pipeline.delivery?.operation?.state !== "running") {
+    const policy = mergeOnReviewSetting(pipeline.project);
+    if (!policy.enabled || policy.changedAt !== integration.decisionRevision || integration.scope !== integrationScope(pipeline)
+      || integration.requirementRevision !== integrationRequirementRevision(pipeline) || integration.ownerEpoch !== pipeline.delivery?.epoch) {
+      integration.state = "blocked";
+      await park(pipeline, "integration requirements, policy or delivery authority changed; review before continuing", attempt);
+      return true;
+    }
+  }
+  if (integration && pipeline.cursor && INTEGRATION_STAGES.includes(pipeline.cursor.stageId as typeof INTEGRATION_STAGES[number])
+    && unixMs(ports.now()) >= unixMs(integration.deadline)) {
+    integration.state = "blocked";
+    await park(pipeline, "integration session deadline expired; reconcile the current attempt before retrying", attempt);
+    return true;
+  }
   if (pipeline.state === "provisioning") {
     /* Nothing slow runs here any more (#1799): the fetch and the worktree add
        happened in the pre-pass, outside this lease, and all that is left is
@@ -11052,6 +11099,7 @@ async function tickPipeline(
     }
     else await tickReviewStage(pipeline, stage, entries, ports, persist);
   }
+  integrationAttempt(pipeline);
   const settledAttempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
   if (proactiveError && pipeline.delivery?.operation?.state !== "running" && pipeline.state !== "closed" && (!settledAttempt
     || ["pending", "passed", "failed", "needs_decision", "skipped"].includes(settledAttempt.state))) await park(pipeline, proactiveError);
@@ -16227,6 +16275,51 @@ function graphEditBriefer(actor: PauseResumeActor | null, pipeline: Pipeline, po
   return sizingBriefer({ kind: "agent", conversationId: actor.conversationId }, pipeline.srcConversationId ?? null, ports);
 }
 
+/** Reopen the existing outcome through the same delivery CAS and stage engine.
+ * No creation request, user pipeline, alternate host or report channel is made. */
+export async function startPipelineIntegration(expected: Pipeline, ports: PipelinePorts = defaultPipelinePorts()): Promise<{ pipeline?: Pipeline; error?: string }> {
+  const normalized = normalizeStages(integrationStages(expected), ports.roleLookup, undefined, 1, expected.project);
+  if (!normalized.stages) return { error: normalized.error ?? "integration stages could not be normalized" };
+  const remote = expected.delivery?.target;
+  if (!remote?.remote || !remote.branch) return { error: "integration needs an owned remote branch" };
+  const readback = await ports.exec("git", ["ls-remote", remote.remote, remote.branch], expected.repoDir, pipelineLiteralGitEnv());
+  const remoteHead = readback.stdout.trim().split(/\s+/)[0];
+  if (readback.code !== 0 || remoteHead !== (expected.merge?.integration?.expectedRemoteHead ?? expected.merge?.refresh?.head))
+    return { error: "integration remote head changed or could not be reconciled" };
+  const result = await withDeliveryMutationAsync<{ pipeline?: Pipeline; error?: string }>(tx => {
+    const current = tx.get(expected.id);
+    if (!current?.merge?.refresh || !current.delivery) return { error: "integration outcome is unavailable" };
+    assertWorkspaceExecution(current.project);
+    assertProactivePipelineExecution(current);
+    if (integrationScope(current) !== integrationScope(expected) || current.merge.refresh.key !== expected.merge?.refresh?.key
+      || current.merge.refresh.digest !== expected.merge?.refresh?.digest) return { error: "integration reservation or scope changed before admission" };
+    const setting = mergeOnReviewSetting(current.project);
+    if (!setting.enabled || setting.changedAt !== current.merge.policyChangedAt) return { error: "integration merge policy changed or was revoked" };
+    const receipt = tx.pipelineLookup({ requestKey: current.merge.refresh.key });
+    if (receipt && receipt.id !== current.id) {
+      if (receipt.creationRequest?.digest !== current.merge.refresh.digest || receipt.refreshOf?.pipelineId !== current.id
+        || receipt.refreshOf.base !== current.merge.refresh.base) return { error: "legacy reservation receipt conflicts with integration ownership" };
+      return { pipeline: receipt };
+    }
+    const owner = tx.pipelineLookup({ ...current.delivery.target, active: true });
+    const history = owner ?? tx.pipelineLookup(current.delivery.target);
+    if (owner && owner.id !== current.id || history && (history.id !== current.id || history.delivery?.epoch !== current.delivery.epoch))
+      return { error: "integration delivery has another owner; drain and reconcile it first" };
+    if (current.state !== "completed" && current.merge.integration
+      && current.merge.refresh.key === expected.merge?.refresh?.key && current.delivery.active
+      && current.merge.integration.scope === integrationScope(current)) return { pipeline: current };
+    if (tx.hasUnfinishedPipeline({ repository: current.delivery.target.repository, branch: current.delivery.target.branch }))
+      return { error: "integration waits for unfinished branch work" };
+    const refused = admitIntegration(current, expected, normalized.stages!, ports.now());
+    if (refused) return { error: refused };
+    deliveryJournal(current, "claim", "integration resumed the original outcome at a new delivery epoch", null);
+    tx.put(current);
+    return { pipeline: current };
+  }, 32);
+  if (result.pipeline?.id === expected.id) requestPipelineTick();
+  return result;
+}
+
 export async function patchPipeline(
   id: string,
   req: PatchPipelineRequest,
@@ -16252,6 +16345,7 @@ export async function patchPipeline(
       // Keep the caller's revision guards over the original record. Authority
       // joins the accepted edit in its transaction, before any later launch.
       if (pipeline && principal) pipeline.workspace ??= principal;
+      if (pipeline && (req.action === "resolve-decision" || req.action === "retry-stage")) renewIntegrationDecision(pipeline, ports.now());
       if (records) await persist(records); else await persist();
     });
   }, observeHold);
@@ -18197,6 +18291,15 @@ export async function reportStageCompletion(
     const rewriteOwner = pendingSummaryRewrite(pipeline, attempt);
     if (rewriteOwner && (normalized.verdict.status !== "pass" || normalized.verdict.findings?.length || !normalized.summary))
       return { error: "a summary rewrite requires pass, no findings and a non-empty summary; the accepted verdict is unchanged", status: 409, code: "STAGE_REPORT_SUMMARY_ONLY" };
+    const integration = pipeline.merge?.integration;
+    if (integration && INTEGRATION_STAGES.includes(stageId as typeof INTEGRATION_STAGES[number])) {
+      const policy = mergeOnReviewSetting(pipeline.project);
+      if (integration.scope !== integrationScope(pipeline) || integration.requirementRevision !== integrationRequirementRevision(pipeline)
+        || integration.ownerEpoch !== pipeline.delivery?.epoch || pipeline.delivery?.ownerId !== pipeline.id
+        || !policy.enabled || policy.changedAt !== integration.decisionRevision)
+        return { error: "integration report lost its delivery or policy authority", status: 409, code: "STAGE_REPORT_INTEGRATION_FENCED" };
+      integrationAttempt(pipeline);
+    }
     const prior = attempt.report ?? null;
     const entries = pipeline.stageReports ?? [];
     const seq = (entries.at(-1)?.seq ?? 0) + 1;

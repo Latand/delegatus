@@ -1379,8 +1379,35 @@ export type PipelineRefresh = {
   pipelineId: string | null;
 };
 
+export type PipelineIntegration = {
+  /** Stable originating outcome. Legacy carriers keep their original identity. */
+  outcomeId: string;
+  state: "queued" | "legacy-draining" | "resolving" | "reviewing" | "checking" | "waiting" | "blocked" | "landing" | "reconciling" | "landed";
+  scope: string;
+  requirementRevision: string;
+  decisionRevision: string;
+  desiredBase: string;
+  integratedHead: string | null;
+  expectedRemoteHead: string;
+  ownerEpoch: number;
+  cycles: number;
+  repairs: number;
+  /** First reservation key survives adoption and every subsequent base update. */
+  reservationKey: string;
+  startedAt: string;
+  deadline: string;
+  binding: { stageId: string; attempt: number; launchId: string | null; conversationId: string | null } | null;
+  publicationId: string | null;
+  reviewedHead: string | null;
+  /** Frozen compatible batch, at most eight outcomes. Cursor advances from receipts. */
+  batch: { owner: string; items: string[]; cursor: number; deadline: string };
+};
+
 export type PipelineMerge = {
-  /** A proactive write began without a terminal forge receipt. Only receipt
+  /** Forge target branch; absent on legacy unresolved writes, which fence the repository. */
+  targetBranch?: string;
+  integration?: PipelineIntegration;
+  /** A proactive or integration write began without a terminal forge receipt. Only receipt
       reconciliation, never a repeated write, may advance it automatically. */
   effectUncertain?: boolean;
   /** Enrolled when this release automatically lands the PR. */
