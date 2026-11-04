@@ -12061,11 +12061,18 @@ describe("phone voice drop", () => {
           await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "reconnecting");
           await head.tap(); expect(await page.locator("[data-phone-voice-resume]").count()).toBe(0); expect(await page.locator("[data-phone-voice-end]").isEnabled()).toBe(true); await head.tap();
           await capture("reconnecting");
+          await head.tap();
+          const mute = page.locator("[data-phone-voice-mute]"); expect(await mute.isEnabled()).toBe(true); await mute.tap();
+          expect((await mute.innerText()).trim()).toBe(translate(lang, "voiceCompanion.unmute"));
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true);
+          await head.tap();
           await page.clock.runFor(5_000); await head.tap(); await page.clock.runFor(1_000);
           const beforeClock = await page.locator("[data-phone-voice-clock]").innerText();
           const seconds = (value: string) => { const parts = value.match(/(\d+):(\d+)/)!; return Number(parts[1]) * 60 + Number(parts[2]); };
           expect(seconds(beforeClock)).toBeGreaterThanOrEqual(5); await head.tap();
           await control("release"); await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "idle");
+          await head.tap(); expect((await mute.innerText()).trim()).toBe(translate(lang, "voiceCompanion.unmute"));
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true); await head.tap();
           await head.tap(); expect(seconds(await page.locator("[data-phone-voice-clock]").innerText())).toBeGreaterThanOrEqual(seconds(beforeClock)); await head.tap();
           await capture("back");
           await control("fail"); await control("drop"); await page.clock.runFor(60_000);

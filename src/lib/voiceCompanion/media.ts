@@ -36,6 +36,7 @@ export class BrowserCompanionMedia implements CompanionMedia {
   private outputLast = 0;
   private outputStart = 0;
   private blocked = false;
+  private inputMuted = false;
   private quietSince: number | null = null;
   private cancelIce: (() => void) | null = null;
   private generation = 0;
@@ -49,6 +50,7 @@ export class BrowserCompanionMedia implements CompanionMedia {
       if (this.disposed) { microphone.getTracks().forEach(track => track.stop()); release(); throw new Error("SESSION_CLOSED"); }
       this.microphone = microphone;
       this.releaseMicrophone = release;
+      for (const track of microphone.getAudioTracks()) track.enabled = !this.inputMuted;
     })();
     this.capturing = promise;
     return promise.finally(() => { if (this.capturing === promise) this.capturing = null; });
@@ -156,7 +158,10 @@ export class BrowserCompanionMedia implements CompanionMedia {
     this.outputOn = outputOn;
     this.frame = requestAnimationFrame(this.sample);
   };
-  mute(muted: boolean): void { this.microphone?.getAudioTracks().forEach(track => { track.enabled = !muted; }); }
+  mute(muted: boolean): void {
+    this.inputMuted = muted;
+    this.microphone?.getAudioTracks().forEach(track => { track.enabled = !muted; });
+  }
   interrupt(): void {
     this.blocked = true; this.quietSince = null;
     if (this.audio) this.audio.muted = true;

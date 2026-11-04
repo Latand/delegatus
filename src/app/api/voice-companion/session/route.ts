@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { companionBody, companionFailure, companionOperator, companionStarter, companionSessionOwner } from "@/lib/voiceCompanion/http";
 import { companionSessions } from "@/lib/voiceCompanion/server";
-import { BROWSER_DROP_CAUSES, type CompanionCommand, type ConnectionEpisode, type DropCause, type ReconnectRecord } from "@/lib/voiceCompanion/contract";
+import { BROWSER_DROP_CAUSES, type CompanionCommand, type ConnectionEpisode, type DropCause, type DropDiagnostic, type ReconnectRecord } from "@/lib/voiceCompanion/contract";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +10,10 @@ const id = (value: unknown): value is string => typeof value === "string" && /^[
 const episodeValid = (value: unknown): value is ConnectionEpisode => !!value && typeof value === "object" && !Array.isArray(value)
   && Number.isSafeInteger((value as ConnectionEpisode).ms) && (value as ConnectionEpisode).ms >= 0 && (value as ConnectionEpisode).ms <= 86_400_000
   && [null, "voice", "operator"].includes((value as ConnectionEpisode).speaking);
+const dropValid = (value: unknown): value is DropDiagnostic => !!value && typeof value === "object" && !Array.isArray(value)
+  && Object.keys(value).every(key => key === "cause" || key === "episode")
+  && BROWSER_DROP_CAUSES.includes((value as DropDiagnostic).cause)
+  && ((value as DropDiagnostic).episode === undefined || episodeValid((value as DropDiagnostic).episode));
 
 /** Only operator browser actions reach session controls. Provider tool events,
  * final usage and transcripts have no browser-write route. */
@@ -30,12 +34,13 @@ export async function POST(req: NextRequest) {
       if (reconnect !== undefined && (!body.resume || !reconnect || typeof reconnect !== "object" || Array.isArray(reconnect) || reconnect.tier !== 2
         || !Number.isSafeInteger(reconnect.attempts) || reconnect.attempts < 1 || reconnect.attempts > 8 || typeof reconnect.automatic !== "boolean"
         || !Number.isSafeInteger(reconnect.noticedToStartMs) || reconnect.noticedToStartMs < 0 || reconnect.noticedToStartMs > 86_400_000)) throw new Error("INVALID_REQUEST");
+      if (body.drop !== undefined && (!body.resume || !dropValid(body.drop))) throw new Error("INVALID_REQUEST");
       const previous = Object.values(service.storage.read().sessions).find(session => session.mintRequestId === body.requestId);
       if (previous) companionSessionOwner(req, previous);
       /* A reconnect continues only the caller's own call. */
       if (typeof body.resume === "string") owns(body.resume);
       return NextResponse.json(await service.start({ project: body.project, locale: body.locale as "en" | "uk", sdp: body.sdp, requestId: body.requestId,
-        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}), ...(reconnect ? { reconnect } : {}), ...(typeof body.timeZone === "string" ? { timeZone: body.timeZone } : {}) }), { status: 201, headers });
+        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}), ...(body.drop ? { drop: body.drop as DropDiagnostic } : {}), ...(reconnect ? { reconnect } : {}), ...(typeof body.timeZone === "string" ? { timeZone: body.timeZone } : {}) }), { status: 201, headers });
     }
     if (body.action === "close" && id(body.requestId) && body.sessionId === undefined) {
       const session = Object.values(service.storage.read().sessions).find(row => row.mintRequestId === body.requestId);

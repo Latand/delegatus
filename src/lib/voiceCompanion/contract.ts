@@ -23,6 +23,8 @@ export type Locale = "en" | "uk";
 export const BROWSER_DROP_CAUSES = ["ice-failed", "ice-grace", "channel-closed", "viewer-unreachable", "audio-refused"] as const;
 export type DropCause = typeof BROWSER_DROP_CAUSES[number] | "watchdog" | "sideband" | "provider-connection_lost" | "provider-expired" | "provider-remote_hangup" | "provider-content" | "provider-error" | "viewer-restart" | "answer-lost" | "mint-failed";
 export interface ConnectionEpisode { ms: number; speaking: "voice" | "operator" | null }
+/** Browser drop facts replayed with a resume start when the close request was lost. */
+export interface DropDiagnostic { cause: typeof BROWSER_DROP_CAUSES[number]; episode?: ConnectionEpisode }
 export interface ReconnectRecord { tier: 2; attempts: number; automatic: boolean; noticedToStartMs: number }
 
 export type Recipient = {
@@ -166,7 +168,7 @@ export const STALE_BROWSER_MS = 5_000;
 export interface VoiceCompanionAdapter {
   readonly mode: CompanionMode;
   /** `resume` continues a dropped call: the new session starts with its conversation. */
-  start(options: { locale: Locale; project: Id; resume?: Id; reconnect?: ReconnectRecord; signal?: AbortSignal }): Promise<void>;
+  start(options: { locale: Locale; project: Id; resume?: Id; drop?: DropDiagnostic; reconnect?: ReconnectRecord; signal?: AbortSignal }): Promise<void>;
   /** Call-wide retry sounds and release of retained media on give-up. */
   reconnect?(status: "trying" | "tick" | "gave-up" | "cancelled"): void;
   /** Updates browser context on the same call, including while it starts. */

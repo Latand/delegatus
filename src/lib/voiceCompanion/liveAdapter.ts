@@ -1,6 +1,6 @@
 "use client";
 
-import type { CompanionCommand, CompanionEvent, CompanionUsage, ConnectionEpisode, DropCause, Payload, ResumableCall, VoiceCompanionAdapter } from "./contract";
+import { BROWSER_DROP_CAUSES, type CompanionCommand, type CompanionEvent, type CompanionUsage, type ConnectionEpisode, type DropCause, type Payload, type ResumableCall, type VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
 import { clientTimeZone } from "@/lib/i18n";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
@@ -55,6 +55,10 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   /** A dispatched context can have reached the server even when its reply is lost. */
   private contextUncertain = false;
   private muted = false;
+  /** Local mute survives a gap with no provider session; input stays paused until its replacement is ready. */
+  private recovering = false;
+  /** A browser close can be lost. The next resume start carries its validated diagnostic until the server commits it. */
+  private pendingDrop: ({ sessionId: string } & { cause: typeof BROWSER_DROP_CAUSES[number]; episode?: ConnectionEpisode }) | null = null;
   private cursor = 0;
   private seq = 0;
   private born = 0;
@@ -122,6 +126,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.stopObserver();
     this.contextSync = null; this.syncedProject = undefined; this.contextUncertain = false;
     if (!options.resume) this.muted = false;
+    this.recovering = !!options.resume;
+    this.contextMute();
     this.resuming = !!options.resume; this.attemptError = null; this.attemptCause = undefined;
     this.buffering = options.resume ? [] : null;
     const epoch = ++this.epoch;
@@ -140,6 +146,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       } };
     const retained = this.media;
     const media = this.media = retained?.restart ? retained : this.options.media?.(callbacks) ?? new BrowserCompanionMedia(callbacks);
+    this.contextMute();
     const signal = options.signal ?? (options.resume ? AbortSignal.timeout(15_000) : undefined);
     let failureCause: DropCause = "ice-failed";
     try {
@@ -147,7 +154,10 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       const sdp = await abortable(retained === media && media.restart ? media.restart(callbacks) : media.open(), signal);
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
       const reconnect = options.reconnect ?? { tier: 2, automatic: false, attempts: 1, noticedToStartMs: 0 };
+      const pendingDrop = options.resume && this.pendingDrop?.sessionId === options.resume ? this.pendingDrop : null;
+      const drop = pendingDrop ? { cause: pendingDrop.cause, ...(pendingDrop.episode ? { episode: pendingDrop.episode } : {}) } : null;
       const body = { action: "start", ...options, signal: undefined, ...clientTimeZone(), sdp, requestId: this.requestId,
+        ...(drop ? { drop } : {}),
         ...(options.resume ? { reconnect: { ...reconnect, noticedToStartMs: reconnect.noticedToStartMs + Math.max(0, Math.round(this.clock() - preparingAt)) } } : {}) };
       let result: Record<string, unknown>;
       try { result = await this.request(body, "", signal); }
@@ -157,6 +167,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
         result = await this.request(body, "", signal);
       }
       if (typeof result.sessionId !== "string" || typeof result.sdp !== "string") throw new Error("PROVIDER_ERROR");
+      if (pendingDrop && this.pendingDrop === pendingDrop) this.pendingDrop = null;
       if (epoch !== this.epoch) { await this.request({ action: "close", sessionId: result.sessionId }); throw new Error("SESSION_CLOSED"); }
       this.sessionId = result.sessionId;
       this.observedId = result.sessionId;
@@ -171,6 +182,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       await abortable(this.readEvents(), signal);
       if (this.attemptError) throw this.attemptError;
       if (!this.sessionId && options.resume) throw new Error("SESSION_CLOSED");
+      this.recovering = false;
+      this.contextMute();
       const buffered = this.buffering; this.buffering = null;
       if (buffered) for (const event of buffered) for (const listener of this.listeners) listener(event);
       this.schedule(epoch);
@@ -318,9 +331,12 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.media?.interrupt();
   }
   async command(command: CompanionCommand): Promise<void> {
-    if (!this.sessionId) throw new Error("SESSION_CLOSED");
+    if (command.type === "mute") {
+      this.muted = command.muted;
+      this.contextMute();
+      if (!this.sessionId) return;
+    } else if (!this.sessionId) throw new Error("SESSION_CLOSED");
     if (command.type === "interrupt") this.yieldPlayback();
-    if (command.type === "mute") { this.muted = command.muted; this.contextMute(); }
     await this.request({ action: "command", sessionId: this.sessionId, command });
     await this.readEvents();
   }
@@ -330,7 +346,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     await this.syncContext();
   }
   private contextMute(): void {
-    this.media?.mute(this.muted || (!!this.sessionId && (this.contextSync !== null || this.contextUncertain || this.project !== this.syncedProject)));
+    this.media?.mute(this.muted || this.recovering || (!!this.sessionId && (this.contextSync !== null || this.contextUncertain || this.project !== this.syncedProject)));
   }
   private syncContext(): Promise<void> {
     if (this.contextSync) return this.contextSync;
@@ -431,6 +447,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     const dropped = retain;
     const episode = this.episode ? { ms: Math.min(86_400_000, Math.max(0, Math.round(this.clock() - this.episode.at))), speaking: this.episode.speaking } : undefined;
     this.episode = null;
+    const dropDiagnostic = sessionId && dropped && cause && BROWSER_DROP_CAUSES.includes(cause as typeof BROWSER_DROP_CAUSES[number])
+      ? { sessionId, cause: cause as typeof BROWSER_DROP_CAUSES[number], ...(episode ? { episode } : {}) } : null;
+    if (dropDiagnostic) this.pendingDrop = dropDiagnostic;
     const media = this.media;
     this.sessionId = null; this.requestId = null;
     if (!retain) this.media = null;
@@ -440,7 +459,10 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       // provider usage drains through the server's close request.
       media?.mute(true);
       try {
-        if (sessionId || requestId) await this.request({ action: "close", ...(sessionId ? { sessionId, ...(dropped ? { reason: "transport", ...(cause ? { cause } : {}), ...(episode ? { episode } : {}) } : {}) } : { requestId }) });
+        if (sessionId || requestId) {
+          await this.request({ action: "close", ...(sessionId ? { sessionId, ...(dropped ? { reason: "transport", ...(cause ? { cause } : {}), ...(episode ? { episode } : {}) } : {}) } : { requestId }) });
+          if (dropDiagnostic && this.pendingDrop === dropDiagnostic) this.pendingDrop = null;
+        }
         if (sessionId && !silent && epoch === this.epoch) { await this.poll; if (epoch === this.epoch) await this.readEvents(); }
       } catch { if (!retain && epoch === this.epoch) this.emit({ type: "error", code: "FINALIZATION_INCOMPLETE", recoverable: true }); }
       finally {

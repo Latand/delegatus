@@ -34,7 +34,7 @@ test("replacing a peer keeps one microphone, audio output and context, preserves
   const lost: string[] = [], connections: string[] = [];
   const cb = { ...callbacks(), lost: (code: string) => { lost.push(code); }, connection: (state: string) => { connections.push(state); } };
   const media = new BrowserCompanionMedia(cb);
-  await media.open(); media.mute(true);
+  media.mute(true); await media.open();
   peers[0].connectionState = "disconnected"; peers[0].dispatchEvent(new Event("connectionstatechange"));
   await media.restart(cb);
   peers[0].connectionState = "failed"; peers[0].dispatchEvent(new Event("connectionstatechange"));

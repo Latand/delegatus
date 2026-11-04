@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { projectHandle } from "./projectNames";
 import { hardenedRedact } from "@/lib/view/compactText";
-import type { CompanionCommand, CompanionEvent, CompanionPlan, ConnectionEpisode, DropCause, Locale, Payload, ReconnectRecord } from "./contract";
+import type { CompanionCommand, CompanionEvent, CompanionPlan, ConnectionEpisode, DropCause, DropDiagnostic, Locale, Payload, ReconnectRecord } from "./contract";
 import { CompanionStorage, type SessionStarter, type StoredSession } from "./storage";
 import { CompanionAdmission, type OperatorAttempt } from "./admission";
 import { CompanionBoardReads, READ_TOOL_NAMES, VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
@@ -176,7 +176,7 @@ interface Options {
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
 /** A call that dropped and can go on: the browser offers it in one tap. */
 export interface ResumableCall { sessionId: string; project: string; endedAt: number | null }
-type StartInput = { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"]; resume?: string; timeZone?: string; reconnect?: ReconnectRecord };
+type StartInput = { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"]; resume?: string; drop?: DropDiagnostic; timeZone?: string; reconnect?: ReconnectRecord };
 /** `session.commentary.append` takes at most 500 tokens. A token holds at
  * least one byte, so text of at most 500 UTF-8 bytes always fits, whatever
  * the language. */
@@ -238,7 +238,7 @@ export class CompanionLiveSessions {
   async start(input: StartInput): Promise<MintedCompanionSession> {
     const requestId = input.requestId ?? randomUUID();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId) || (input.resume !== undefined && !/^[A-Za-z0-9_-]{1,200}$/.test(input.resume))) throw new Error("INVALID_REQUEST");
-    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : [])])).digest("hex");
+    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : []), input.drop ?? null])).digest("hex");
     const knownRequest = (): Promise<MintedCompanionSession> | null => {
       const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
       if (!previous) return null;
@@ -265,7 +265,7 @@ export class CompanionLiveSessions {
       const active = this.active.get(head);
       if (active) {
         if (resume !== input.resume && active.polled && this.now() - active.lastSeen < STALE_BROWSER_MS) throw new Error("SESSION_UNAVAILABLE");
-        await this.close(resume, "transport", resume === input.resume ? undefined : "answer-lost");
+        await this.close(resume, "transport", resume === input.resume ? input.drop?.cause : "answer-lost", resume === input.resume ? input.drop?.episode : undefined);
       }
     }
     await this.recover();

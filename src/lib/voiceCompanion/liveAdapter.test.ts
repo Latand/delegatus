@@ -664,7 +664,7 @@ for (const lost of [false, true]) test(`returning to the acknowledged project ke
 
 
 /** Loss occurs after the real service minted. Other requests, especially close, still reach it. */
-async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; holdOffer?: boolean; closeAfterLost?: boolean; refusal?: string; contentClose?: boolean } = {}) {
+async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; holdOffer?: boolean; closeAfterLost?: boolean; loseClose?: boolean; refusal?: string; contentClose?: boolean } = {}) {
   const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
   const { CompanionStorage } = await import("./storage");
   const { CompanionAdmission } = await import("./admission");
@@ -717,7 +717,10 @@ async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boo
           if (body.resume && options.failFirstPoll) { options.failFirstPoll = false; failPoll = true; }
           return Response.json(answer);
         }
-        if (body.action === "close") await (body.sessionId ? service.close(body.sessionId, body.reason, body.cause, body.episode) : service.closeRequest(body.requestId));
+        if (body.action === "close") {
+          if (options.loseClose && body.sessionId && body.reason === "transport") { options.loseClose = false; throw new TypeError("lost close request"); }
+          await (body.sessionId ? service.close(body.sessionId, body.reason, body.cause, body.episode) : service.closeRequest(body.requestId));
+        }
         if (body.action === "command") await service.command(body.sessionId, body.command);
         return Response.json({ ok: true });
       } catch (error) { if (error instanceof TypeError) throw error; return Response.json({ code: (error as Error).message }, { status: 409 }); }
@@ -747,6 +750,43 @@ test("notice-to-request timing includes the replacement offer's preparation", as
     await f.tick(2000); f.release(); await f.tick(0);
     expect(f.requests.filter(row => row.action === "start").at(-1)?.reconnect).toMatchObject({ noticedToStartMs: 2150 });
     expect(f.store.get().reconnected).toBe(true);
+  } finally { await f.dispose(); }
+});
+
+for (const initiallyMuted of [false, true]) for (const heldOffer of [false, true]) test("mute " + (initiallyMuted ? "off" : "on") + " during " + (heldOffer ? "held offer preparation" : "retry backoff") + " is applied to the recovered microphone", async () => {
+  const f = await reconnecting(heldOffer ? { holdOffer: true } : { lostAnswers: 2 });
+  try {
+    if (initiallyMuted) await f.store.command({ type: "mute", muted: true });
+    await f.drop(); await f.tick(150);
+    if (heldOffer) {
+      expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+      expect(f.muted).toBe(true);
+    } else {
+      expect(f.requests.filter(row => row.action === "start")).toHaveLength(3);
+      expect(f.store.get().reconnected).toBe(false);
+      expect(f.muted).toBe(true);
+    }
+    await f.store.command({ type: "mute", muted: !initiallyMuted });
+    /* Recovery keeps the microphone physically muted while the replacement is being prepared. */
+    expect(f.muted).toBe(true);
+    if (heldOffer) { f.release(); await f.tick(0); }
+    else await f.tick(1_000);
+    expect(f.store.get(), JSON.stringify(f.store.get())).toMatchObject({ reconnected: true });
+    expect(f.muted).toBe(!initiallyMuted);
+  } finally { await f.dispose(); }
+});
+
+test("a lost browser close carries its cause into the resume that closes the original part", async () => {
+  const f = await reconnecting({ loseClose: true });
+  try {
+    await f.drop();
+    expect(f.service.admission.transcriptRecord(f.first.id).entries.some(row => row.kind === "session_end")).toBe(false);
+    await f.tick(150);
+    expect(f.store.get().reconnected).toBe(true);
+    const originalEnd = f.service.admission.transcriptRecord(f.first.id).entries.find(row => row.kind === "session_end");
+    expect(originalEnd?.data).toMatchObject({ reason: "transport", cause: "ice-failed" });
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(2);
+    expect(f.provider.sessions).toHaveLength(2);
   } finally { await f.dispose(); }
 });
 

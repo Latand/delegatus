@@ -25046,8 +25046,13 @@ describe("floating voice companion", () => {
           await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "reconnecting");
           expect(await page.locator("[data-companion-resume]").count()).toBe(0); expect(await page.locator("[data-companion-end]").first().isEnabled()).toBe(true);
           await capture("reconnecting");
+          const mute = page.locator("[data-voice-companion] .vc-controls button[aria-pressed]");
+          expect(await mute.isEnabled()).toBe(true); await mute.click(); expect(await mute.getAttribute("aria-pressed")).toBe("true");
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true);
           await control("release");
           await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]'));
+          expect(await mute.getAttribute("aria-pressed")).toBe("true");
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true);
           await capture("back");
           await control("fail"); await control("drop"); await page.clock.runFor(60_000);
           await page.waitForFunction(() => document.querySelector('[data-code="RECONNECT_GAVE_UP"]'));

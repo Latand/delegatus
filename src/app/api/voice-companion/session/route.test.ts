@@ -47,6 +47,22 @@ test("browser drop causes and ICE episodes are validated and journalled without 
   }
 });
 
+test("a resume start accepts only browser drop diagnostics and journals them when it closes the named part", async () => {
+  const f = fixture([], () => Date.UTC(2026, 10, 4, 12));
+  const first = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "resume-diagnostic-original" }))).json();
+  f.provider.replay(first.providerId, { type: "session.output_transcript.delta", event_id: "resume-diagnostic-speech", delta: "The check passed.", start_ms: 0, end_ms: 900 });
+  await f.service.drain(first.sessionId);
+  const resume = { action: "start", project: "fixture", locale: "en", sdp: "v=1", requestId: "resume-diagnostic-next", resume: first.sessionId };
+  for (const drop of [{ cause: "watchdog" }, { cause: "ice-failed", episode: { ms: -1, speaking: "voice" } }, { cause: "ice-failed", episode: { ms: 500, speaking: "operator" }, extra: true }])
+    expect((await POST(request({ ...resume, drop }))).status).toBe(400);
+  const response = await POST(request({ ...resume, drop: { cause: "ice-failed", episode: { ms: 800, speaking: "operator" } } }));
+  expect(response.status, JSON.stringify(await response.clone().json())).toBe(201);
+  expect(f.admission.transcriptRecord(first.sessionId).entries.find(row => row.kind === "session_end")?.data)
+    .toMatchObject({ reason: "transport", cause: "ice-failed", episode: { ms: 800, speaking: "operator" } });
+  expect(f.provider.sessions).toHaveLength(2);
+  await f.service.close((await response.json()).sessionId);
+});
+
 test("resume timing is bounded at the route and survives in the new part's journal", async () => {
   const f = fixture([], () => Date.UTC(2026, 10, 4, 12));
   const p = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "timed-original" }))).json();
