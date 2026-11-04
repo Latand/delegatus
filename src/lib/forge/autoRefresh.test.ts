@@ -3044,7 +3044,10 @@ test("durable integration twenty base changes and duplicate events keep one outc
     h.enableIntegration();
     const history = structuredClone(h.pipeline("finished").runs.filter(r => ["build", "review"].includes(r.stageId)));
     const key = h.merge("finished")!.integration!.reservationKey;
+    const baselineRss = process.memoryUsage().rss;
+    let maxSweepCalls = 0, peakRss = baselineRss;
     for (let n = 1; n <= 20; n++) {
+      const before = h.calls.length;
       const head = n.toString(16).padStart(40, "0");
       completeIntegration(h, "finished", head);
       h.prs.get(11)!.head = head;
@@ -3054,7 +3057,12 @@ test("durable integration twenty base changes and duplicate events keep one outc
       expect(h.ports.loadPipelines()).toHaveLength(1);
       expect(h.merge("finished")!.integration!.reservationKey).toBe(key);
       expect(h.merge("finished")!.integration!.cycles).toBe(n + 1);
+      maxSweepCalls = Math.max(maxSweepCalls, h.calls.length - before);
+      peakRss = Math.max(peakRss, process.memoryUsage().rss);
     }
+    expect(maxSweepCalls).toBeLessThanOrEqual(12);
+    console.info("integration work probe", JSON.stringify({ corpus: "one synthetic outcome, twenty bases, duplicate sweeps", samples: 20,
+      maxSweepCalls, baselineRss, peakRss, retainedBytes: JSON.stringify(h.pipeline("finished")).length }));
     expect(h.creates).toHaveLength(0);
     expect(h.pipeline("finished").runs.slice(0, history.length)).toEqual(history);
   });
