@@ -940,6 +940,8 @@
     transition: height var(--motion-base) var(--ease-standard), content-visibility var(--motion-base) allow-discrete;
   }
   .kb .card .history[open]::details-content, .kb .draft-added[open]::details-content { height: auto; }
+  /* The folding text leaves layout once the fold has closed over it. */
+  .kb .draft-added .added-text { transition: display var(--motion-base) allow-discrete; }
   /* The agent window fades in, its field and scrim with it, once its reader
      has come to rest (useReaderReady): opacity only, at its final box, so
      nothing in it moves while it appears. A switch or a close inside the open
@@ -1851,6 +1853,9 @@
 .kb .draft-added summary:hover { background: var(--dc-hover, var(--surface-well)); color: var(--color-secondary); }
 .kb .draft-added summary .chev { width: 12px; height: 12px; flex-shrink: 0; margin-top: 3px; transition: transform var(--motion-fast); }
 .kb .draft-added[open] summary .chev { transform: rotate(90deg); }
+/* Folded, the text is out of layout: a closed details still lays out its content
+   unpainted, and its scroller's edge then cuts lines nobody can see. */
+.kb .draft-added:not([open]) .added-text { display: none; }
 .kb .draft-added .added-text { margin: 4px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--text-caption) / 1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); background: var(--surface-sunken); border: 1px solid var(--border-default); border-radius: var(--radius-control); }
 .kb .draft-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--text-label); padding: 6px 8px; margin-top: 6px; border-radius: var(--radius-control); white-space: normal; text-align: left; }
 .kb .draft-notice.info { background: var(--color-accent-soft); color: var(--color-accent); }
