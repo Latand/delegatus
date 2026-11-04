@@ -45,6 +45,13 @@ whose retained terminal proof confirms completion, or whose recorded native
 owners are all proved unable to run. An elapsed deadline or missing identity
 proof alone never releases a slot.
 
+Owner checks include the retained aggregate `terminal.report` on legacy rows.
+Before compressing `terminal.reports`, the writer preserves their distinct
+supervisor and command identities in the bounded `terminalOwners` list. A
+reopened ledger therefore retains every slot whose aggregate or individual
+producer still has a live or unverifiable owner, even after its host, recorder
+and wrapper have exited.
+
 Slot release changes no receipt, result, replay key, delivery obligation or
 evidence-root hold. Acknowledgement still requires the current retained result
 and evidence revision. This also preserves unknown and failed outcomes without
@@ -76,6 +83,10 @@ is claimed.
 child writer, exits that writer, then reopens the database. Admission succeeds,
 a live holder remains, and all replay records and root holds survive another
 reopen. Both cases fail on the original main revision with the capacity error.
+The review regression fails on the predecessor revision when a persisted
+unknown close names a live command. Further cases cover aggregate and individual
+producer supervisors and commands at both limits, legacy rows, unverified
+identities after reopen, and release once the old owners are proved dead.
 
 `src/lib/recordedChecks/lifecycle.integration.test.ts` also drives real native
 handoff after abandoned capacity, waits while an independent owner acquires the

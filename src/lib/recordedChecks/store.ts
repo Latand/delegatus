@@ -33,6 +33,9 @@ export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), requ
   observerFault: z.string().max(1024).nullable().default(null),
   observation: z.object({ owner: identitySchema, epoch: z.number().int().positive().nullable(), releaseRevision: z.string().nullable() }).strict().nullable().default(null),
   custody: z.array(reportSchema).max(4).default([]),
+  // Producer reports are compressed after retention. Keep their native owners
+  // independently of the aggregate close, which can omit an outer command.
+  terminalOwners: z.array(identitySchema).max(8).optional(),
   acknowledgement: z.object({ actor: z.string(), resultRevision: z.number(), resultDigest: z.string(), evidenceDigest: z.string(),
     disposition: z.literal("adopt-retained"), at: z.number() }).strict().nullable(),
 }).strict();
@@ -45,6 +48,7 @@ export function custodyCapacityReleased(row: CheckRow): boolean {
     || terminal?.report?.phase === "close" && terminal.report.cleanup === "confirmed") return true;
   const owners = [row.binding.host, row.descriptor.recorder, row.descriptor.wrapper,
     ...row.custody.flatMap(report => [report.supervisor, report.command]),
+    terminal?.report?.supervisor, terminal?.report?.command, ...(row.terminalOwners ?? []),
     ...(terminal?.reports ?? []).flatMap(report => [report.supervisor, report.command])];
   return owners.every(owner => !owner || !processIdentityMayRun(owner));
 }
@@ -172,6 +176,12 @@ export class RecordedCheckStore {
     })();
   }
   put(row: CheckRow, expected: number | null, authority: () => void = () => {}) {
+    if (row.result?.terminal?.reports.length) {
+      const owners = [...(row.terminalOwners ?? []),
+        ...row.result.terminal.reports.flatMap(report => [report.supervisor, report.command])]
+        .filter((owner): owner is NonNullable<typeof owner> => owner !== null);
+      row = { ...row, terminalOwners: [...new Map(owners.map(owner => [digest(owner), owner])).values()] };
+    }
     rowSchema.parse(row);
     const value = JSON.stringify(row.result ? { ...row, result: { ...row.result, evidence: [],
       terminal: row.result.terminal ? { ...row.result.terminal, reports: [] } : null } } : row);
