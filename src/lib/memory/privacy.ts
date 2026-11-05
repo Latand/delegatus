@@ -14,7 +14,13 @@ export class RoleMemoryChanged extends RoleMemoryRefusal {
 /** Restart from original inputs on revision changes or a classified transient
  * read failure. Unknown and permanent failures remain decisive. */
 export async function withCurrentRoleMemory<T>(work: () => Promise<T>): Promise<T> {
-  try { return await withPrivacyRetry(() => withCurrentRevision(work)); }
+  return withRoleMemoryRetry(() => withCurrentRevision(work));
+}
+
+/** Include launch-side reads and composition in one cutoff without adding
+ * another revision replay around composition's own revision fence. */
+export async function withRoleMemoryRetry<T>(work: () => Promise<T>): Promise<T> {
+  try { return await withPrivacyRetry(work); }
   catch (error) {
     if (error instanceof PrivacyRetryExhausted) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE",
       `role memory could not be read or filtered; ${error.failure}; retry window exhausted after 180 seconds; nothing was sent`, { cause: error });

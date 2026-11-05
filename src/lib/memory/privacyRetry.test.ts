@@ -1,5 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import { spawn } from "node:child_process";
+import { ownFixtureTree, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import path from "node:path";
 import * as timers from "node:timers/promises";
 import { Database } from "bun:sqlite";
@@ -269,3 +272,72 @@ test("the real worker carries a corrupt stored row's category without the row", 
     expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
   } finally { log.mockRestore(); }
 });
+
+// This supervisor uses wall time in a different process. Neither the worker
+// method nor performance.now is mocked: removing the submit timer's cap must
+// leave the child running past this watchdog, and fail the parent.
+test("real worker deadline is independently supervised and cleans up its processes", async () => {
+  const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "privacy-deadline-"));
+  const identities = path.join(directory, "workers.jsonl");
+  const child = ownFixtureTree(spawn(process.execPath, ["test", "--timeout=220000", import.meta.path, "-t", "^real worker deadline child$"], {
+    env: { ...process.env, LLV_PRIVACY_DEADLINE_CHILD: directory, LLV_STATE_DIR: path.join(directory, "state") },
+    stdio: ["ignore", "pipe", "pipe"],
+  }));
+  let output = "", timedOut = false;
+  child.stdout!.on("data", chunk => { output += chunk; });
+  child.stderr!.on("data", chunk => { output += chunk; });
+  const closed = new Promise<number | null>((resolve, reject) => {
+    child.once("close", resolve); child.once("error", reject);
+  });
+  let cleanup: Promise<void> | undefined;
+  const watchdog = setTimeout(() => {
+    timedOut = true;
+    cleanup = stopFixtureProcess(child);
+  }, PRIVACY_RETRY_WINDOW_MS + 15_000);
+  try {
+    const exit = await closed;
+    await cleanup;
+    expect(timedOut, output).toBe(false);
+    expect(exit, output).toBe(0);
+    expect(output).toContain("worker-timeout; retry window exhausted after 180 seconds");
+    expect(output).toContain('"dispatches":0');
+    expect(output).not.toContain(privateText);
+  } finally {
+    clearTimeout(watchdog);
+    await stopFixtureProcess(child);
+    await cleanup;
+    const workers = fs.existsSync(identities) ? fs.readFileSync(identities, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as ProcessIdentity) : [];
+    expect(workers.length).toBeGreaterThan(0);
+    for (const identity of workers) expect(processIdentityStatus(identity)).toBe("dead");
+  }
+}, 220_000);
+
+test.skipIf(!process.env.LLV_PRIVACY_DEADLINE_CHILD)("real worker deadline child", async () => {
+  const directory = process.env.LLV_PRIVACY_DEADLINE_CHILD!;
+  const fixture = path.join(directory, "blocked-worker.ts");
+  // The leased helper is a real subprocess that remains blocked until its
+  // owner closes the lease. Record its launch identity for the supervisor.
+  fs.writeFileSync(fixture, `import fs from "node:fs";
+import { captureProcessIdentity } from ${JSON.stringify(path.join(import.meta.dir, "../processIdentity.ts"))};
+fs.appendFileSync(${JSON.stringify(path.join(directory, "workers.jsonl"))}, JSON.stringify(captureProcessIdentity(process.pid)) + "\\n");
+setInterval(() => {}, 1000);
+`);
+  const worker = new TaskPageWorker({ launch: { executable: process.execPath, workerPath: fixture } });
+  let dispatches = 0, calls = 0;
+  const started = performance.now();
+  try {
+    const result = withCurrentRoleMemory(async () => {
+      // Spend real preparation time before the first worker request. The last
+      // request then has much less than 60 seconds left (about 27 seconds),
+      // giving the independent watchdog ample room to detect a removed cap.
+      if (++calls === 1) await timers.setTimeout(30_000);
+      return worker.privacy({ kind: "filter", value: privateText });
+    }).then(value => { dispatches++; return value; });
+    const error = await result.catch(error => error);
+    console.info(JSON.stringify({ reason: String(error.message), dispatches }));
+    expect(error).toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE", message: expect.stringContaining("worker-timeout; retry window exhausted after 180 seconds") });
+    expect(performance.now() - started).toBeGreaterThanOrEqual(PRIVACY_RETRY_WINDOW_MS);
+    expect(dispatches).toBe(0);
+    expect(calls).toBe(3);
+  } finally { await worker.shutdown(); }
+}, 220_000);

@@ -11,8 +11,13 @@ No prompt leaves privacy preparation during this wait. The worker still
 filters against every stored rule, requires a complete matcher and verifies
 the current revision before returning. Preparation checks its revision again
 before accepting the result. Revoked operation leases stop retries and results.
-The existing activation and reservation checks still govern dispatch after
-preparation returns.
+The launch-side stability-wait revision read, cached-input revision read and
+initial input revision read are inside the same retry mechanism as composition.
+The stability-wait read and initial composition share one cutoff. The adapter's
+later pre-delivery callback starts a new bounded preparation if needed; its
+cached-input revision check is inside that callback's retry. Durable activation
+input is updated only after preparation succeeds. The existing activation and
+reservation checks still govern dispatch after preparation returns.
 
 Timeout, busy-store, queue-capacity, retirement-timeout and revision-change
 diagnostics are eligible for retry. Corruption, permission errors, invalid
@@ -78,3 +83,20 @@ start. Their ranking and selection utility are lost for that start; they remain
 stored and still participate in outgoing privacy filtering, including archived
 rules and reasons. The warning is independent of read failures. This change
 leaves selection and its ceiling unchanged.
+
+## Regression evidence
+
+`src/lib/pipelines/stageInputRetry.test.ts` injects filesystem read failures at all
+three launch-side revision reads. One busy read recovers to one filtered
+adapter effect; persistent busy reads exhaust 180 seconds with the safe cause;
+permission failures refuse without a retry. The existing role-privacy suite
+covers revision changes, activation cancellation and reservation recovery.
+
+`src/lib/memory/privacyRetry.test.ts` also runs an independently supervised child with
+real clocks and a real `TaskPageWorker` driving leased blocked subprocesses.
+Thirty seconds of initial preparation leave about 27 seconds for its last
+worker request. The normal cap exhausts the shared 180-second window with a
+cause-bearing refusal and zero dispatches. A separate 195-second watchdog
+fails a worker whose request ignores that remaining budget, and closes its
+owned process tree; recorded worker identities must all be dead afterward.
+The fast mocked-clock tests retain their arithmetic and late-result checks.
