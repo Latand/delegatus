@@ -565,6 +565,9 @@ function taskDueIndexCurrent(db: Database): boolean {
  * The caller holds the startup writer transaction; a refusal rolls it back. */
 function backfillPipelineRequestReceipts(db: Database): void {
   const deadline = performance.now() + 30_000;
+  const checkBudget = () => {
+    if (performance.now() >= deadline) throw new Error("pipeline receipt backfill exceeded its startup budget");
+  };
   const insert = db.query("INSERT OR IGNORE INTO pipeline_request_receipts(collection,row_key,request_key) VALUES (?,?,?)");
   const existing = db.query<{ request_key: string }, [string, string]>(
     "SELECT request_key FROM pipeline_request_receipts WHERE collection=? AND row_key=?");
@@ -574,37 +577,44 @@ function backfillPipelineRequestReceipts(db: Database): void {
   for (const collection of ["pipelines", "pipelines_archive"]) {
     let after = "";
     for (;;) {
-      if (performance.now() >= deadline) throw new Error("pipeline receipt backfill exceeded its startup budget");
+      checkBudget();
       const rows = db.query<{ row_key: string }, [string, string]>(
         "SELECT row_key FROM state_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT 16",
       ).all(collection, after);
       for (const { row_key: key } of rows) {
-        if (performance.now() >= deadline) throw new Error("pipeline receipt backfill exceeded its startup budget");
+        checkBudget();
         const value = parseSqliteJson(read.get(collection, key)!.value_json, db) as Record<string, unknown> | null;
+        checkBudget();
         const keys = new Set<string>();
         const add = (receipt: unknown) => {
+          checkBudget();
           if (receipt && typeof receipt === "object" && typeof (receipt as { key?: unknown }).key === "string") {
             keys.add((receipt as { key: string }).key);
           }
+          checkBudget();
         };
         if (value && typeof value === "object") {
           add(value.creationRequest); add(value.adoptedCreationRequest);
           if (Array.isArray(value.adoptedCreationRequests)) value.adoptedCreationRequests.forEach(add);
         }
-        if (existing.all(collection, key).some(row => !keys.has(row.request_key))) {
+        if (existing.all(collection, key).some(row => { checkBudget(); return !keys.has(row.request_key); })) {
           throw new Error("pipeline receipt projection contradicts its retained row");
         }
         for (const requestKey of keys) {
-          if (["pipelines", "pipelines_archive"].some(other => conflicts.get(other, requestKey, key))) {
+          checkBudget();
+          if (["pipelines", "pipelines_archive"].some(other => { checkBudget(); return conflicts.get(other, requestKey, key); })) {
             throw new Error("pipeline receipt key has conflicting retained owners");
           }
+          checkBudget();
           insert.run(collection, key, requestKey);
+          checkBudget();
         }
         after = key;
       }
       if (rows.length < 16) break;
     }
   }
+  checkBudget();
 }
 
 function openRawDatabase(filename: string): Database {
