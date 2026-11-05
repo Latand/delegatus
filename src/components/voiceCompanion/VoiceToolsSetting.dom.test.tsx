@@ -276,6 +276,27 @@ test("a failed dry run reads its reason, and a stale digest rereads the record b
   expect(button(host, "remove")).not.toBeNull();
 });
 
+for (const locale of ["en", "uk"] as const) test(`a tool filter that matches nothing says so in a muted line (${locale})`, async () => {
+  const many = { ...catalog, tools: Array.from({ length: 8 }, (_, at) => ({ name: `tool_${at}`, description: `Fixture tool ${at}.`, inputSchema: { type: "object" } })) };
+  routes({ spotify: spotify({ missingSecrets: [], catalog: many, lastDryRun: { code: "OK", at: AT, digest: digestOf(500) } }) });
+  setLocale(locale);
+  try {
+    const host = await mount();
+    const field = host.querySelector<HTMLInputElement>("[data-voice-tool-filter]")!;
+    const filter = async (value: string) => {
+      const propsKey = Object.keys(field).find(key => key.startsWith("__reactProps$"))!;
+      await act(async () => (field as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!.onChange({ target: { value } }));
+    };
+    expect(host.querySelector("[data-voice-tool-filter-none]")).toBeNull();
+    await filter("zzzz-no-such-tool");
+    expect(host.querySelectorAll("[data-voice-tool]")).toHaveLength(0);
+    expect(host.querySelector("[data-voice-tool-filter-none]")?.textContent).toBe(translate(locale, "settings.voice.toolFilterNone"));
+    await filter("tool_3");
+    expect(host.querySelector("[data-voice-tool-filter-none]")).toBeNull();
+    expect(host.querySelectorAll("[data-voice-tool]")).toHaveLength(1);
+  } finally { resetLocaleForTests(); localStorage.removeItem("llv_lang"); }
+});
+
 test("an HTTP server shows its URL, a literal header's value and a secret header's name, and the Ukrainian strings cover every visible line", async () => {
   routes({ remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: ["Authorization", "X-Workspace"], headerValues: { "X-Workspace": "studio-a" } },
     missingSecrets: [], secretRefs: ["remote-token"] }) });

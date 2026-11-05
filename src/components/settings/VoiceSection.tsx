@@ -172,7 +172,7 @@ function CodexLines({ settings }: { settings: NonNullable<ReturnType<typeof useV
   const date = call ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short" }).format(new Date(call.endedAt)) : "";
   const readAt = plan ? new Intl.DateTimeFormat(locale, now - plan.observedAt < 86_400_000 ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(plan.observedAt)) : "";
   return (
-    <div data-voice-companion-codex="" className="flex flex-col gap-0.5 px-5 pb-1.5 text-ui leading-snug text-muted tabular-nums max-sm:px-4">
+    <div data-voice-companion-codex="" className="flex flex-col gap-0.5 px-5 pb-1.5 text-ui leading-snug text-muted tabular-nums settings-sheet:px-4">
       <p data-voice-companion-last-call="" data-settings-unit="">{call ? t("voiceCompanion.settings.lastCodexCall", { duration: callDuration(call.seconds), date }) : t("voiceCompanion.settings.noCall")}</p>
       {/* The plan as the footer sets it: one short line a window with its figure emphasised, the whole-account note once above them and the reading time below. */}
       {plan ? <div className="flex flex-col gap-0.5" data-voice-companion-plan="" data-tone={planTone(plan)}>

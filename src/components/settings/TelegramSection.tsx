@@ -217,7 +217,7 @@ function Overview({ state, failure, go }: { state: TelegramBotState; failure: Re
           {active.map((chat) => <ChatListRow key={chat.chatId} chat={chat} go={go} />)}
           {active.length === 0 ? <TextRow tone="muted">{connected ? <Prose text={t("telegram.bot.noChats", { username: status.bot?.username ?? "bot" })} /> : t("telegram.bot.noCloneChats")}</TextRow> : null}
           {inactive.length ? (
-            <button type="button" data-telegram-inactive-fold="" data-settings-unit="" aria-expanded={foldOpen} onClick={() => setFoldOpen((was) => !was)} className={`flex min-h-10 w-full items-center gap-2 px-5 text-left text-body font-semibold text-secondary hover:bg-sunken max-sm:min-h-11 max-sm:px-4 ${FOCUS}`}>
+            <button type="button" data-telegram-inactive-fold="" data-settings-unit="" aria-expanded={foldOpen} onClick={() => setFoldOpen((was) => !was)} className={`flex min-h-10 w-full items-center gap-2 px-5 text-left text-body font-semibold text-secondary hover:bg-sunken settings-sheet:min-h-11 settings-sheet:px-4 ${FOCUS}`}>
               <span className="min-w-0 flex-1 truncate">{t("telegram.bot.inactive", { count: inactive.length })}</span>
               <Arrow data-settings-chevron="" className="h-4 w-4 shrink-0 text-muted" aria-hidden />
             </button>
@@ -380,7 +380,7 @@ function ChatPage({ chat, state, failure, here }: { chat: TelegramBotChatView; s
       {failure}
       {posting && chat.alias ? (
         <ActionsRow>
-          <button type="button" data-telegram-chat-test="" disabled={state.busy} className={BUTTON} onClick={() => here(() => state.testPost(chat.alias!).then((sent) => { if (sent) setTested(true); }))}>{t("telegram.bot.test")}</button>
+          <button type="button" data-telegram-chat-test="" disabled={state.busy} className={BUTTON} onClick={() => { setTested(false); here(() => state.testPost(chat.alias!).then((sent) => { if (sent) setTested(true); })); }}>{t("telegram.bot.test")}</button>
           {tested ? <span role="status" className="text-ui font-semibold text-success">{t("telegram.bot.testSent", { title: chat.title })}</span> : null}
         </ActionsRow>
       ) : null}
@@ -479,7 +479,8 @@ export function TelegramBotRow({ state, onOpen }: { state: TelegramBotState; onO
   const name = status?.connected ? status.bot?.name ?? t("telegram.bot.title") : t("telegram.bot.title");
   return (
     <section aria-label={t("telegram.bot.title")} data-telegram-bot-entry="" className="flex min-w-0 items-center gap-1 border-t border-border pt-2">
-      {status?.connected ? <StatusDot tone={dot.tone} note={dot.note} label={name} /> : null}
+      {/* Its target is the button's height: 44 px on the phone, 24 on the desktop. */}
+      {status?.connected ? <StatusDot tone={dot.tone} note={dot.note} label={name} hit="h-11 w-11 justify-center sm:h-6 sm:w-6" /> : null}
       <button type="button" data-telegram-bot-open="" className={`flex min-h-[44px] min-w-0 flex-1 items-center gap-2 rounded-[6px] text-left hover:bg-sunken sm:min-h-[28px] ${FOCUS}`} onClick={() => { onOpen?.(); openSettings("telegram"); }}>
         <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-primary">{name}</span>
         <span className="shrink-0 text-[10.5px] font-medium text-muted">{status?.connected ? dot.word : t("settings.notSet")}</span>

@@ -31,12 +31,12 @@ const DENSITY: Record<Density, { box: string; boxHint: string; label: string; hi
   sheet: { box: "min-h-11 px-4 py-1.5", boxHint: "min-h-11 px-4 pt-3 pb-1.5", label: "text-body", hint: "text-ui", pad: "px-4", section: "", pick: "w-48" },
 };
 export const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-export const BUTTON = `min-h-9 rounded-control border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 max-sm:min-h-11 max-sm:text-body ${FOCUS}`;
-export const PRIMARY = `min-h-9 rounded-control bg-brand px-3 text-ui font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 max-sm:min-h-11 max-sm:text-body ${FOCUS}`;
+export const BUTTON = `min-h-9 rounded-control border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 settings-sheet:min-h-11 settings-sheet:text-body ${FOCUS}`;
+export const PRIMARY = `min-h-9 rounded-control bg-brand px-3 text-ui font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 settings-sheet:min-h-11 settings-sheet:text-body ${FOCUS}`;
 /* The product's warning button (TelegramFileConfirmation): the secondary's shape, the warning colour on the surface. */
-export const CAUTION = `min-h-9 rounded-control border border-warning bg-card px-3 text-ui font-semibold text-warning hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 max-sm:min-h-11 max-sm:text-body ${FOCUS}`;
-export const DANGER_TEXT = `min-h-9 px-1 first:-ml-1 font-semibold text-danger underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-45 max-sm:min-h-11 text-body ${FOCUS}`;
-export const FIELD = `min-h-9 w-full min-w-0 rounded-control border border-border bg-well px-2.5 text-body text-primary placeholder:text-muted disabled:cursor-not-allowed disabled:opacity-55 max-sm:min-h-11 ${FOCUS}`;
+export const CAUTION = `min-h-9 rounded-control border border-warning bg-card px-3 text-ui font-semibold text-warning hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 settings-sheet:min-h-11 settings-sheet:text-body ${FOCUS}`;
+export const DANGER_TEXT = `min-h-9 px-1 first:-ml-1 font-semibold text-danger underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-45 settings-sheet:min-h-11 text-body ${FOCUS}`;
+export const FIELD = `min-h-9 w-full min-w-0 rounded-control border border-border bg-well px-2.5 text-body text-primary placeholder:text-muted disabled:cursor-not-allowed disabled:opacity-55 settings-sheet:min-h-11 ${FOCUS}`;
 
 /** The rows of one page. Its foot keeps 16 px under an open «Details» at the end of the surface. */
 export function Rows({ children, ...data }: { children: ReactNode } & Data) {
@@ -44,14 +44,15 @@ export function Rows({ children, ...data }: { children: ReactNode } & Data) {
   return <div {...data} data-settings-rows="" className={`flex flex-1 flex-col break-words pb-4 font-normal ${sheet ? "pt-1" : "pt-2"}`}>{children}</div>;
 }
 
+/** A heading under the page's own: the window's page title is an h3, the sheet's page title stands in its back row under the h2. */
 export function SectionHead({ title, count }: { title: string; count?: number }) {
   const density = useDensity();
   return density === "sheet"
-    ? <div data-settings-unit="" data-settings-section=""><MobileSheetSection count={count}>{title}</MobileSheetSection></div>
+    ? <div role="heading" aria-level={3} data-settings-unit="" data-settings-section=""><MobileSheetSection count={count}>{title}</MobileSheetSection></div>
     : (
-      <div data-settings-unit="" data-settings-section="" className={`flex items-center gap-1.5 font-semibold text-secondary ${DENSITY.dialog.section}`}>
+      <h4 data-settings-unit="" data-settings-section="" className={`flex items-center gap-1.5 font-semibold text-secondary ${DENSITY.dialog.section}`}>
         {title}{count !== undefined ? <span className="text-caption font-semibold tabular-nums text-muted">{count}</span> : null}
-      </div>
+      </h4>
     );
 }
 
@@ -112,7 +113,7 @@ function SheetChoice({ label, value, options, width, disabled, onChange, selectA
 }
 
 /** The label on the left, the value on the right at one width per group; the muted line spans the row under both. */
-export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disabled, onChange, attrs, selectAttrs, describedBy, id, labelNode, children }: {
+export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disabled, onChange, attrs, selectAttrs, describedBy, id, labelNode, wide = false, children }: {
   label: string;
   /** What a screen reader hears when the label alone would not say it. */
   ariaLabel?: string;
@@ -127,6 +128,8 @@ export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disa
   id?: string;
   /** A label drawn otherwise than plain, such as one a `<label>` ties to the select. */
   labelNode?: ReactNode;
+  /** Values as long as a device's name: in the window the select takes three fifths of the row, so the name reads whole. */
+  wide?: boolean;
   children?: ReactNode;
 }) {
   const density = useDensity();
@@ -139,7 +142,7 @@ export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disa
           {density === "sheet"
             ? <SheetChoice label={ariaLabel} value={value} options={options} width={d.pick} disabled={disabled} onChange={onChange} selectAttrs={selectAttrs} describedBy={describedBy} id={id} />
             : (
-              <Select roomy id={id} value={value} disabled={disabled} aria-label={ariaLabel} aria-describedby={describedBy} className={`shrink-0 ${d.pick}`} onChange={(event) => onChange(event.target.value)} {...selectAttrs}>
+              <Select roomy id={id} value={value} disabled={disabled} aria-label={ariaLabel} aria-describedby={describedBy} className={`shrink-0 ${wide ? "w-3/5" : d.pick}`} onChange={(event) => onChange(event.target.value)} {...selectAttrs}>
                 {options.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
               </Select>
             )}
@@ -237,7 +240,7 @@ export function BlockRow({ children, attrs }: { children: ReactNode; attrs?: Dat
   return <div {...attrs} data-settings-unit="" className={`${d.pad} py-1.5`}>{children}</div>;
 }
 
-export const TEXT_ACTION = `min-h-6 shrink-0 px-1 font-semibold text-secondary underline underline-offset-2 hover:text-primary disabled:opacity-45 max-sm:min-h-11 text-ui ${FOCUS}`;
+export const TEXT_ACTION = `min-h-6 shrink-0 px-1 font-semibold text-secondary underline underline-offset-2 hover:text-primary disabled:opacity-45 settings-sheet:min-h-11 text-ui ${FOCUS}`;
 
 const TEXT_TONE = { muted: "text-muted", warning: "text-warning", danger: "text-danger", plain: "text-secondary" } as const;
 
@@ -260,7 +263,7 @@ export function RefusalLine({ children, attrs }: { children: ReactNode; attrs?: 
 export function ActionsRow({ children, note, foot = false, attrs }: { children: ReactNode; note?: ReactNode; foot?: boolean; attrs?: Data }) {
   const d = DENSITY[useDensity()];
   return (
-    <div {...attrs} data-settings-unit="" data-settings-row="actions" className={`mt-1 flex flex-col gap-2 border-t border-border pb-2 pt-3 ${d.pad} ${foot ? "max-sm:mt-auto" : ""}`}>
+    <div {...attrs} data-settings-unit="" data-settings-row="actions" className={`mt-1 flex flex-col gap-2 border-t border-border pb-2 pt-3 ${d.pad} ${foot ? "settings-sheet:mt-auto" : ""}`}>
       <div className="flex flex-wrap items-center gap-2">{children}</div>
       {note ? <span className={`block font-normal leading-snug text-muted ${d.hint}`}>{note}</span> : null}
     </div>
@@ -271,12 +274,22 @@ export function ActionsRow({ children, note, foot = false, attrs }: { children: 
 export function ConfirmAction({ label, prompt, onConfirm, disabled }: { label: string; prompt: string; onConfirm: () => void; disabled?: boolean }) {
   const { t } = useLocale();
   const [arming, setArming] = useState(false);
-  if (!arming) return <button type="button" disabled={disabled} onClick={() => setArming(true)} className={DANGER_TEXT}>{label}</button>;
+  const promptId = useId();
+  const arm = useRef<HTMLButtonElement | null>(null);
+  const cancel = useRef<HTMLButtonElement | null>(null);
+  /* The pressed button leaves the page: the keyboard lands on Cancel, the safe answer, and a cancel returns it to the button that armed. */
+  const move = useRef<"in" | "back" | null>(null);
+  useEffect(() => {
+    if (move.current === "in") cancel.current?.focus();
+    else if (move.current === "back") arm.current?.focus();
+    move.current = null;
+  }, [arming]);
+  if (!arming) return <button ref={arm} type="button" disabled={disabled} onClick={() => { move.current = "in"; setArming(true); }} className={DANGER_TEXT}>{label}</button>;
   return (
-    <span className="flex w-full flex-wrap items-center gap-2">
-      <span className="w-full text-ui font-semibold leading-snug text-danger">{prompt}</span>
+    <span role="group" aria-labelledby={promptId} data-settings-confirm="" className="flex w-full flex-wrap items-center gap-2">
+      <span id={promptId} role="alert" className="w-full text-ui font-semibold leading-snug text-danger">{prompt}</span>
       <button type="button" disabled={disabled} className={`${BUTTON} !border-danger !text-danger`} onClick={() => { setArming(false); onConfirm(); }}>{t("telegram.confirmCta")}</button>
-      <button type="button" disabled={disabled} className={BUTTON} onClick={() => setArming(false)}>{t("telegram.confirmCancel")}</button>
+      <button ref={cancel} type="button" disabled={disabled} className={BUTTON} onClick={() => { move.current = "back"; setArming(false); }}>{t("telegram.confirmCancel")}</button>
     </span>
   );
 }

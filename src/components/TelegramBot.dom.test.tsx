@@ -401,3 +401,34 @@ for (const order of ["the other chat answers first", "the refusal answers first"
     } finally { globalThis.fetch = saved; }
   });
 }
+
+test("a test post's success goes away on the next press, so a later refusal reads alone", async () => {
+  const status: TelegramBotStatusPayload = {
+    ...DISCONNECTED_BOT_STATUS, connected: true, receiving: "polling",
+    bot: { name: "Report Bot", username: "report_test_bot", canReadAllGroupMessages: false, canJoinGroups: true }, chats: CHATS,
+  };
+  let failure: TelegramBotState["failure"] = null;
+  let answer: (sent: boolean) => void = () => {};
+  const state = (): TelegramBotState => ({
+    status, busy: false, failure, refresh: async () => {}, connect: async () => {}, setChat: async () => {}, addChat: async () => null,
+    setDocumentRoots: async () => true, remove: async () => {},
+    testPost: () => new Promise<boolean>((resolve) => { answer = (sent) => { if (!sent) failure = { code: "action_failed" }; resolve(sent); }; }),
+  });
+  const render = () => root!.render(<Paged state={state()} />);
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => render());
+  await openChat(container, "-1000000000101");
+  const press = () => act(async () => container!.querySelector<HTMLButtonElement>("[data-telegram-chat-test]")!.click());
+  const sent = () => container!.querySelector("[role='status']")?.textContent ?? null;
+  const settle = (ok: boolean) => act(async () => { answer(ok); await new Promise((resolve) => setTimeout(resolve, 0)); render(); });
+  await press();
+  await settle(true);
+  expect(sent()).toBe("Test post sent to Team Reports.");
+  await press();
+  expect(sent()).toBeNull();
+  await settle(false);
+  expect(sent()).toBeNull();
+  expect(container.querySelector("[data-telegram-failure='action_failed']")).not.toBeNull();
+});

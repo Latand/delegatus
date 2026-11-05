@@ -15,13 +15,16 @@ export const DOT_CLASS: Record<DotTone, string> = {
 
 const POPOVER_WIDTH = 240;
 const EDGE = 8;
+/* Long enough for a pointer to cross from the dot to the popover under the row. */
+const CLOSE_DELAY = 200;
 
 /**
  * A status: a 7 px dot, and a short popover on hover, focus, click or tap
  * (the operator's rule of 2026-10-12). It floats on an opaque surface through a
  * portal at the popover layer, so it rises above the window or sheet that holds
- * it, and it takes no focus. Escape closes it alone; the next Escape reaches
- * the window. `hit` is the classes of the button's target area.
+ * it, and it takes no focus. A pointer may move onto it and read it there
+ * (WCAG 1.4.13). Escape closes it alone; the next Escape reaches the window.
+ * `hit` is the classes of the button's target area.
  */
 export function StatusDot({ tone, note, label, hit = "h-6 w-6 justify-center", dotClass = "", anchor }: {
   tone: DotTone;
@@ -39,6 +42,15 @@ export function StatusDot({ tone, note, label, hit = "h-6 w-6 justify-center", d
   const trigger = useRef<HTMLButtonElement | null>(null);
   const dot = useRef<HTMLSpanElement | null>(null);
   const popover = useRef<HTMLDivElement | null>(null);
+  const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hold = useCallback(() => { if (closing.current) clearTimeout(closing.current); closing.current = null; }, []);
+  const enter = useCallback(() => { hold(); hovering.current = true; setOpen(true); }, [hold]);
+  const leave = useCallback(() => {
+    hold();
+    hovering.current = false;
+    closing.current = setTimeout(() => { closing.current = null; if (!pinned.current && !hovering.current) setOpen(false); }, CLOSE_DELAY);
+  }, [hold]);
+  useEffect(() => hold, [hold]);
 
   const measure = useCallback(() => {
     const button = trigger.current;
@@ -58,7 +70,7 @@ export function StatusDot({ tone, note, label, hit = "h-6 w-6 justify-center", d
 
   useEffect(() => {
     if (!open) return;
-    const close = () => { pinned.current = false; setOpen(false); };
+    const close = () => { hold(); pinned.current = false; hovering.current = false; setOpen(false); };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.stopPropagation();
@@ -79,7 +91,7 @@ export function StatusDot({ tone, note, label, hit = "h-6 w-6 justify-center", d
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
-  }, [open, measure]);
+  }, [open, measure, hold]);
 
   return (
     <>
@@ -90,10 +102,10 @@ export function StatusDot({ tone, note, label, hit = "h-6 w-6 justify-center", d
         aria-label={`${label}: ${note}`}
         aria-expanded={open}
         className={`flex shrink-0 items-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hit}`}
-        onPointerEnter={(event) => { if (event.pointerType === "mouse") { hovering.current = true; setOpen(true); } }}
-        onPointerLeave={(event) => { if (event.pointerType === "mouse") { hovering.current = false; if (!pinned.current) setOpen(false); } }}
+        onPointerEnter={(event) => { if (event.pointerType === "mouse") enter(); }}
+        onPointerLeave={(event) => { if (event.pointerType === "mouse") leave(); }}
         onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) setOpen(true); }}
-        onBlur={() => { if (!pinned.current) setOpen(false); }}
+        onBlur={() => { if (!pinned.current && !hovering.current) setOpen(false); }}
         onClick={(event) => {
           event.stopPropagation();
           /* A mouse already opened it by hovering: its click holds it open. A tap, which has no hover, toggles. */
@@ -111,6 +123,8 @@ export function StatusDot({ tone, note, label, hit = "h-6 w-6 justify-center", d
           role="tooltip"
           data-settings-dot-popover=""
           onClick={(event) => event.stopPropagation()}
+          onPointerEnter={(event) => { if (event.pointerType === "mouse") enter(); }}
+          onPointerLeave={(event) => { if (event.pointerType === "mouse") leave(); }}
           style={{ left: 0, top: 0, maxWidth: POPOVER_WIDTH, visibility: "hidden" }}
           className={`fixed ${Z.popover} w-max rounded-control border border-border bg-raised px-2.5 py-1.5 text-ui font-normal leading-snug text-primary shadow-2`}
         >

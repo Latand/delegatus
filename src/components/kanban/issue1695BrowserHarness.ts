@@ -1488,6 +1488,7 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
     for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
       for (const scene of ["multi-one", "multi-kicked", "multi-refused", "multi-ready"]) {
         const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        let railDot: { dot: number[]; opens: boolean } | null = null;
         try {
           await context.addInitScript(({ lang, scheme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv_theme", scheme); }, { lang, scheme });
           const page = await context.newPage();
@@ -1496,6 +1497,16 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             await page.locator('[data-mobile2-open="menu"]').first().click();
             await page.locator('[data-mobile2-menu-row="accounts"]').click();
             await page.locator("[data-mobile2-telegram] button").first().click();
+            /* The panel's status dot is a 44 px target of its own, and a tap on the row's button still reaches the button. */
+            await page.locator("[data-telegram-bot-entry] [data-settings-dot]").waitFor();
+            const entry = await page.locator("[data-telegram-bot-entry]").evaluate((section) => {
+              const dot = section.querySelector<HTMLElement>("[data-settings-dot]")!.getBoundingClientRect();
+              const open = section.querySelector<HTMLElement>("[data-telegram-bot-open]")!;
+              const box = open.getBoundingClientRect();
+              return { dot: [Math.round(dot.width), Math.round(dot.height)], opens: open.contains(document.elementFromPoint(box.left + 4, box.top + box.height / 2)) };
+            });
+            if (entry.dot[0]! < 44 || entry.dot[1]! < 44 || !entry.opens) throw new Error(`rail Telegram dot ${JSON.stringify(entry)}`);
+            railDot = entry;
           } else {
             const footer = page.locator("[data-rail-footer]").first();
             await footer.waitFor();
@@ -1550,7 +1561,7 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             }
           }
           const actions = await page.evaluate(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.map(p => p.action));
-          readings.push({ key, width, height, ...before, actions, frames });
+          readings.push({ key, width, height, ...before, actions, frames, ...(railDot ? { railDot } : {}) });
         } finally { await context.close(); }
       }
     }
@@ -1681,6 +1692,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "voice", name: "devices-permission", scene: "voice-codex", section: "voice", query: "dev=noperm", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-devices-allow]" },
   { surface: "voice", name: "devices-denied", scene: "voice-codex", section: "voice", query: "dev=denied", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='input']" },
   { surface: "voice", name: "devices-missing", scene: "voice-codex", section: "voice", query: "dev=gone", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-device-state='missing']" },
+  /* A chosen device's long name reads whole: in the window's wide select, and on the sheet in the line under it. */
+  { surface: "voice", name: "devices-chosen", scene: "voice-codex", section: "voice", query: "dev=chosen", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device='input'] select" },
   { surface: "voice", name: "devices-no-speakers", scene: "voice-codex", section: "voice", query: "dev=nosink", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='output']" },
   { surface: "voice", name: "timer-on", scene: "voice-timer", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-timer-telegram]").scrollIntoViewIfNeeded(), defining: "[data-timer-telegram] [role=switch][aria-checked=true]" },
   { surface: "voice", name: "memory-empty", scene: "voice-codex", section: "voice", query: "dev=default&calls=empty", steps: async (page) => page.locator("[data-call-memory-row-open]").scrollIntoViewIfNeeded(), defining: "[data-call-memory-row-open]" },
@@ -1695,6 +1708,7 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "voice", name: "tool-containment", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), defining: "[data-voice-tool-uncontained]" },
   { surface: "voice", name: "tool-passed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-passed"), defining: "[data-voice-tool-action='approve']:enabled" },
   { surface: "voice", name: "tool-enabled-filter", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("calendar"), defining: "[data-voice-tool-filter]" },
+  { surface: "voice", name: "tool-filter-empty", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-filter]").fill("zzzz-no-such-tool"); }, defining: "[data-voice-tool-filter-none]" },
   { surface: "voice", name: "tool-changed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("notes"), defining: "[data-voice-tool-state='changed']" },
   { surface: "voice", name: "tool-rejected", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("drive"), defining: "[data-voice-tool-state='rejected']" },
   { surface: "voice", name: "tool-refused", scene: "voice-codex", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-ask]").click(); }, defining: "[data-voice-tools-refused]" },
@@ -1708,7 +1722,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
 const SETTINGS_COMBOS = [
   { lang: "uk", theme: "light" }, { lang: "en", theme: "dark" }, { lang: "en", theme: "light" }, { lang: "uk", theme: "dark" },
 ] as const;
-const SETTINGS_DEVICES = { desktop: { width: 1440, height: 900 }, mid: { width: 900, height: 800 }, short: { width: 1000, height: 700 }, phone: { width: 390, height: 844 } } as const;
+/* A landscape phone is short: the sheet opens there too (MOBILE_LAYOUT_QUERY), with the sheet's 44 px targets. */
+const SETTINGS_DEVICES = { desktop: { width: 1440, height: 900 }, mid: { width: 900, height: 800 }, short: { width: 1000, height: 700 }, phone: { width: 390, height: 844 }, landscape: { width: 844, height: 390 } } as const;
 
 /** Measures the open surface: the brief's §5 numbers, the rules of a settings surface, and what a person would see cut. */
 function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null; landed: boolean }) {
@@ -1754,6 +1769,18 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   }
   const scrollerBox = scroller.getBoundingClientRect();
   for (const { text, rects, face } of ranges) if (!face) for (const rect of rects) if (rect.right > scrollerBox.right + 0.5 || rect.left < scrollerBox.left - 0.5) failures.push(`cut sideways: ${text}`);
+  /* In the window a select's chosen value reads whole: its text fits inside the face beside the native arrow. */
+  if (!phone) {
+    const context = document.createElement("canvas").getContext("2d")!;
+    for (const select of scroller.querySelectorAll<HTMLSelectElement>("[data-settings-row='choice'] select")) {
+      const text = select.selectedOptions[0]?.textContent ?? "";
+      const style = getComputedStyle(select);
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+      const needs = context.measureText(text).width;
+      if (needs > room) failures.push(`select cuts its value: ${text.slice(0, 48)} needs ${Math.ceil(needs)} px, has ${Math.floor(room)}`);
+    }
+  }
   /* A literal breaks only between its parts. */
   for (const part of scroller.querySelectorAll<HTMLElement>("[data-settings-literal] > span.whitespace-nowrap")) {
     const tops = new Set([...part.getClientRects()].map((rect) => Math.round(rect.top)));
@@ -1843,11 +1870,11 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
 
 export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean, only?: (frame: string) => boolean) {
   fs.mkdirSync(out, { recursive: true });
-  const devices = (phone ? ["phone"] : ["desktop", "mid", "short"]) as (keyof typeof SETTINGS_DEVICES)[];
+  const devices = (phone ? ["phone", "landscape"] : ["desktop", "mid", "short"]) as (keyof typeof SETTINGS_DEVICES)[];
   const jobs: { frame: SettingsFrame; device: keyof typeof SETTINGS_DEVICES; lang: "en" | "uk"; theme: "light" | "dark"; key: string }[] = [];
   for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of SETTINGS_FRAMES) {
     /* Every state in all four combinations at the named widths; the between and short heights read in two, at rest and with Details open. */
-    if ((device === "mid" || device === "short") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
+    if ((device === "mid" || device === "short" || device === "landscape") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
     const key = `${frame.surface}-${device}-${frame.name}-${lang}-${theme}`;
     if (only && !only(key)) continue;
     jobs.push({ frame, device, lang, theme, key });

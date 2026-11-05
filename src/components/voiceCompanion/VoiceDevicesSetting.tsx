@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { ChoiceRow, SectionHead } from "@/components/settings/settingsRows";
+import { ChoiceRow, SectionHead, useDensity } from "@/components/settings/settingsRows";
 import {
   listVoiceDevices,
   outputChoiceSupported,
@@ -34,6 +34,7 @@ export function VoiceDevicesSetting() {
   const input = useVoiceDeviceChoice("input");
   const output = useVoiceDeviceChoice("output");
   const active = useActiveVoiceInput();
+  const sheet = useDensity() === "sheet";
   const ids = { microphone: useId(), speakers: useId(), microphoneHint: useId(), speakersHint: useId() };
   const alive = useRef(true);
 
@@ -92,6 +93,7 @@ export function VoiceDevicesSetting() {
     return (
       <ChoiceRow
         label={label}
+        wide
         attrs={{ "data-voice-device": kind, "data-device-state": resolved.state }}
         id={kind === "input" ? ids.microphone : ids.speakers}
         value={value}
@@ -104,13 +106,13 @@ export function VoiceDevicesSetting() {
           ...(hidden ? [] : entries.map(entry => ({ value: entry.id, label: nameOf(entry, entries) }))),
         ]}
       >
-        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className="px-5 pb-1.5 text-ui leading-snug text-muted max-sm:px-4" data-voice-device-hint={kind}>{lines.map(entry => <p key={entry.key} className={entry.phoneOnly ? "sm:hidden" : undefined}>{entry.text}</p>)}</div> : null}
+        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className={`${sheet ? "px-4" : "px-5"} pb-1.5 text-ui leading-snug text-muted`} data-voice-device-hint={kind}>{lines.filter(entry => sheet || !entry.phoneOnly).map(entry => <p key={entry.key}>{entry.text}</p>)}</div> : null}
       </ChoiceRow>
     );
   };
 
   /* The lines a row carries under its select, each whole at 390 px where a native select cuts a long device name: the
-     device in use (the select shows it too, so the chosen device's line is drawn on the phone only), the marker of a
+     device in use (the window's wide select shows it whole, so the chosen device's line is drawn in the sheet only), the marker of a
      choice that is not connected, and the row's own remark. A row with nothing to say draws none. */
   const hint = (kind: VoiceDeviceKind, state: "default" | "present" | "missing", chosen: string, stored: string, defaultName: string | null): HintLine[] => {
     const inUse = (name: string, phoneOnly: boolean): HintLine => ({ key: "in-use", phoneOnly, text: t("voiceCompanion.devices.inUse", { name }) });
@@ -120,7 +122,7 @@ export function VoiceDevicesSetting() {
       if (!list.labelled) return [{ key: "permission", text: (
         <>
           {t("voiceCompanion.devices.permission")}{" "}
-          <button type="button" data-voice-devices-allow onClick={() => void allow()} className="min-h-9 rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">{t("voiceCompanion.devices.allow")}</button>
+          <button type="button" data-voice-devices-allow onClick={() => void allow()} className="min-h-9 rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 settings-sheet:min-h-11">{t("voiceCompanion.devices.allow")}</button>
         </>
       ) }];
       const using = state === "present" ? chosen : defaultName ?? "";

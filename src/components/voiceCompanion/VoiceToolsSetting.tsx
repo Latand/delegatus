@@ -178,7 +178,7 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
   const dryRunLine = !dryRun ? t("voiceCompanion.tools.dryRun.none")
     : passed ? t("voiceCompanion.tools.dryRun.ok", { time: when(dryRun.at), count: toolCount })
     : t("voiceCompanion.tools.dryRun.failed", { time: when(dryRun.at), reason: t((DRY_RUN_CODES.includes(dryRun.code) ? `voiceCompanion.tools.dryRun.${dryRun.code}` : "voiceCompanion.tools.dryRun.PROTOCOL_ERROR") as MessageKey) });
-  return <div data-voice-tool-server={name} data-state={state} className="flex flex-1 flex-col break-words pb-4 pt-2 font-normal max-sm:pt-1">
+  return <div data-voice-tool-server={name} data-state={state} className="flex flex-1 flex-col break-words pb-4 pt-2 font-normal settings-sheet:pt-1">
     <TextRow>{server.capability}</TextRow>
     <TextRow tone="muted">
       <span data-voice-tool-state={state}>{t(`voiceCompanion.tools.state.${state}` as MessageKey)}</span>
@@ -249,6 +249,7 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
     {catalog.length ? <div data-voice-tool-tools="" role="group" aria-labelledby={ids.tools}>
       <div id={ids.tools}><SectionHead title={t("voiceCompanion.tools.toolList")} count={catalog.length} /></div>
       {catalog.length > FILTER_ABOVE ? <BlockRow><input type="search" data-voice-tool-filter="" value={filter} aria-label={t("settings.voice.toolFilter")} placeholder={t("settings.voice.toolFilter")} onChange={event => setFilter(event.target.value)} className={FIELD} /></BlockRow> : null}
+      {shownTools.length === 0 ? <TextRow tone="muted" attrs={{ "data-voice-tool-filter-none": "" }}>{t("settings.voice.toolFilterNone")}</TextRow> : null}
       {shownTools.map(tool => {
         const choice = server.tools[tool.name] ?? { enabled: false, acts: tool.annotations?.readOnlyHint !== true };
         return <div key={tool.name} data-voice-tool={tool.name} data-settings-unit="" className={`flex items-center gap-3 ${density === "sheet" ? "min-h-11 px-4 py-1.5" : "min-h-10 px-5 py-1.5"}`}>

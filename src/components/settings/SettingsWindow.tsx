@@ -259,7 +259,7 @@ function PhoneWindow({ sections, section, sub, go, back, choose, close, project,
     /* The window's layer on both surfaces: over a resting voice head, which stands one step over a sheet, and over the
        setup guide, which fills the screen on first run while the install notice opens this. A live call's head keeps
        its place above every layer. */
-    <div className="relative" style={{ zIndex: LAYER.modal }}>
+    <div className="relative" data-settings-density="sheet" style={{ zIndex: LAYER.modal }}>
     <MobileSheet name="settings" title={t("headerMenu.settings")} onClose={close} full pinned={pinned}>
       <div className="flex min-h-full flex-col">
         <Fitted page={`${section ?? ""}/${sub?.id ?? ""}/${sub?.arg ?? ""}`}>
