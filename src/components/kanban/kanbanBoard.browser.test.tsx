@@ -2588,6 +2588,53 @@ function richMemory(): RoleMemoryProjectView {
 }
 
 describe("memory profile window: opening under slow data", () => {
+  browserTest("the first slow rules answer opens both tabs after a poll tick", async () => {
+    const out = path.resolve(".artifacts/memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let answeredFirst!: () => void;
+    let began!: () => void;
+    let started = Promise.resolve();
+    let reads = 0, posts = 0;
+    const pending: Array<() => void> = [];
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => {
+        reads++;
+        const wait = new Promise<void>(resolve => { pending.push(resolve); if (reads === 1) answeredFirst = resolve; });
+        began(); await wait; return Response.json(rules);
+      },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        return Response.json(service.read("garden", new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en"));
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        reads = 0; posts = 0; started = new Promise<void>(resolve => { began = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.clock.install({ time: new Date("2026-01-02T12:00:00.000Z") });
+          await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
+          await started;
+          await page.locator("[data-rules-window-loading]").waitFor();
+          await page.clock.fastForward(16_000);
+          answeredFirst();
+          await page.locator("[data-memory-profile]").waitFor({ timeout: 5000 });
+          await page.locator('[data-memory-profile][aria-busy="false"]').waitFor({ timeout: 5000 });
+          expect(reads).toBe(1);
+          expect(await page.locator("[data-rules-window-loading]").count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-section]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-rules.png`) });
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } finally { for (const release of pending.splice(0)) release(); await context.close(); }
+      }
+    } finally { for (const release of pending.splice(0)) release(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
   browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
     const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
