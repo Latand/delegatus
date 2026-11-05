@@ -24,10 +24,22 @@ export async function attemptTempState(owner: AttemptTempOwner, inventory = new 
     && (attempt.definition?.outputs?.length || stage?.outputs?.length || stage?.effectiveRole.roleId === "visual-critic")) return "live";
   if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)
     || ["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) {
-    if (pipeline.worktreeDir && fs.existsSync(pipeline.worktreeDir)) {
-      const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory, owner.directory, inventory);
-      if (reader.version() !== version) return "unknown";
-      if (referenced) return "live";
+    if (pipeline.worktreeDir) {
+      const checkout = fs.lstatSync(pipeline.worktreeDir, { throwIfNoEntry: false });
+      const present = fs.existsSync(pipeline.worktreeDir);
+      if (!!checkout !== present || checkout && (!checkout.isDirectory() || checkout.isSymbolicLink())) return "unknown";
+      if (present && checkout) {
+        const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory, owner.directory, inventory);
+        const after = fs.lstatSync(pipeline.worktreeDir, { throwIfNoEntry: false });
+        // A checkout that disappears or changes while its links are being
+        // inventoried cannot authorize retirement. Its restored tree may now
+        // contain a link omitted from the inventory snapshot.
+        if (!after?.isDirectory() || after.isSymbolicLink()
+          || `${after.dev}:${after.ino}` !== `${checkout.dev}:${checkout.ino}`
+          || after.mtimeMs !== checkout.mtimeMs || after.ctimeMs !== checkout.ctimeMs) return "unknown";
+        if (reader.version() !== version) return "unknown";
+        if (referenced) return "live";
+      }
     }
     return "settled";
   }

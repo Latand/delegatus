@@ -164,7 +164,7 @@ test("a checkout link created after the first authority inventory keeps its atte
   } finally { observed.mockRestore(); store.close(); }
 });
 
-test.each([0, 1, 2, 3, 4, 5, 6])("a restored checkout holds scratch across authority boundary %i (zero is the removal control)", async boundary => {
+test.each([0, 1, 2, 3, 4, 5, 6, 7])("a restored checkout holds scratch across authority boundary %i (zero is the removal control)", async boundary => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
   const { attemptTempState } = await import("./attemptTempProduction");
   const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
@@ -217,7 +217,7 @@ test.each([0, 1, 2, 3, 4, 5, 6])("a restored checkout holds scratch across autho
       expect(exists(directory)).toBeFalse();
     } else {
       expect(disappeared).toBeTrue(); expect(restored).toBeTrue();
-      expect(report).toMatchObject({ removed: 0, held: 1, liveHeld: 1, errors: 0 });
+      expect(report).toMatchObject({ removed: 0, held: 1, errors: 0 });
       expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
       expect(fs.readlinkSync(path.join(repository, "dependency"))).toBe(directory);
     }
