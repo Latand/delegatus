@@ -195,17 +195,19 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   } else if (dispatchStore && cached && priorDispatchCursor) {
     cached.cursors.boundedPatch(2, tx => tx.delete(dispatchCursorId));
   }
+  let preparationFailure: { error: unknown } | undefined;
   if (pending.some(row => row.state === "pending")) {
-    await step(() => ports.registry.prepareRecoveryIndexes(AbortSignal.timeout(ports.readMs ?? 10_000)));
+    try { await step(() => ports.registry.prepareRecoveryIndexes(AbortSignal.timeout(ports.readMs ?? 10_000))); }
+    catch (error) { ports.assertActive(); preparationFailure = { error }; }
   }
-  const receiptFailure = (row: SendFailureNotice, error: unknown) => {
+  const receiptFailure = (row: SendFailureNotice, error: unknown, phase = "receipt") => {
     ports.assertActive();
     const attempts = (row.attempts ?? 0) + 1;
     const detail = error instanceof Error ? error.message : String(error);
     const terminal = attempts >= 3;
     const seat = terminal ? fallback(row.senderConversationId, row.targetConversationId) : { kind: "skip" as const };
     update(row, { attempts,
-      reason: `Failure notice receipt unavailable: ${detail.slice(0, 300)}; original failure: ${row.reason}`.slice(0, 500),
+      reason: `Failure notice ${phase} unavailable: ${detail.slice(0, 300)}; original failure: ${row.reason}`.slice(0, 500),
       ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null } : {}) });
   };
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
@@ -216,6 +218,10 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
     if (projected?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     if (row.state === "failed") return;
+    // Preparation is shared by this page, but every pending obligation owns
+    // its durable retry budget. No keyed recovery or dispatch is safe until
+    // preparation succeeds; a timeout must still leave an actionable alarm.
+    if (preparationFailure) { receiptFailure(row, preparationFailure.error, "index preparation"); return; }
     let receipt: SendReceipt | null;
     try { receipt = await step(() => ports.receipt(row.operationId)); }
     catch (error) { ports.assertActive(); receiptFailure(row, error); return; }

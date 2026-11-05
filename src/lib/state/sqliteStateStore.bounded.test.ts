@@ -13,6 +13,80 @@ import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
 type Row = { key: string; value: number };
 
+test.each([0, 10_000, 50_000])("active key pages seek past finished history (%s finished rows)", history => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "active-key-page-"));
+  const filename = path.join(dir, "state.sqlite");
+  const rows: Row[] = Array.from({ length: history }, (_, index) => ({ key: `a${String(index).padStart(6, "0")}`, value: 0 }));
+  rows.push({ key: "z1", value: 1 }, { key: "z2", value: 1 }, { key: "z3", value: 1 });
+  let decodes = 0;
+  const options = { collection: "send_failure_notices", schemaVersion: 1, busyMessage: "busy",
+    key: (row: Row) => row.key, controllerActive: (row: Row) => row.value > 0,
+    decode: (raw: unknown) => { decodes++; return raw as Row; }, clone: structuredClone };
+  let store: SqliteStateCollection<Row> | undefined;
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "active-key-v1", loadRecords: () => rows }]);
+    store = new SqliteStateCollection(filename, options);
+    const peer = new Database(filename);
+    const query = spyOn(Database.prototype, "query");
+    try {
+      decodes = 0;
+      expect(store.keyRangeForController("", "z2", 1)).toEqual([{ key: "z1", value: 1 }]);
+      expect(decodes).toBe(1);
+      // Explain the actual production statement, including its selected index.
+      const sql = query.mock.calls.map(call => call[0]).find(sql => sql.includes("SELECT row_key, value_json FROM state_rows"))!;
+      const plan = peer.query<{ detail: string }, [string, string, string, number]>(`EXPLAIN QUERY PLAN ${sql}`)
+        .all(options.collection, "", "z2", 1).map(row => row.detail);
+      expect(plan).toHaveLength(1);
+      expect(plan[0]).toContain("collection=? AND controller_active=? AND row_key>? AND row_key<?");
+      expect(plan[0]).not.toContain("SCAN");
+      expect(store.keyRangeForController("z1", "z2", 32)).toEqual([{ key: "z2", value: 1 }]);
+      expect(store.keyRangeForController("z2", "z2", 32)).toEqual([]);
+      // Both the active predicate and the cursor order follow real writes.
+      store.boundedPatch(4, tx => { tx.put({ key: "z1", value: 0 }); tx.put({ key: "bnew", value: 1 }); });
+      expect(store.keyRangeForController("", "z1", 32)).toEqual([{ key: "bnew", value: 1 }]);
+      store.boundedPatch(2, tx => tx.delete("bnew"));
+      expect(store.keyRangeForController("", "z2", 32)).toEqual([{ key: "z2", value: 1 }]);
+    } finally { query.mockRestore(); peer.close(); }
+  } finally { store?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an existing database installs active key paging without reimporting or changing collection metadata", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "active-key-upgrade-"));
+  const filename = path.join(dir, "state.sqlite");
+  const options = { collection: "send_failure_notices", schemaVersion: 1, busyMessage: "busy",
+    key: (row: Row) => row.key, controllerActive: (row: Row) => row.value > 0,
+    decode: (raw: unknown) => raw as Row, clone: structuredClone };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "active-key-v1", loadRecords: () => [{ key: "pending", value: 1 }] }]);
+    const db = new Database(filename);
+    try {
+      db.exec("DROP INDEX IF EXISTS state_rows_controller_active_key");
+      const metadata = db.query("SELECT * FROM state_collections").all();
+      const records = db.query("SELECT * FROM state_rows").all();
+      const modulePath = new URL("./sqliteStateStore.ts", import.meta.url).pathname;
+      const child = Bun.spawn([process.execPath, "--eval", `
+        const { initializeStateCollections, SqliteStateCollection } = await import(${JSON.stringify(modulePath)});
+        const options = { collection: "send_failure_notices", schemaVersion: 1, busyMessage: "busy",
+          key: row => row.key, controllerActive: row => row.value > 0, decode: raw => raw, clone: structuredClone };
+        initializeStateCollections(${JSON.stringify(filename)}, [{ ...options, migrationId: "active-key-v1",
+          loadRecords: () => { throw new Error("existing records must not be reimported"); } }]);
+        const store = new SqliteStateCollection(${JSON.stringify(filename)}, options);
+        try { console.log(JSON.stringify(store.keyRangeForController("", "z", 32))); } finally { store.close(); }
+      `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(exit, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual([{ key: "pending", value: 1 }]);
+      const upgraded = new Database(filename);
+      try {
+        expect(upgraded.query<{ name: string }, []>("PRAGMA index_info(state_rows_controller_active_key)").all().map(row => row.name))
+          .toEqual(["collection", "controller_active", "row_key"]);
+      } finally { upgraded.close(); }
+      expect(db.query("SELECT * FROM state_collections").all()).toEqual(metadata);
+      expect(db.query("SELECT * FROM state_rows").all()).toEqual(records);
+    } finally { db.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test.each([0, 512])("indexed successor-source custody follows released parents, publication and peer replacement (%s retained owners)", history => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-successor-owner-"));
   const filename = path.join(dir, "state.sqlite");

@@ -74,6 +74,19 @@ closed Viewer control endpoint through `checkEnvironment`,
 
 Notice-key recovery uses the registry's bounded message-key index. Canonical
 arrivals retire pending or failed alarms without replaying either input.
+Preparation throws and timeouts consume each pending notice's persisted retry
+budget. After three failures the notice becomes a failed alarm for the project
+seat. A later process resumes the same counter; successful preparation before
+exhaustion recovers the stable notice key. A retired sweep owner cannot count
+an attempt or dispatch after its preparation await.
+
+Active notice pages seek through `state_rows_controller_active_key` on
+`(collection, controller_active, row_key)`, so finished history does not consume
+the page's read work. Existing databases acquire this additive index through
+the store's schema readiness check: a missing index enters the existing fenced
+startup transaction and `CREATE INDEX IF NOT EXISTS` backfills the stored rows.
+Collection versions, records and retry counters stay intact. Pipeline tables
+and their format are unchanged.
 
 The native recurrence is `src/lib/runtime/deliveryLongTurn.native.test.ts`.
 Enable both engines with `LLV_NATIVE_LONG_TURN_TEST=1` and explicit

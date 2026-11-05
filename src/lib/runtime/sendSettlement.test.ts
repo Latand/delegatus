@@ -3700,3 +3700,117 @@ test("a notice controller retired during recovery index preparation sends nothin
     expect(readSendFailureNotice(operationId)?.state).toBe("pending");
   } finally { restorePreparation(); active.registry.close(); active.close(); }
 });
+
+for (const failure of ["throw", "timeout"] as const) for (const recover of [false, true]) {
+  test(`notice index preparation ${failure} preserves attempts across process restarts (recover=${recover})`, async () => {
+    const priorState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(isolated, "preparation-ledger-"));
+    setSystemTime(new Date("2026-11-01T12:00:00Z"));
+    const active = fixture(`notice-preparation-${failure}-${recover}`, { sqlite: true });
+    const prepare = active.registry.prepareRecoveryIndexes.bind(active.registry);
+    try {
+      const sender = secondConversation(active, "preparation-sender");
+      const seat = secondConversation(active, "preparation-seat");
+      const { sweepSendFailureNotices, readSendFailureNotice, decodeSendFailureNotice, sendFailureSignals } = await import("./sendFailureNotice");
+      const { operationId } = acceptSend(active, { clientMessageId: `preparation-original-${failure}-${recover}`,
+        origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+      await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+      const original = active.journal.operationResult(operationId);
+      const snapshot = active.registry.deliverySnapshotForOperation(operationId);
+      const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
+      const registryPath = new URL("../agent/registry.ts", import.meta.url).pathname;
+      // Each failure runs in a new process against the same two durable stores.
+      // Any receipt read or dispatch before preparation succeeds is a defect.
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const child = Bun.spawn([process.execPath, "--eval", `
+          const { AgentRegistry } = await import(${JSON.stringify(registryPath)});
+          const m = await import(${JSON.stringify(modulePath)});
+          const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined,
+            { sqliteMode: "sqlite", sqliteFilename: ${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))} });
+          try {
+            registry.prepareRecoveryIndexes = async () => {
+              if (${JSON.stringify(failure)} === "throw") throw new Error("preparation unavailable");
+              await new Promise(() => {});
+            };
+            await m.sweepSendFailureNotices({ registry, assertActive: () => {}, readMs: 5,
+              receipt: async () => { throw new Error("preparation failure reached receipt"); },
+              recipient: () => { throw new Error("preparation failure reached recipient"); },
+              deliver: async () => { throw new Error("preparation failure dispatched"); },
+              fallback: () => ({ kind: "deliver", conversationId: ${JSON.stringify(seat.conversationId)} }) });
+            console.log(JSON.stringify(m.readSendFailureNotice(${JSON.stringify(operationId)})));
+          } finally { registry.close(); }
+        `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+        const [stdout, stderr, exit] = await Promise.all([
+          new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+        ]);
+        expect(exit, stderr).toBe(0);
+        expect(JSON.parse(stdout)).toMatchObject({ state: "pending", attempts: attempt,
+          reason: expect.stringContaining("index preparation unavailable") });
+      }
+      expect(readSendFailureNotice(operationId)).toMatchObject({ state: "pending", attempts: 2 });
+      let deliveries = 0;
+      const target = recordingHost(sender.generationId);
+      if (!recover) active.registry.prepareRecoveryIndexes = async () => {
+        if (failure === "throw") throw new Error("preparation unavailable");
+        await new Promise<void>(() => {});
+      };
+      const ports = { registry: active.registry, assertActive: () => {}, readMs: recover ? 10_000 : 5,
+        receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
+        recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+        fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+        deliver: async (request: { text: string; clientMessageId: string; origin: import("./messageOrigin").MessageOrigin }) => {
+          deliveries++;
+          const accepted = acceptSend(sender, request);
+          await new StructuredDeliveryQueue(stalePortFor(sender, accepted.operationId, request.clientMessageId, request.text), () => target.host).drain();
+          return { ok: true };
+        },
+      };
+      await sweepSendFailureNotices(ports);
+      await sweepSendFailureNotices(ports);
+      const notice = readSendFailureNotice(operationId);
+      expect(notice).toMatchObject(recover ? { state: "sent", attempts: 2 } : {
+        state: "failed", attempts: 3, fallbackConversationId: seat.conversationId,
+      });
+      expect(decodeSendFailureNotice(notice)).toEqual(notice);
+      expect(deliveries).toBe(recover ? 1 : 0);
+      expect(target.received).toHaveLength(recover ? 1 : 0);
+      if (!recover) expect(sendFailureSignals(seat.conversationId).map(signal => signal.id)).toContain(`send-failed:${operationId}`);
+      expect(active.journal.operationResult(operationId)).toEqual(original);
+      expect(active.registry.deliverySnapshotForOperation(operationId)).toEqual(snapshot);
+    } finally {
+      active.registry.prepareRecoveryIndexes = prepare; active.registry.close(); active.close(); setSystemTime();
+      process.env.LLV_STATE_DIR = priorState;
+    }
+  });
+}
+
+test.each(["throw", "timeout"] as const)("retirement during a preparation %s leaves attempts untouched", async failure => {
+  const priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(isolated, "preparation-retirement-ledger-"));
+  const active = fixture(`notice-preparation-retired-${failure}`, { sqlite: true });
+  const prepare = active.registry.prepareRecoveryIndexes.bind(active.registry);
+  try {
+    const sender = secondConversation(active, "preparation-retired-sender");
+    const { sweepSendFailureNotices, readSendFailureNotice } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: `preparation-retired-${failure}`,
+      origin: { kind: "agent", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    const before = readSendFailureNotice(operationId);
+    let owned = true;
+    active.registry.prepareRecoveryIndexes = async () => {
+      owned = false;
+      if (failure === "throw") throw new Error("preparation unavailable");
+      await new Promise<void>(() => {});
+    };
+    await expect(sweepSendFailureNotices({ registry: active.registry, readMs: 5,
+      assertActive: () => { if (!owned) throw new Error("preparation owner retired"); },
+      receipt: async () => { throw new Error("retired receipt"); },
+      recipient: () => { throw new Error("retired recipient"); },
+      deliver: async () => { throw new Error("retired dispatch"); },
+    })).rejects.toThrow("preparation owner retired");
+    expect(readSendFailureNotice(operationId)).toEqual(before);
+  } finally {
+    active.registry.prepareRecoveryIndexes = prepare; active.registry.close(); active.close();
+    process.env.LLV_STATE_DIR = priorState;
+  }
+});

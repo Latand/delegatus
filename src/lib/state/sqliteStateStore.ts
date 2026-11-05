@@ -435,6 +435,8 @@ const stateSchema = [
         OR json_type(value_json,'$.sync.s.handover') IS NULL)`,
   `CREATE INDEX IF NOT EXISTS state_rows_controller_active
     ON state_rows(collection, controller_active, row_order)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_controller_active_key
+    ON state_rows(collection, controller_active, row_key)`,
   `CREATE INDEX IF NOT EXISTS state_rows_send_failure_sender_v3
     ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.senderConversationId') END, controller_active, row_key)`,
   `CREATE INDEX IF NOT EXISTS state_rows_send_failure_fallback_v3
@@ -1825,7 +1827,7 @@ export class SqliteStateCollection<T> {
   keyRangeForController(after: string, through: string, limit: number): T[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
     return this.readDb.query<Pick<CollectionRow, "row_key" | "value_json">, [string, string, string, number]>(`
-      SELECT row_key, value_json FROM state_rows
+      SELECT row_key, value_json FROM state_rows INDEXED BY state_rows_controller_active_key
       WHERE collection = ? AND controller_active = 1 AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
     `).all(this.options.collection, after, through, limit).flatMap((row) => {
       const decoded = this.decodeRow(row.value_json);
