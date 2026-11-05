@@ -1,8 +1,8 @@
 import { statePath } from "@/lib/configDir";
 import type { Locale } from "@/lib/i18n/core";
-import { projectView } from "./roleStore";
+import { projectProfileView, projectView } from "./roleStore";
 import type { RoleMemoryProjectView } from "./roleTypes";
-import { MemoryProfileError, PROFILE_PROMPT_VERSION, profileInputs, profileView, validateProfileAnswer } from "./profile";
+import { MemoryProfileError, PROFILE_PROMPT_VERSION, profileInputs, profileView, validateProfileAnswer, type ProfileRulesView } from "./profile";
 import { MEMORY_PROFILE_MODEL, prepareProfileCaller, type ProfileCaller } from "./profileModel";
 import { readProfileRow, writeProfileRow } from "./profileStore";
 import type { MemoryProfileView, ProfileRow } from "./profileTypes";
@@ -10,6 +10,7 @@ import type { MemoryProfileView, ProfileRow } from "./profileTypes";
 export type ProfileRun = { latest: MemoryProfileView; done: Promise<void>; subscribe: (listener: (view: MemoryProfileView) => void) => () => void };
 type Ports = {
   rules: (project: string) => RoleMemoryProjectView;
+  readRules?: (project: string) => ProfileRulesView;
   read: (project: string, locale: Locale) => ProfileRow | null;
   write: (row: ProfileRow) => void;
   prepare: (project: string) => Promise<ProfileCaller>;
@@ -23,7 +24,7 @@ const sharedRuns = shared[RUNS_KEY] ??= new Map<string, ProfileRun>();
 export function createProfileService(ports: Ports, runs = new Map<string, ProfileRun>(), namespace = "") {
   const runKey = (project: string, locale: Locale) => JSON.stringify([namespace, project, locale]);
   function read(project: string, locale: Locale): MemoryProfileView {
-    const rules = ports.rules(project);
+    const rules = (ports.readRules ?? ports.rules)(project);
     const row = ports.read(rules.project, locale);
     if (row?.run?.state === "running" && !runs.has(runKey(rules.project, locale))) {
       row.run = { ...row.run, state: "failed", errors: [{ scope: "overall", code: "interrupted" }] };
@@ -107,5 +108,5 @@ export function createProfileService(ports: Ports, runs = new Map<string, Profil
   return { read, start };
 }
 export function memoryProfileService() {
-  return createProfileService({ rules: projectView, read: readProfileRow, write: writeProfileRow, prepare: prepareProfileCaller, model: MEMORY_PROFILE_MODEL }, sharedRuns, statePath("state.sqlite"));
+  return createProfileService({ rules: projectView, readRules: projectProfileView, read: readProfileRow, write: writeProfileRow, prepare: prepareProfileCaller, model: MEMORY_PROFILE_MODEL }, sharedRuns, statePath("state.sqlite"));
 }
