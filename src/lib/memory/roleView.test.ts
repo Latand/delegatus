@@ -253,8 +253,9 @@ async function child(script: string) {
   return stdout.trim();
 }
 test("peer commits invalidate the memo and a restarted real reader derives the same answer", async () => {
-  seed(); projectView(PROJECT, NOW);
-  await child(`const {roleMemoryCollection}=await import('./src/lib/memory/roleStore');const c=roleMemoryCollection();c.boundedPatch(2,tx=>{const r=tx.get('r:r_0000000000000001');tx.put({...r,rule:'Recheck the persisted revision after another writer commits.'});});`);
+  seed(); projectView(PROJECT, NOW); projectProfileView(PROJECT, NOW);
+  await child(`const {roleMemoryCollection}=await import('./src/lib/memory/roleStore');const c=roleMemoryCollection();c.boundedPatch(2,tx=>{const r=tx.get('r:r_0000000000000001');tx.put({...r,rule:'Recheck the persisted revision after another writer commits.',changedAt:'2026-10-12T12:01:00.000Z'});});`);
+  expect(projectProfileView(PROJECT, NOW).scopes[0].active[0].changedAt).toBe("2026-10-12T12:01:00.000Z");
   const fresh = projectView(PROJECT, NOW);
   expect(fresh.scopes[0].active[0].rule).toBe("Recheck the persisted revision after another writer commits.");
   const restarted = await child(`const {projectView}=await import('./src/lib/memory/roleStore');console.log(JSON.stringify(projectView('${PROJECT}',${NOW})));`);
@@ -357,14 +358,15 @@ test("project-view curation follows canonical curation scope ordering for confli
 });
 
 test("reopening the shared reader cannot reuse a token from before a peer commit", async () => {
-  seed(); projectView(PROJECT, NOW);
+  seed(); projectView(PROJECT, NOW); projectProfileView(PROJECT, NOW);
   const primary = directory;
   const secondary = fs.mkdtempSync(path.join(os.tmpdir(), "role-view-peer-"));
   try {
     process.env.LLV_STATE_DIR = secondary;
-    seed(); projectView(PROJECT, NOW);
-    await child(`process.env.LLV_STATE_DIR=${JSON.stringify(primary)};const {roleMemoryCollection}=await import('./src/lib/memory/roleStore');roleMemoryCollection().boundedPatch(2,tx=>{const r=tx.get('r:r_0000000000000001');tx.put({...r,rule:'Reopen the authoritative reader after switching its state root.'});});`);
+    seed(); projectView(PROJECT, NOW); projectProfileView(PROJECT, NOW);
+    await child(`process.env.LLV_STATE_DIR=${JSON.stringify(primary)};const {roleMemoryCollection}=await import('./src/lib/memory/roleStore');roleMemoryCollection().boundedPatch(2,tx=>{const r=tx.get('r:r_0000000000000001');tx.put({...r,rule:'Reopen the authoritative reader after switching its state root.',changedAt:'2026-10-12T12:02:00.000Z'});});`);
     process.env.LLV_STATE_DIR = primary;
+    expect(projectProfileView(PROJECT, NOW).scopes[0].active[0].changedAt).toBe("2026-10-12T12:02:00.000Z");
     expect(projectView(PROJECT, NOW).scopes[0].active[0].rule).toBe("Reopen the authoritative reader after switching its state root.");
   } finally {
     process.env.LLV_STATE_DIR = primary;
@@ -439,4 +441,52 @@ test("profile basis preserves cached topic binding and stale changes after edits
   expect(same(PROJECT).changes).toEqual({ added: 0, rewritten: 1, removed: 1 });
   persistProjectAliases([{ source: PROJECT, target: "renamed-profile-fixture", displayName: "Renamed profile fixture" }]);
   expect(same(PROJECT).project).toBe("renamed-profile-fixture");
+});
+
+
+for (const mode of ["cold", "warm", "alias"] as const) test(`profile basis sees committed membership while a ${mode} retained history cursor is open`, async () => {
+  const warmed = mode !== "cold";
+  const otherProject = "profile-cursor-other", otherScope = `role:${otherProject}:builder`;
+  const first = rule(), other = rule("r_0000000000000011", otherScope);
+  const memory = seed([first, other]);
+  const readingScope = warmed ? otherScope : SCOPE;
+  memory.boundedPatch(2, tx => {
+    const held = tx.get(`s:${readingScope}`) as RoleMemoryScopeRow;
+    tx.put({ ...held, history: Array.from({ length: 128 }, (_, index) => ({ revision: index + 1, at: AT, by: "operator" as const, added: [], merged: [], archived: [] })) });
+  });
+  if (mode === "alias") persistProjectAliases([{ source: "profile-source-alias", target: PROJECT, displayName: "Profile fixture" }]);
+  if (warmed) { projectView(PROJECT, NOW); projectProfileView(PROJECT, NOW); }
+  const changed = new Date(NOW + 60000).toISOString(), newScope = `role:${PROJECT}:reviewer`;
+  let cursorFinished = false;
+  const read = new Promise<ReturnType<typeof projectProfileView>>((resolve, reject) => setImmediate(() => {
+    try {
+      expect(cursorFinished).toBe(false);
+      memory.boundedPatch(6, tx => {
+        const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+        tx.put({ ...first, changedAt: changed }); tx.put({ ...held, revision: held.revision + 1 });
+        const sourceScope = mode === "alias" ? "role:profile-source-alias:reviewer" : newScope;
+        const added = rule("r_0000000000000012", sourceScope);
+        tx.put(added); tx.put({ kind: "scope", scope: sourceScope, revision: 1, active: [added.id], history: [] });
+      });
+      resolve(projectProfileView(PROJECT, NOW + 60000));
+    } catch (error) { reject(error); }
+  }));
+  const cursor = projectViewAsync(warmed ? otherProject : PROJECT, NOW + 60000).then(() => null, error => error).finally(() => { cursorFinished = true; });
+  const [answer] = await Promise.allSettled([read, cursor] as const);
+  if (answer.status === "rejected") throw answer.reason;
+  expect(answer.value.scopes.find(scope => scope.scope === SCOPE)?.active[0]?.changedAt).toBe(changed);
+  expect(answer.value.scopes.find(scope => scope.scope === newScope)?.active.map(rule => rule.id)).toEqual(["r_0000000000000012"]);
+});
+
+
+test("profile basis reuse is immutable and a peer revision replaces it", () => {
+  const memory = seed();
+  const first = projectProfileView(PROJECT, NOW);
+  expect(projectProfileView(PROJECT, NOW)).toBe(first);
+  expect(() => first.scopes[0]!.active.push({ id: "unexpected", changedAt: AT })).toThrow();
+  const changed = new Date(NOW + 1000).toISOString();
+  memory.boundedPatch(2, tx => { tx.put({ ...rule(), changedAt: changed }); });
+  const next = projectProfileView(PROJECT, NOW);
+  expect(next).not.toBe(first);
+  expect(next.scopes[0]!.active[0]!.changedAt).toBe(changed);
 });

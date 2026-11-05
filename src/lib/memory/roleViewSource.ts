@@ -15,6 +15,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 const owner = globalThis as typeof globalThis & {
   __llvCurationVersionReader?: { file: string; db: Database; generation: number };
   __llvRoleViewReader?: { file: string; db: Database; generation: number };
+  __llvProfileBasisReader?: { file: string; db: Database; generation: number };
   __llvRoleViewGeneration?: number;
   __llvCurationRules?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: CurationRuleInput | null; bytes: number }> };
@@ -23,7 +24,8 @@ const owner = globalThis as typeof globalThis & {
   __llvCurationScopeProjection?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: RoleMemoryScopeRow; bytes: number }> };
 };
-function reader(slot: "__llvRoleViewReader" | "__llvCurationVersionReader" = "__llvRoleViewReader") {
+type ReaderSlot = "__llvRoleViewReader" | "__llvCurationVersionReader" | "__llvProfileBasisReader";
+function reader(slot: ReaderSlot = "__llvRoleViewReader") {
   const file = statePath("state.sqlite");
   if (owner[slot]?.file === file) return owner[slot].db;
   owner[slot]?.db.close();
@@ -54,8 +56,8 @@ function readVersion(slot: "__llvRoleViewReader" | "__llvCurationVersionReader")
   const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
   return `${owner[slot]!.generation}:${databaseFileIdentity(file)}:${version}:${schema}`;
 }
-function keys(prefix: string, predicate = "1", bindings: SQLQueryBindings[] = []): string[] {
-  return reader().query<{ row_key: string }, SQLQueryBindings[]>(`
+function keys(prefix: string, predicate = "1", bindings: SQLQueryBindings[] = [], slot: ReaderSlot = "__llvRoleViewReader"): string[] {
+  return reader(slot).query<{ row_key: string }, SQLQueryBindings[]>(`
     SELECT row_key FROM state_rows WHERE collection = 'role_memory'
     AND row_key > ? AND row_key < ? AND (${predicate}) ORDER BY row_order, row_key
   `).all(prefix, `${prefix}\uffff`, ...bindings).map(row => row.row_key);
@@ -132,6 +134,11 @@ export function projectViewUnaffectedByChanges(project: string, from: number | u
 /** Inspect scope identities without decoding their potentially large histories. */
 export function roleScopeKeys(): string[] {
   return roleMemoryCollection() ? keys("s:").map(key => key.slice(2)) : [];
+}
+
+/** Profile reads cannot inherit a cooperative history cursor's old snapshot. */
+export function profileScopeKeys(): string[] {
+  return roleMemoryCollection() ? keys("s:", "1", [], "__llvProfileBasisReader").map(key => key.slice(2)) : [];
 }
 
 /** Curation selects one scope family in key order. This covered key lookup
@@ -715,7 +722,7 @@ export function activeRoleRuleRows(input: { project?: string; terms?: string[]; 
 export function activeProfileBasis(scopes: readonly string[]): Map<string, Array<Pick<RoleMemoryRule, "id" | "changedAt">>> {
   const basis = new Map(scopes.map(scope => [scope, [] as Array<Pick<RoleMemoryRule, "id" | "changedAt">>]));
   if (!scopes.length || !roleMemoryCollection()) return basis;
-  const rows = reader().query<{ scope: string; id: string; changedAt: string }, [string]>(`
+  const rows = reader("__llvProfileBasisReader").query<{ scope: string; id: string; changedAt: string }, [string]>(`
     SELECT wanted.value AS scope, json_extract(r.value_json, '$.id') AS id,
       json_extract(r.value_json, '$.changedAt') AS changedAt
     FROM json_each(?) wanted CROSS JOIN state_rows s
