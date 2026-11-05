@@ -7959,7 +7959,9 @@ function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts)
   attempt.roleMemoryFailures = failures;
   const delayMs = Math.min(30_000, 250 * 2 ** Math.min(failures - 1, 7));
   return {
-    revision: storedLessonRevision(),
+    // Let the retry-protected stability read observe the next revision. This
+    // helper also runs during retirement reconciliation, outside preparation.
+    revision: "",
     observations: 0,
     retryAfter: new Date(unixMs(ports.now()) + delayMs).toISOString(),
   };
