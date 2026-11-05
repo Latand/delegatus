@@ -1364,8 +1364,9 @@ export async function runStructuredHostRetirementSweep(
         if (!tail.determined) await prepareRuntimeEventFlushLedger(entry.key.sessionId, signal);
       }
     });
-    if (publicationState() !== "ready") {
-      report.standDown = publicationState();
+    const afterPreparation = publicationState();
+    if (afterPreparation !== "ready") {
+      report.standDown = afterPreparation;
       report.finishedAt = new Date(now()).toISOString();
       record(report);
       return report;
