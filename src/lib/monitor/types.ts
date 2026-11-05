@@ -1378,6 +1378,8 @@ export interface SeatTickWorkerAskInput {
 }
 
 export interface SeatTickCheckInput {
+  /** Process-local fence attached by the owning seat sweep. */
+  sweepIsCurrent?: () => boolean;
   releaseAlerts?: { kind: "release-settled" | "release-blocked"; id: string; label: string }[];
   project: string;
   workers?: { limit: number; source: string; machine: number; running: number };

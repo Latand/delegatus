@@ -31,8 +31,12 @@ added. The 75-second check budget is unchanged.
 ## Paired measurements
 
 The measurements in `measurements.json` ran on 2026-11-05 under Bun 1.4.0 against
-base `6e8b65d9` and the final production source hashes. The paired fixture was
-identical across both revisions (`fixtureHash` in each row). They exercise
+base `6e8b65d9` and the production source hashes captured for that replay. Those
+hashes identify the measured source revision; the `sourceSha256` records in the
+measurement files preserve those replay inputs. Current file hashes are in
+`verification.json`. The release-demotion fence was added after the replay;
+reported measurements assign no performance gain to that change. The paired
+fixture was identical across both revisions (`fixtureHash` in each row). They exercise
 Viewer modules in isolated Bun processes. They start neither a Viewer listener
 nor a runtime-host listener. Worker regression tests separately exercise the
 real files-response child process. This lane performed no production comparison.
@@ -126,16 +130,19 @@ records, compact encoding, old journals, concurrent writes, retention, writer
 failure, and a fresh reader process. The queue driver holds a real child and
 proves 17 ms of wait followed by 23 ms of service with a controlled clock.
 
-The shared-owner regression fails on base with three reconciliations instead
-of one. The two original withdrawal contention tests pass on base; their head
-fixtures now prepare the indexes used in production and carry the actual
+The shared-owner regression fails on the pre-fix branch source by launching
+once after release demotion; the final source passes it with zero launches.
+The shared-owner-count regression fails on base with three reconciliations
+instead of one. The two original withdrawal contention tests pass on base; their
+head fixtures now prepare the indexes used in production and carry the actual
 delivery recipient. Independent production mutations fail for the full-read
 path, recipient filter, alias handling, message key, shared selection, due
 launch, controller ownership, span cap, CPU delta, queue boundary and journal
 reader. Mutations were confined to scratch exports and restored after each run.
 
-Verification commands use `bun run test <explicit-file>` individually with a
-fresh isolated environment, log and exit status. Whole-project types use
+Current post-review-fence results and final source hashes are in
+`verification.json`. Verification commands use `bun run test <explicit-file>`
+individually with a fresh isolated environment, log and exit status. Whole-project types use
 `bash scripts/gate-slot.sh bun node_modules/typescript/bin/tsc --noEmit
 --incremental false` as a background job. The local publication privacy gate
 checks the staged changes before the plain commit. The pipeline owns publication.

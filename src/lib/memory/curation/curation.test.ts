@@ -457,6 +457,74 @@ test("review: a canceled first check cannot cancel the shared due curator admiss
   expect(observedSignals).toEqual([undefined]);
 });
 
+test("release demotion fences the shared curator launch after project checks stop", async () => {
+  const { seatTickWorkSignal } = await import("@/lib/monitor/seatTickWork");
+  fixture(); const f = hostingFixture(); f.seat();
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve: () => resolve() };
+  };
+  const launchEntered = deferred(), unblockLaunch = deferred();
+  const controller = productionCurationController(f.sources, {
+    ...f.ports,
+    launch: async (body, authorize) => {
+      launchEntered.resolve();
+      await unblockLaunch.promise;
+      authorize();
+      return f.ports.launch(body);
+    },
+  });
+  const entered = deferred(), unblock = deferred(), completed = deferred();
+  const rawLiveness = f.sources.liveness;
+  f.sources.liveness = async request => {
+    const signal = seatTickWorkSignal();
+    entered.resolve();
+    await unblock.promise;
+    signal?.throwIfAborted();
+    return rawLiveness(request);
+  };
+  let state = emptySeatTickState();
+  const sources = {
+    ...f.sources,
+    prepareRead: async () => {},
+    seatFor: () => ({ active: null, pending: null, history: [] }),
+    activeSeats: () => [PROJECT], pipelines: () => [], archivedPipelines: () => [], tasks: () => [],
+    liveness: async () => [], lifecycleJournal: () => ({ version: 1 as const, lastSeq: 0, events: [], retired: [] }),
+    retirementReport: () => null, reports: undefined, maintenanceRuns: () => [], recordRuleReports: undefined,
+    recordDeploySnapshots: undefined, workerCounts: undefined,
+  };
+  const dependencies = {
+    sources, policy: tickInput().policy, reconcileSeat: () => null,
+    readState: () => state, writeState: (_project: string, next: typeof state) => { state = next; },
+    appendRecord: () => {}, readRecords: () => [], ensureCard: () => true,
+    curation: {
+      reconcile: controller.reconcile,
+      launchIfDue: async (input: Parameters<typeof controller.launchIfDue>[0]) => {
+        try { return await controller.launchIfDue(input); }
+        finally { completed.resolve(); }
+      },
+    },
+    release: null, maintenance: null, turbo: () => {}, recordSuccessions: () => [],
+  };
+  const running = reconcileSeatTick({ ...dependencies, ownsTraffic: () => true });
+  try {
+    await entered.promise;
+    unblock.resolve();
+    await launchEntered.promise;
+    await reconcileSeatTick({ ...dependencies, ownsTraffic: () => false });
+    unblockLaunch.resolve();
+    await running;
+    await completed.promise;
+    expect(f.bodies).toHaveLength(0);
+    expect(machinePass()?.state).not.toBe("running");
+  } finally {
+    unblock.resolve();
+    unblockLaunch.resolve();
+    await running;
+  }
+});
+
 test("a sweep starting at a disabled project still launches a due eligible project", async () => {
   fixture(); const f = hostingFixture(); f.seat();
   const sweep = curationForSweep(f.controller);

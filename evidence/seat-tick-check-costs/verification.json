@@ -1,5 +1,5 @@
 {
-  "verifiedAt": "2026-11-05T14:44:25.839490+00:00",
+  "verifiedAt": "2026-11-05T19:11:48.000Z",
   "baseline": "6e8b65d9b316ff2da95b8c94f4a3ea01a8f1cfb8",
   "tests": [
     {
@@ -97,5 +97,38 @@
     "mutationsAllFailedIntendedAssertions": true
   },
   "isolation": "Each test file ran directly in its own command with fresh HOME, XDG roots, TMPDIR and LLV_STATE_DIR, control URL on closed port 1, separate combined log and actual exit. Listener fixtures bind ephemeral addresses. No recorded gate or check-wait handoff was used.",
-  "scope": "Viewer source modules and private files-response children; no live Viewer/runtime-host restart, signals, deployment or production comparison."
+  "scope": "Viewer source modules and private files-response children; no live Viewer/runtime-host restart, signals, deployment or production comparison.",
+  "postReviewFence": {
+    "verifiedAt": "2026-11-05T19:11:48.000Z",
+    "sourceSha256": {
+      "src/lib/monitor/seatTickSources.ts": "45f254117684abd7bb1d42d703048cad46a27c300cd35f460044a13e903a54fe",
+      "src/lib/memory/curation/run.ts": "9849474bc4e87d5735c06c1827e89a15d0870a13c1d605a062ff4245fa7fc019",
+      "src/lib/monitor/seatTickController.ts": "3eaf803cf851d1ce37291fb973ff7b27436536c24983d49dabb1e29675710bc5",
+      "src/lib/monitor/seatTickWork.ts": "e646ca11001c88147a176861432a262533bb24a75067e12909d6a71f6fe92839",
+      "src/lib/monitor/seatTickTiming.ts": "88e27deafab1bd3bff8d0a2d30d66b4fe728c95b3f53cf378a6bcc62d4015589",
+      "src/lib/monitor/journalStore.ts": "ca8f0a19b7a1ee9f7fadeaec8e312ddeeb4809920e45e86c292dda6c3f82fdbe",
+      "src/lib/monitor/types.ts": "c680984d272e2f1130ead93b0c31f1a4c8500a4bc7086fae3134c2345d8a6071",
+      "src/lib/scanner/filesResponseWorker.ts": "7f54666f585d9fffe03062046fc3d71a4f9c66e35d6a936bc3982ab997fc13a9"
+    },
+    "demotionRegression": {
+      "test": "release demotion fences the shared curator launch after project checks stop",
+      "fixedSourceExit": 0,
+      "preFixBranchSourceExit": 1,
+      "preFixObservation": "one launch after production release refusal"
+    },
+    "directTestFiles": [
+      { "file": "src/lib/memory/curation/curation.test.ts", "exit": 0, "passed": 157, "skipped": 0 },
+      { "file": "src/lib/monitor/journalStore.test.ts", "exit": 0, "passed": 23, "skipped": 0 },
+      { "file": "src/lib/monitor/seatTickController.scheduling.test.ts", "exit": 0, "passed": 25, "skipped": 1 },
+      { "file": "src/lib/monitor/seatTickSources.test.ts", "exit": 0, "passed": 166, "skipped": 0 },
+      { "file": "src/lib/monitor/seatTickTiming.test.ts", "exit": 0, "passed": 4, "skipped": 0 },
+      { "file": "src/lib/monitor/seatTickController.sources.test.ts", "exit": 0, "passed": 21, "skipped": 3 },
+      { "file": "src/lib/scanner/filesResponseWorker.test.ts", "exit": 0, "passed": 25, "skipped": 0 }
+    ],
+    "totalPassed": 421,
+    "skipped": 4,
+    "typecheck": { "command": "gate-slot.sh bun node_modules/typescript/bin/tsc --noEmit --incremental false", "exit": 0 },
+    "privacyGate": { "command": "privacy-publication-gate.ts --check-commits --require-known-values", "exit": 0, "paths": 19 },
+    "isolation": "Every direct test file had fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR under the gate sandbox, control URL 127.0.0.1:1, its own log and an observed exit status; no --record or wait_for_check."
+  }
 }

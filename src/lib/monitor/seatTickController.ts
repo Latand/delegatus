@@ -2637,6 +2637,7 @@ function kickTurboWork(project: string, kick: ((project: string) => void) | unde
 }
 
 export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord[]> {
+  const sweepGeneration = tickHost.__llvSeatTickGeneration;
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
   if (!await (dependencies.ownsTraffic ?? releaseOwnsTraffic)()) {
@@ -2670,7 +2671,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   const incumbent = machinePass();
   if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
   const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
-  const curation = curator ? curationForSweep(curator, [...projects].sort()) : null;
+  const curation = curator ? curationForSweep(curator, [...projects].sort(), () => sweepGeneration === tickHost.__llvSeatTickGeneration) : null;
   // Each project starts independently. Its own deadline includes every phase;
   // an overdue project never holds the roster behind its await.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
