@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
+import { checkEnvironment } from "./gate-cache";
 import { runPrivacyTestProcess } from "./privacy-test-process";
 
 const roots: string[] = [];
@@ -234,6 +235,24 @@ test("an uninspectable binary blob remains a refusal after it is deleted", async
   refuses(await f.scan(), "inspection_error");
 });
 
+test("identical binary blobs keep filename-dependent inspection errors in either path order", async () => {
+  const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("safe binary data", "utf16le")]);
+
+  const textOnly = fixture(); textOnly.write("safe.txt", bytes); textOnly.commit();
+  passes(await textOnly.scan());
+
+  const binaryOnly = fixture(); binaryOnly.write("opaque.bin", bytes); binaryOnly.commit();
+  refuses(await binaryOnly.scan(), "inspection_error");
+
+  const textFirst = fixture();
+  textFirst.write("a.txt", bytes); textFirst.write("b.bin", bytes); textFirst.commit();
+  refuses(await textFirst.scan(), "inspection_error");
+
+  const binaryFirst = fixture();
+  binaryFirst.write("a.bin", bytes); binaryFirst.write("b.txt", bytes); binaryFirst.commit();
+  refuses(await binaryFirst.scan(), "inspection_error");
+});
+
 test("a historical image cannot borrow a later manifest", async () => {
   const f = fixture(); f.write("image.png", png()); f.write("privacy-manifest.json", "{}"); f.commit();
   f.git("rm", "image.png", "privacy-manifest.json"); f.commit();
@@ -242,7 +261,9 @@ test("a historical image cannot borrow a later manifest", async () => {
 
 test("unavailable OCR can be deferred locally while metadata and provenance still refuse", async () => {
   const f = fixture(); const bin = join(f.root, "only-git"); mkdirSync(bin);
-  symlinkSync(Bun.which("git")!, join(bin, "git")); f.env.PATH = bin;
+  const nativeGit = Bun.which("git", { PATH: checkEnvironment(process.env).PATH ?? "" });
+  if (!nativeGit) throw new Error("Git fixture executable is unavailable");
+  symlinkSync(nativeGit, join(bin, "git")); f.env.PATH = bin;
   f.write("image.png", png()); f.commit();
   refuses(await f.scan(), "tool_unavailable");
   const deferred = await f.scan(["--defer-unavailable-media"]);

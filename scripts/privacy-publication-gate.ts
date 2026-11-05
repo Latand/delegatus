@@ -1947,6 +1947,10 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
   return findings;
 }
 
+function isTextLikePath(path: string): boolean {
+  return textExtensions.has(extname(path).toLowerCase()) || textBasenames.has(basename(path));
+}
+
 function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClass> {
   if (kind) return new Set();
   try {
@@ -2000,8 +2004,7 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
     if (views.slice(1).some(view => matchesStandaloneIdentity(normalizedSensitiveText(view).exactSearchable))) {
       findings.add("known_value");
     }
-    const extension = extname(path).toLowerCase();
-    const textLike = textExtensions.has(extension) || textBasenames.has(basename(path));
+    const textLike = isTextLikePath(path);
     const controlBytes = contents.reduce((count, byte) => {
       const allowedWhitespace = byte === 0x09 || byte === 0x0a || byte === 0x0d;
       return count + (byte < 0x20 && !allowedWhitespace ? 1 : 0);
@@ -2575,7 +2578,9 @@ function inspectCommitAdditions(repository: string, base: string, requireKnownVa
       }
       const root = snapshotAt(input.commit);
       const detected = inspectPaths([join(root, input.path)], false, false, root, base, [], (path, kind) => {
-        const key = `${input.blob}:${kind ?? "text"}`;
+        // inspectText's refusal depends on whether this particular filename
+        // is classified as text, even when the blob bytes and media kind match.
+        const key = `${input.blob}:${kind ?? "text"}:${isTextLikePath(path) ? "text-like" : "other"}`;
         let result = content.get(key);
         if (!result) { result = inspectFileContents(path, kind); content.set(key, result); }
         return result;
