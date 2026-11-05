@@ -169,6 +169,12 @@ export function AccountStatusDot({ accountId, label, word, tone, plan, note, pho
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onClick={() => { setTapped((value) => !value); setFocused(false); }}
+        // Escape on an open status closes the status; the dialog around it stays.
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || !open) return;
+          event.stopPropagation();
+          setTapped(false); setFocused(false); setHovered(false);
+        }}
         className={`flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "h-11 w-11" : "h-[26px] w-[26px]"}`}
       >
         {tone === "pending"

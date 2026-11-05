@@ -95,6 +95,31 @@ test("Escape and a press outside close it", async () => {
   await view.unmount();
 });
 
+test("Escape on the focused dot closes its words and leaves the dialog around it alone", async () => {
+  let heard = 0;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  await act(async () => root.render(
+    // The dialog's own Escape handler is an ancestor of every row.
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div role="dialog" onKeyDown={(event) => { if (event.key === "Escape") heard += 1; }}>
+      <div data-account-row="own"><div data-account-head><AccountStatusDot accountId="own" label="Own" word="signed in" tone="success" plan={null} note={null} phone={false} /></div></div>
+    </div>,
+  ));
+  const dot = host.querySelector<HTMLButtonElement>("[data-account-status]")!;
+  const escape = () => act(async () => { dot.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event); });
+  await act(async () => dot.click());
+  expect(dot.getAttribute("aria-expanded")).toBe("true");
+  await escape();
+  expect(dot.getAttribute("aria-expanded")).toBe("false");
+  expect(heard).toBe(0);
+  // With nothing open, Escape goes on to the dialog.
+  await escape();
+  expect(heard).toBe(1);
+  await act(async () => root.unmount());
+});
+
 test("while open it hides the lines it lies over whole, and a row whose head it reaches with its dividers; closing restores them", async () => {
   const view = await mount("");
   const dot = view.host.querySelector<HTMLButtonElement>("[data-account-status]")!;
