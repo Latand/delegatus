@@ -511,6 +511,10 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
         });
         if (args[0] === "api" && args[1] === "repos/acme/widgets/rules/branches/main") return "[]";
+        if (args[0] === "api" && args[1] === "repos/acme/widgets/branches/main"
+          && args[args.indexOf("--jq") + 1] === ".commit.sha") return fixture.base;
+        if (args[0] === "api" && args[1] === `repos/acme/widgets/compare/${fixture.base}...${prHead}`
+          && args[args.indexOf("--jq") + 1] === ".merge_base_commit.sha") return await git(worktree, "merge-base", fixture.base, prHead);
         if (args[0] === "api" && args[1] === "repos/acme/widgets/branches/main") return "[]";
         if (args[0] === "api" && args[1] === "repos/acme/widgets/pulls/11/reviews?per_page=100") return "";
         if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
