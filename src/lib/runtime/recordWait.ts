@@ -1,3 +1,4 @@
+import { cancelSendFailureNotice, recordSendFailureNotice } from "./sendFailureNotice";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -338,6 +339,8 @@ function* restorationSteps(registry: AgentRegistry, progress: RestorableProgress
     const receipt = sendReceiptFor(file, operationId);
     if (!receipt || receipt.state === "in-flight") continue;
     try {
+      if (receipt.state === "delivered") cancelSendFailureNotice(operationId);
+      if (receipt.state === "failed") recordSendFailureNotice(registry, operationId, receipt.duplicateRisk ? "uncertain" : "failed", receipt.reason);
       const written = progress.backfillEnded({
         operationId,
         conversationId: owner.runtimeConversationId,

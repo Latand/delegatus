@@ -1,3 +1,4 @@
+import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { withHostStopOrigin } from "./hostExit";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { composeBatch, type InboxMember } from "./inboxBatch";
@@ -1383,7 +1384,7 @@ export class StructuredDeliveryQueue {
       this.unlistedChecks.set(record.operationId, now);
       void this.readStatus(record.operationId).then((durable) => {
         if (!durable.readable || !durable.value || !TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) return;
-        progress.settle(record.operationId, progressTerminalState(durable.value.status), durable.value.reason ?? null);
+        this.settleProgress(record.operationId, durable.value.status, durable.value.reason);
       });
     }
   }
@@ -1401,6 +1402,9 @@ export class StructuredDeliveryQueue {
         || this.activeSteers.has(effect.operationId) || this.activeInjections.has(effect.operationId)) continue;
       const record = progress.get(effect.operationId);
       const due = record?.nextWakeAt ? Date.parse(record.nextWakeAt) : null;
+      // An event wait has no promised timer to lose. The safety pass still
+      // checks it, and the host's next state change wakes it independently.
+      if (record?.waitReason === "awaiting-turn") continue;
       if (record && (due === null || due + WAKE_GRACE_MS > now)) continue;
       this.noteWait(effect, "wake-lost", { wake: "retry", detail: record ? `due ${Math.round((now - due!) / 1000)}s earlier` : "admitted without a wake" });
     }
@@ -2344,6 +2348,8 @@ export class StructuredDeliveryQueue {
         continue;
       }
       if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt && !queuesDuringTurn) {
+        if (health.activeTurnRef) this.port.progress?.deadline(effect.operationId,
+          new Date(this.timing.now() + SEND_SETTLEMENT_WINDOW_MS).toISOString(), "turn-boundary");
         const interrupted = replacementIsActive && this.interruptAcknowledged.has(effect.operationId);
         const reconciled = interrupted ? await this.reconcileStalledInterrupt(effect) : "wait";
         if (reconciled === "delivered") continue;

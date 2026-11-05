@@ -1958,7 +1958,9 @@ export function loadPipelinesForList(): readonly Pipeline[] {
 export async function loadPipelinesForListAsync(): Promise<readonly Pipeline[]> {
   const rows = await pipelineStore().loadReadonlyAsync();
   if (!Object.isFrozen(rows)) {
-    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    // Incremental snapshots retain frozen records. Only changed graphs owe
+    // work; yielding for every retained row can exhaust a busy seat's budget.
+    await forEachCooperatively(rows.filter(row => !Object.isFrozen(row)), row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
     Object.freeze(rows);
   }
   return loadPipelinesForList();
@@ -2310,7 +2312,7 @@ export function loadArchivedPipelinesForList(): readonly Pipeline[] {
 export async function loadArchivedPipelinesForListAsync(): Promise<readonly Pipeline[]> {
   const rows = await archiveStore().loadReadonlyAsync();
   if (!Object.isFrozen(rows)) {
-    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    await forEachCooperatively(rows.filter(row => !Object.isFrozen(row)), row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
     Object.freeze(rows);
   }
   return rows;
