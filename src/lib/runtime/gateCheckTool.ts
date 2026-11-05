@@ -12,6 +12,7 @@ export const gateCheckTool = {
 } as const;
 
 export type GateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
+type SavedGateCheckRoot = { identity?: unknown; root?: unknown; physicalRoot?: unknown; rootDirectoryIdentity?: unknown };
 export const GATE_CHECK_ROOT_IDENTITY_ENV = "LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY";
 
 /** Capture once at launch/adoption; callbacks must retain this physical binding. */
@@ -39,30 +40,32 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string
   const identity = JSON.stringify([owner.process.pid, owner.process.startIdentity, owner.process.bootEpoch]);
   try {
     let root = launchRoot;
+    let saved: SavedGateCheckRoot | null = null;
     if (root === undefined) {
       try {
-        const saved = readEnvelope(filename) as { identity?: unknown; root?: unknown; physicalRoot?: unknown; rootDirectoryIdentity?: unknown } | null;
+        saved = readEnvelope(filename) as SavedGateCheckRoot | null;
         if (!saved || saved.identity !== identity || typeof saved.root !== "string" || !path.isAbsolute(saved.root)
           || typeof saved.physicalRoot !== "string" || !path.isAbsolute(saved.physicalRoot)
           || typeof saved.rootDirectoryIdentity !== "string") return null;
         const liveRoot = procBackend.readEnvVar(owner.process.pid, "TMPDIR");
-        const launchDirectoryIdentity = procBackend.readEnvVar(owner.process.pid, GATE_CHECK_ROOT_IDENTITY_ENV);
-        if (!liveRoot || path.resolve(liveRoot) !== path.resolve(saved.root)
-          || !launchDirectoryIdentity || launchDirectoryIdentity !== saved.rootDirectoryIdentity) return null;
-        const binding = bindGateCheckRoot(saved.root);
-        if (!binding || binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== launchDirectoryIdentity
-          || !verifiedCodexSocketOwner(owner)) return null;
-        return binding;
+        if (!liveRoot || path.resolve(liveRoot) !== path.resolve(saved.root)) return null;
+        root = saved.root;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
       }
       // The current Viewer's environment says nothing about the retained CLI.
-      root = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
+      if (root === undefined) root = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
     }
     if (!root || !verifiedCodexSocketOwner(owner)) return null;
+    // This listener-owned launch proof is required for both saved and missing
+    // records. TMPDIR locates the root; only its launch-time device/inode
+    // distinguishes the original directory from a replacement at that path.
+    const launchDirectoryIdentity = procBackend.readEnvVar(owner.process.pid, GATE_CHECK_ROOT_IDENTITY_ENV);
+    if (!launchDirectoryIdentity) return null;
     const binding = bindGateCheckRoot(root);
-    if (!binding) return null;
-    writeEnvelope(filename, { identity, ...binding });
+    if (!binding || binding.rootDirectoryIdentity !== launchDirectoryIdentity
+      || (saved && (binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== saved.rootDirectoryIdentity))) return null;
+    if (!saved) writeEnvelope(filename, { identity, ...binding });
     return verifiedCodexSocketOwner(owner) ? binding : null;
   } catch { return null; }
 }

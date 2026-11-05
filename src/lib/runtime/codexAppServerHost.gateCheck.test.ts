@@ -18,6 +18,7 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
   for (const root of [originalRoot, replacementRoot]) fs.mkdirSync(root);
   fs.chmodSync(directory, 0o700);
   const descriptor = path.join(directory, "descriptor.json"), result = path.join(directory, "result.json");
+  const rootBinding = path.join(directory, "gate-root.json");
   const log = path.join(originalRoot, "check.log"), ticket = `${log}.gate`;
   fs.mkdirSync(ticket); fs.writeFileSync(log, "stage check finished\n");
   const recorder = cpuOwnerIdentity(process.pid);
@@ -62,6 +63,13 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
       expect(engine.child.exitCode).toBeNull();
     }
 
+    fs.unlinkSync(rootBinding);
+    fs.unlinkSync(result);
+    const recoveredWithoutRecord = launch("host");
+    const recoveredAnswer = JSON.parse(await recoveredWithoutRecord.line);
+    expect(await recoveredWithoutRecord.closed, recoveredWithoutRecord.errors()).toBe(0);
+    expect(recoveredAnswer).toEqual(initial);
+
     // The engine holds the callback until the new host has bound its root.
     const ready = path.join(directory, "callback-ready"), release = path.join(directory, "callback-release");
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, ready, release }));
@@ -91,7 +99,6 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
     fs.unlinkSync(originalRoot); fs.renameSync(retained, originalRoot);
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
 
-    const rootBinding = path.join(directory, "gate-root.json");
     const savedBinding = fs.readFileSync(rootBinding, "utf8");
     fs.writeFileSync(rootBinding, JSON.stringify({ ...JSON.parse(savedBinding), root: replacementRoot,
       physicalRoot: fs.realpathSync(replacementRoot), rootDirectoryIdentity: physical(replacementRoot) }));
@@ -129,6 +136,22 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
     fs.renameSync(redirectedRoot, originalRoot);
 
     fs.writeFileSync(rootBinding, savedBinding);
+    const missingRecordRedirect = `${originalRoot}.missing-record`;
+    fs.renameSync(originalRoot, missingRecordRedirect);
+    fs.symlinkSync(replacementRoot, originalRoot, "dir");
+    fs.unlinkSync(rootBinding);
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, log: foreignLog }));
+    fs.unlinkSync(result);
+    const missingRecordSubstitution = launch("host", replacementRoot);
+    const missingRecordAnswer = JSON.parse(await missingRecordSubstitution.line);
+    expect(await missingRecordSubstitution.closed, missingRecordSubstitution.errors()).toBe(0);
+    expect(missingRecordAnswer.success).toBe(false);
+    expect(missingRecordAnswer.contentItems[0].text).toContain("directory identity could not be verified");
+    expect(missingRecordAnswer.contentItems[0].text).not.toContain("foreign recording");
+    fs.unlinkSync(originalRoot);
+    fs.renameSync(missingRecordRedirect, originalRoot);
+
+    fs.writeFileSync(rootBinding, savedBinding);
     const retainedRoot = `${originalRoot}.retained`;
     fs.renameSync(originalRoot, retainedRoot);
     fs.symlinkSync(replacementRoot, originalRoot, "dir");
@@ -147,7 +170,7 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
   }
 }, 60_000);
 
-for (const fault of ["none", "saved-no-env", "coordinated-root-no-env", "identity", "root", "root-symlink", "proof-changed", "malformed", "symlink", "hardlink", "relative", "unknown", "owner-changed"] as const)
+for (const fault of ["none", "saved-no-env", "coordinated-root-no-env", "identity", "root", "root-symlink", "proof-changed", "malformed", "symlink", "hardlink", "relative", "unknown", "missing-record-no-identity", "missing-record-substituted", "owner-changed"] as const)
 test.skipIf(process.platform === "win32")(`callback root binding survives a new reader and refuses ${fault} proof`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gb-")); fs.chmodSync(root, 0o700);
   const launchRoot = path.join(root, "stage-root"), foreignRoot = path.join(root, "foreign-root");
@@ -157,17 +180,19 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
   const owner = { endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid) };
+  let recovering = false;
   const readEnv = spyOn(procBackend, "readEnvVar").mockImplementation((_pid, name) => {
-    if (name === "TMPDIR") return ["unknown", "saved-no-env", "coordinated-root-no-env"].includes(fault) ? null : launchRoot;
+    if (name === "TMPDIR") return recovering && ["unknown", "saved-no-env", "coordinated-root-no-env"].includes(fault) ? null : launchRoot;
     if (name === gateTool.GATE_CHECK_ROOT_IDENTITY_ENV)
-      return ["unknown", "saved-no-env", "coordinated-root-no-env"].includes(fault) ? null
-        : fault === "proof-changed" ? physical(foreignRoot) : physical(launchRoot);
+      return recovering && ["unknown", "saved-no-env", "missing-record-no-identity"].includes(fault) ? null
+        : recovering && fault === "proof-changed" ? physical(foreignRoot) : physical(launchRoot);
     return null;
   });
   let restoreProof = () => {};
   try {
     expect(gateTool.socketGateCheckRoot(owner, launchRoot)).toEqual(gateTool.bindGateCheckRoot(launchRoot));
     expect(fs.statSync(filename).mode & 0o077).toBe(0);
+    recovering = true;
     if (fault === "identity") { const saved = JSON.parse(fs.readFileSync(filename, "utf8")); fs.writeFileSync(filename, JSON.stringify({ ...saved, identity: "stale" })); }
     if (fault === "root") { const saved = JSON.parse(fs.readFileSync(filename, "utf8")); fs.writeFileSync(filename, JSON.stringify({ ...saved, root: foreignRoot })); }
     if (fault === "coordinated-root-no-env") {
@@ -178,6 +203,12 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
       fs.renameSync(launchRoot, `${launchRoot}.retained`);
       fs.symlinkSync(foreignRoot, launchRoot, "dir");
     }
+    if (fault === "missing-record-substituted") {
+      fs.renameSync(launchRoot, `${launchRoot}.retained`);
+      fs.symlinkSync(foreignRoot, launchRoot, "dir");
+      fs.unlinkSync(filename);
+    }
+    if (fault === "missing-record-no-identity") fs.unlinkSync(filename);
     if (fault === "proof-changed") {
       const saved = JSON.parse(fs.readFileSync(filename, "utf8"));
       fs.writeFileSync(filename, JSON.stringify({ ...saved, physicalRoot: fs.realpathSync(foreignRoot), rootDirectoryIdentity: physical(foreignRoot) }));
@@ -197,8 +228,10 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
       restoreProof = () => readProof.mockRestore();
     }
     expect(gateTool.socketGateCheckRoot(fault === "owner-changed" ? owner : structuredClone(owner))).toEqual(fault === "none" ? gateTool.bindGateCheckRoot(launchRoot) : null);
-    expect(readEnv.mock.calls).toHaveLength(["identity", "malformed", "symlink", "hardlink", "relative"].includes(fault) ? 0
-      : fault === "unknown" ? 1 : 2);
+    if (["unknown", "missing-record-no-identity", "missing-record-substituted"].includes(fault)) {
+      expect(readEnv.mock.calls.map(call => call[1])).toContain("TMPDIR");
+      expect(readEnv.mock.calls.map(call => call[1])).toContain(gateTool.GATE_CHECK_ROOT_IDENTITY_ENV);
+    }
   } finally {
     restoreProof(); readEnv.mockRestore();
     await new Promise<void>(resolve => server.close(() => resolve()));
