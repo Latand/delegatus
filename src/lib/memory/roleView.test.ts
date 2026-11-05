@@ -400,7 +400,7 @@ test.each(["ancestor", "active"])("a newly inserted foreign %s invalidates a vie
 
 test("a cold profile basis matches the complete view without decoding scope histories, retired rules or task provenance", () => {
   const memory = seed([rule(), rule("r_0000000000000002", `project:${PROJECT}`),
-    rule("r_0000000000000003", "machine"), rule("r_0000000000000004", SCOPE, { state: "deleted" }),
+    rule("r_0000000000000003", "machine"), rule("r_0000000000000004", SCOPE, { state: "archived", reason: "deleted" }),
     rule("r_0000000000000005", "role:elsewhere:builder")]);
   memory.boundedPatch(2, tx => {
     const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
