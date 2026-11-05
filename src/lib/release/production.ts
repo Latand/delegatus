@@ -211,6 +211,11 @@ export function releaseControllerForSources(sources: SeatTickSources) {
         live: snapshot.current.some(p => {
           if (canonicalOrchestratorProject(p.project) !== project || p.state === "closed"
             || !/^(Release\s+(Delegatus|\d)|Реліз\s)/i.test(p.task)) return false;
+          const publishOnly = !p.stages.some(stage => stage.id === "prepare")
+            && p.stages.some(stage => isReleasePublishStage(stage));
+          // A completed publisher is terminal; consulting the merge-successor
+          // index here would copy and scan the cold archive on every seat tick.
+          if (p.state === "completed" && publishOnly) return false;
           const lane = snapshot.resolve(p);
           const published = !lane.stages.some(stage => stage.id === "prepare")
             && lane.stages.some(stage => isReleasePublishStage(stage));
