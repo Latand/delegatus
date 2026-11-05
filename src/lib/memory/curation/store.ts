@@ -78,7 +78,7 @@ function* readPassSteps(id: string, fence?: CurationReadFence): Generator<null, 
   let rowStamp: string | undefined;
   const stamp = function* () {
     rowStamp = yield* curationRowRevisionSteps(selectedKeys(), fence?.row);
-    return JSON.stringify([databaseIdentity(), rowStamp, curationRevision(), aliases]);
+    return JSON.stringify([databaseIdentity(), rowStamp, row.counts, aliases]);
   };
   const prior = countMemos.get(memoKey);
   const cached = prior?.rowStamp && prior.familyKeys ? prior : undefined;
@@ -283,7 +283,7 @@ function* curationStatusSteps(project: string, now = Date.now(), setting = effec
   let rowStamp: string | undefined;
   const stampFor = function* (ruleKeys: string[]) {
     rowStamp = yield* curationRowRevisionSteps([...selectedKeys(), ...ruleKeys]);
-    return JSON.stringify([databaseIdentity(), curationRevision(), aliases, rowStamp]);
+    return JSON.stringify([databaseIdentity(), projectRows(project), aliases, rowStamp]);
   };
   const prior = cacheSummary ? summaries.get(key) : undefined;
   const cached = prior?.rowStamp && prior.projectStamp ? prior : undefined;
@@ -633,6 +633,11 @@ function panelPasses(project: string, fence?: CurationReadFence) {
 export function curationPanelRuns(project: string) {
   const selected = panelPasses(project);
   return { live: selected.live ? readPass(selected.live.id) : null, last: selected.last ? readPass(selected.last.id) : null };
+}
+/** Run identities remain readable when history-derived counts or scheduling
+ * exceed the panel deadline. The caller marks their counts unavailable. */
+export function curationPanelRunMetadata(project: string) {
+  return panelPasses(project);
 }
 /** One deadline and freshness fence cover both displayed pass counts and status. */
 export async function curationPanelDataCooperatively(project: string, now: number, setting: ReturnType<typeof effectiveCurationSetting>, signal?: AbortSignal) {
