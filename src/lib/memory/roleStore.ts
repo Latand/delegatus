@@ -1,4 +1,5 @@
 import { MeasuredCache } from "@/lib/cacheTelemetry";
+import { PrivacyWorkError, privacyFailureOf } from "./privacyFailure";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -156,7 +157,7 @@ export function readableScopes(project: string, roleId: string | null): string[]
 }
 
 export class RoleMemoryRefusal extends Error {
-  constructor(readonly code: string, message: string) { super(message); }
+  constructor(readonly code: string, message: string, options?: ErrorOptions) { super(message, options); }
 }
 
 export const ROLE_MEMORY_CHANGED_MESSAGE = "Role-memory privacy changed; retrying before dispatch";
@@ -791,13 +792,19 @@ export const WITHHELD_LESSON = "[learned rule]";
 
 const UNREADABLE = "role memory could not be read, so its learned rules cannot be kept out of outgoing text; nothing was sent. Repair or restore state.sqlite, or set LLV_ROLE_MEMORY=off and remove the role_memory rows";
 
+function unreadableRoleMemory(error: unknown): RoleMemoryRefusal {
+  const failure = privacyFailureOf(error, "store-unreadable");
+  console.warn(`[role-memory] privacy store read failed: ${failure}`);
+  return new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", `${UNREADABLE}; cause: ${failure}`, { cause: new PrivacyWorkError(failure) });
+}
+
 /** The stored rows, or a refusal that quotes nothing a row holds. */
 function readableRows(): { rows: RoleMemoryRow[]; signature: string } {
   try {
     const held = roleMemoryCollection();
     return held ? { signature: held.signature(), rows: held.snapshot() as RoleMemoryRow[] } : { signature: "", rows: [] };
-  } catch {
-    throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+  } catch (error) {
+    throw unreadableRoleMemory(error);
   }
 }
 
@@ -848,7 +855,7 @@ export function storedLessonRevision(): string {
     const revision = held && stat ? `${stat.dev}:${stat.ino}:${held.signature()}` : "";
     if (`${identity()}:${stateDatabaseSignature(file)}` === signature) privacyRevisionHost.__llvLessonPrivacyRevision = { file, signature, revision };
     return revision;
-  } catch { throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE); }
+  } catch (error) { throw unreadableRoleMemory(error); }
 }
 
 /** Bounded alternatives in longest-first order, cached for this store signature. */
@@ -1035,7 +1042,7 @@ export function refreshLessonKnownValues(): string {
     return file;
   } catch (error) {
     fs.rmSync(file, { force: true });
-    throw error instanceof RoleMemoryRefusal ? error : new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+    throw error instanceof RoleMemoryRefusal ? error : unreadableRoleMemory(error);
   }
 }
 
