@@ -1,3 +1,7 @@
+import { integrationAuthorityRefusal } from "@/lib/pipelines/integrationAuthority";
+import { INTEGRATION_STAGES } from "@/lib/pipelines/integration";
+import { isRepositoryResolver, holdsRepositoryResolverCapacity } from "@/lib/forge/autoRefresh";
+import type { MessageOrigin } from "./messageOrigin";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
@@ -7,11 +11,11 @@ import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { AgentRegistry, RegistryConversation } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
-import { findPipelineRecord, loadPipelinesForRetirement } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadPipelinesForRetirement, pipelineIntegrationResolverCandidates } from "@/lib/pipelines/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { openRuntimeSwitch } from "@/lib/pipelines/runtimeSwitch";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
-import { StructuredSendRefusedError, type EngineHost } from "./engineHost";
+import { StructuredSendRefusedError, StructuredDispatchDeferredError, type EngineHost } from "./engineHost";
 import { delegatusMessageOrigin } from "./agentMessageAuthor";
 import type { StructuredMessageRequest, StructuredMessageResult } from "./structuredMessageDelivery";
 import { interruptionObligationDirectory, accountGuardObligationRevision, accountGuardObligationStore, submittedContinuationOutcome, STAGE_CUT_RESOLUTION, REVIEWER_CUT_RESOLUTION } from "./interruptionObligations";
@@ -35,11 +39,99 @@ function pipelineOwner(conversationId: string, registry?: AgentRegistry) {
   return null;
 }
 
+/** Metadata already retained by the held delivery or native queue version. */
+export interface PipelineDispatchContext {
+  operationId: string;
+  clientMessageId?: string;
+  /** Native edits retain the add operation that owns the held delivery. */
+  deliveryOperationId?: string;
+  origin?: MessageOrigin;
+  now?: number;
+}
+
+/** Keep revocable integration input in our journal, outside the provider's
+ * automatic queue. Membership and candidate-owner reads are keyed. */
+export function pipelineRequiresDispatchGuard(conversationId: string, registry: AgentRegistry): boolean {
+  try {
+    return registry.conversationMemberships(conversationId as ViewerConversationId).some(m => {
+      if (m.kind !== "pipeline" || !INTEGRATION_STAGES.includes(m.stageId as typeof INTEGRATION_STAGES[number])) return false;
+      const pipeline = findPipelineRecord(m.containerId);
+      // A missing owner remains fenced. An ordinary pipeline may legitimately
+      // use this stage name without ever having an integration reservation.
+      return !pipeline || !!pipeline.merge?.integration || !!pipeline.merge?.refresh;
+    });
+  } catch {
+    throw new StructuredDispatchDeferredError("pipeline queue authority is temporarily unreadable");
+  }
+}
+
 /** A stopped attempt retains its checkout until its controller replaces it.
- * Late sends and on-demand recovery cannot take that checkout back. */
-export function assertPipelineTurnAllowed(conversationId: string, registry?: AgentRegistry): void {
-  if (pipelineOwner(conversationId, registry)?.attempt.suspension) {
+ * At actual dispatch, resolve current integration authority from durable state;
+ * a request-local admission closure cannot authorize a delayed journal entry. */
+export function assertPipelineTurnAllowed(conversationId: string, registry?: AgentRegistry, dispatch?: PipelineDispatchContext): void {
+  try { assertCurrentPipelineTurn(conversationId, registry, dispatch); }
+  catch (error) {
+    if (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError) throw error;
+    throw new StructuredDispatchDeferredError("pipeline execution authority is temporarily unreadable");
+  }
+}
+
+function assertCurrentPipelineTurn(conversationId: string, registry?: AgentRegistry, dispatch?: PipelineDispatchContext): void {
+  const owner = pipelineOwner(conversationId, registry);
+  if (owner?.attempt.suspension) {
     throw new StructuredSendRefusedError("pipeline attempt is suspended; its controller owns recovery");
+  }
+  // Host recovery alone starts no turn. The queued input is checked below when
+  // its operation actually reaches the host, including after a process restart.
+  if (!dispatch) return;
+  const member = !owner && registry && pipelineRequiresDispatchGuard(conversationId, registry);
+  if (!owner && !member) return;
+  if (owner && (!owner.stage || !INTEGRATION_STAGES.includes(owner.stage.id as typeof INTEGRATION_STAGES[number]))) return;
+  const deliveryOperationId = dispatch.deliveryOperationId ?? dispatch.operationId;
+  const delivery = registry
+    ? Object.values(registry.deliverySnapshotForOperation(deliveryOperationId).heldDeliveries)
+      .find(row => row.command.operationId === deliveryOperationId) : undefined;
+  // Native clientUserMessageId names the operation, whereas the held record
+  // retains the pipeline's original provider-cut idempotency key.
+  const key = delivery?.clientMessageId ?? dispatch.clientMessageId ?? dispatch.operationId;
+  const origin = dispatch.origin ?? delivery?.command.origin;
+  if (!owner) {
+    if (member && origin?.kind !== "operator") throw new StructuredSendRefusedError("integration delivery has no current pipeline owner");
+    return;
+  }
+  const { pipeline, attempt, stage } = owner;
+  if (!stage || !INTEGRATION_STAGES.includes(stage.id as typeof INTEGRATION_STAGES[number])) return;
+  if (!pipeline.merge?.integration) {
+    if (!pipeline.merge?.refresh) return;
+    if (origin?.kind !== "operator") throw new StructuredSendRefusedError("integration delivery authority is unavailable");
+    return;
+  }
+  // Explicit human discussion of a terminal outcome remains available. An old
+  // automatic continuation cannot regain execution authority through that path.
+  if (origin?.kind === "operator" && pipeline.state !== "running") return;
+  const current = pipeline.runs.find(run => run.stageId === stage.id)?.attempts.filter(a => !a.historical).at(-1);
+  const startsAttempt = key.startsWith("stage-provider-") || key.startsWith("stage-restore-")
+    || dispatch.operationId.startsWith("spawn_message_");
+  // Publication/summary repairs can address the accepted producer while the
+  // current cursor publishes a later review. They retain the live grant; a
+  // provider continuation or first prompt must own the unfinished cursor too.
+  if (pipeline.state !== "running" || pipeline.closedAt || pipeline.hiddenAt
+    || !current || current.n !== attempt.n || current.launchId !== attempt.launchId || attempt.historical
+    || startsAttempt && (pipeline.cursor?.stageId !== stage.id || attempt.report || attempt.verdict)
+    || !pipeline.delivery?.active
+    || pipeline.delivery.disposition !== "owner" || pipeline.delivery.ownerId !== pipeline.id
+    || attempt.providerWait?.retryCancelled) {
+    throw new StructuredSendRefusedError("integration delivery no longer owns its outcome or attempt");
+  }
+  if (key.startsWith("stage-provider-") && key !== `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${attempt.providerWait?.turnTs}`
+    || key.startsWith("stage-restore-") && key !== attempt.restartRecovery?.clientMessageId) {
+    throw new StructuredSendRefusedError("integration continuation belongs to an earlier interrupted turn");
+  }
+  const refusal = integrationAuthorityRefusal(pipeline, dispatch.now ?? Date.now());
+  if (refusal) throw new StructuredSendRefusedError(refusal);
+  if (isRepositoryResolver(pipeline) && pipelineIntegrationResolverCandidates(pipeline.delivery.target.repository)
+    .some(peer => peer.id !== pipeline.id && holdsRepositoryResolverCapacity(peer, false))) {
+    throw new StructuredDispatchDeferredError("waiting for repository resolver capacity");
   }
 }
 

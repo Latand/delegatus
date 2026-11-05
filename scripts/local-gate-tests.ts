@@ -43,6 +43,12 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
+function configuredWorkers(env: NodeJS.ProcessEnv): number | undefined {
+  const value = env.LLV_GATE_TEST_WORKERS;
+  if (value === undefined) return;
+  if (!/^[1-8]$/.test(value)) throw new Error("LLV_GATE_TEST_WORKERS must be an integer from 1 to 8");
+  return Number(value);
+}
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 const RUNNER_ERROR = "<runner error> ";
@@ -410,6 +416,7 @@ function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
 }
 
 export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
+  const workerLimit = configuredWorkers(options.env ?? process.env);
   const started = performance.now();
   const sandbox = recordGateSandbox(mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-")));
   const log = options.log ?? console.log;
@@ -417,7 +424,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   const inherited = budget.env;
   const budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const now = () => performance.now() - budget.elapsed();
-  const runOptions = { now, budgets, log };
+  const runOptions = { now, budgets, log, workers: Math.min(workerLimit ?? 3, 3) };
   const logTiming = () => {
     const wall = performance.now() - started, wait = budget.elapsed();
     log(`touched-tests: timing ${wall.toFixed(0)}ms wall; ${wait.toFixed(0)}ms CPU admission; ${Math.max(0, wall - wait).toFixed(0)}ms execution`);
@@ -463,7 +470,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       }
       for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run);
     };
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
+    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: workerLimit ?? HEAD_FILE_WORKERS,
       onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };

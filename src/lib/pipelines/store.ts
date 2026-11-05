@@ -1,3 +1,4 @@
+import { creationRequestDigest, isPipelineIntegration, INTEGRATION_STAGES } from "./integration";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
@@ -44,10 +45,10 @@ export function pipelineRevision(pipeline: Pipeline): string {
   return crypto.createHash("sha256").update(JSON.stringify(pipeline)).digest("hex");
 }
 
-export const PIPELINES_SCHEMA_VERSION = 5;
+export const PIPELINES_SCHEMA_VERSION = 6;
 /** Older registries are migrated in memory on load; the file is rewritten in
     the current shape by the next successful mutation, never by a read. */
-const MIGRATABLE_SCHEMA_VERSIONS = new Set([2, 3, 4, PIPELINES_SCHEMA_VERSION]);
+const MIGRATABLE_SCHEMA_VERSIONS = new Set([2, 3, 4, 5, PIPELINES_SCHEMA_VERSION]);
 const pipelinesFile = () => statePath("pipelines.json");
 const pipelinesArchiveFile = () => statePath("pipelines-archive.json");
 const stateDatabaseFile = () => statePath("state.sqlite");
@@ -950,6 +951,8 @@ function isPipelineMerge(value: unknown): boolean {
   const merge = value as Record<string, unknown>;
   return MERGE_STATES.has(String(merge.state))
     && (merge.effectUncertain === undefined || typeof merge.effectUncertain === "boolean")
+    && (merge.targetBranch === undefined || typeof merge.targetBranch === "string" && !!merge.targetBranch)
+    && (merge.integration === undefined || isPipelineIntegration(merge.integration))
     && (merge.refresh === undefined || isMergeRefresh(merge.refresh))
     && (merge.state !== "refreshing" || merge.refresh !== undefined)
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
@@ -1030,6 +1033,13 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
     isPublicationRecovery(pipeline.publicationRecovery) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
+    (pipeline.adoptedCreationRequest === undefined || !!pipeline.adoptedCreationRequest
+      && typeof pipeline.adoptedCreationRequest.key === "string" && !!pipeline.adoptedCreationRequest.key
+      && typeof pipeline.adoptedCreationRequest.digest === "string" && !!pipeline.adoptedCreationRequest.digest) &&
+    (pipeline.adoptedCreationRequests === undefined || Array.isArray(pipeline.adoptedCreationRequests)
+      && pipeline.adoptedCreationRequests.every(receipt => !!receipt && typeof receipt.key === "string" && !!receipt.key
+        && typeof receipt.digest === "string" && !!receipt.digest)
+      && new Set(pipeline.adoptedCreationRequests.map(receipt => receipt.key)).size === pipeline.adoptedCreationRequests.length) &&
     (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
     Array.isArray(pipeline.taskIds) &&
@@ -1117,7 +1127,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
      (#1789). Every other state keeps the 1–8 invariant (#353: the minimum
      started graph is one implement conversation). */
   const minStages = pipeline.state === "draft" || pipeline.state === "closed" ? 0 : 1;
-  if (stages.length < minStages || stages.length > MAX_PIPELINE_STAGES || runs.length !== stages.length) return false;
+  if (stages.length < minStages || stages.length > MAX_PIPELINE_STAGES + (pipeline.merge?.integration ? INTEGRATION_STAGES.length : 0) || runs.length !== stages.length) return false;
   const ids = stages.map((stage) => stage.id);
   if (new Set(ids).size !== ids.length) return false;
   if (pipelineGraphError(stages, { legacyReachability: false }) !== null) return false;
@@ -1220,6 +1230,8 @@ function migrateReviewLoopFailEdges(raw: unknown): unknown {
     ...pipeline,
     ...(pipeline.delivery ? { delivery: structuredClone(pipeline.delivery) } : {}),
     ...(pipeline.creationRequest ? { creationRequest: { ...pipeline.creationRequest } } : {}),
+    ...(pipeline.adoptedCreationRequest ? { adoptedCreationRequest: { ...pipeline.adoptedCreationRequest } } : {}),
+    ...(pipeline.adoptedCreationRequests ? { adoptedCreationRequests: structuredClone(pipeline.adoptedCreationRequests) } : {}),
     stages: pipeline.stages.map((stage) => {
       if (!stage || typeof stage !== "object" || Array.isArray(stage)) return stage;
       const record = stage as Record<string, unknown>;
@@ -2071,6 +2083,11 @@ export function pipelineDeliveryLookup(query: { requestKey: string } | { reposit
   return pipelineStore().pipelineLookup(query);
 }
 
+/** Indexed same-repository resolver candidates used to gate resumed dispatch across batches. */
+export function pipelineIntegrationResolverCandidates(repository: string): Pipeline[] {
+  return pipelineStore().pipelineIntegrationResolverCandidates(repository);
+}
+
 export function unclaimedPipelinePublications(): Pipeline[] {
   return pipelineStore().unclaimedPipelinePublications();
 }
@@ -2133,7 +2150,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {
         options.admitReplay?.(existing);
-        if (existing.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
+        if (creationRequestDigest(existing, pipeline.creationRequest.key) !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
         options.onReplay?.();
         return existing;
       }

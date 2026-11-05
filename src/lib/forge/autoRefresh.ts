@@ -93,3 +93,38 @@ If resolving a conflict would change either side's behaviour, run git merge --ab
     ],
   };
 }
+
+
+/** Integration is another attempt of the outcome that already owns delivery. */
+export function integrationStages(lane: Pipeline): CreatePipelineRequest["stages"] {
+  const ids: Record<string, string> = { refresh: "integration-resolve", review: "integration-review", fix: "integration-fix" };
+  return refreshRequest(lane).stages.map(stage => ({
+    ...stage, id: ids[stage.id]!, next: stage.next ? ids[stage.next]! : null,
+    ...(stage.onFail ? { onFail: { ...stage.onFail, to: ids[stage.onFail.to]!, onExhausted: "park" as const } } : {}),
+    "prompt": stage.id === "review"
+      ? `Review integration onto ${lane.merge!.refresh!.base}. Preserve the feature review as historical evidence of its original head. Inspect the integrated tree and ALL base changes since that reviewed head, including transitive contracts, consumers, defaults, configuration, schema, generators, lockfiles, toolchain and policy. Unchanged feature diff does not establish applicability. Require project checks against this exact tree. Unknown impact requires a conservative integration review. Report through this stage's ordinary stage_report.`
+      : `${stage.prompt}\nThis is integration work in the existing outcome. Its reservation is ${lane.merge!.refresh!.key}. Work only on this item's branch under the current delivery epoch; do not create another pipeline.`,
+  }));
+}
+
+/** Both durable integrations and retained legacy carriers write under the
+ * repository's resolver capacity. Review stages do not hold that capacity. */
+export function isRepositoryResolver(pipeline: Pipeline): boolean {
+  const id = pipeline.cursor?.stageId;
+  return Boolean(id && (pipeline.merge?.integration && ["integration-resolve", "integration-fix"].includes(id)
+    || pipeline.refreshOf && ["refresh", "fix"].includes(id)));
+}
+
+export function holdsRepositoryResolverCapacity(pipeline: Pipeline, includeRetryIntent = true): boolean {
+  if (!isRepositoryResolver(pipeline)) return false;
+  if (pipeline.state === "provisioning") return true;
+  if (pipeline.state !== "running") return false;
+  const attempt = pipeline.runs.find(run => run.stageId === pipeline.cursor!.stageId)?.attempts.filter(item => !item.historical).at(-1);
+  if (attempt?.providerWait && !attempt.providerWait.actionAt && !attempt.providerWait.continuationRequestedAt) return false;
+  if (pipeline.merge?.integration) return !attempt || ["pending", "spawning", "running"].includes(attempt.state);
+  // Preserve legacy retry reservations at sweep admission. Dispatch itself is
+  // serialized by the pipeline mutation lease: terminal retry intents have no
+  // worker yet, so two resumed carriers must not wait on each other forever.
+  if (includeRetryIntent && pipeline.cursor!.state === "pending") return true;
+  return Boolean(attempt && ["pending", "spawning", "running", "reviewing"].includes(attempt.state));
+}

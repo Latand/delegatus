@@ -1,5 +1,9 @@
 # Delegatus refreshes a reviewed PR whose merge stopped on a conflict
 
+The current runner uses [durable PR integration](durable-pr-integration.md) for
+new work. This document retains the earlier successor-lane design and incident
+evidence; active legacy carriers continue to drain under that design.
+
 Design, 2026-10-12. It builds on `docs/design/merge-policy-and-task-finishing.md`
 (#2187), whose §4.4 sends every conflict to the operator and whose §9 deferred
 "a successor lane that merges main and pushes". The operator has now asked for

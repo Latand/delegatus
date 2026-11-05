@@ -1,3 +1,6 @@
+import { integrationAuthorityRefusal } from "./integrationAuthority";
+import { admitIntegration, creationRequestDigest, integrationAttempt, integrationScope, integrationRequirementRevision, renewIntegrationDecision, INTEGRATION_STAGES, INTEGRATION_REPAIR_LIMIT } from "./integration";
+import { holdsRepositoryResolverCapacity, integrationStages, isRepositoryResolver } from "@/lib/forge/autoRefresh";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
@@ -186,16 +189,16 @@ import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLi
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, pipelineIntegrationResolverCandidates, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
-import { mergeOnReviewEnabled } from "@/lib/projects/settings";
+import { mergeOnReviewEnabled, mergeOnReviewSetting } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
-import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
+import { cachedKindOf, canonicalRepository, pipelineHasPullRequest, pipelineRepository } from "@/lib/forge/resolve";
 import { boundedRepository, editStoredWorkLinks, githubRepositoryOfRemote, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
 import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
@@ -501,6 +504,8 @@ export interface PipelinePorts {
     turnId?: null;
     /** Recheck the cut after delivery preflight; the runtime also fences its idle revision. */
     continuationAllowed?: () => Promise<boolean>;
+    /** Execution authority is checked even when a continuation is queued. */
+    authorizeContinuation?: () => void;
     /** The delivery layer's refusal, retained by provider recovery when it parks. */
     onRefused?: (reason: string, admission?: "refused") => void;
     project?: string;
@@ -2516,7 +2521,10 @@ export function defaultPipelinePorts(
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       }, { ...(input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {}),
-        authorizeDispatch: () => assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId]), undefined, () => proactiveConversationContext(input.conversationId)) });
+        authorizeDispatch: () => {
+          assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId]), undefined, () => proactiveConversationContext(input.conversationId));
+          input.authorizeContinuation?.();
+        } });
       if (result?.ok !== true) {
         input.onRefused?.(result?.error ?? "structured delivery is disabled or the conversation uses a legacy host", result?.admission);
         if (result?.transportUncertain === true) input.onUncertain?.();
@@ -3566,6 +3574,7 @@ async function recoverProviderCut(
   ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  if (await holdIntegrationExecution(pipeline, attempt, ports, persist)) return true;
   const now = ports.now();
   const time = unixMs(now);
   let wait = attempt.providerWait;
@@ -3690,6 +3699,7 @@ async function recoverProviderCut(
     scheduleProviderWake(ports, wait.resumeAt);
     return true;
   }
+  if (await holdRepositoryResolver(pipeline, ports, persist)) return true;
   if (target) {
     // A reseat request acknowledges intent; only a fresh host binds the target here.
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
@@ -3710,6 +3720,7 @@ async function recoverProviderCut(
   const cutTs = wait.turnTs;
   const controlGeneration = pipeline.controlGeneration;
   let continuationRefusal: string | null = null;
+  let continuationUncertain = false;
   const continuationAllowed = async () => {
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
       continuationRefusal = "operator-stop authority holds provider recovery";
@@ -3733,7 +3744,8 @@ async function recoverProviderCut(
       : newerExternalProviderPrompt(attempt, latest) ? "newer external stage activity was recorded"
       : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
       : latest.terminalProviderMessage?.ts !== cutTs ? "terminal provider record no longer matches the cut"
-      : stageAccountBlocked(pipeline, attempt, ports);
+      : stageAccountBlocked(pipeline, attempt, ports)
+        ?? integrationContinuationRefusal(pipeline, stage, attempt, ports);
     return continuationRefusal === null;
   };
   let delivered: boolean;
@@ -3743,6 +3755,11 @@ async function recoverProviderCut(
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
       policy: "queue", continuationAllowed, onRefused: reason => { continuationRefusal ??= reason; },
+      onUncertain: () => { continuationUncertain = true; },
+      ...(pipeline.merge?.integration || pipeline.refreshOf ? { authorizeContinuation: () => {
+        const refusal = integrationContinuationRefusal(pipeline, stage, attempt, ports);
+        if (refusal) { continuationRefusal = refusal; throw new Error(refusal); }
+      } } : {}),
       project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
     await waitForProviderTransport(pipeline, attempt, condition, `continuation transport failed: ${String(error)}`, ports, persist);
@@ -3757,7 +3774,15 @@ async function recoverProviderCut(
     recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     await persist();
-  } else if (!wait.retryCancelled) await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
+  } else {
+    // A definite refusal spent no execution slot. An unknown reply retains
+    // the durable reservation until the original delivery is reconciled.
+    if ((pipeline.merge?.integration || pipeline.refreshOf) && !continuationUncertain && continuationRefusal !== null) {
+      delete wait.continuationRequestedAt;
+      await persist();
+    }
+    if (!wait.retryCancelled) await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
+  }
   return true;
 }
 
@@ -3806,6 +3831,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required" || condition.kind === "transient";
   const confirmProviderCut = async () => {
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
+    if (await holdIntegrationExecution(pipeline, attempt, ports, persist) || await holdRepositoryResolver(pipeline, ports, persist)) return false;
     if (!providerLimit) return true;
     if (!attempt.paneId && attempt.conversationId && ports.conversationRegistered?.(attempt.conversationId) === false) {
       await park(pipeline, "provider account recovery cannot verify recorded host ownership; waiting for operator decision", attempt);
@@ -3814,6 +3840,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     }
     const activity = await providerCutActivity(pipeline, attempt, ports, persist);
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
+    if (await holdIntegrationExecution(pipeline, attempt, ports, persist) || await holdRepositoryResolver(pipeline, ports, persist)) return false;
     if (activity === "unchanged") return true;
     if (activity === "newer") {
       await park(pipeline, "provider account recovery cancelled after newer stage activity; waiting for operator decision", attempt);
@@ -4022,6 +4049,14 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage): Promise<Pip
   /* One hand launches one attempt; a relaunch the engine makes after it is the engine's. */
   if (pipeline.cursor) delete pipeline.cursor.launchedBy;
   run.attempts.push(attempt);
+  integrationAttempt(pipeline);
+  if (stage.id === "integration-fix" && pipeline.merge?.integration) {
+    if (pipeline.merge.integration.repairs >= INTEGRATION_REPAIR_LIMIT) {
+      await park(pipeline, "integration repair budget exhausted", attempt);
+      return null;
+    }
+    pipeline.merge.integration.repairs++;
+  }
   return attempt;
 }
 
@@ -4559,6 +4594,21 @@ async function advancePipeline(
   }
   if (successor.next === null) {
     await clearEngineTaskNote(pipeline);
+    if (pipeline.merge?.integration && stage.id === "integration-review") {
+      const integration = pipeline.merge.integration;
+      integrationAttempt(pipeline);
+      integration.integratedHead = pipeline.lastPassedCommit;
+      integration.reviewedHead = attempt?.state === "passed" ? pipeline.lastPassedCommit : null;
+      integration.publicationId = pipeline.delivery?.operation?.id ?? null;
+      integration.state = "checking";
+      pipeline.merge.chain = [...new Set([...pipeline.merge.chain, pipeline.lastPassedCommit])];
+      pipeline.merge.state = "queued";
+      pipeline.merge.head = null; pipeline.merge.headSeenAt = null; pipeline.merge.lastChecks = null;
+      pipeline.merge.nextReadAt = null;
+      pipeline.merge.updatedAt = ports.now();
+      // The old reservation is a historical adoption receipt in integration.
+      delete pipeline.merge.refresh;
+    }
     pipeline.cursor = null;
     pipeline.state = "completed";
     pipeline.stateDetail = detail;
@@ -7230,13 +7280,18 @@ async function continueRestoredClaudeStage(
       && (latestActive !== true || !!latestInterrupted)
       && (latest.turn !== "busy" || (latest.lastAgentOutputAt ?? 0) <= unixMs(recovery.cutAt) || idleTurnSilent(latest, ports))
       && (!latest.snapshot || stageTurnEvidenceCurrent(latest) === true)
-      && !stageAccountBlocked(pipeline, attempt, ports);
+      && !stageAccountBlocked(pipeline, attempt, ports)
+      && !integrationContinuationRefusal(pipeline, stage, attempt, ports);
   };
   let refusal = "continuation was refused";
   try {
     if (!await continuationAllowed()) return true;
     const accepted = await ports.resumeSeveredTurn({ conversationId, transcriptPath,
       clientMessageId: recovery.clientMessageId, text: RESTORE_CONTINUATION_TEXT, policy: "queue", continuationAllowed,
+      ...(pipeline.merge?.integration || pipeline.refreshOf ? { authorizeContinuation: () => {
+        const reason = integrationContinuationRefusal(pipeline, stage, attempt, ports);
+        if (reason) throw new Error(reason);
+      } } : {}),
       onRefused: reason => { refusal = reason; }, project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir,
       ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
     if (!current()) return true;
@@ -9651,6 +9706,61 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
   if (!startCloudStageJob(pipeline, stage, attempt, ports.cloudJobContext?.ports ?? ports, ports.cloudJobContext?.phaseDone)) ports.scheduleTick?.(1000);
 }
 
+function integrationExecutionRefusal(pipeline: Pipeline, ports: PipelinePorts, reconcilePublication = false): string | null {
+  return integrationAuthorityRefusal(pipeline, unixMs(ports.now()), reconcilePublication);
+}
+
+async function holdIntegrationExecution(pipeline: Pipeline, attempt: PipelineStageAttempt | null, ports: PipelinePorts,
+  persist: () => void | Promise<void>, reconcilePublication = false): Promise<boolean> {
+  const reason = integrationExecutionRefusal(pipeline, ports, reconcilePublication);
+  if (!reason) return false;
+  pipeline.merge!.integration!.state = "blocked";
+  await park(pipeline, reason, attempt);
+  await persist();
+  return true;
+}
+
+function repositoryResolverRefusal(pipeline: Pipeline): string | null {
+  if (!isRepositoryResolver(pipeline)) return null;
+  const repository = pipeline.delivery?.target.repository;
+  if (!repository) return "repository resolver delivery identity is unavailable";
+  return pipelineIntegrationResolverCandidates(repository).some(peer => peer.id !== pipeline.id && holdsRepositoryResolverCapacity(peer, false))
+    ? "waiting for repository resolver capacity held by another integration or legacy refresh" : null;
+}
+
+async function holdRepositoryResolver(pipeline: Pipeline, ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  const reason = repositoryResolverRefusal(pipeline);
+  if (!reason) return false;
+  if (!pipeline.delivery?.target.repository) await park(pipeline, reason);
+  else {
+    const changed = pipeline.stateDetail !== reason;
+    pipeline.stateDetail = reason;
+    ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+    ports.scheduleTick?.(1_000);
+    if (!changed) return true;
+  }
+  await persist();
+  return true;
+}
+
+/** The delivery layer can actuate after its preflight awaits. Read the indexed
+ * current outcome again, while preserving the original attempt's identity. */
+function integrationContinuationRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+  if (!pipeline.merge?.integration && !pipeline.refreshOf) return null;
+  const live = findPipelineRecord(pipeline.id);
+  const current = live && currentAttempt(live, stage.id);
+  if (!live || !current || live.state !== "running" || live.closedAt || live.hiddenAt || live.cursor?.stageId !== stage.id
+    || live.controlGeneration !== pipeline.controlGeneration || current.n !== attempt.n || current.launchId !== attempt.launchId
+    || current.conversationId !== attempt.conversationId || current.report || current.verdict
+    || current.providerWait?.retryCancelled || attempt.providerWait && current.providerWait?.turnTs !== attempt.providerWait.turnTs
+    || live.delivery?.epoch !== pipeline.delivery?.epoch || live.delivery?.ownerId !== pipeline.delivery?.ownerId
+    || live.delivery?.target.repository !== pipeline.delivery?.target.repository || live.delivery?.target.branch !== pipeline.delivery?.target.branch
+    || !live.delivery?.active || live.delivery.disposition !== "owner"
+    || pipeline.merge?.integration && !live.merge?.integration) return "integration continuation no longer owns its outcome or attempt";
+  if (live.workspace && !workspacePrincipalAllows(live.workspace, live.project)) return "integration continuation workspace authority changed";
+  return integrationExecutionRefusal(live, ports) ?? repositoryResolverRefusal(live);
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -9659,6 +9769,10 @@ async function tickRunStage(
   persist: () => void | Promise<void>,
   recoveryAccountingDeadline: number,
 ): Promise<void> {
+  if (isRepositoryResolver(pipeline) && pipeline.cursor?.state === "pending") {
+    if (await holdRepositoryResolver(pipeline, ports, persist)) return;
+    if (pipeline.stateDetail?.startsWith("waiting for repository resolver capacity")) pipeline.stateDetail = null;
+  }
   const canSpendRecoveryCheck = () => ports.monotonicNow() < recoveryAccountingDeadline;
   const prior = currentAttempt(pipeline, stage.id);
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
@@ -10245,6 +10359,7 @@ async function tickRunStage(
         // Refund only the acceptance whose durable effect never began. The
         // same cut/key still rechecks human input and idle ownership on send.
         delete wait.actionAt;
+        delete wait.continuationRequestedAt;
         wait.tries = Math.max(0, wait.tries - 1);
         if (attempt.providerRecoveryBudget) attempt.providerRecoveryBudget.tries = Math.max(0, attempt.providerRecoveryBudget.tries - 1);
         await persist();
@@ -10832,7 +10947,7 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string; integration: string | null };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
@@ -10849,6 +10964,8 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
     createdAt: pipeline.createdAt,
     lastPassedCommit: pipeline.lastPassedCommit,
     owner: JSON.stringify(pipeline.delivery ? [pipeline.delivery.ownerId, pipeline.delivery.epoch, pipeline.delivery.active, pipeline.delivery.target] : null),
+    integration: pipeline.merge?.integration ? JSON.stringify([integrationScope(pipeline), integrationRequirementRevision(pipeline),
+      pipeline.merge.integration.expectedRemoteHead, pipeline.merge.integration.integratedHead, pipeline.merge.integration.decisionRevision]) : null,
     repoDir: pipeline.repoDir,
     worktreeDir: pipeline.worktreeDir,
     branch: pipeline.branch,
@@ -10912,15 +11029,29 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
     : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds })));
   const jobs = pending.map((pipeline) => {
     const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
+    const integration = pipeline.merge?.integration;
+    const integrationIdentityValid = !integration || integration.scope === integrationScope(pipeline)
+      && integration.requirementRevision === integrationRequirementRevision(pipeline)
+      && integration.ownerEpoch === pipeline.delivery?.epoch;
     const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
       if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
         || JSON.stringify(provisionFence(record)) !== fence) abort.abort();
     });
-    return { pipeline, abort, revalidate };
+    return { pipeline, abort, revalidate, integrationIdentityValid };
   });
   const revalidate = () => {
     try {
-      for (const job of jobs) job.revalidate();
+      for (const job of jobs) {
+        job.revalidate();
+        const integration = job.pipeline.merge?.integration;
+        if (!integration) continue;
+        try {
+          const policy = mergeOnReviewSetting(job.pipeline.project);
+          assertWorkspaceExecution(job.pipeline.project);
+          if (!job.integrationIdentityValid || !policy.enabled || policy.changedAt !== integration.decisionRevision
+            || job.pipeline.workspace && !workspacePrincipalAllows(job.pipeline.workspace, job.pipeline.project)) job.abort.abort();
+        } catch { job.abort.abort(); }
+      }
     } catch {
       // An unreadable registry cannot authorize more provisioning work.
       for (const job of jobs) job.abort.abort();
@@ -10996,6 +11127,11 @@ async function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvis
   if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
   const fence = provisionFence(pipeline);
   if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
+  if (pipeline.merge?.integration && !outcome.error && outcome.head !== pipeline.merge.integration.expectedRemoteHead) {
+    pipeline.merge.integration.state = "blocked";
+    await park(pipeline, "integration head changed during provisioning; reconcile branch ownership before retrying");
+    return true;
+  }
   if (outcome.base) {
     pipeline.baseBranch = outcome.base.baseBranch;
     pipeline.baseRef = outcome.base.baseRef;
@@ -11084,6 +11220,7 @@ async function tickPipeline(
     await park(pipeline, proactiveError);
     return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
   }
+  if (await holdIntegrationExecution(pipeline, attempt, ports, persist, true)) return true;
   if (pipeline.state === "provisioning") {
     /* Nothing slow runs here any more (#1799): the fetch and the worktree add
        happened in the pre-pass, outside this lease, and all that is left is
@@ -11099,6 +11236,7 @@ async function tickPipeline(
     }
     else await tickReviewStage(pipeline, stage, entries, ports, persist);
   }
+  integrationAttempt(pipeline);
   const settledAttempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
   if (proactiveError && pipeline.delivery?.operation?.state !== "running" && pipeline.state !== "closed" && (!settledAttempt
     || ["pending", "passed", "failed", "needs_decision", "skipped"].includes(settledAttempt.state))) await park(pipeline, proactiveError);
@@ -13794,6 +13932,7 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
           await checkpoint();
         }
       }
+      if (await holdIntegrationExecution(pipeline, attempt, lanePorts, checkpoint)) return;
       await tickRunStage(pipeline, stage, [], lanePorts, checkpoint, Number.POSITIVE_INFINITY);
       await checkpoint();
     }, ports?.observeControllerLeaseHold, true), selected, new Map([[id, references]]));
@@ -15059,7 +15198,7 @@ export async function createPipelineFromRequest(
   if (options.creationRequest) {
     const replay = pipelineDeliveryLookup({ requestKey: options.creationRequest.key });
     if (replay) {
-      if (replay.creationRequest?.digest !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
+      if (creationRequestDigest(replay, options.creationRequest.key) !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
       const repositoryInitialization = await readRepositoryInitialization(replay.repoDir);
       return { pipeline: replay, ...(options.conversationSource ? { replayed: true } : {}), ...(repositoryInitialization ? { repositoryInitialization } : {}) };
     }
@@ -16334,6 +16473,65 @@ function graphEditBriefer(actor: PauseResumeActor | null, pipeline: Pipeline, po
   return sizingBriefer({ kind: "agent", conversationId: actor.conversationId }, pipeline.srcConversationId ?? null, ports);
 }
 
+/** Reopen the existing outcome through the same delivery CAS and stage engine.
+ * No creation request, user pipeline, alternate host or report channel is made. */
+export async function startPipelineIntegration(expected: Pipeline, ports: PipelinePorts = defaultPipelinePorts()): Promise<{ pipeline?: Pipeline; error?: string }> {
+  if (expected.workspace && !workspacePrincipalAllows(expected.workspace, expected.project)) return { error: "integration workspace access denied" };
+  const normalized = normalizeStages(integrationStages(expected), ports.roleLookup, undefined, 1, expected.project);
+  if (!normalized.stages) return { error: normalized.error ?? "integration stages could not be normalized" };
+  const remote = expected.delivery?.target;
+  if (!remote?.remote || !remote.branch) return { error: "integration needs an owned remote branch" };
+  const readback = await ports.exec("git", ["ls-remote", remote.remote, remote.branch], expected.repoDir, pipelineLiteralGitEnv());
+  const remoteHead = readback.stdout.trim().split(/\s+/)[0];
+  if (readback.code !== 0 || remoteHead !== (expected.merge?.integration?.expectedRemoteHead ?? expected.merge?.refresh?.head))
+    return { error: "integration remote head changed or could not be reconciled" };
+  const result = await withDeliveryMutationAsync<{ pipeline?: Pipeline; error?: string }>(tx => {
+    const current = tx.get(expected.id);
+    if (!current?.merge?.refresh || !current.delivery) return { error: "integration outcome is unavailable" };
+    assertWorkspaceExecution(current.project);
+    assertProactivePipelineExecution(current);
+    if (current.workspace && !workspacePrincipalAllows(current.workspace, current.project)) return { error: "integration workspace access denied" };
+    if (integrationScope(current) !== integrationScope(expected) || current.merge.refresh.key !== expected.merge?.refresh?.key
+      || current.merge.refresh.digest !== expected.merge?.refresh?.digest) return { error: "integration reservation or scope changed before admission" };
+    const setting = mergeOnReviewSetting(current.project);
+    if (!setting.enabled || setting.changedAt !== current.merge.policyChangedAt) return { error: "integration merge policy changed or was revoked" };
+    const receipt = tx.pipelineLookup({ requestKey: current.merge.refresh.key });
+    if (receipt && receipt.id !== current.id) {
+      if (creationRequestDigest(receipt, current.merge.refresh.key) !== current.merge.refresh.digest || receipt.refreshOf?.pipelineId !== current.id
+        || receipt.refreshOf.base !== current.merge.refresh.base) return { error: "legacy reservation receipt conflicts with integration ownership" };
+      return { pipeline: receipt };
+    }
+    const adoptedKey = current.merge.refresh.key, adoptedDigest = current.merge.refresh.digest;
+    if (current.creationRequest?.key === adoptedKey && current.creationRequest.digest !== adoptedDigest)
+      return { error: "integration reservation conflicts with the outcome's original creation receipt" };
+    if (creationRequestDigest(current, adoptedKey) !== adoptedDigest) {
+      current.adoptedCreationRequests ??= current.adoptedCreationRequest ? [{ ...current.adoptedCreationRequest }] : [];
+      if (!current.adoptedCreationRequests.some(item => item.key === adoptedKey))
+        current.adoptedCreationRequests.push({ key: adoptedKey, digest: adoptedDigest });
+      current.adoptedCreationRequest = { key: adoptedKey, digest: adoptedDigest };
+    }
+    const owner = tx.pipelineLookup({ ...current.delivery.target, active: true });
+    const history = owner ?? tx.pipelineLookup(current.delivery.target);
+    if (owner && owner.id !== current.id || history && (history.id !== current.id || history.delivery?.epoch !== current.delivery.epoch))
+      return { error: "integration delivery has another owner; drain and reconcile it first" };
+    if (current.state !== "completed" && current.merge.integration
+      && current.merge.refresh.key === expected.merge?.refresh?.key && current.delivery.active
+      && current.merge.integration.scope === integrationScope(current)) return { pipeline: current };
+    if (tx.hasUnfinishedPipeline({ repository: current.delivery.target.repository, branch: current.delivery.target.branch,
+      ...(current.merge.prNumber ? { pullRequestRepository: current.merge.repository, prNumber: current.merge.prNumber,
+        pullRequestMatches: (candidate, repository, number) => pipelineHasPullRequest(candidate as Pipeline, repository, number),
+      } : {}),
+    })) return { error: "integration waits for unfinished branch or PR work" };
+    const refused = admitIntegration(current, expected, normalized.stages!, ports.now());
+    if (refused) return { error: refused };
+    deliveryJournal(current, "claim", "integration resumed the original outcome at a new delivery epoch", null);
+    tx.put(current);
+    return { pipeline: current };
+  }, 32);
+  if (result.pipeline?.id === expected.id) requestPipelineTick();
+  return result;
+}
+
 export async function patchPipeline(
   id: string,
   req: PatchPipelineRequest,
@@ -16359,6 +16557,7 @@ export async function patchPipeline(
       // Keep the caller's revision guards over the original record. Authority
       // joins the accepted edit in its transaction, before any later launch.
       if (pipeline && principal) pipeline.workspace ??= principal;
+      if (pipeline && (req.action === "resolve-decision" || req.action === "retry-stage")) renewIntegrationDecision(pipeline, ports.now());
       if (records) await persist(records); else await persist();
     });
   }, observeHold);
@@ -18312,6 +18511,16 @@ export async function reportStageCompletion(
     const rewriteOwner = pendingSummaryRewrite(pipeline, attempt);
     if (rewriteOwner && (normalized.verdict.status !== "pass" || normalized.verdict.findings?.length || !normalized.summary))
       return { error: "a summary rewrite requires pass, no findings and a non-empty summary; the accepted verdict is unchanged", status: 409, code: "STAGE_REPORT_SUMMARY_ONLY" };
+    const integration = pipeline.merge?.integration;
+    if (integration && INTEGRATION_STAGES.includes(stageId as typeof INTEGRATION_STAGES[number])) {
+      const policy = mergeOnReviewSetting(pipeline.project);
+      if (pipeline.workspace && !workspacePrincipalAllows(pipeline.workspace, pipeline.project)
+        || integration.scope !== integrationScope(pipeline) || integration.requirementRevision !== integrationRequirementRevision(pipeline)
+        || integration.ownerEpoch !== pipeline.delivery?.epoch || pipeline.delivery?.ownerId !== pipeline.id
+        || !policy.enabled || policy.changedAt !== integration.decisionRevision)
+        return { error: "integration report lost its delivery or policy authority", status: 409, code: "STAGE_REPORT_INTEGRATION_FENCED" };
+      integrationAttempt(pipeline);
+    }
     const prior = attempt.report ?? null;
     const entries = pipeline.stageReports ?? [];
     const seq = (entries.at(-1)?.seq ?? 0) + 1;

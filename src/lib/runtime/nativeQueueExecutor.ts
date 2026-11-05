@@ -1,3 +1,4 @@
+import type { PipelineDispatchContext } from "./accountCreditGuard";
 import { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { nativeQueueInputMatches } from "./nativeQueueContent";
 import type { RuntimeHostClient } from "./client";
@@ -37,7 +38,7 @@ export interface NativeQueueExecutorPort {
   resolveHost(conversationId: string): EngineHost | null;
   binding(conversationId: string): NativeQueueBinding | null;
   /** Synchronous account admission after journal/health waits. Cleanup stays available. */
-  authorizeDispatch?(conversationId: string): void;
+  authorizeDispatch?(conversationId: string, dispatch: PipelineDispatchContext): void;
   /** Revocable work must stay in our journal until an idle, guarded turn start. */
   requiresDispatchGuard?(conversationId: string): boolean;
   /** Registry evidence of a succession from this predecessor's generation chain. */
@@ -77,6 +78,8 @@ export class NativeQueueExecutor {
     const entry = entryTargeted ? records.find(e => e.entryId === (command.action === "add" ? command.operationId : command.entryId)) : null;
     if (entryTargeted && (!entry || entry.mutationOperationId !== command.operationId)) throw new Error("native queue mutation identity is unavailable");
     const version = entry?.versions.find(v => v.revision === entry.revision);
+    const dispatch = { operationId: version?.operationId ?? command.operationId, deliveryOperationId: entry?.entryId,
+      clientMessageId: entry?.clientUserMessageId ?? command.idempotencyKey, origin: version?.origin ?? command.origin };
     let binding = command.action === "add" && entry ? entry.binding : command.binding;
     const succession = this.port.succession?.(command.conversationId, binding, prior.receipt.admittedAt);
     if (succession?.status === "refused") {
@@ -134,7 +137,7 @@ export class NativeQueueExecutor {
       if ((command.action === "start" || (command.action === "send-now" && command.turnId === null)) && health.status !== "idle") throw new StructuredSendRefusedError("idle state is unproven");
       if (command.action === "add" && health.status === "attention" && health.activeTurnRef === null) throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
       if (command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId) && health.status !== "idle") {
-        this.port.authorizeDispatch?.(command.conversationId);
+        this.port.authorizeDispatch?.(command.conversationId, dispatch);
         note("awaiting-turn", "waiting for the current turn to finish");
         return false;
       }
@@ -157,7 +160,7 @@ export class NativeQueueExecutor {
       await transition({ phase: "prepared", input, ...(rebinding ? { binding } : {}) });
       prepared = true;
       if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
-      if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
+      if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId, dispatch);
       const guardedAdd = command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId);
       if (guardedAdd && health.status !== "idle") {
         await transition({ phase: "deferred", reason: "waiting for guarded idle dispatch" });
@@ -217,7 +220,7 @@ export class NativeQueueExecutor {
         }
         await transition({ phase: "withdrawn" });
         if (!owns()) throw new StructuredSendRefusedError("native queue writer changed after withdrawal");
-        this.port.authorizeDispatch?.(command.conversationId);
+        this.port.authorizeDispatch?.(command.conversationId, dispatch);
         const result = await native.sendWithdrawn({ ...entry!, state: "withdrawn" }, command.turnId!);
         await transition({ phase: "acknowledged", turnId: result.turnId });
       }

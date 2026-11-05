@@ -329,11 +329,16 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     && owner.worktreeDir === pipeline.worktreeDir && owner.repoDir === pipeline.repoDir
     && owner.delivery?.target.remote === pipeline.delivery?.target.remote
     && deliveryOwnerError(pipeline, owner) === null;
+  const integration = pipeline.merge?.integration;
+  const preparedIntegration = Boolean(integration?.integratedHead && pipeline.cursor?.stageId === "integration-review"
+    && integration.integratedHead === integration.expectedRemoteHead && integration.expectedRemoteHead === pipeline.baseRef
+    && integration.ownerEpoch === pipeline.delivery?.epoch && pipeline.baseRefPinned);
+  if (preparedIntegration && !sameOwner) return { ok: false, error: "mechanical integration delivery ownership changed" };
   const operation = sameOwner ? owner?.delivery?.operation : undefined;
   const resumesPublication = !!operation && operation.epoch === pipeline.delivery?.epoch
     && operation.sha === localSha && (operation.state === "pending" || operation.state === "running");
   let ownsCheckout = false;
-  if (deliveryBranch !== pipeline.branch) {
+  if (deliveryBranch !== pipeline.branch || preparedIntegration) {
     const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
     if (listing.code !== 0) return failure("checking ownership of the existing pipeline branch", listing);
     const entries = listing.stdout.split("\0\0").map((record) => record.split("\0"));
@@ -364,13 +369,15 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     }
   }
   let remoteSha: string | null = null;
-  if (deliveryBranch !== pipeline.branch && pipeline.delivery?.target.remote) {
+  if ((deliveryBranch !== pipeline.branch || preparedIntegration) && pipeline.delivery?.target.remote) {
     const remote = pipeline.delivery.target.remote;
     const ref = pipeline.delivery.target.branch;
     const probe = await exec("git", ["ls-remote", "--heads", remote, ref], pipeline.repoDir, signal);
     if (probe.code !== 0) return failure("checking the delivery branch before checkout", probe);
     remoteSha = probe.stdout.trim().split(/\s+/)[0] || null;
     if (remoteSha && !/^[0-9a-f]{40}$/i.test(remoteSha)) return { ok: false, error: "the delivery branch has no exact commit SHA" };
+    if (preparedIntegration && remoteSha !== integration!.expectedRemoteHead)
+      return { ok: false, error: "mechanical integration delivery head changed before checkout" };
     if (remoteSha && remoteSha !== localSha) {
       const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.repoDir, signal);
       if (fetched.code !== 0) return failure("fetching the delivery branch before checkout", fetched);
@@ -463,6 +470,12 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     && !holdsInitialPin) {
     const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
     if (remoteContainsLocal.code === 0) {
+      if (preparedIntegration) {
+        const remote = pipeline.delivery!.target;
+        const latest = await exec("git", ["ls-remote", "--heads", remote.remote!, remote.branch], pipeline.repoDir, signal);
+        if (latest.code !== 0 || latest.stdout.trim().split(/\s+/)[0] !== remoteSha)
+          return { ok: false, error: "mechanical integration delivery head changed before fast-forward" };
+      }
       const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);
       if (merged.code !== 0) return failure("fast-forwarding the delivery branch before production", merged);
       expectedHead = remoteSha;
@@ -954,12 +967,19 @@ export async function commitPipelineStage(
       if (add.code !== 0) return stagingFailure(add);
     }
   } else {
-    const tracked = await exec("git", ["add", "-u", "--", ...changedOutputPaths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
-    if (tracked.code !== 0) return stagingFailure(tracked);
     const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ...declaredOutputs], pipeline.worktreeDir);
     if (untracked.code !== 0) return stagingFailure(untracked);
     const outputPaths = new Set(changedOutputPaths);
     const eligibleUntracked = untracked.stdout.split("\0").filter((candidate) => candidate && outputPaths.has(candidate));
+    // `add -u` rejects a new declared report: it has no index entry yet.
+    // Reuse the untracked read to update only existing paths, then add the
+    // eligible new outputs under the same index-custody checks below.
+    const newOutputs = new Set(eligibleUntracked);
+    const trackedOutputs = changedOutputPaths.filter(file => !newOutputs.has(file));
+    if (trackedOutputs.length) {
+      const tracked = await exec("git", ["add", "-u", "--", ...trackedOutputs.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+      if (tracked.code !== 0) return stagingFailure(tracked);
+    }
     for (let start = 0; start < eligibleUntracked.length; start += 100) {
       const add = await exec("git", ["add", "--", ...eligibleUntracked.slice(start, start + 100).map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
       if (add.code !== 0) return stagingFailure(add);
@@ -2419,7 +2439,14 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     }
   }
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
-  if (push.code !== 0) return failure("publishing the pipeline branch", push);
+  if (push.code !== 0) {
+    // A transport can fail after the remote accepted the ref. Read the
+    // declared target before treating that exit as proof nothing landed.
+    const observed = await readRemotePipelineBranch(pipeline, exec, "reconciling the failed pipeline push");
+    if (observed.ok && observed.sha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
+    if (!observed.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: observed.error };
+    return failure("publishing the pipeline branch", push);
+  }
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));
   if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };
   const publishedHead = confirm.sha;

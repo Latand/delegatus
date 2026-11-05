@@ -1219,6 +1219,11 @@ export type Pipeline = {
   /** Per-head publication recovery survives a takeover and a new stage attempt. */
   publicationRecovery?: Record<string, PipelinePublicationRecovery>;
   creationRequest?: { key: string; digest: string };
+  /** Consumed idempotency keys adopted by this durable outcome. The original
+   * creationRequest remains the immutable identity of the pipeline itself. */
+  adoptedCreationRequest?: { key: string; digest: string };
+  /** All consumed refresh reservations, retained so any earlier request can replay. */
+  adoptedCreationRequests?: { key: string; digest: string }[];
   id: string;
   task: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */
@@ -1386,8 +1391,37 @@ export type PipelineRefresh = {
   pipelineId: string | null;
 };
 
+export type PipelineIntegration = {
+  /** Stable originating outcome. Legacy carriers keep their original identity. */
+  outcomeId: string;
+  state: "queued" | "legacy-draining" | "resolving" | "reviewing" | "checking" | "waiting" | "blocked" | "landing" | "reconciling" | "landed";
+  scope: string;
+  requirementRevision: string;
+  decisionRevision: string;
+  desiredBase: string;
+  /** Original feature comparison base; null only when a legacy record did not retain it. */
+  featureBase: string | null;
+  integratedHead: string | null;
+  expectedRemoteHead: string;
+  ownerEpoch: number;
+  cycles: number;
+  repairs: number;
+  /** First reservation key survives adoption and every subsequent base update. */
+  reservationKey: string;
+  startedAt: string;
+  deadline: string;
+  binding: { stageId: string; attempt: number; launchId: string | null; conversationId: string | null } | null;
+  publicationId: string | null;
+  reviewedHead: string | null;
+  /** Frozen compatible batch, at most eight outcomes. Cursor advances from receipts. */
+  batch: { owner: string; items: string[]; cursor: number; deadline: string };
+};
+
 export type PipelineMerge = {
-  /** A proactive write began without a terminal forge receipt. Only receipt
+  /** Forge target branch; absent on legacy unresolved writes, which fence the repository. */
+  targetBranch?: string;
+  integration?: PipelineIntegration;
+  /** A proactive or integration write began without a terminal forge receipt. Only receipt
       reconciliation, never a repeated write, may advance it automatically. */
   effectUncertain?: boolean;
   /** Enrolled when this release automatically lands the PR. */

@@ -57,7 +57,7 @@ function inputName(name: string): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || ["PATH", "HOME", "TMPDIR", "NODE_ENV", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
     "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "LLV_LANG", "LLV_LAUNCHER_REEXEC", "LLV_LAUNCHER_CHECKOUT", "LLV_TOKEN", "LLV_DEBUG", "LLV_SKIP_HOOKS", "DELEGATUS_DEBUG"].includes(name)
     || /^(?:XDG_|LLV_(?:STATE|INBOX|VIEWER|SIGNAL|CPU|OWNED)_|DELEGATUS_|GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|CONFIG(?:_COUNT|_PARAMETERS|_KEY_\d+|_VALUE_\d+)?)$)/.test(name)
-    || (name.startsWith("LLV_GATE_") && !["LLV_GATE_CHECK_ENV", "LLV_GATE_BUN"].includes(name))) {
+    || (name.startsWith("LLV_GATE_") && !["LLV_GATE_CHECK_ENV", "LLV_GATE_BUN", "LLV_GATE_TEST_WORKERS"].includes(name))) {
     throw new Error("Unsupported Cloud check input name");
   }
 }

@@ -350,6 +350,10 @@ for (const stallMs of [0, 27_000]) test(`refresh completion advances its parent 
         });
         if (args[0] === "api" && args[1]?.includes("/reviews")) return "";
         if (args[0] === "api" && args[1]?.includes("/rules/branches/")) return "[]";
+        if (args[0] === "api" && args[1] === "repos/acme/widgets/branches/main"
+          && args[args.indexOf("--jq") + 1] === ".commit.sha") return base;
+        if (args[0] === "api" && args[1] === `repos/acme/widgets/compare/${base}...${head}`
+          && args[args.indexOf("--jq") + 1] === ".merge_base_commit.sha") return base;
         if (args[0] === "api" && args[1]?.includes("/branches/")) return '["ci"]';
         if (args[0] === "repo") return '{"squashMergeAllowed":true}';
         throw new Error(`unexpected forge read ${args.join(" ")}`);

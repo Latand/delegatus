@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { stateLockProcessKind } from "@/lib/state/lockWait";
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
-import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
+import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, pipelineIntegrationResolverCandidates, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
@@ -89,6 +89,76 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("adopted integration receipts replay through the keyed SQLite index", async () => isolatedDelivery(async () => {
+  const pipeline = deliveryFixture("integration-receipt-index");
+  pipeline.adoptedCreationRequest = { key: "integration-old", digest: "digest-old" };
+  pipeline.adoptedCreationRequests = [
+    { key: "integration-old", digest: "digest-old" },
+    { key: "integration-new", digest: "digest-new" },
+  ];
+  savePipelines([pipeline]);
+  expect(pipelineDeliveryLookup({ requestKey: "integration-old" })?.id).toBe(pipeline.id);
+  expect(pipelineDeliveryLookup({ requestKey: "integration-new" })?.id).toBe(pipeline.id);
+  pipeline.state = "closed";
+  pipeline.cursor = null;
+  pipeline.closedAt = "2026-07-01T00:00:00.000Z";
+  savePipelines([pipeline]);
+  expect(await archiveSettledPipelines(Date.parse("2027-01-01T00:00:00.000Z"))).toBe(1);
+  const observed: Array<{ db: Database; sql: string }> = [];
+  const original = Database.prototype.query;
+  const capture = spyOn(Database.prototype, "query").mockImplementation(function <T, P extends SQLQueryBindings | SQLQueryBindings[]>(this: Database, sql: string) {
+    if (sql.includes("pipeline_request_receipts AS receipt") || sql.includes("INDEXED BY pipeline_creation_request")
+      || sql.includes("INDEXED BY pipeline_adopted_creation_request")) observed.push({ db: this, sql });
+    return original.bind(this)<T, P>(sql);
+  });
+  try {
+    expect(pipelineDeliveryLookup({ requestKey: pipeline.creationRequest!.key })?.id).toBe(pipeline.id);
+    expect(pipelineDeliveryLookup({ requestKey: "integration-new" })?.id).toBe(pipeline.id);
+    expect(pipelineDeliveryLookup({ requestKey: "missing-integration-fixture" })).toBeNull();
+    const plans = observed.map(({ db, sql }) => ({ sql, plan: original.call(db, `EXPLAIN QUERY PLAN ${sql}`)
+      .all("pipelines", sql.includes("pipeline_request_receipts") ? "integration-new" : "missing-integration-fixture") as Array<{ detail: string }> }));
+    expect(plans.some(({ sql, plan }) => sql.includes("pipeline_request_receipts")
+      && plan.some(row => row.detail.includes("pipeline_request_receipt_key") && row.detail.includes("collection=?") && row.detail.includes("request_key=?")))).toBe(true);
+    expect(plans.some(({ sql, plan }) => sql.includes("pipeline_creation_request")
+      && plan.some(row => row.detail.includes("pipeline_creation_request") && row.detail.includes("<expr>=?")))).toBe(true);
+    expect(plans.some(({ sql, plan }) => sql.includes("pipeline_adopted_creation_request")
+      && plan.some(row => row.detail.includes("pipeline_adopted_creation_request") && row.detail.includes("<expr>=?")))).toBe(true);
+    console.info("integration receipt lookup plans", JSON.stringify(plans.map(item => item.plan)));
+  } finally { capture.mockRestore(); }
+}));
+
+test("resolver capacity reads only active writers from its repository index", async () => isolatedDelivery(async () => {
+  const records = ["active", "parked", "foreign", "reviewer"].map((id, i) => {
+    const pipeline = deliveryFixture(`capacity-${id}`);
+    const stageId = id === "reviewer" ? "review" : "refresh";
+    pipeline.stages[0]!.id = stageId;
+    pipeline.runs[0]!.stageId = stageId;
+    pipeline.cursor = { stageId, state: "pending", input: null, activatedBy: null };
+    pipeline.state = id === "parked" ? "needs_decision" : "running";
+    pipeline.refreshOf = { pipelineId: "original-outcome", base: "b".repeat(40) };
+    pipeline.delivery = { target: { ...deliveryTarget, repository: id === "foreign" ? "another-repository" : deliveryTarget.repository,
+      branch: `refs/heads/${id}`, pr: i + 1 }, disposition: "owner", publish: "enabled", active: true, ownerId: pipeline.id, epoch: 1, journal: [] };
+    return pipeline;
+  });
+  savePipelines(records);
+  const observed: Array<{ db: Database; sql: string }> = [];
+  const original = Database.prototype.query;
+  const capture = spyOn(Database.prototype, "query").mockImplementation(function <T, P extends SQLQueryBindings | SQLQueryBindings[]>(this: Database, sql: string) {
+    if (sql.includes("INDEXED BY pipeline_repository_resolver_capacity")) observed.push({ db: this, sql });
+    return original.bind(this)<T, P>(sql);
+  });
+  try {
+    expect(pipelineIntegrationResolverCandidates(deliveryTarget.repository).map(p => p.id)).toEqual(["capacity-active"]);
+    expect(pipelineIntegrationResolverCandidates("missing-repository")).toEqual([]);
+    expect(observed).toHaveLength(2);
+    for (const { db, sql } of observed) {
+      const plan = original.call(db, `EXPLAIN QUERY PLAN ${sql}`).all(deliveryTarget.repository) as Array<{ detail: string }>;
+      expect(plan.some(row => row.detail.includes("SEARCH") && row.detail.includes("pipeline_repository_resolver_capacity") && row.detail.includes("<expr>=?"))).toBe(true);
+      expect(plan.some(row => row.detail.startsWith("SCAN"))).toBe(false);
+    }
+  } finally { capture.mockRestore(); }
+}));
 
 test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
   const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
@@ -780,7 +850,7 @@ test("a legacy registry loads pipelines with an empty durable task binding", () 
 
 test("a v4 review-loop fail edge migrates without poisoning the pipeline registry", () => {
   sandboxed((sandbox) => {
-    expect(PIPELINES_SCHEMA_VERSION).toBe(5);
+    expect(PIPELINES_SCHEMA_VERSION).toBeGreaterThan(4);
     const pipeline = buildPipeline({
       id: "reviewv4",
       task: "legacy review edge",
@@ -811,7 +881,7 @@ test("a v4 review-loop fail edge migrates without poisoning the pipeline registr
     savePipelines(loaded);
     checkpointPipelineRollbackMirrorsForDemotion();
     expect(JSON.parse(fs.readFileSync(path.join(sandbox, "pipelines.json"), "utf8"))).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: PIPELINES_SCHEMA_VERSION,
       pipelines: [{ stages: [{ id: "build" }, { id: "review", onFail: null }] }],
     });
   });
