@@ -18,9 +18,11 @@ import { deputyAskerOf } from "./deputyAsker";
 import { productionManagerAuthoritySources } from "./managerAuthoritySources";
 import { relayMessageText } from "./relayText";
 import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor } from "./seats";
+import { nativeRelayConversation } from "./nativeRelayHandoff";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
 type RelayAdmission =
-  | { ok: true; text: string; origin: MessageOrigin; recipient: string; operationId?: string; terminalReceipt?: SendReceipt; voiceRecoveryReceipt?: SendReceipt }
+  | { ok: true; text: string; origin: MessageOrigin; recipient: string; operationId?: string; terminalReceipt?: SendReceipt; voiceRecoveryReceipt?: SendReceipt; admissionGuard?: () => void }
   | { ok: false; status: number; code: string; error: string };
 
 /** Shared server-derived payload for admission and durable MCP recovery. */
@@ -53,7 +55,9 @@ export function admitOrchestratorRelay(
   inProcessPerson = false,
 ): RelayAdmission {
   const refused = (code: string, error: string, status = 403): RelayAdmission => ({ ok: false, status, code, error });
-  const conversationId = callerConversationId(request);
+  let conversationId: string | null;
+  try { conversationId = nativeRelayConversation(request) ?? callerConversationId(request); }
+  catch { return refused("orchestrator_relay_refused", "the native relay caller changed or could not be verified"); }
   if (!conversationId && request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
     return refused("orchestrator_relay_refused", "the relay caller's conversation could not be identified");
   }
@@ -88,7 +92,19 @@ export function admitOrchestratorRelay(
   if (owner && !ownerRelayTargetMatches(conversationId!, project, resolved.ok ? resolved.recipient : recipient)) {
     return refused("owner_report_seat_unavailable", "the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", 409);
   }
-  return resolved;
+  if (!resolved.ok || !seat) return resolved;
+  const epoch = orchestratorSeatFor(seat.project!).active?.seatEpoch;
+  return { ...resolved, admissionGuard: () => {
+    try {
+      const caller = nativeRelayConversation(request) ?? callerConversationId(request);
+      const current = authorizedManagerSeats(productionManagerAuthoritySources()).find(candidate => candidate.conversationId === conversationId);
+      if (caller !== conversationId || !current || current.project !== seat.project
+        || orchestratorSeatFor(seat.project!).active?.seatEpoch !== epoch
+        || (!resolved.operationId && orchestratorSeatFor(project).active?.conversationId !== resolved.recipient)) throw new Error("relay authority changed");
+    } catch {
+      throw new DeliveryAdmissionRefusedError("orchestrator_relay_refused");
+    }
+  } };
 }
 
 /** Recipient and durable recovery shared by local and authenticated link relays.
