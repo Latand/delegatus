@@ -108,7 +108,7 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
     const unverifiableAnswer = JSON.parse(await unverifiable.line);
     expect(await unverifiable.closed, unverifiable.errors()).toBe(0);
     expect(unverifiableAnswer.success).toBe(false);
-    expect(unverifiableAnswer.contentItems[0].text).toContain("launch TMPDIR or directory identity could not be verified");
+    expect(unverifiableAnswer.contentItems[0].text).toContain("verified listener's launch TMPDIR or directory identity proof is unavailable or does not match");
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
 
     fs.writeFileSync(rootBinding, JSON.stringify({ ...JSON.parse(savedBinding), root: replacementRoot }));
@@ -146,7 +146,7 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
     const missingRecordAnswer = JSON.parse(await missingRecordSubstitution.line);
     expect(await missingRecordSubstitution.closed, missingRecordSubstitution.errors()).toBe(0);
     expect(missingRecordAnswer.success).toBe(false);
-    expect(missingRecordAnswer.contentItems[0].text).toContain("directory identity could not be verified");
+    expect(missingRecordAnswer.contentItems[0].text).toContain("verified listener's launch TMPDIR or directory identity proof is unavailable or does not match");
     expect(missingRecordAnswer.contentItems[0].text).not.toContain("foreign recording");
     fs.unlinkSync(originalRoot);
     fs.renameSync(missingRecordRedirect, originalRoot);
@@ -190,7 +190,9 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
   });
   let restoreProof = () => {};
   try {
-    expect(gateTool.socketGateCheckRoot(owner, launchRoot)).toEqual(gateTool.bindGateCheckRoot(launchRoot));
+    const launchBinding = gateTool.bindGateCheckRoot(launchRoot);
+    expect(gateTool.socketGateCheckRoot(owner, launchBinding)).toEqual(launchBinding);
+    expect(readEnv).not.toHaveBeenCalled();
     expect(fs.statSync(filename).mode & 0o077).toBe(0);
     recovering = true;
     if (fault === "identity") { const saved = JSON.parse(fs.readFileSync(filename, "utf8")); fs.writeFileSync(filename, JSON.stringify({ ...saved, identity: "stale" })); }
@@ -230,10 +232,32 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
     expect(gateTool.socketGateCheckRoot(fault === "owner-changed" ? owner : structuredClone(owner))).toEqual(fault === "none" ? gateTool.bindGateCheckRoot(launchRoot) : null);
     if (["unknown", "missing-record-no-identity", "missing-record-substituted"].includes(fault)) {
       expect(readEnv.mock.calls.map(call => call[1])).toContain("TMPDIR");
-      expect(readEnv.mock.calls.map(call => call[1])).toContain(gateTool.GATE_CHECK_ROOT_IDENTITY_ENV);
+      expect(readEnv.mock.calls.map(call => call[1]).includes(gateTool.GATE_CHECK_ROOT_IDENTITY_ENV))
+        .toBe(fault !== "unknown");
     }
   } finally {
     restoreProof(); readEnv.mockRestore();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform === "win32")("fresh socket launch keeps its pre-spawn root when listener environment reads are unavailable", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gb-")); fs.chmodSync(root, 0o700);
+  const launchRoot = path.join(root, "stage-root"); fs.mkdirSync(launchRoot);
+  const socket = path.join(root, "rpc.sock");
+  const server = net.createServer(connection => connection.end());
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const owner = { endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid) };
+  const readEnv = spyOn(procBackend, "readEnvVar").mockReturnValue(null);
+  try {
+    const binding = gateTool.bindGateCheckRoot(launchRoot);
+    expect(gateTool.socketGateCheckRoot(owner, binding)).toEqual(binding);
+    expect(readEnv).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(root, "gate-root.json"))).toBe(true);
+  } finally {
+    readEnv.mockRestore();
     await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(root, { recursive: true, force: true });
   }

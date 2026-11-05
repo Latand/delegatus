@@ -1616,7 +1616,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
     provisional.gateCheckRoot = child instanceof CodexSocketTransport
       ? socketGateCheckRoot({ endpoint: child.endpoint, process: { pid: child.pid,
-        startIdentity: child.startIdentity, bootEpoch: child.bootEpoch } }, options.socketOwner ? undefined : gateCheckLaunchRoot)
+        startIdentity: child.startIdentity, bootEpoch: child.bootEpoch } }, options.socketOwner ? undefined : gateCheckLaunchBinding)
       : gateCheckLaunchBinding;
     provisional.nativeQueueRequiresCanonicalValidation = threadId !== null;
     provisional.protocol = protocol;

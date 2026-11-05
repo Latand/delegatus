@@ -34,28 +34,37 @@ function validateGateCheckRoot(binding: GateCheckRoot): void {
 /** The listener keeps its launch environment when a different Viewer connects.
  * The stage can edit the saved record, so recovery also needs the verified
  * listener's original TMPDIR. Refuse recovery when that evidence is unavailable. */
-export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string): GateCheckRoot | null {
+export function socketGateCheckRoot(owner: CodexSocketOwner, launchBinding?: GateCheckRoot | null): GateCheckRoot | null {
   if (!verifiedCodexSocketOwner(owner)) return null;
   const filename = path.join(path.dirname(codexSocketPath(owner.endpoint)!), "gate-root.json");
   const identity = JSON.stringify([owner.process.pid, owner.process.startIdentity, owner.process.bootEpoch]);
   try {
-    let root = launchRoot;
-    let saved: SavedGateCheckRoot | null = null;
-    if (root === undefined) {
-      try {
-        saved = readEnvelope(filename) as SavedGateCheckRoot | null;
-        if (!saved || saved.identity !== identity || typeof saved.root !== "string" || !path.isAbsolute(saved.root)
-          || typeof saved.physicalRoot !== "string" || !path.isAbsolute(saved.physicalRoot)
-          || typeof saved.rootDirectoryIdentity !== "string") return null;
-        const liveRoot = procBackend.readEnvVar(owner.process.pid, "TMPDIR");
-        if (!liveRoot || path.resolve(liveRoot) !== path.resolve(saved.root)) return null;
-        root = saved.root;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
-      }
-      // The current Viewer's environment says nothing about the retained CLI.
-      if (root === undefined) root = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
+    // A new socket launch already captured this physical binding before spawn.
+    // Some platforms cannot read another process's environment, so keep that
+    // proof instead of trying to rediscover it from the listener.
+    if (launchBinding !== undefined) {
+      if (!launchBinding) return null;
+      validateGateCheckRoot(launchBinding);
+      if (!verifiedCodexSocketOwner(owner)) return null;
+      writeEnvelope(filename, { identity, ...launchBinding });
+      return verifiedCodexSocketOwner(owner) ? launchBinding : null;
     }
+
+    let root: string | undefined;
+    let saved: SavedGateCheckRoot | null = null;
+    try {
+      saved = readEnvelope(filename) as SavedGateCheckRoot | null;
+      if (!saved || saved.identity !== identity || typeof saved.root !== "string" || !path.isAbsolute(saved.root)
+        || typeof saved.physicalRoot !== "string" || !path.isAbsolute(saved.physicalRoot)
+        || typeof saved.rootDirectoryIdentity !== "string") return null;
+      const liveRoot = procBackend.readEnvVar(owner.process.pid, "TMPDIR");
+      if (!liveRoot || path.resolve(liveRoot) !== path.resolve(saved.root)) return null;
+      root = saved.root;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+    }
+    // The current Viewer's environment says nothing about the retained CLI.
+    if (root === undefined) root = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
     if (!root || !verifiedCodexSocketOwner(owner)) return null;
     // This listener-owned launch proof is required for both saved and missing
     // records. TMPDIR locates the root; only its launch-time device/inode
@@ -77,7 +86,7 @@ export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | n
     if (!input || typeof input.log !== "string" || !path.isAbsolute(input.log)
       || typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 500)
       throw new Error("log and a bounded check reason are required");
-    if (!binding) throw new Error(`stage temporary root is unavailable: launch TMPDIR or directory identity could not be verified (root=null, log=${JSON.stringify(input.log)})`);
+    if (!binding) throw new Error(`stage temporary root is unavailable: the verified listener's launch TMPDIR or directory identity proof is unavailable or does not match (root=null, log=${JSON.stringify(input.log)})`);
     const { root, physicalRoot: ownerRoot } = binding;
     validateGateCheckRoot(binding);
     let parent: string;
