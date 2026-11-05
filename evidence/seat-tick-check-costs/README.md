@@ -15,7 +15,10 @@ concurrent work and worker threads in that process can contribute. Nested spans
 overlap. These counters do not attribute CPU exclusively to one asynchronous
 phase or measure the files-response child process's CPU.
 
-The final row is captured after the check scope closes and is
+After the 512-span bound, the journal keeps the newest 512 spans and increments
+`dropped` for each evicted older span. The rolling buffer replaces one slot per
+new phase, so its cost stays constant after reaching the bound. The final row is
+captured after the check scope closes and is
 durable before the check returns. Audit persistence and subsequent check-error
 card bookkeeping are outside the recorded phase interval. The check awaits the
 asynchronous journal writer under the existing file-transaction lock; lock
@@ -28,7 +31,8 @@ added. The 75-second check budget is unchanged.
 ## Paired measurements
 
 The measurements in `measurements.json` ran on 2026-11-05 under Bun 1.4.0 against
-base `6e8b65d9` and the listed final production source hashes. They exercise
+base `6e8b65d9` and the final production source hashes. The paired fixture was
+identical across both revisions (`fixtureHash` in each row). They exercise
 Viewer modules in isolated Bun processes. They start neither a Viewer listener
 nor a runtime-host listener. Worker regression tests separately exercise the
 real files-response child process. This lane performed no production comparison.
@@ -50,20 +54,20 @@ measures candidate admission: a due launch still performs its final host and
 authority checks. The due-project regression separately proves launch.
 
 Pairs ran base/head, head/base, base/head, sequentially with no added request
-load. End-of-run one-minute machine load ranged from 18.3 to 44.1, so wall times
+load. End-of-run one-minute machine load ranged from 26.1 to 35.3, so wall times
 are subject to shared-machine noise. Main-thread CPU below uses
 `process.threadCpuUsage`; the JSON also preserves process CPU and load.
 
-| Pair | Cold lookup wall, base → head (ms) | Warm lookup wall (ms) | Warm sweep wall (ms) | Warm sweep main-thread CPU (ms) |
+| Pair | Cold lookup wall, base → head (ms) | Warm lookup median, base → head (ms) | Warm sweep median, base → head (ms) | Warm sweep main-thread CPU median, base → head (ms) |
 | --- | ---: | ---: | ---: | ---: |
-| 1 | 889.9 → 11.8 | 2.73 → 1.97 | 1691.6 → 40.6 | 1525.6 → 39.8 |
-| 2 | 918.2 → 7.1 | 3.29 → 1.14 | 1670.9 → 53.1 | 1647.4 → 53.2 |
-| 3 | 684.7 → 15.0 | 1.41 → 2.29 | 768.1 → 45.5 | 767.8 → 45.6 |
+| 1 | 551.2 → 10.1 | 1.44 → 1.19 | 981.4 → 48.1 | 963.2 → 47.7 |
+| 2 | 664.1 → 14.1 | 1.74 → 2.10 | 1370.0 → 61.2 | 1281.3 → 60.3 |
+| 3 | 781.9 → 13.4 | 2.28 → 2.22 | 1296.2 → 75.8 | 1246.1 → 72.9 |
 
 Candidate admissions are **900 → 30** in every sweep. Cold lookup savings are
-670–911 ms, or 0.89–1.21% of one 75-second budget per lookup. This small fixture
-shows no consistent warm lookup gain: the third pair regressed by 0.88 ms.
-Warm sweep savings are 723–1651 ms, equivalent to 0.96–2.20% of one 75-second
+541–769 ms, or 0.72–1.03% of one 75-second budget per lookup. This small fixture
+shows no consistent warm lookup gain: pair two regressed by 0.36 ms.
+Warm sweep savings are 933–1309 ms, equivalent to 1.24–1.75% of one 75-second
 budget for the entire 30-project sweep. That aggregate is not a per-project
 budget saving. The earlier copy-of-state investigation reported 262–266 ms
 per warm lookup, about 0.35% of 75 seconds, on different data.
@@ -83,12 +87,12 @@ worker threads. Wall time includes awaited file I/O.
 
 | Phases | Added bytes per row | Trace main CPU (ms/check) | Base journal main CPU (ms/append) | New journal main CPU (ms/append) | New awaited wall (ms/append) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 100 | 1968 | 0.121 | 0.85–1.49 | 1.34–1.75 | 9.28–10.49 |
-| 512 | 9297 | 0.589 | 0.88–1.20 | 2.50–3.27 | 12.94–16.29 |
+| 100 | 1979 | 0.112 | 0.96–1.67 | 1.44–1.89 | 7.85–10.01 |
+| 512 | 9298 | 0.459 | 1.23–1.68 | 3.47–3.67 | 17.38–21.59 |
 
 At the supplied observation's 179 checks per 41 minutes, the largest paired
-main-thread increase plus tracing extrapolates to about 0.20 ms of CPU per
-second, below 0.03% of one core. This extrapolation uses isolated burst
+main-thread increase plus tracing extrapolates to about 0.21 ms of CPU per
+second, about 0.02% of one core. This extrapolation uses isolated burst
 measurements; production main-loop impact remains unmeasured. File I/O is awaited
 asynchronously. The early synchronous timing prototype was rejected after its
 full-ring overhead was measured; it is not the shipped writer.
@@ -96,8 +100,10 @@ full-ring overhead was measured; it is not the shipped writer.
 ## Regression evidence
 
 Tests cover recipient isolation, both alias directions, exact keys, N candidate
-admissions, concurrent and settled choice sharing, next-sweep freshness, and a
-due project after a disabled project. Existing curator admission tests retain
+admissions, all-project wake-state coordination, fresh owed-check ownership,
+next-sweep freshness, and a due project after a disabled project. The follow-up
+late-eligibility and owed-check regressions pass on the final source and fail on
+the pre-fix implementation. Existing curator admission tests retain
 their settings, seat, host, deployment, ownership, deferred-launch and restart
 fences. Timing tests cover precise boundaries and CPU deltas, failures, capped
 records, compact encoding, old journals, concurrent writes, retention, writer

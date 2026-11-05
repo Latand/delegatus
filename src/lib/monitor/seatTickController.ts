@@ -2670,7 +2670,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   const incumbent = machinePass();
   if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
   const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
-  const curation = curator ? curationForSweep(curator) : null;
+  const curation = curator ? curationForSweep(curator, [...projects].sort()) : null;
   // Each project starts independently. Its own deadline includes every phase;
   // an overdue project never holds the roster behind its await.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
@@ -2688,6 +2688,12 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
   const checks = tickHost.__llvSeatTickProjects ??= new Map();
   const active = checks.get(project);
   if (active) {
+    // This sweep borrows an existing check. Release this sweep's coordination
+    // slot only when the borrowed check has refreshed its state and finished.
+    void active.promise.then(
+      () => dependencies.curation?.finishProject?.(project),
+      () => dependencies.curation?.finishProject?.(project),
+    );
     active.owed = true;
     console.error(`[seat tick] project held: ${active.work?.detail() ?? `project=${project}; opening`}; retry owed`);
     return active.promise;
@@ -2707,10 +2713,12 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
       return null;
     } finally {
       if (checks.get(project) === entry) checks.delete(project);
+      dependencies.curation?.finishProject?.(project);
       if (entry.owed && generation === tickHost.__llvSeatTickGeneration) {
         // A callback which arrived during this check is a fresh obligation.
         // Coalesce it once; the new check re-reads all durable state.
-        void checkSeatTickProject(project, dependencies);
+        const fresh = dependencies.curation?.fresh?.(project);
+        void checkSeatTickProject(project, fresh ? { ...dependencies, curation: fresh } : dependencies);
       }
     }
   })();

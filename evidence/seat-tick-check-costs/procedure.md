@@ -83,7 +83,7 @@ const curators=[];
 for(let i=0;i<4;i++) {
  admissions=0;
  const controller=curation.productionCurationController(sources);
- const owner=(curation as any).curationForSweep?.(controller)??controller;
+const owner=(curation as any).curationForSweep?.(controller,projects)??controller;
  const measured=await measure(i===0?"cold-sweep":"warm-sweep",()=>Promise.all(projects.map(project=>owner.launchIfDue({project,now,settings:{...defaultSeatTickSettings(project),enabled:true}} as never))));
  curators.push({...measured,answer:undefined,admissions});
 }

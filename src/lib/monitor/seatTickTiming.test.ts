@@ -45,6 +45,23 @@ test("sync work, async failures and optional source queue work share one check t
   } finally { work.close(); }
 });
 
+test("a failing phase after the timing cap remains diagnosable", async () => {
+  let now = 0, cpu = 0;
+  const work = new SeatTickWork("fixture", 10_000, () => now);
+  const ports = work.ports({ read: () => { now++; cpu += 3; return cpu; }, fail: () => { now += 4; cpu += 11; throw Error("late source failure"); } }, "check.sources");
+  try {
+    for (let i = 0; i < SEAT_TICK_TIMING_LIMIT; i++) ports.read();
+    expect(() => ports.fail()).toThrow("late source failure");
+    const timing = work.timings.snapshot();
+    expect(timing.phases).toHaveLength(SEAT_TICK_TIMING_LIMIT);
+    expect(timing.dropped).toBe(1);
+    expect(timing.phases[0]!.beginMs).toBe(1);
+    expect(timing.phases.at(-1)).toMatchObject({ phase: "check.sources.fail", beginMs: 512, endMs: 516 });
+    expect(timing.phases.at(-1)!.cpuUs).toBeGreaterThanOrEqual(0);
+    expect(sanitizeSeatTickTiming(compactSeatTickTiming(timing))?.phases.at(-1)).toEqual(timing.phases.at(-1));
+  } finally { work.close(); }
+});
+
 test("timing reader rejects invalid headers and bounds malformed or excessive phases", () => {
   const trace = new SeatTickTimings(); trace.begin("check.registry")();
   const snapshot = trace.snapshot();

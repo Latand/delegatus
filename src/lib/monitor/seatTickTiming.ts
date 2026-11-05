@@ -39,15 +39,24 @@ export class SeatTickTimings {
   private readonly started: number;
   private readonly cpu;
   private readonly spans: { row: SeatTickPhaseTiming; cpu: NodeJS.CpuUsage; open: boolean }[] = [];
+  private spanOffset = 0;
   private dropped = 0;
   constructor(private readonly clock = () => performance.now(), private readonly usage = () => process.cpuUsage()) {
     this.started = clock();
     this.cpu = usage();
   }
   begin(phase: string): () => void {
-    if (this.spans.length >= SEAT_TICK_TIMING_LIMIT) { this.dropped++; return () => {}; }
     const span = { row: { phase, beginMs: milliseconds(this.clock() - this.started), endMs: 0, cpuUs: 0 }, cpu: this.usage(), open: true };
-    this.spans.push(span);
+    if (this.spans.length >= SEAT_TICK_TIMING_LIMIT) {
+      // Keep a bounded rolling tail so a late failing phase remains visible.
+      // Existing closures still finish their span, but evicted rows are no
+      // longer retained by the journal snapshot.
+      this.spans[this.spanOffset] = span;
+      this.spanOffset = (this.spanOffset + 1) % SEAT_TICK_TIMING_LIMIT;
+      this.dropped++;
+    } else {
+      this.spans.push(span);
+    }
     return () => {
       if (!span.open) return;
       span.open = false;
@@ -58,9 +67,10 @@ export class SeatTickTimings {
   }
   snapshot(): SeatTickTiming {
     const elapsedMs = milliseconds(Math.max(0, this.clock() - this.started)), cpu = this.usage();
+    const ordered = this.spanOffset ? [...this.spans.slice(this.spanOffset), ...this.spans.slice(0, this.spanOffset)] : this.spans;
     return { checkId: this.checkId, startedAt: this.startedAt, elapsedMs,
       cpuUs: Math.max(0, cpu.user + cpu.system - this.cpu.user - this.cpu.system), dropped: this.dropped,
-      phases: this.spans.map(({ row, open, cpu: start }) => open
+      phases: ordered.map(({ row, open, cpu: start }) => open
         ? { ...row, endMs: Math.max(row.beginMs, elapsedMs), cpuUs: Math.max(0, cpu.user + cpu.system - start.user - start.system), pending: true }
         : { ...row }) };
   }

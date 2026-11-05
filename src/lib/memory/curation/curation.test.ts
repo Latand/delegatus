@@ -412,6 +412,23 @@ test("one sweep shares in-flight and settled machine choices, with N host admiss
   expect(f.bodies).toHaveLength(0);
 });
 
+test("review: a due project whose wake lands later in the sweep still launches", async () => {
+  let dueProject: string | null = null, choices = 0;
+  const controller = {
+    reconcile: async () => null,
+    launchIfDue: async () => { choices++; return dueProject ? `launched ${dueProject}` : null; },
+  };
+  const sweep = curationForSweep(controller, ["quiet-seat", PROJECT]);
+  const early = sweep.launchIfDue({ ...tickInput(), project: "quiet-seat" });
+  await Promise.resolve();
+  expect(choices).toBe(0);
+  // Eligibility changes after the early project requested the sweep's choice.
+  dueProject = PROJECT;
+  const due = sweep.launchIfDue({ ...tickInput(), project: PROJECT });
+  expect(await Promise.all([early, due])).toEqual([`launched ${PROJECT}`, `launched ${PROJECT}`]);
+  expect(choices).toBe(1);
+});
+
 test("a sweep starting at a disabled project still launches a due eligible project", async () => {
   fixture(); const f = hostingFixture(); f.seat();
   const sweep = curationForSweep(f.controller);

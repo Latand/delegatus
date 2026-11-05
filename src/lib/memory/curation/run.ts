@@ -16,6 +16,9 @@ const LAUNCH_GRACE_MS = 15 * 60_000;
 export interface CurationController {
   reconcile(project: string): Promise<string | null>;
   launchIfDue(input: SeatTickCheckInput): Promise<string | null>;
+  /** Internal sweep coordination; production controllers add these methods. */
+  finishProject?(project: string): void;
+  fresh?(project: string): CurationController;
 }
 export interface CurationPorts extends CurationAdmissionPorts {
   sources: SeatTickSources;
@@ -24,18 +27,41 @@ export interface CurationPorts extends CurationAdmissionPorts {
   launchTimeoutMs?: number;
 }
 
-/** One ephemeral owner per seat sweep. Retain settled promises too: a quiet or
- * refused choice must not repeat the machine scan for every project. A new
- * sweep reads all authority again; launch/recovery keep their own live fences. */
-export function curationForSweep(controller: CurationController): CurationController {
+/** One ephemeral owner per seat sweep. It waits for every project's refreshed
+ * wake state before making one machine-wide choice. A new sweep reads all
+ * authority again; launch/recovery keep their own live fences. */
+export function curationForSweep(controller: CurationController, projects: readonly string[] = []): CurationController {
   let reconcile: Promise<string | null> | undefined;
+  const expected = new Set(projects);
+  const ready = new Set<string>();
+  const inputs: SeatTickCheckInput[] = [];
+  let resolveReady!: () => void;
+  const allReady = new Promise<void>(resolve => { resolveReady = resolve; });
+  const markReady = (project: string) => {
+    if (!expected.has(project)) return;
+    ready.add(project);
+    if (ready.size === expected.size) resolveReady();
+  };
   let launch: Promise<string | null> | undefined;
   return {
     reconcile: project => reconcile ??= controller.reconcile(project),
-    // A project with wakes disabled cannot suppress another project's choice.
-    launchIfDue: input => !input.settings.enabled
-      ? Promise.resolve("curation: paused, wakes off")
-      : launch ??= controller.launchIfDue(input),
+    finishProject: markReady,
+    fresh: project => curationForSweep(controller, [project]),
+    // Each check publishes its fully updated wake state before the single
+    // machine-wide scan. A failed check releases its place in the barrier from
+    // finishProject, so it cannot strand the other projects.
+    launchIfDue: input => {
+      if (expected.size) {
+        inputs.push(input);
+        markReady(input.project);
+        return launch ??= allReady.then(() => {
+          const eligible = inputs.find(candidate => candidate.settings.enabled);
+          return eligible ? controller.launchIfDue(eligible) : "curation: paused, wakes off";
+        });
+      }
+      if (!input.settings.enabled) return Promise.resolve("curation: paused, wakes off");
+      return launch ??= controller.launchIfDue(input);
+    },
   };
 }
 async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string | null> {

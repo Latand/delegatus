@@ -257,8 +257,13 @@ test("callbacks during one project check coalesce one owed check with fresh stat
   rig.deps.sources!.prepareRead = async () => {
     if (++preparations === 1) { entered.resolve(); await preparing.promise; }
   };
+  let curatorChoices = 0;
+  const curator = {
+    reconcile: async () => null,
+    launchIfDue: async () => { curatorChoices++; return null; },
+  };
   Object.assign(rig.deps, { ownsTraffic: () => true, recordSuccessions: () => [],
-    workStarted: () => { checks++; }, curation: null, release: null, maintenance: null });
+    workStarted: () => { checks++; }, curation: curator, release: null, maintenance: null });
   const append = rig.deps.appendRecord!;
   rig.deps.appendRecord = record => { append(record); if (checks === 2) finished.resolve(); };
   const first = reconcileSeatTick(rig.deps);
@@ -273,6 +278,7 @@ test("callbacks during one project check coalesce one owed check with fresh stat
     await finished.promise;
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(checks).toBe(2);
+    expect(curatorChoices).toBe(2);
     expect(rig.sent).toHaveLength(1);
     expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
   } finally { preparing.resolve(); await first; stopSeatTick(); }
