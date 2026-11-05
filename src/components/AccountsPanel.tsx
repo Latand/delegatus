@@ -128,7 +128,7 @@ const PHONE: typeof DESK = {
   name: "text-body leading-5",
   line: "text-[12px] leading-snug",
   indent: "pl-11 pr-3.5",
-  action: "min-h-11 text-[12px]",
+  action: "min-h-11 min-w-11 text-[12px]",
   endLine: "last:-mb-3",
   icon: "h-11 w-11",
   nudge: "",
@@ -838,7 +838,7 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
         type="button"
         onClick={() => activate(() => void state.cancelLogin(login.operationId))}
         disabled={busy || !cancelable}
-        className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+        className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"
       >
         {t("accounts.claudeLogin.cancel")}
       </button>
@@ -868,7 +868,7 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
             {/* The link renders only in awaiting_code — it is stale once the code
                 is submitted. The URL is server-vetted; render it verbatim. */}
             {login.loginUrl ? (
-              <a href={login.loginUrl} target="_blank" rel="noreferrer noopener" className="inline-flex min-h-[44px] items-center self-start text-[11px] font-semibold text-accent underline sm:min-h-0">
+              <a href={login.loginUrl} target="_blank" rel="noreferrer noopener" className="inline-flex min-h-[44px] items-center self-start text-[11px] font-semibold text-accent underline sm:min-h-6">
                 {t("accounts.claudeLogin.openLink")}
               </a>
             ) : null}
@@ -922,7 +922,7 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
           type="button"
           onClick={() => activate(() => void state.retryLogin(account.id))}
           disabled={busy || loginBusy}
-          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"
         >
           {t("accounts.retry")}
         </button>
@@ -944,7 +944,7 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
           type="button"
           onClick={() => activate(() => void state.retryLogin(account.id))}
           disabled={busy || loginBusy}
-          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2.5 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+          className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2.5 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"
         >
           {label}
         </button>

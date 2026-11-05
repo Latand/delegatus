@@ -14679,3 +14679,25 @@ describe("a task card without inline conversations, on the phone", () => {
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+describe("account row on the phone", () => {
+  /* The phone's accounts screen draws the same row as the dialog, with 44 px targets: every state at 360, 390 and 430 px,
+     in both languages and both schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the
+     frames and `readings.json`; `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
+  browserTest("390 px: every state of the row on the accounts screen, in both languages and schemes, with the keyboard and reduced motion", async () => {
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "phone"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const server = await serveEvidenceFixture(out, undefined, rows.routes);
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    try {
+      const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
+      const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "phone", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [360, 390, 430], height: 844, only });
+      expect(failures).toEqual([]);
+      expect(frames).toBeGreaterThan(0);
+      if (!only) {
+        expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 7_200_000);
+});

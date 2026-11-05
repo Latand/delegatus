@@ -1,4 +1,4 @@
-import { AccountsPanel } from "@/components/AccountsPanel";
+import { AccountsPanel, MobileAccountsPanel } from "@/components/AccountsPanel";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
 import { RoundDeck } from "@/components/flows/RoundDeck";
@@ -4189,6 +4189,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
+  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   /* The lane review case answers these from the driver's own server, through
      the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
@@ -5574,7 +5575,25 @@ function SpendCreditsScene() {
   </main>;
 }
 
-createRoot(document.getElementById("root")!).render(SCENARIO === "spend-credits" ? <SpendCreditsScene /> : SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
+/* The account row on the surface the case names (`surface=dialog|phone`, `engine=claude|codex`): the real panel or the real
+   phone screen over the real store, answered by the case's own routes (`accountRowFrames.ts`). */
+function AccountRowScene() {
+  const params = new URLSearchParams(location.search);
+  const claude = useEngineAccounts("claude");
+  const codex = useEngineAccounts("codex");
+  /* `next=<id>`: the project's next pick, which the row names in its status popover. */
+  const next = params.get("next");
+  if (params.get("surface") === "phone") {
+    return <main data-account-row-scene="phone" className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas text-primary"><MobileAccountsPanel project={next ? "atlas" : null} /></main>;
+  }
+  const state = params.get("engine") === "claude" ? claude : codex;
+  const projectContext = next ? { project: "atlas", nextChosenAccountId: next, restricted: false, allowed: [], carrying: [], outsidePool: [] } : undefined;
+  return <main data-account-row-scene="dialog" className="relative flex min-h-screen items-start justify-center bg-canvas p-2 pt-4 text-primary">
+    <div className="relative w-full max-w-[400px]"><AccountsPanel state={state} onClose={() => {}} placement="header" projectContext={projectContext} /></div>
+  </main>;
+}
+
+createRoot(document.getElementById("root")!).render(SCENARIO === "account-row" ? <AccountRowScene /> : SCENARIO === "spend-credits" ? <SpendCreditsScene /> : SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   /* `attach`: the draft is created and attaching its issue fails, so the picker keeps it with the reason. */
   : PIPELINE_LINK ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => (PIPELINE_LINK === "attach" ? { pipeline: linkDraft, warning: "the pipeline store is busy; retry" } : {})} onCreated={() => {}} onClose={() => {}} />

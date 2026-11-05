@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { Loader2 } from "./icons";
-import { TooltipBubble } from "./TooltipBubble";
+import { TooltipBubble, type BubblePosition } from "./TooltipBubble";
 
 export type AccountDotTone = "success" | "muted" | "warning" | "danger" | "pending";
 
@@ -69,6 +69,29 @@ function hideUnder(bubble: HTMLElement, anchor: HTMLElement): () => void {
 }
 
 /**
+ * Under the dot and clear of the name's lines: a name that wraps keeps all of
+ * its lines showing, so the popover opens below the last of them, or above the
+ * first when the window has no room below. Null leaves it to the bubble's own
+ * placement (no name to clear).
+ */
+function placeBelowName(anchor: HTMLElement | null, bubble: HTMLElement): BubblePosition | null {
+  const name = anchor?.closest("[data-account-head]")?.querySelector("[data-account-name]");
+  if (!anchor || !name || typeof document.createRange !== "function") return null;
+  const range = document.createRange();
+  range.selectNodeContents(name);
+  const lines = [...range.getClientRects()].filter((rect) => rect.width > 0.5);
+  if (lines.length === 0) return null;
+  const nameTop = Math.min(...lines.map((rect) => rect.top)) - NEAR;
+  const nameBottom = Math.max(...lines.map((rect) => rect.bottom)) + NEAR;
+  const dot = anchor.getBoundingClientRect();
+  const box = bubble.getBoundingClientRect();
+  const left = Math.max(8, Math.min(dot.left + dot.width / 2 - 12, window.innerWidth - box.width - 8));
+  const above = nameTop - box.height;
+  const top = nameBottom + box.height <= window.innerHeight - 8 || above < 8 ? nameBottom : above;
+  return { left, top: Math.max(8, Math.min(top, window.innerHeight - box.height - 8)), maxWidth: Math.min(280, window.innerWidth - 40) };
+}
+
+/**
  * The status of an account row: a dot, with its words in a short popover on
  * hover, focus or tap (hover, focus and tap open it, Escape or a press outside
  * close it). The button is named "label: state" so the dot is never the only
@@ -88,6 +111,7 @@ export function AccountStatusDot({ accountId, label, word, tone, plan, note, pho
 }) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const bubbleId = useId();
+  const place = useCallback((bubble: HTMLElement) => placeBelowName(anchorRef.current, bubble), []);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [tapped, setTapped] = useState(false);
@@ -157,6 +181,7 @@ export function AccountStatusDot({ accountId, label, word, tone, plan, note, pho
           anchorRef={anchorRef}
           side="bottom"
           align="left"
+          place={place}
           className={`flex w-max max-w-[min(280px,calc(100vw-40px))] flex-col rounded-[8px] border border-border bg-[color-mix(in_srgb,var(--color-primary)_6%,var(--color-raised))] px-2.5 py-1.5 shadow-2 ${phone ? "text-[12px]" : "text-[11px]"} leading-snug`}
         >
           <span data-account-status-popover={accountId} className="block">
