@@ -26,8 +26,8 @@ function rules(project: string): RoleMemoryProjectView {
 type Reading = { project: string; signal: AbortSignal; finish: (view: RoleMemoryProjectView) => void };
 
 async function withRulesWindow(project: string, check: (controls: {
-  reads: Reading[]; poll: () => Promise<void>; expire: () => Promise<void>; render: (project: string) => Promise<void>;
-}) => Promise<void>) {
+  reads: Reading[]; profileReads: string[]; posts: string[]; poll: () => Promise<void>; expire: () => Promise<void>; render: (project: string) => Promise<void>;
+}) => Promise<void>, cachedProfile = false) {
   const original = { fetch: globalThis.fetch, interval: globalThis.setInterval, clearInterval: globalThis.clearInterval,
     timeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
   type Timer = ReturnType<typeof setInterval>;
@@ -35,6 +35,8 @@ async function withRulesWindow(project: string, check: (controls: {
   const timeouts = new Map<Timer, () => void>();
   const ownedTimers = new Set<Timer>();
   const reads: Reading[] = [];
+  const profileReads: string[] = [];
+  const posts: string[] = [];
   const invoke = (handler: TimerHandler, args: unknown[]) => { if (typeof handler === "function") handler(...args); };
   globalThis.setInterval = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
     const id = {} as Timer; ownedTimers.add(id);
@@ -51,20 +53,24 @@ async function withRulesWindow(project: string, check: (controls: {
   }) as typeof clearTimeout;
   globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
     const requested = new URL(String(url), "http://localhost").searchParams.get("project")!;
+    if (init?.method === "POST") posts.push(String(url));
     if (String(url).startsWith("/api/role-memory?")) return new Promise<Response>((resolve, reject) => {
       reads.push({ project: requested, signal: init!.signal!, finish: view => resolve(Response.json(view)) });
       init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
     });
+    profileReads.push(requested);
     return Promise.resolve(Response.json({ project: requested, locale: "en", enabled: true,
       model: "sample", ruleCount: 1, changes: { added: 0, rewritten: 0, removed: 0 },
-      overall: null, slices: [], stale: false, run: null }));
+      overall: cachedProfile ? { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false,
+        answer: { headline: "Saved project overview", text: "Read the saved overview while the rules arrive.", topics: [{ title: "Saved rule topic", text: "A known rule.", ruleIds: ["r_1234abcd"] }] } } : null,
+      slices: [], stale: false, run: null }));
   }) as typeof fetch;
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   const render = async (project: string) => { await act(async () => { root.render(<RulesWindow project={project} onClose={() => {}} />); }); };
   try {
     setLocale("en"); await render(project);
-    await check({ reads, render,
+    await check({ reads, render, profileReads, posts,
       poll: async () => { await act(async () => { for (const timer of [...intervals.values()]) if (timer.delay === 15000) timer.run(); }); },
       expire: async () => { await act(async () => { for (const [id, run] of [...timeouts]) { timeouts.delete(id); run(); } }); },
     });
@@ -108,3 +114,23 @@ test("switching projects aborts the old read and immediately reads the new proje
   expect(document.querySelector("[data-memory-profile]")).not.toBeNull();
   expect(document.querySelector("#rules-window-title")!.textContent).toContain("next-rules-project");
 }));
+
+
+test("a cached profile opens before the first rules response without enabling paid generation or rule drilldown", () => withRulesWindow("cold-rules-profile", async ({ reads, profileReads, posts, poll }) => {
+  expect(reads).toHaveLength(1);
+  expect(profileReads).toHaveLength(1);
+  expect(document.querySelector("[data-profile-ready]")).not.toBeNull();
+  expect(document.body.textContent).toContain("Saved project overview");
+  expect(document.querySelector("[data-profile-summarize]")).toBeNull();
+  const topic = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Saved rule topic"))!;
+  expect(topic.disabled).toBe(true);
+  await poll();
+  expect(reads).toHaveLength(1);
+  expect(document.body.textContent).toContain("Saved project overview");
+  await act(async () => { reads[0]!.finish(rules("cold-rules-profile")); });
+  expect(document.querySelector("[data-profile-summarize]")).not.toBeNull();
+  expect(topic.disabled).toBe(false);
+  await act(async () => { topic.click(); });
+  expect(document.body.textContent).toContain("Retain the first completed rules reading.");
+  expect(posts).toHaveLength(0);
+}, true));

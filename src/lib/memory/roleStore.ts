@@ -19,8 +19,9 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { activeProfileBasis, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
+import type { ProfileRulesView } from "./profile";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
 import { deliveredRuleIds } from "./deliveryLedger";
@@ -615,6 +616,25 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
 /** The rules window: every scope the project reads or wrote, with what left each. */
 export function projectView(project: string, now = Date.now()): RoleMemoryProjectView {
   return withViewerOperation("role-memory.view", () => performanceSpans.sync("memory.project-view", () => projectViewMemo(project, now)));
+}
+
+/** Read the saved profile against current active ids without constructing the
+ * rule window's provenance, retired rules, task counts or curator history. */
+export function projectProfileView(project: string, now = Date.now()): ProfileRulesView {
+  const context = projectViewContext(project, now);
+  if (context.hit) return context.hit;
+  joinMovedScopes();
+  const before = context.version().stamp;
+  const wanted = [...roleScopeKeys().filter(scope => (scopeProject(scope) === context.canonical || isCrossProjectRoleScope(scope)) && scopeKind(scope) === "role").sort(),
+    projectScope(context.canonical), MACHINE_SCOPE];
+  const basis = activeProfileBasis(wanted);
+  const scopes: ProfileRulesView["scopes"] = wanted.map(scope => ({ scope, kind: scopeKind(scope), roleId: scopeRole(scope), active: basis.get(scope)! }));
+  if (swarmRulesEnabled()) for (const role of SWARM_ROLE_IDS) {
+    scopes.push({ scope: swarmScope(role), kind: "swarm", roleId: role,
+      active: swarmRulesForRole(role).map(({ id, changedAt }) => ({ id, changedAt })) });
+  }
+  if (context.version().stamp !== before) throw new StateSnapshotChangedError();
+  return { project: context.canonical, enabled: context.enabled, scopes };
 }
 
 /** Production readers yield between bounded history slices on cold and revised views. */

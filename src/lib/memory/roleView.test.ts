@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { effectiveCurationSetting, readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
-import { projectView, projectViewAsync, roleMemoryCollection } from "./roleStore";
+import { projectProfileView, projectView, projectViewAsync, roleMemoryCollection } from "./roleStore";
 import { otherProjectRoleRules, roleViewVersion } from "./roleViewSource";
 import { curationCollection, claimPass, curationStatus, curationView, patchPass, readPass } from "./curation/store";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
@@ -12,6 +12,8 @@ import { readCuration } from "./curation/read";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import type { RoleMemoryRow, RoleMemoryRule, RoleMemoryScopeRow } from "./roleTypes";
+import { profileInputs, profileView } from "./profile";
+import type { ProfileRow } from "./profileTypes";
 import { chooseSource } from "./fixtures/source";
 
 const NOW = Date.parse("2026-10-12T12:00:00.000Z");
@@ -393,4 +395,48 @@ test.each(["ancestor", "active"])("a newly inserted foreign %s invalidates a vie
     await expect(projectViewAsync(PROJECT, NOW)).rejects.toBeInstanceOf(StateSnapshotChangedError);
     expect(inserted).toBe(true);
   } finally { observed.mockRestore(); }
+});
+
+
+test("a cold profile basis matches the complete view without decoding scope histories, retired rules or task provenance", () => {
+  const memory = seed([rule(), rule("r_0000000000000002", `project:${PROJECT}`),
+    rule("r_0000000000000003", "machine"), rule("r_0000000000000004", SCOPE, { state: "deleted" }),
+    rule("r_0000000000000005", "role:elsewhere:builder")]);
+  memory.boundedPatch(2, tx => {
+    const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+    tx.put({ ...held, history: Array.from({ length: 32 }, (_, i) => ({ revision: i + 1, at: AT, by: "operator" as const,
+      added: [], merged: [], archived: [], before: ["retained history ".repeat(200)] })) });
+  });
+  const expected = profileView(projectView(PROJECT, NOW), "en", "sample", null);
+  (globalThis as typeof globalThis & { __llvProjectViews?: Map<string, unknown> }).__llvProjectViews?.clear();
+  const get = spyOn(memory, "get").mockImplementation(() => { throw Error("full rule/history decode"); });
+  const snapshot = spyOn(memory, "snapshot").mockImplementation(() => { throw Error("collection snapshot"); });
+  const range = spyOn(memory, "keyRange").mockImplementation(() => { throw Error("scope/history range decode"); });
+  try {
+    expect(profileView(projectProfileView(PROJECT, NOW), "en", "sample", null)).toEqual(expected);
+    expect(get).not.toHaveBeenCalled(); expect(snapshot).not.toHaveBeenCalled(); expect(range).not.toHaveBeenCalled();
+  } finally { get.mockRestore(); snapshot.mockRestore(); range.mockRestore(); }
+});
+
+test("profile basis preserves cached topic binding and stale changes after edits, removals and project succession", () => {
+  const memory = seed([rule(), rule("r_0000000000000002", SCOPE), rule("r_0000000000000003", "machine")]);
+  const initial = projectView(PROJECT, NOW);
+  const row: ProfileRow = { project: PROJECT, locale: "en", model: "sample", promptVersion: 1,
+    parts: profileInputs(initial).map(input => ({ scope: input.scope, model: "sample", promptVersion: 1, hash: input.hash, basis: input.basis,
+      createdAt: AT, durationMs: 1, answer: { headline: "Saved guidance", text: "Read the existing guidance.", topics: [{ title: "Current rule", text: "A saved example.", rules: [1] }] } })) };
+  const same = (project: string) => {
+    const light = profileView(projectProfileView(project, NOW), "en", "sample", row);
+    expect(light).toEqual(profileView(projectView(project, NOW), "en", "sample", row));
+    return light;
+  };
+  expect(same(PROJECT).stale).toBe(false);
+  memory.boundedPatch(4, tx => {
+    const first = tx.get(`r:${rule().id}`) as RoleMemoryRule;
+    tx.put({ ...first, rule: "Read the latest saved guidance.", changedAt: new Date(NOW + 1000).toISOString() });
+    const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+    tx.put({ ...held, revision: held.revision + 1, active: [first.id] });
+  });
+  expect(same(PROJECT).changes).toEqual({ added: 0, rewritten: 1, removed: 1 });
+  persistProjectAliases([{ source: PROJECT, target: "renamed-profile-fixture", displayName: "Renamed profile fixture" }]);
+  expect(same(PROJECT).project).toBe("renamed-profile-fixture");
 });

@@ -708,3 +708,24 @@ export function activeRoleRuleRows(input: { project?: string; terms?: string[]; 
     return normalizedTerms.every(term => text.includes(term) || row.id.includes(term));
   }).slice(0, input.limit);
 }
+
+
+/** Saved profile freshness needs active membership and revision stamps only.
+ * Preserve each scope's active order without decoding histories or provenance. */
+export function activeProfileBasis(scopes: readonly string[]): Map<string, Array<Pick<RoleMemoryRule, "id" | "changedAt">>> {
+  const basis = new Map(scopes.map(scope => [scope, [] as Array<Pick<RoleMemoryRule, "id" | "changedAt">>]));
+  if (!scopes.length || !roleMemoryCollection()) return basis;
+  const rows = reader().query<{ scope: string; id: string; changedAt: string }, [string]>(`
+    SELECT wanted.value AS scope, json_extract(r.value_json, '$.id') AS id,
+      json_extract(r.value_json, '$.changedAt') AS changedAt
+    FROM json_each(?) wanted CROSS JOIN state_rows s
+    CROSS JOIN json_each(s.value_json, '$.active') a CROSS JOIN state_rows r
+    WHERE s.collection='role_memory' AND s.row_key='s:' || wanted.value
+      AND json_extract(s.value_json, '$.kind')='scope'
+      AND r.collection='role_memory' AND r.row_key='r:' || a.value
+      AND json_extract(r.value_json, '$.kind')='rule'
+    ORDER BY CAST(wanted.key AS INTEGER), CAST(a.key AS INTEGER)
+  `).all(JSON.stringify(scopes));
+  for (const row of rows) basis.get(row.scope)!.push({ id: row.id, changedAt: row.changedAt });
+  return basis;
+}
