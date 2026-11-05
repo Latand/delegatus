@@ -2454,9 +2454,18 @@ export function defaultPipelinePorts(
         if (!sessions.length || sessions.some(session => session.host === "conflict" || session.attentionIds.length > 0)
           || exitStatusPending(conversationId)) return null;
         const gone = sessions.every(session => ["dead", "unhosted"].includes(session.host));
-        if (gone) runtimeReads.reset();
+        // This read is ordered after transcript and durable evidence reads.
+        // Reset the shared activity cache on either outcome so a fresh host
+        // adoption invalidates an earlier cached dead session before the
+        // retry decision consumes conversationAgentActive.
         return gone;
       } catch { return null; }
+      finally {
+        // Invalidate any earlier death cached by conversationAgentActive on
+        // every outcome, including attention, conflict and unknown evidence.
+        // Those paths must not let stale death authorize a replacement.
+        runtimeReads.reset();
+      }
     },
     restartRecoveryBootId: () => PIPELINE_RECOVERY_BOOT_ID,
     restartRecoveryBootStartedAt: () => PIPELINE_RECOVERY_BOOT_STARTED_AT,
@@ -5736,15 +5745,23 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const conversationId = worker.conversationId;
   const proveGone = confirmHostGone ? ports.publicationRepairProducerGone : undefined;
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
-  const interrupted = proveGone ? null
-    : await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
+  const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
-  const hostGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
-  // The targeted native read supplies activity evidence for this producer.
-  // Legacy ports retain their existing interruption and activity witnesses.
-  const active = proveGone ? hostGone === true ? false : null
-    : await ports.conversationAgentActive(conversationId).catch(() => null);
-  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle", dead: interrupted === "dead", hostGone };
+  const observedGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
+  const observedActive = await ports.conversationAgentActive(conversationId).catch(() => null);
+  // Activity is read last and can observe adoption after the absence proof.
+  // Invalidate that older death evidence everywhere the retry consumes it.
+  const hostGone = observedActive === true ? false : observedGone;
+  // An earlier cached dead/conflict result cannot override a fresh absence
+  // probe reporting attention or an unknown host.
+  const active = proveGone && hostGone !== true && observedActive !== true ? null
+    : proveGone && hostGone === true ? false : observedActive;
+  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle",
+    // The interruption read can precede a host adoption while durable evidence
+    // is awaited. A fresh host observation that says it is present supersedes
+    // that earlier death result.
+    dead: proveGone ? hostGone === true
+      : active !== true && (hostGone === true || (hostGone !== false && interrupted === "dead")), hostGone };
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
@@ -5784,8 +5801,25 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   if (!worker.conversationId) return abandon("the producer has no conversation.");
   const { active, durable } = evidence;
   const bounded = !passedStageCustodyPark(pipeline, attempt);
+  const outstanding = ports.conversationDeliveryOutstanding?.(worker.conversationId) === true;
+  const repairDeliverySettled = delivery?.state === "failed" && delivery.safeToReplace
+    || delivery?.state === "unreserved" && delivery.safeToReplace && !repair?.requestedAt;
+  const priorDeliveryId = repair?.delivery?.operationId;
+  const sameRepairOperation = !!delivery?.operationId && (!priorDeliveryId || delivery.operationId === priorDeliveryId);
+  const terminalRepairDelivery = sameRepairOperation && (delivery?.state === "delivered" || delivery?.state === "failed");
+  // Legacy history cannot prove reservation identity. Its failed key-specific
+  // read still bounds this repair after confirmed death and the original cutoff.
+  const failedOperationlessRepair = delivery?.state === "failed" && !delivery.operationId && !priorDeliveryId;
+  const canProceedWithUnrelatedHeldDelivery = outstanding && evidence.hostGone === true && expired
+    && (repairDeliverySettled || terminalRepairDelivery || failedOperationlessRepair);
+  // An unrelated message can remain held behind account migration after the
+  // repair itself has failed. Once the old producer is freshly confirmed gone
+  // and this repair's original window has elapsed, that older reservation
+  // cannot keep the accepted head parked forever. Keep it in the registry so
+  // its own lifecycle can settle it later.
+  if (outstanding && !canProceedWithUnrelatedHeldDelivery) return refusal;
   if (active === true) return refusal;
-  if (active === false && (repair || bounded)) return abandon("the producer is gone or idle.");
+  if (active === false && evidence.hostGone !== false && (repair || bounded)) return abandon("the producer is gone or idle.");
   const background = liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(now));
   const progressAt = durable?.lastRecordAt ?? durable?.message?.ts;
   if ((durable?.turn === "busy" && typeof progressAt === "number"
@@ -5798,7 +5832,7 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
     && (durable.message?.ts ?? 0) > (repair?.messageTs ?? 0)
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repairStartedAt);
   const failed = delivery?.state === "failed";
-  if (durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
+  if (durable?.turn === "busy" || outstanding && !canProceedWithUnrelatedHeldDelivery
     || background.length > 0 || active !== false && !finished && !failed) return refusal;
   if (repair) {
     if (delivery) repair.delivery = delivery;
@@ -17083,7 +17117,8 @@ export async function patchPipeline(
         const refusal = decisionAnswerActorRefusal(snapshot, actor, req.clientRequestId);
         if (refusal) return refusal;
       }
-      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports);
+      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports,
+        req.action === "retry-stage");
     }
   }
 
@@ -17771,12 +17806,43 @@ export async function patchPipeline(
       const receiptRetry = (explicitReceiptRetry || attempt?.paneId === null)
         && retryStageId !== null
         && retryLaunchId !== null;
-      // The accepted work is already committed. Retry its publication from
-      // this cursor without claiming a new launch or closing its stage flow.
+      // The accepted work stays committed while recovery chooses between a
+      // publication retry and a fresh attempt for an unreachable producer.
       if (stage && attempt && (passedStagePublicationPark(pipeline, attempt) || resumablePassedPublication(pipeline))) {
         if (attempt.publicationRepair || passedStagePublicationPark(pipeline, attempt)) {
           const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, decisionProducerEvidence, ports);
           if (repairRefusal) return { error: repairRefusal, status: 409 };
+        }
+        const repair = attempt.publicationRepair;
+        const delivery = decisionProducerEvidence?.delivery ?? repair?.delivery;
+        // A finished producer can retry the push in place. An undeliverable
+        // repair needs a new identity, with the accepted commits and current
+        // stage definition retained. Never reset the checkout to the base.
+        const unreachable = repair && repair.outcome?.status === "rejected"
+          && (decisionProducerEvidence?.dead === true || decisionProducerEvidence?.hostGone === true
+            || delivery?.state === "failed" && delivery.safeToReplace
+            || delivery?.state === "unreserved" && delivery.safeToReplace && !repair.requestedAt
+              && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS);
+        if (stage.kind === "run" && unreachable) {
+          if (pipeline.delivery?.operation?.state === "running" || pipeline.delivery?.operation?.state === "pending") {
+            return { error: "the publication is still settling", status: 409 };
+          }
+          recordSettledPublicationFailure(pipeline, attempt, ports);
+          if (pipeline.delivery) delete pipeline.delivery.operation;
+          pipeline.publishedCommit = null;
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.cursor!.input = [attempt.input,
+            "The previous attempt passed and its committed work is preserved at the accepted head. Its producer could not complete publication repair.",
+            "Repair the following publication refusal using this stage's current instructions, then report the result:",
+            repair.detail].filter(Boolean).join("\n\n");
+          recordHandLaunch(pipeline, actor, ports.now());
+          await newAttempt(pipeline, stage);
+          pipeline.state = "running";
+          pipeline.pausedState = null;
+          pipeline.stateDetail = null;
+          await persist();
+          requestPipelineTick();
+          return { pipeline };
         }
         if (pipeline.delivery && settledPublicationRefusal(pipeline)) {
           recordSettledPublicationFailure(pipeline, attempt, ports);

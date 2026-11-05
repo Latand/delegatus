@@ -7348,6 +7348,8 @@ async function agentActivity(
       ? { [snapshot.selection.scope === "targeted" ? "undescribedTargetCount" : "undescribedHostCount"]: snapshot.selection.recoveryPending }
       : {};
     return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(projectReadText(filtered, context))), journaled: journal.appended,
+      deliveryEvidence: "not_checked",
+      deliveryNote: "Lifecycle and verified describe host and turn observations. A waiting conversation can still fail delivery or recovery; read message_receipt for the send outcome.",
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
       /* Every projection says what it could not confirm. `pending`: no
