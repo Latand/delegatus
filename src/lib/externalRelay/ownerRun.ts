@@ -89,12 +89,12 @@ function boundedOwnerPrompt<T extends { prompt: string; seen: string[] }>(reques
   const localIds = new Set(owner.localContext?.conversation.map(message => message.id));
   const original = new Map([...request.input.conversation, ...(owner.localContext?.conversation ?? [])].map(message => [message.id, message]));
   const optionalSuffix = suffix ? quotedRelayText(suffix, 4096) : "";
-  const boundedWithSuffix = (optional: string) => boundedRelayPrompt(request, (value, quotationBytes) => {
+  const boundedWithSuffix = (optional: string) => boundedRelayPrompt(request, (value, quotationBytes, bridgeReportBytes) => {
     const conversation = value.input.conversation.filter(message => localIds.has(message.id));
     const retained = new Set(conversation.map(message => message.id));
     const instruction = { ...owner,
       ...(owner.bridgeReport ? { bridgeReport: { ...owner.bridgeReport,
-        reportText: quotedRelayText(owner.bridgeReport.reportText, quotationBytes) } } : {}),
+        reportText: quotedRelayText(owner.bridgeReport.reportText, bridgeReportBytes) } } : {}),
       ...(value !== request && owner.localContext ? { localContext: { ...owner.localContext, conversation,
         questionIds: owner.localContext.questionIds.filter(id => retained.has(id)),
         origins: Object.fromEntries(Object.entries(owner.localContext.origins).filter(([id]) => retained.has(id))),

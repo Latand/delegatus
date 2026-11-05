@@ -4,6 +4,7 @@ import type { ExternalRelayRequest } from "./protocol";
 type Message = ExternalRelayRequest["input"]["conversation"][number];
 const QUOTED_TEXT_BYTES = 4096;
 const QUOTED_TEXT_MARKER = "\n[Quoted text shortened; beginning and end kept]\n";
+const MIN_QUOTED_TEXT_BYTES = Buffer.byteLength(QUOTED_TEXT_MARKER);
 
 /** Clip optional quotations at Unicode boundaries; measure the final escaped
  * prompt separately, because JSON can expand even short source strings. */
@@ -23,11 +24,13 @@ export function quotedRelayText(text: string, maxBytes = QUOTED_TEXT_BYTES): str
  * current input whole and its immediate parent present, including recovered parents.
  * Refuse before dispatch when mandatory content alone cannot fit. */
 export function boundedRelayPrompt<T extends string | { prompt: string }>(request: ExternalRelayRequest,
-  render: (request: ExternalRelayRequest, quotationBytes: number) => T, extraMessages: readonly Message[] = [], maxBytes = MAX_STRUCTURED_TEXT_BYTES,
+  render: (request: ExternalRelayRequest, quotationBytes: number, bridgeReportBytes: number) => T,
+  extraMessages: readonly Message[] = [], maxBytes = MAX_STRUCTURED_TEXT_BYTES,
 ): { request: ExternalRelayRequest; result: T } {
   let current = request;
   let quotationBytes = Infinity;
-  let result = render(current, quotationBytes);
+  let bridgeReportBytes = Infinity;
+  let result = render(current, quotationBytes, bridgeReportBytes);
   const fits = () => Buffer.byteLength(typeof result === "string" ? result : result.prompt) <= maxBytes;
   if (fits()) return { request: current, result };
   const messages = new Map(request.input.conversation.map(message => [message.id, message]));
@@ -36,7 +39,7 @@ export function boundedRelayPrompt<T extends string | { prompt: string }>(reques
   const protectedIds = new Set([request.input.respond_to, trigger?.reply_to]);
   current = { ...request, input: { ...request.input, conversation: [...messages.values()].map(message =>
     message.author.self && !protectedIds.has(message.id) ? { ...message, text: quotedRelayText(message.text) } : message) } };
-  const refresh = () => { result = render(current, quotationBytes); return fits(); };
+  const refresh = () => { result = render(current, quotationBytes, bridgeReportBytes); return fits(); };
   if (refresh()) return { request: current, result };
   // Once unprotected rows have had the ordinary excerpt cap, remove the
   // oldest rows before applying smaller excerpts to the explicit reply.
@@ -81,12 +84,19 @@ export function boundedRelayPrompt<T extends string | { prompt: string }>(reques
   // their display summaries are shortened here.
   current.input.tool_guidance = undefined;
   if (refresh()) return { request: current, result };
-  current.input.tools = current.input.tools?.map(tool => ({ ...tool, summary: quotedRelayText(tool.summary, 256) }));
-  if (refresh()) return { request: current, result };
+  const originalTools = current.input.tools;
+  if (originalTools?.length) {
+    // Summary source bytes do not predict JSON output bytes: '<' expands to
+    // six bytes in the owner renderer. Find a cap that fits the full render.
+    for (const budget of [256, 224, 192, 160, 128, 96, 64, 48, 32, 24, 16, 8, 0]) {
+      current.input.tools = originalTools.map(tool => ({ ...tool, summary: quotedRelayText(tool.summary, budget) }));
+      if (refresh()) return { request: current, result };
+    }
+  }
   const trimServiceText = (field: "owner_instructions" | "instructions") => {
     const original = current.input[field];
     if (!original) return false;
-    const minimum = Buffer.byteLength(QUOTED_TEXT_MARKER);
+    const minimum = MIN_QUOTED_TEXT_BYTES;
     let low = minimum, high = Math.min(QUOTED_TEXT_BYTES, Buffer.byteLength(original));
     const apply = (budget: number) => { current.input[field] = quotedRelayText(original, budget); };
     apply(high);
@@ -114,6 +124,14 @@ export function boundedRelayPrompt<T extends string | { prompt: string }>(reques
         ? { ...message, text: quotedRelayText(message.text, budget) } : message);
       if (refresh()) return { request: current, result };
     }
+  }
+  // A confirmed bridge report answers the owner's explicit reference. Keep
+  // it whole while clearing unrelated memory and service context; excerpt it
+  // only after the direct reply target has received the same priority.
+  if (bridgeReportBytes === Infinity) bridgeReportBytes = 4096;
+  for (const budget of [4096, 2048, 1024, 512, 256, 128, 64, MIN_QUOTED_TEXT_BYTES]) {
+    bridgeReportBytes = budget;
+    if (refresh()) return { request: current, result };
   }
   throw new StructuredEnvelopeTooLargeError();
 }

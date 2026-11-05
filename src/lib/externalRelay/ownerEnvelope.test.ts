@@ -74,6 +74,53 @@ test("escaping is budgeted after rendering and a later reply can receive a short
   expect(next.prompt).toContain("end: violet.");
 });
 
+for (const mode of ["fresh", "resumed"] as const)
+test(`${mode} prompt reduces escaped tool summaries by rendered size and retains tool contracts`, () => {
+  const r = request("A short quoted message");
+  r.input.tools = Array.from({ length: 50 }, (_, index) => ({ name: `read_${index}`,
+    summary: "😀".repeat(60) + "<".repeat(120), mode: "direct" as const, effect: "read" as const, audience: "owner" as const }));
+  const owner = ownerTierFor(target, r)!;
+  const prompt = mode === "fresh" ? ownerRunPrompt(r, owner, 1)
+    : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null }).prompt;
+  assertStructuredTextEnvelope(prompt);
+  const tools = section(prompt, "tools") as Array<Record<string, unknown>>;
+  expect(tools).toHaveLength(50);
+  expect(tools.map(tool => tool.name)).toEqual(r.input.tools.map(tool => tool.name));
+  expect(tools.every(tool => tool.mode === "direct" && tool.effect === "read" && tool.audience === "owner")).toBe(true);
+  expect(section(prompt, "owner_request")).toMatchObject({ text: owner.text, request_text: owner.requestText });
+});
+
+for (const mode of ["fresh", "resumed"] as const)
+test(`${mode} prompt keeps the requested bridge-report fact ahead of unrelated memory`, () => {
+  const r = request("What is MIDDLE_FIELD?");
+  r.input.short_term_memory = "unrelated memory ".repeat(1500);
+  const owner = ownerTierFor(target, r)!;
+  owner.bridgeReport = { project: "project-b", sourceSeat: "seat-b", reportId: "report-b",
+    reportText: "L".repeat(1400) + " MIDDLE_FIELD=amber " + "R".repeat(1555) };
+  const prompt = mode === "fresh" ? ownerRunPrompt(r, owner, 1)
+    : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null }).prompt;
+  assertStructuredTextEnvelope(prompt);
+  expect(section(prompt, "bridge_report")).toMatchObject({ project: "project-b", sourceSeat: "seat-b", reportId: "report-b" });
+  expect(section(prompt, "bridge_report")).toMatchObject({ reportText: owner.bridgeReport!.reportText });
+  expect(prompt).not.toContain("unrelated memory");
+  if (mode === "resumed") expect(section(prompt, "short_term_memory")).toBeNull();
+});
+
+for (const mode of ["fresh", "resumed"] as const)
+test(`${mode} prompt labels a genuinely oversized bridge-report excerpt and keeps its route`, () => {
+  const r = request("Summarize this report");
+  const owner = ownerTierFor(target, r)!;
+  const reportText = "report detail ".repeat(4000);
+  owner.bridgeReport = { project: "project-b", sourceSeat: "seat-b", reportId: "report-b", reportText };
+  const prompt = mode === "fresh" ? ownerRunPrompt(r, owner, 1)
+    : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null }).prompt;
+  assertStructuredTextEnvelope(prompt);
+  expect(section(prompt, "bridge_report")).toMatchObject({ project: "project-b", sourceSeat: "seat-b", reportId: "report-b" });
+  const excerpt = (section(prompt, "bridge_report") as { reportText: string }).reportText;
+  expect(excerpt).toContain("[Quoted text shortened; beginning and end kept]");
+  expect(excerpt).not.toBe(reportText);
+});
+
 test("small quotations remain complete, and excerpt boundaries are valid UTF-8", () => {
   for (const text of ["plain", "ї😀".repeat(1000), "<\\\"".repeat(1000)]) {
     if (Buffer.byteLength(text) <= 512) expect(quotedRelayText(text, 512)).toBe(text);
