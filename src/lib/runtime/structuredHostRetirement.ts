@@ -1436,12 +1436,9 @@ export async function runStructuredHostRetirementSweep(
     atomicWrite(CURSOR_FILE(), cursor);
   }))(afterKey);
 
-  for (const entry of goneCandidates) {
-    const publication = publicationState();
-    if (publication !== "ready") { report.standDown = publication; break; }
+  const reconcileGoneAndReport = async (entry: RegistryFile["entries"][string], conversationId: string | null) => {
     const process = recordedScopeProcess(entry.structuredHost)!;
     const key = sessionKeyId(entry.key);
-    const conversationId = planned.conversationsBySession.get(key)?.id ?? null;
     try {
       if (await reconcileGone(entry)) report.gone!.push({ key, conversationId, process });
       else report.failed.push({ key, conversationId,
@@ -1449,6 +1446,12 @@ export async function runStructuredHostRetirementSweep(
     } catch (error) {
       report.failed.push({ key, conversationId, error: safeReason(error), remaining: [] });
     }
+  };
+  for (const entry of goneCandidates) {
+    const publication = publicationState();
+    if (publication !== "ready") { report.standDown = publication; break; }
+    const key = sessionKeyId(entry.key);
+    await reconcileGoneAndReport(entry, planned.conversationsBySession.get(key)?.id ?? null);
   }
 
   let parents: Map<number, number> | null = null;
@@ -1485,6 +1488,12 @@ export async function runStructuredHostRetirementSweep(
         reason: "the registry no longer records this host",
         changed: true,
       });
+      continue;
+    }
+    // Planning may have observed a live host before the asynchronous memory
+    // read. Its disappearance cannot admit a scope stop or a native release.
+    if (processStatus(freshProcess) === "dead") {
+      await reconcileGoneAndReport(fresh, planning.conversationId);
       continue;
     }
     const subject = retirementSubject(fresh, current, readers);

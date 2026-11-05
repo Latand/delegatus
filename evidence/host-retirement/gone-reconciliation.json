@@ -2,9 +2,9 @@
   "baseCommit": "95ff1dd5e3bc9f9f68edbbf6efd72c8e40701be4",
   "runtime": "Bun 1.4.0",
   "sourceSha256": {
-    "src/lib/runtime/structuredHostRetirement.ts": "29077aa5c4b3ebf08da1f374a98fee2ed21b3971b5775144ab8da32119ddd339",
-    "src/lib/runtime/structuredHostRetirement.paging.fixture.ts": "0e288094a6b5380293ef9ab0e92236faa91ae49be49360f924144cc60258b2f4",
-    "src/lib/runtime/structuredHostRetirement.paging.test.ts": "ef5e3a1408249dca75ea04faa19be610e3eff9c77fb6ebf3580055974c7fa1a8",
+    "src/lib/runtime/structuredHostRetirement.ts": "ab46444807a07cd5810f33ccae20f55f2c0ed088730d23a8052065b3a9a0dc46",
+    "src/lib/runtime/structuredHostRetirement.paging.fixture.ts": "e83d2b7ede1483b26c7d9008211e69e5b6f4cf549e63d1d678977a69a8f4fbc5",
+    "src/lib/runtime/structuredHostRetirement.paging.test.ts": "95d8fd068133676f3b8c043cfdb325192b19c5ad3c395abc48edfa862d5ee3a2",
     "src/lib/runtime/structuredHostRetirement.test.ts": "ba88b1185c15d49f1bdb16419b73fcd6736b22e78483a02aa641aaf061ab4c21"
   },
   "isolation": "Each direct invocation had private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, control URL on closed port 1, and the repository preload owned its children. No live sweep was run.",
@@ -83,14 +83,14 @@
       "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
       "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts",
       "passed": 19,
-      "failed": 10,
+      "failed": 11,
       "exitCode": 1
     },
     {
       "variant": "head",
       "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
       "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts",
-      "passed": 29,
+      "passed": 30,
       "failed": 0,
       "exitCode": 0
     },
@@ -109,6 +109,22 @@
       "passed": 0,
       "failed": 1,
       "exitCode": 1
+    },
+    {
+      "variant": "mutation: disable final gone recheck",
+      "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts -t \"disappears during memory\"",
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 1
+    },
+    {
+      "variant": "restored controls",
+      "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts -t \"gone-scope-old|gone-reused|live-lag|disappears during memory\"",
+      "passed": 4,
+      "failed": 0,
+      "exitCode": 0
     }
   ],
   "lint": {
@@ -118,7 +134,7 @@
     "command": "bun run privacy:check",
     "exitCode": 0
   },
-  "selfReview": "No findings. Live predicate unchanged; gone reconciliation has no release or termination call, pins custody after waits, preserves durable history and retains unproven scope/survivor custody.",
+  "selfReview": "No remaining findings. A disappearance during the asynchronous memory read also takes no-signal reconciliation. Both initial and final gone routing, plus live flush protection, have failing mutation controls. Custody and durable history remain protected.",
   "globalLiveIdlePolicyCensus": {
     "observedAt": "2026-11-05T03:44:54.943010+00:00",
     "method": "Read-only identity census and sufficient live-policy blockers; no sweep or runtime call. Refusals are inferred from the unchanged predicate, not post-deployment observations.",

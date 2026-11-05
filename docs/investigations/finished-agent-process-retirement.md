@@ -310,8 +310,10 @@ After asynchronous scope observation and writer admission, the reconciliation
 checks publication ownership, recorded process, scope, boot, claim owner and
 both claim epochs again. It uses the existing registry mutation and preserves
 transcripts, durable events, conversations and delivery history. Process-restart
-regressions prove reconciled rows leave subsequent candidate pages. The live
-predicate and its ordering are unchanged, including refusal of cursor lag.
+regressions prove reconciled rows leave subsequent candidate pages. The final recheck also classifies identity after the asynchronous memory read,
+so a host that disappeared while measurement waited reconciles without entering
+termination. The live predicate and its ordering are unchanged, including
+refusal of cursor lag.
 
 The version 1 report adds optional `liveRefused` with a count and counts by
 clause for proven live identities. Unknown identities are excluded from that
@@ -326,12 +328,13 @@ unreadable evidence, writer-admission changes, survivors and write failure.
 The existing adoption regression also opens and resumes a reconciled Claude
 conversation through its transcript, checking retained runtime events.
 
-Verification on the final source: 74 core tests and 29 paging tests passed.
-The identical tests on the starting base had five and ten expected failures,
+Verification on the final source: 74 core tests and 30 paging tests passed.
+The identical tests on the starting base had five and eleven expected failures,
 respectively. Disabling gone routing failed both targeted reconciliation cases;
 inverting the event-flush comparison made the live-lag test detect four
-termination attempts. Both mutations were restored and the full paging file
-passed again. Focused lint and the local privacy publication gate passed.
+termination attempts. Disabling the final gone-identity recheck failed the
+case where a host disappears during asynchronous memory measurement. All three
+mutations were restored byte-for-byte; the four targeted controls passed again. Focused lint and the local privacy publication gate passed.
 Commands, source fingerprints, exits and aggregate observations are recorded in
 `evidence/host-retirement/gone-reconciliation.json`.
 

@@ -14,7 +14,9 @@ const session = (index: number) => ["00000000", "0000", "0000", "0000", String(i
 const filename = statePath("fixture-registry.json");
 const scenario = process.argv[2]!;
 const gone = scenario.startsWith("gone");
-const scoped = scenario.startsWith("gone-scope") || scenario === "gone-exit";
+const lateGone = scenario === "gone-after-measurement";
+const disappeared = new Set<number>();
+const scoped = scenario.startsWith("gone-scope") || scenario === "gone-exit" || lateGone;
 const currentBoot = systemBootEpoch()!;
 const oldBoot = `linux:${["00000000", "0000", "0000", "0000", "000000000000"].join("-")}:pidns:pid:[1]`;
 const reused = scenario === "gone-reused";
@@ -36,7 +38,7 @@ if (!fs.existsSync(filename)) {
     const pathname = path.join(path.dirname(filename), `${id}.jsonl`);
     const columns = codexHostColumns({
       status: "idle", sessionKey: key, endpoint: "stdio:fixture", pid: 2_000_000_000 + index,
-      processStartIdentity: `fixture:${index}`, eventCursor: gone || liveLag || index <= 520 && scenario === "paging" ? 10 : 12,
+      processStartIdentity: `fixture:${index}`, eventCursor: gone && !lateGone || liveLag || index <= 520 && scenario === "paging" ? 10 : 12,
       protocolVersion: null, activeTurnRef: index === 2 && !paging ? "busy-turn" : null,
       pendingAttention: [], activeFlags: index === 4 && !paging ? ["protected"] : [], account: null,
     }, 1);
@@ -123,13 +125,17 @@ const dependencies: StructuredHostRetirementDependencies = {
     return { ok: true, via: "runtime", pids: [ref.pid] };
   },
   // Bun runs this fixture against the base too; unknown dependency fields are inert there.
-  ...{ pidAlive: scenario === "gone" ? undefined : (pid: number) => determined(reused || !gone || revived && pid === 2_000_000_001),
+  ...{ pidAlive: scenario === "gone" ? undefined : (pid: number) => determined((lateGone && !disappeared.has(pid)) || reused || !gone || revived && pid === 2_000_000_001),
     scopeLoadState: async (scope: { unit: string }) => {
       scopeReads.push(scope.unit);
       if (scenario === "gone-scope-unknown") throw new Error("scope read unavailable");
       return scenario === "gone-scope-live" ? "loaded" : "not-found";
     },
-    treePss: () => ({ bytes: 60, measuredProcesses: 1 }) },
+    treePss: async (pids: readonly number[]) => {
+      await Promise.resolve();
+      if (lateGone) for (const pid of pids) disappeared.add(pid);
+      return { bytes: 60, measuredProcesses: 1 };
+    } },
 };
 const before = registry.readOnlySnapshot();
 const report = await runStructuredHostRetirementSweep(dependencies);

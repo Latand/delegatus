@@ -180,3 +180,15 @@ for (const scenario of ["gone-scope-live", "gone-scope-unknown", "gone-scope-cha
     expect(result.historyIntact).toBe(true);
   });
 }
+
+
+test("a scoped host that disappears during memory measurement reconciles without entering termination", async () => {
+  const result = await sweep(root(), "gone-after-measurement");
+  expect(result.report.gone).toHaveLength(3);
+  expect(result.report.retired).toEqual([]);
+  expect(result.report.failed).toEqual([]);
+  expect(result.report.refused.map((row: { clause: string }) => row.clause)).toEqual(["turn-settled", "seat-free", "no-active-flags"]);
+  expect(result.attempted).toEqual([]);
+  expect(result.remaining).toHaveLength(3);
+  expect(result.historyIntact).toBe(true);
+});
