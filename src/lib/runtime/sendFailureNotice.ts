@@ -153,7 +153,7 @@ function update(row: SendFailureNotice, patch: Partial<SendFailureNotice>): void
   collection(true)!.boundedPatch(2, tx => {
     const current = tx.get(row.operationId);
     if (!current || (current.state !== "pending" && !(current.state === "failed"
-      && (patch.state === "cancelled" || patch.attemptedAt !== undefined)))) return;
+      && (patch.state === "cancelled" || patch.attemptedAt !== undefined || patch.fallbackConversationId !== undefined)))) return;
     tx.put({ ...current, ...patch });
   });
 }
@@ -205,23 +205,54 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const attempts = (row.attempts ?? 0) + 1;
     const detail = error instanceof Error ? error.message : String(error);
     const terminal = attempts >= 3;
-    const seat = terminal ? fallback(row.senderConversationId, row.targetConversationId) : { kind: "skip" as const };
-    update(row, { attempts,
-      reason: `Failure notice ${phase} unavailable: ${detail.slice(0, 300)}; original failure: ${row.reason}`.slice(0, 500),
-      ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null } : {}) });
+    let fallbackConversationId: string | null = null;
+    let fallbackReason = "";
+    if (terminal) {
+      try {
+        const seat = fallback(row.senderConversationId, row.targetConversationId);
+        if (seat.kind === "deliver") fallbackConversationId = seat.conversationId;
+      } catch (fallbackError) {
+        const fallbackDetail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        fallbackReason = `; project seat lookup unavailable: ${fallbackDetail.slice(0, 200)}`;
+      }
+    }
+    update(row, { attempts, attemptedAt: new Date().toISOString(),
+      reason: `Failure notice ${phase} unavailable: ${detail.slice(0, 240)}${fallbackReason}; original failure: ${row.reason}`.slice(0, 500),
+      ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId } : {}) });
   };
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
     ports.assertActive();
+    // Failed alarms are already visible to their sender. Retry only the
+    // recoverable project-seat lookup; a canonical delivered projection can
+    // still retire the alarm without reopening the fenced operation.
+    if (row.state === "failed") {
+      try {
+        const projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
+        if (projected?.state === "delivered") {
+          update(row, { state: "cancelled", settledAt: new Date().toISOString() });
+          return;
+        }
+      } catch { /* Preserve the terminal alarm while projection is unavailable. */ }
+      if (!row.fallbackConversationId) {
+        try {
+          const seat = fallback(row.senderConversationId, row.targetConversationId);
+          if (seat.kind === "deliver") update(row, { fallbackConversationId: seat.conversationId });
+        } catch { /* Keep the durable sender alarm and retry seat resolution later. */ }
+      }
+      return;
+    }
+    // Preparation failure belongs to every pending row, even when the
+    // supplemental registry projection is unavailable too.
+    if (preparationFailure) { receiptFailure(row, preparationFailure.error, "index preparation"); return; }
     update(row, { attemptedAt: new Date().toISOString() });
-    // Retained failed alarms need only the keyed durable projection. They
-    // never reopen dispatch or repeatedly scan an unchanged transcript.
-    const projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
+    // Pending notices use only the keyed durable projection here.
+    let projected: SendReceipt | null;
+    try { projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId); }
+    catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (projected?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
-    if (row.state === "failed") return;
     // Preparation is shared by this page, but every pending obligation owns
     // its durable retry budget. No keyed recovery or dispatch is safe until
     // preparation succeeds; a timeout must still leave an actionable alarm.
-    if (preparationFailure) { receiptFailure(row, preparationFailure.error, "index preparation"); return; }
     let receipt: SendReceipt | null;
     try { receipt = await step(() => ports.receipt(row.operationId)); }
     catch (error) { ports.assertActive(); receiptFailure(row, error); return; }

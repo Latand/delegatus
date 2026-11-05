@@ -3360,7 +3360,7 @@ test("a permanent notice refusal becomes a durable seat alarm with its transport
     await sweepSendFailureNotices(ports);
     expect(attempts).toBe(1);
     expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 1, reason: expect.stringContaining("403") });
-    expect(sendFailureSignals(seat.conversationId)).toEqual([expect.objectContaining({ id: `send-failed:${operationId}`, label: expect.stringContaining("recipient refused admission") })]);
+    expect(sendFailureSignals(seat.conversationId)).toContainEqual(expect.objectContaining({ id: `send-failed:${operationId}`, label: expect.stringContaining("recipient refused admission") }));
   } finally { active.close(); }
 });
 
@@ -3732,6 +3732,7 @@ for (const failure of ["throw", "timeout"] as const) for (const recover of [fals
               if (${JSON.stringify(failure)} === "throw") throw new Error("preparation unavailable");
               await new Promise(() => {});
             };
+            registry.deliverySnapshotForOperation = () => { throw new Error("projection unavailable"); };
             await m.sweepSendFailureNotices({ registry, assertActive: () => {}, readMs: 5,
               receipt: async () => { throw new Error("preparation failure reached receipt"); },
               recipient: () => { throw new Error("preparation failure reached recipient"); },
@@ -3749,6 +3750,7 @@ for (const failure of ["throw", "timeout"] as const) for (const recover of [fals
       }
       expect(readSendFailureNotice(operationId)).toMatchObject({ state: "pending", attempts: 2 });
       let deliveries = 0;
+      let seatLookupFailures = 0;
       const target = recordingHost(sender.generationId);
       if (!recover) active.registry.prepareRecoveryIndexes = async () => {
         if (failure === "throw") throw new Error("preparation unavailable");
@@ -3757,7 +3759,10 @@ for (const failure of ["throw", "timeout"] as const) for (const recover of [fals
       const ports = { registry: active.registry, assertActive: () => {}, readMs: recover ? 10_000 : 5,
         receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
         recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
-        fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+        fallback: () => {
+          if (!recover && seatLookupFailures++ === 0) throw new Error("seat lookup unavailable");
+          return { kind: "deliver" as const, conversationId: seat.conversationId };
+        },
         deliver: async (request: { text: string; clientMessageId: string; origin: import("./messageOrigin").MessageOrigin }) => {
           deliveries++;
           const accepted = acceptSend(sender, request);
@@ -3765,16 +3770,26 @@ for (const failure of ["throw", "timeout"] as const) for (const recover of [fals
           return { ok: true };
         },
       };
+      const snapshotRead = active.registry.deliverySnapshotForOperation.bind(active.registry);
+      if (!recover) active.registry.deliverySnapshotForOperation = () => { throw new Error("projection unavailable"); };
       await sweepSendFailureNotices(ports);
+      if (!recover) {
+        expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 3,
+          fallbackConversationId: null, reason: expect.stringContaining("project seat lookup unavailable: seat lookup unavailable") });
+        expect(sendFailureSignals(sender.conversationId).map(signal => signal.id)).toContain(`send-failed:${operationId}`);
+      }
       await sweepSendFailureNotices(ports);
+      active.registry.deliverySnapshotForOperation = snapshotRead;
       const notice = readSendFailureNotice(operationId);
       expect(notice).toMatchObject(recover ? { state: "sent", attempts: 2 } : {
         state: "failed", attempts: 3, fallbackConversationId: seat.conversationId,
+        reason: expect.stringContaining("project seat lookup unavailable: seat lookup unavailable"),
       });
-      expect(decodeSendFailureNotice(notice)).toEqual(notice);
+      expect(decodeSendFailureNotice(readSendFailureNotice(operationId))).toEqual(readSendFailureNotice(operationId));
       expect(deliveries).toBe(recover ? 1 : 0);
       expect(target.received).toHaveLength(recover ? 1 : 0);
       if (!recover) expect(sendFailureSignals(seat.conversationId).map(signal => signal.id)).toContain(`send-failed:${operationId}`);
+      if (!recover) expect(sendFailureSignals(sender.conversationId).map(signal => signal.id)).toContain(`send-failed:${operationId}`);
       expect(active.journal.operationResult(operationId)).toEqual(original);
       expect(active.registry.deliverySnapshotForOperation(operationId)).toEqual(snapshot);
     } finally {

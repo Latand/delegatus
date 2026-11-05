@@ -78,7 +78,10 @@ Preparation throws and timeouts consume each pending notice's persisted retry
 budget. After three failures the notice becomes a failed alarm for the project
 seat. A later process resumes the same counter; successful preparation before
 exhaustion recovers the stable notice key. A retired sweep owner cannot count
-an attempt or dispatch after its preparation await.
+an attempt or dispatch after its preparation await. Preparation failures are
+accounted before reading the supplemental registry projection. If terminal seat
+resolution throws, the sender alarm and lookup reason are persisted first; later
+sweeps retry seat resolution while preserving the fenced operation.
 
 Active notice pages seek through `state_rows_controller_active_key` on
 `(collection, controller_active, row_key)`, so finished history does not consume
