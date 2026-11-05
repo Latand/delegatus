@@ -61,27 +61,18 @@ export async function restoreMissingLaneWorktree(
     throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
   }
   if (listing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
-  const registrations = listing.stdout.split("\0\0").filter(Boolean).map(record => record.split("\0"));
-  const directoryOf = (fields: string[]) => fields.find(field => field.startsWith("worktree "))?.slice(9);
-  const holder = registrations.find(fields => fields.includes(`branch ${ref}`)
-    && directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) !== ownPath);
-  if (holder) throw new Error(`${prefix}; branch ${lane.branch} is held by ${directoryOf(holder)}; release the branch from that worktree or correct the lane directory, then retry the stage`);
-  const registration = registrations.find(fields => directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) === ownPath);
-  if (registration) {
-    if (registration.some(field => field === "locked" || field.startsWith("locked ")))
+  const inspectRegistrations = (output: string) => {
+    const registrations = output.split("\0\0").filter(Boolean).map(record => record.split("\0"));
+    const directoryOf = (fields: string[]) => fields.find(field => field.startsWith("worktree "))?.slice(9);
+    const holder = registrations.find(fields => fields.includes(`branch ${ref}`)
+      && directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) !== ownPath);
+    if (holder) throw new Error(`${prefix}; branch ${lane.branch} is held by ${directoryOf(holder)}; release the branch from that worktree or correct the lane directory, then retry the stage`);
+    const registration = registrations.find(fields => directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) === ownPath);
+    if (registration?.some(field => field === "locked" || field.startsWith("locked ")))
       throw new Error(`${prefix}; its worktree registration is locked; resolve the lock and retry the stage`);
-    // `worktree remove` recursively deletes the checkout. The path can reappear
-    // after our last lstat and before Git starts, so prune stale metadata only:
-    // Git never removes files from a worktree, including one recreated during
-    // this command. Verify any reappeared checkout against the lane before
-    // accepting it; a conflicting directory is left untouched and reported.
-    const pruned = await git(["worktree", "prune", "--expire=now"]);
-    if (!missing()) {
-      if (await verifyAppeared(head, ref, repositoryCommonDir)) return;
-      throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
-    }
-    if (pruned.code !== 0) throw new Error(`${prefix}; its stale worktree registration could not be released; repair that registration and retry the stage`);
-  }
+    return registration;
+  };
+  const registration = inspectRegistrations(listing.stdout);
   const current = await git(["rev-parse", "--verify", `${ref}^{commit}`]);
   if (!missing()) {
     if (current.code === 0 && current.stdout.trim() === head
@@ -90,7 +81,19 @@ export async function restoreMissingLaneWorktree(
   }
   if (current.code !== 0 || current.stdout.trim() !== head)
     throw new Error(`${prefix}; local branch ${lane.branch} changed during recovery; check the branch and retry the stage`);
-  const added = await git(["worktree", "add", "--", lane.worktreeDir, lane.branch]);
+  // One --force replaces only this missing path's stale registration. Git
+  // retains other worktrees' indexes and refuses a lock (which needs two).
+  // A directory appearing after our lstat is left to Git's nonempty-path guard.
+  const added = await git(["worktree", "add", ...(registration ? ["--force"] : []), "--", lane.worktreeDir, lane.branch]);
+  // --force also bypasses Git's branch-in-use check. Recheck collisions that
+  // arose during add before accepting the checkout or dispatching the stage.
+  const restoredListing = await git(["worktree", "list", "--porcelain", "-z"]);
+  if (restoredListing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
+  inspectRegistrations(restoredListing.stdout);
+  if (added.code !== 0 && !missing()) {
+    if (await verifyAppeared(head, ref, repositoryCommonDir)) return;
+    throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
+  }
   if (added.code !== 0) throw new Error(`${prefix}; checkout could not be restored; check directory permissions and release any conflicting branch registration, then retry the stage`);
   if (!await verifyAppeared(head, ref, repositoryCommonDir))
     throw new Error(`${prefix}; restored checkout could not be verified on branch ${lane.branch} in its repository; inspect the directory and retry the stage`);
