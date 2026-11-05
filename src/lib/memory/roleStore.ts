@@ -19,8 +19,9 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { activeProfileBasis, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
+import type { ProfileRulesView } from "./profile";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
 import { deliveredRuleIds } from "./deliveryLedger";
@@ -171,11 +172,11 @@ export function roleMemoryRevisionToken(): string {
     into the project's current key, in one transaction: the active rules of
     both in the order they were written, a word-for-word repeat merged into
     the earlier rule, with the same curation order and bound as every writer. Both histories stay, with one entry that records the join. */
-export function joinMovedScopes(now = new Date().toISOString()): void {
+export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () => string[] = roleScopeKeys): void {
   const held = roleMemoryCollection();
   if (!held) return;
   const resolve = scopeResolver();
-  const moved = roleScopeKeys().filter(scope => resolve(scope) !== scope);
+  const moved = scopeKeys().filter(scope => resolve(scope) !== scope);
   if (!moved.length) return;
   const policies = new Map(moved.map(scope => {
     const into = resolve(scope);
@@ -617,16 +618,53 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
   return withViewerOperation("role-memory.view", () => performanceSpans.sync("memory.project-view", () => projectViewMemo(project, now)));
 }
 
+/** Read the saved profile against current active ids without constructing the
+ * rule window's provenance, retired rules, task counts or curator history. */
+export function projectProfileView(project: string, now = Date.now()): ProfileRulesView {
+  // The full view memo and its reader can belong to an in-flight history
+  // snapshot. Derive this basis independently, including the scope keys.
+  const context = projectViewContext(project, now, false);
+  const memo = profileBases.get(context.memoKey);
+  if (memo?.stamp === context.version().stamp) {
+    profileBases.delete(context.memoKey); profileBases.set(context.memoKey, memo);
+    return memo.value;
+  }
+  joinMovedScopes(undefined, profileScopeKeys);
+  const before = context.version().stamp;
+  const wanted = [...profileScopeKeys().filter(scope => (scopeProject(scope) === context.canonical || isCrossProjectRoleScope(scope)) && scopeKind(scope) === "role").sort(),
+    projectScope(context.canonical), MACHINE_SCOPE];
+  const basis = activeProfileBasis(wanted);
+  const scopes: ProfileRulesView["scopes"] = wanted.map(scope => ({ scope, kind: scopeKind(scope), roleId: scopeRole(scope), active: basis.get(scope)! }));
+  if (swarmRulesEnabled()) for (const role of SWARM_ROLE_IDS) {
+    scopes.push({ scope: swarmScope(role), kind: "swarm", roleId: role,
+      active: swarmRulesForRole(role).map(({ id, changedAt }) => ({ id, changedAt })) });
+  }
+  if (context.version().stamp !== before) throw new StateSnapshotChangedError();
+  const value = freezeProjectView({ project: context.canonical, enabled: context.enabled, scopes });
+  const bytes = Buffer.byteLength(JSON.stringify(value));
+  profileBases.delete(context.memoKey);
+  if (bytes <= PROJECT_VIEW_MEMO_BYTES) profileBases.set(context.memoKey, { stamp: before, bytes, value });
+  let total = [...profileBases.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+  while (profileBases.size > PROJECT_VIEW_MEMO_ENTRIES || total > PROJECT_VIEW_MEMO_BYTES) {
+    const oldest = profileBases.keys().next().value!;
+    total -= profileBases.get(oldest)!.bytes; profileBases.delete(oldest);
+  }
+  return value;
+}
+
 /** Production readers yield between bounded history slices on cold and revised views. */
 export async function projectViewAsync(project: string, now = Date.now()): Promise<RoleMemoryProjectView> {
   return withViewerOperation("role-memory.view", () => projectViewAsyncMemo(project, now));
 }
 
+type ProfileBasisMemo = { stamp: string; bytes: number; value: ProfileRulesView };
 type ProjectViewMemo = { stamp: string; guard: string; from: number; until: number; bytes: number; value: RoleMemoryProjectView };
 // One LRU across Next server bundles, bounded by both entries and serialized
 // bytes. It owns only rendered views; scope histories never enter this memo.
-const projectViewOwner = globalThis as typeof globalThis & { __llvProjectViews?: Map<string, ProjectViewMemo> };
+const projectViewOwner = globalThis as typeof globalThis & { __llvProjectViews?: Map<string, ProjectViewMemo>; __llvProfileBases?: Map<string, ProfileBasisMemo> };
 const projectViews = projectViewOwner.__llvProjectViews ??= new MeasuredCache<string, ProjectViewMemo>("project-views", "memory/roleStore", entry => entry.bytes, "encoded-json");
+// This cache contains only bases read through the independent profile reader.
+const profileBases = projectViewOwner.__llvProfileBases ??= new MeasuredCache<string, ProfileBasisMemo>("profile-bases", "memory/roleStore", entry => entry.bytes, "encoded-json");
 const PROJECT_VIEW_MEMO_BYTES = 8 * 1024 * 1024;
 const PROJECT_VIEW_MEMO_ENTRIES = 16;
 function freezeProjectView<T>(value: T): T {
@@ -642,7 +680,7 @@ function timedProjectView(value: RoleMemoryProjectView, now: number): RoleMemory
     nextAt: curation.nextAt && Date.parse(curation.nextAt) < now ? new Date(now).toISOString() : curation.nextAt } } : {}) };
 }
 type ProjectViewVersion = { stamp: string; other: string; memoryRevision: number | undefined };
-function projectViewContext(project: string, now: number): {
+function projectViewContext(project: string, now: number, allowCachedView = true): {
   canonical: string; file: string; memoKey: string; guard: string; enabled: boolean;
   version: () => ProjectViewVersion; hit: RoleMemoryProjectView | null;
 } {
@@ -660,7 +698,7 @@ function projectViewContext(project: string, now: number): {
   const settingsDatabase = path.join(path.dirname(settingsFile), "state.sqlite");
   const swarm = swarmRulesEnabled();
   const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[projectStoreSignature("project-aliases.json", path.dirname(file)), ...[path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp)].join("|")}:${process.env.LLV_ROLE_MEMORY}:${swarm}`;
-  const memo = projectViews.get(memoKey);
+  const memo = allowCachedView ? projectViews.get(memoKey) : undefined;
   if (memo?.guard === guard && now >= memo.from && now < memo.until) {
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);
     return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), version: () => ({ stamp: "", other: "", memoryRevision: undefined }), hit: timedProjectView(memo.value, now) };
