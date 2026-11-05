@@ -435,6 +435,10 @@ const stateSchema = [
         OR json_type(value_json,'$.sync.s.handover') IS NULL)`,
   `CREATE INDEX IF NOT EXISTS state_rows_controller_active
     ON state_rows(collection, controller_active, row_order)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_send_failure_sender_v2
+    ON state_rows(collection, json_extract(value_json,'$.senderConversationId'), controller_active, row_key)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_send_failure_fallback_v2
+    ON state_rows(collection, json_extract(value_json,'$.fallbackConversationId'), controller_active, row_key)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
     ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
     WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
@@ -1828,6 +1832,22 @@ export class SqliteStateCollection<T> {
       const decoded = this.decodeRow(row.value_json);
       return { key: row.row_key, value: decoded === null ? null : this.options.clone(decoded) };
     });
+  }
+
+  /** Indexed recipient lookup for the bounded send-failure alarm reader. */
+  jsonTextKeysByRecipient(field: "senderConversationId" | "fallbackConversationId", recipient: string, after: string, limit: number): string[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error("invalid recipient page limit");
+    if (field !== "senderConversationId" && field !== "fallbackConversationId") throw new Error("unsupported recipient field");
+    if (field === "fallbackConversationId") return this.readDb.query<{ row_key: string }, [string, string, number]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_send_failure_fallback_v2
+      WHERE collection='send_failure_notices' AND json_extract(value_json,'$.fallbackConversationId')=? AND row_key>? AND controller_active=1
+      ORDER BY row_key LIMIT ?
+    `).all(recipient, after, limit).map(row => row.row_key);
+    return this.readDb.query<{ row_key: string }, [string, string, number]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_send_failure_sender_v2
+      WHERE collection='send_failure_notices' AND json_extract(value_json,'$.senderConversationId')=? AND row_key>? AND controller_active=1
+      ORDER BY row_key LIMIT ?
+    `).all(recipient, after, limit).map(row => row.row_key);
   }
 
   /** Project-scoped replica watermark from indexed group maxima, without

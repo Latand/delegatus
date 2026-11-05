@@ -20,6 +20,8 @@ export interface SendFailureNotice {
   text: string;
   settledAt: string | null;
   attemptedAt?: string;
+  attempts?: number;
+  fallbackConversationId?: string | null;
 }
 const COLLECTION = "send_failure_notices";
 const key = (row: SendFailureNotice) => row.operationId;
@@ -28,6 +30,7 @@ const seed = { collection: COLLECTION, schemaVersion: 1, migrationId: "send-fail
   loadRecords: (): SendFailureNotice[] => [] };
 let cached: { file: string; store: SqliteStateCollection<SendFailureNotice> } | null = null;
 let pruneAfter = "";
+let dispatchAfter = "";
 
 export function decodeSendFailureNotice(value: unknown): SendFailureNotice | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -41,6 +44,8 @@ export function decodeSendFailureNotice(value: unknown): SendFailureNotice | nul
     && ["pending", "sent", "failed", "cancelled"].includes(row.state ?? "")
     && (row.recipientConversationId === null || typeof row.recipientConversationId === "string")
     && (row.attemptedAt === undefined || (typeof row.attemptedAt === "string" && Number.isFinite(Date.parse(row.attemptedAt))))
+    && (row.attempts === undefined || (Number.isSafeInteger(row.attempts) && row.attempts >= 0))
+    && (row.fallbackConversationId === undefined || row.fallbackConversationId === null || row.fallbackConversationId.startsWith("conversation_"))
     && (row.settledAt === null || (typeof row.settledAt === "string" && Number.isFinite(Date.parse(row.settledAt))))
     ? row as SendFailureNotice : null;
 }
@@ -56,7 +61,7 @@ function collection(create: boolean): SqliteStateCollection<SendFailureNotice> |
   });
   // One state root per serving process. Test roots evict the previous wrapper.
   cached?.store.close();
-  cached = { file, store }; pruneAfter = "";
+  cached = { file, store }; pruneAfter = ""; dispatchAfter = "";
   return store;
 }
 
@@ -103,8 +108,14 @@ export function pendingSendFailureNotices(): SendFailureNotice[] {
 /** Stable actionable items are harvested by the seat's existing wake ledger. */
 export function sendFailureSignals(sender: string | null | undefined): Array<{ id: string; label: string; actionable: true }> {
   if (!sender) return [];
-  return (collection(false)?.snapshotForController() ?? []).filter(row => row.senderConversationId === sender)
-    .map(row => ({ id: `send-failed:${row.operationId}`, label: `Message ${row.operationId} to ${row.targetConversationId} failed: ${row.reason}`, actionable: true }));
+  const store = collection(false);
+  if (!store) return [];
+  const byId = new Map<string, SendFailureNotice>();
+  for (const field of ["senderConversationId", "fallbackConversationId"] as const) {
+    const keys = store.jsonTextKeysByRecipient(field, sender, "", 32);
+    for (const key of keys) { const row = store.get(key); if (row) byId.set(key, row); }
+  }
+  return [...byId.values()].map(row => ({ id: `send-failed:${row.operationId}`, label: `Message ${row.operationId} to ${row.targetConversationId} failed: ${row.reason}`, actionable: true }));
 }
 
 export interface SendFailureNoticePorts {
@@ -112,7 +123,8 @@ export interface SendFailureNoticePorts {
   receipt(operationId: string): Promise<SendReceipt | null>;
   recipient(sender: string): { kind: "deliver"; conversationId: string; path: string } | { kind: "skip"; reason: string };
   deliver(request: { pid: null; path: string; conversationId: string; clientMessageId: string; text: string;
-    images: []; policy: "steer-or-queue"; origin: { kind: "agent"; role: string } }): Promise<{ ok: boolean }>;
+    images: []; policy: "steer-or-queue"; origin: { kind: "agent"; role: string } }): Promise<{ ok: boolean; status?: number; error?: string }>;
+  fallback?(sender: string, target: string): { kind: "deliver"; conversationId: string } | { kind: "skip" };
   assertActive(): void;
   readMs?: number;
 }
@@ -133,6 +145,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   const { lookupOriginalSend, sendReceiptFor } = await import("./sendSettlement");
   ports.assertActive();
   const store = collection(false);
+  const fallback = (sender: string, target: string) => ports.fallback?.(sender, target) ?? { kind: "skip" as const };
   if (store) {
     const page = store.keyRange(pruneAfter, "\uffff", 64);
     const cutoff = Date.now() - 14 * 24 * 60 * 60_000;
@@ -151,8 +164,10 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     if (!answer.readable) throw new Error(answer.reason);
     return answer.value;
   };
-  const pending = (collection(false)?.snapshotForController() ?? []).sort((a, b) =>
-    (a.attemptedAt ?? a.createdAt).localeCompare(b.attemptedAt ?? b.createdAt) || a.operationId.localeCompare(b.operationId));
+  const dispatchStore = collection(false);
+  const page = dispatchStore?.keyRange(dispatchAfter, "\uffff", 32) ?? [];
+  const pending = page.filter(row => row.state === "pending" || row.state === "failed");
+  dispatchAfter = page.length === 64 ? page.at(-1)!.operationId : "";
   if (pending.some(row => row.state === "pending")) {
     await step(() => ports.registry.prepareRecoveryIndexes(AbortSignal.timeout(ports.readMs ?? 10_000)));
   }
@@ -172,25 +187,43 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     if (latest?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     const recipient = ports.recipient(row.recipientConversationId ?? row.senderConversationId);
     if (recipient.kind !== "deliver") {
-      update(row, { state: "failed", settledAt: new Date().toISOString() }); return;
+      const seat = fallback(row.senderConversationId, row.targetConversationId);
+      update(row, { state: "failed", reason: `Notice recipient unavailable: ${recipient.reason}; original failure: ${row.reason}`.slice(0, 500),
+        fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null, settledAt: new Date().toISOString() }); return;
     }
     if (row.recipientConversationId && row.recipientConversationId !== recipient.conversationId) {
       // A new seat cannot receive a second copy of an already admitted notice.
-      update(row, { state: "failed", settledAt: new Date().toISOString() }); return;
+      const seat = fallback(row.senderConversationId, row.targetConversationId);
+      update(row, { state: "failed", reason: `Notice recipient changed; original failure: ${row.reason}`.slice(0, 500),
+        fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null, settledAt: new Date().toISOString() }); return;
     }
     const original = lookupOriginalSend(ports.registry.deliverySnapshotForMessageKey(recipient.conversationId, row.clientMessageId),
       { conversationId: recipient.conversationId, clientMessageId: row.clientMessageId });
     if (original.kind === "found") {
       const answer = await step(() => ports.receipt(original.operationId));
       ports.assertActive();
-      if (answer?.state !== "in-flight" && answer) update(row, { state: answer.state === "delivered" ? "sent" : "failed", settledAt: new Date().toISOString() });
+      if (answer?.state !== "in-flight" && answer) {
+        const seat = answer.state === "delivered" ? { kind: "skip" as const } : fallback(row.senderConversationId, row.targetConversationId);
+        update(row, { state: answer.state === "delivered" ? "sent" : "failed", fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null, settledAt: new Date().toISOString() });
+      }
       return;
     }
     if (original.kind !== "absent") return;
     update(row, { recipientConversationId: recipient.conversationId });
-    await step(() => ports.deliver({ pid: null, path: recipient.path, conversationId: recipient.conversationId,
+    const result = await step(() => ports.deliver({ pid: null, path: recipient.path, conversationId: recipient.conversationId,
       clientMessageId: row.clientMessageId, text: row.text, images: [], policy: "steer-or-queue", origin: { kind: "agent", role: "delivery" } }));
     ports.assertActive();
+    if (!result.ok) {
+      const attempts = (row.attempts ?? 0) + 1;
+      const permanent = result.status !== undefined && result.status >= 400 && result.status < 500;
+      const terminal = permanent || attempts >= 3;
+      const seat = terminal ? fallback(row.senderConversationId, row.targetConversationId) : { kind: "skip" as const };
+      update(row, { attempts, reason: `Failure notice ${permanent ? "refused" : "delivery failed"}${result.status ? ` (${result.status})` : ""}: ${(result.error ?? "transport returned ok=false").slice(0, 350)}; original failure: ${row.reason}`.slice(0, 500),
+        ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null } : {}) });
+      return;
+    }
+    // Admission is not arrival. The next bounded pass reconciles the stable
+    // notice key against its receipt before making the obligation terminal.
   }));
   const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
   if (failures.length) throw new Error(failures.map(outcome => outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)).join("; "));

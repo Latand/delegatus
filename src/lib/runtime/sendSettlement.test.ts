@@ -3339,6 +3339,77 @@ test("a fenced failure notice is never resent, and its sender keeps an actionabl
   } finally { active.close(); }
 });
 
+test("a permanent notice refusal becomes a durable seat alarm with its transport reason", async () => {
+  const active = fixture("refused-failure-notice");
+  try {
+    const sender = secondConversation(active, "refused-notice-sender");
+    const seat = secondConversation(active, "refused-notice-seat");
+    const { readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "refused-notice-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    let attempts = 0;
+    const ports = { registry: active.registry, assertActive: () => {},
+      receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }),
+      recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async () => { attempts++; return { ok: false, status: 403, error: "recipient refused admission" }; },
+    };
+    await sweepSendFailureNotices(ports);
+    await sweepSendFailureNotices(ports);
+    expect(attempts).toBe(1);
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 1, reason: expect.stringContaining("403") });
+    expect(sendFailureSignals(seat.conversationId)).toEqual([expect.objectContaining({ id: `send-failed:${operationId}`, label: expect.stringContaining("recipient refused admission") })]);
+  } finally { active.close(); }
+});
+
+test("an unavailable sender routes its terminal notice alarm to the live project seat", async () => {
+  const active = fixture("missing-failure-notice-sender");
+  try {
+    const sender = secondConversation(active, "missing-notice-sender");
+    const seat = secondConversation(active, "missing-notice-seat");
+    const { readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "missing-notice-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    const ports = { registry: active.registry, assertActive: () => {},
+      receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }),
+      recipient: () => ({ kind: "skip" as const, reason: "launcher-gone" }),
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async () => ({ ok: true }),
+    };
+    await sweepSendFailureNotices(ports);
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", fallbackConversationId: seat.conversationId });
+    expect(sendFailureSignals(seat.conversationId).some(signal => signal.id === `send-failed:${operationId}`)).toBe(true);
+  } finally { active.close(); }
+});
+
+test("transient negative notice acknowledgements stop after three attempts and leave a seat alarm", async () => {
+  const active = fixture("transient-failure-notice");
+  try {
+    const sender = secondConversation(active, "transient-notice-sender");
+    const seat = secondConversation(active, "transient-notice-seat");
+    const { readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "transient-notice-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    let attempts = 0;
+    const ports = { registry: active.registry, assertActive: () => {},
+      receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }),
+      recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async () => { attempts++; return { ok: false, status: 503, error: "temporary transport outage" }; },
+    };
+    await sweepSendFailureNotices(ports);
+    await sweepSendFailureNotices(ports);
+    await sweepSendFailureNotices(ports);
+    await sweepSendFailureNotices(ports);
+    expect(attempts).toBe(3);
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 3 });
+    expect(sendFailureSignals(seat.conversationId).some(signal => signal.id === `send-failed:${operationId}`)).toBe(true);
+  } finally { active.close(); }
+});
+
 test("a retired notice controller cannot deliver after an awaited receipt", async () => {
   const active = fixture("retired-failure-notice");
   try {

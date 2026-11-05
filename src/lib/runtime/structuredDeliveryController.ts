@@ -2373,6 +2373,18 @@ export async function bindStructuredDeliveryQueue(
             seats: readOrchestratorSeatFileOrNull, conversation: id => registry.conversation(id as ViewerConversationId),
             hiddenPaths: project => boardFor(project).prefs.hidden,
           }), deliver: request => deliverConversationMessage({ ...request, admissionGuard: assertActive, recoveryAuthorityGuard: assertActive }),
+          fallback: sender => {
+            const conversation = registry.conversation(sender as ViewerConversationId);
+            const generation = conversation?.generations.at(-1);
+            if (!conversation || !generation) return { kind: "skip" as const };
+            const project = conversationProjectKey(conversation.projectOwnership, generation.launchProfile, { cwd: generation.launchProfile.cwd });
+            const seat = project ? readOrchestratorSeatFileOrNull()?.seats[project] : null;
+            const id = seat?.conversationId;
+            const active = id ? registry.conversation(id as ViewerConversationId) : null;
+            return active && !active.supersededBy && active.generations.at(-1)
+              ? { kind: "deliver" as const, conversationId: active.id }
+              : { kind: "skip" as const };
+          },
           assertActive });
       })();
       notices = run;
