@@ -9,7 +9,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 import { registryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import type { RuntimeHostClient } from "./client";
@@ -74,6 +74,26 @@ test("unqualified termination still retires its captured host row", async () => 
     expect(f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]).toMatchObject({
       status: "dead", claimOwner: null, structuredHost: null,
     });
+  } finally { await f.cleanup(); }
+});
+
+test("retirement authorization reaches the owned native host through the controller", async () => {
+  const f = migrationDeliveryFixture();
+  let authorizationCalls = 0;
+  const authorize = () => { authorizationCalls += 1; return null; };
+  const expectedProcess = { pid: process.pid + 100_000, startIdentity: "expected-owned-host" };
+  const registeredHost = Object.assign(f.host, {
+    releaseIfOwned: async (expected: Readonly<ProcessIdentity>, check?: () => { status: 403 | 409; error: string } | null) => {
+      expect(expected).toEqual(expectedProcess);
+      expect(check).toBe(authorize);
+      return check?.() === null;
+    },
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: registeredHost }], { registry: f.registry, client: f.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    expect(await terminateStructuredDeliveryHost(f.key, expectedProcess, authorize)).toBe(true);
+    expect(authorizationCalls).toBe(1);
   } finally { await f.cleanup(); }
 });
 

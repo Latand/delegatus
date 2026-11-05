@@ -741,6 +741,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private endCause: HostEndCause | null = null;
   private exitNoted = false;
   private releaseFence: Readonly<ProcessIdentity> | null = null;
+  private releaseAuthorize: (() => { status: 403 | 409; error: string } | null) | null = null;
   private readonly reapedPromise: Promise<void>;
   private resolveReaped!: () => void;
   private readonly launchFlags: readonly string[];
@@ -1349,19 +1350,29 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   /** Resource cleanup may release only the exact child the operator's row
       authorized. The kernel identity is checked here and again inside the
       synchronous signal boundary. */
-  async releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean> {
+  async releaseIfOwned(
+    expected: Readonly<ProcessIdentity>,
+    authorize?: () => { status: 403 | 409; error: string } | null,
+  ): Promise<boolean> {
     const pid = nativeProcessId(this.child);
     if (this.released || this.releasing || this.releasePromise !== null
       || !pid || expected.startIdentity === null
       || pid !== expected.pid
       || this.childStartIdentity !== expected.startIdentity
       || this.processIdentity(pid) !== expected.startIdentity) return false;
+    try {
+      if (authorize?.()) return false;
+    } catch {
+      return false;
+    }
     this.releaseFence = expected;
+    this.releaseAuthorize = authorize ?? null;
     try {
       await this.release();
       return true;
     } finally {
       if (this.releaseFence === expected) this.releaseFence = null;
+      if (this.releaseAuthorize === authorize) this.releaseAuthorize = null;
     }
   }
 
@@ -1888,6 +1899,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private signalReleaseGroup(signal: NodeJS.Signals): boolean {
+    if (this.releaseAuthorizationRefusal()) return false;
     // The memory cell owns fatal OOM cleanup through its unit or verified tree.
     if (this.memoryCell?.fatalMemoryExit) return true;
     if (!this.releaseFenceHolds()) return false;
@@ -1962,6 +1974,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private async startTerminationAdmitted(): Promise<boolean> {
     if (this.memoryCell?.fatalMemoryExit) {
+      if (this.releaseAuthorizationRefusal()) return false;
       if (this.terminationTimer) clearTimeout(this.terminationTimer);
       this.terminationTimer = null;
       for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) stream.destroy();
@@ -1977,11 +1990,17 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
+    /* Capture awaits external registry admission while the child can still
+       publish. Re-prove retirement and custody after it, before EOF or signal. */
+    if (this.releaseAuthorizationRefusal()) return false;
     if (!this.releaseFenceHolds()) return false;
     this.clearCaptureRetry();
     let withdrawEof: (() => void) | undefined;
     if (!this.reaped && this.childStartIdentity !== null && this.processIdentity(nativeProcessId(this.child)!) === this.childStartIdentity
-      && !procBackend.processExited(nativeProcessId(this.child)!)) withdrawEof = recordHostStop(this.exitProcess, "EOF", "claude-host-release");
+      && !procBackend.processExited(nativeProcessId(this.child)!)) {
+      if (this.releaseAuthorizationRefusal()) return false;
+      withdrawEof = recordHostStop(this.exitProcess, "EOF", "claude-host-release");
+    }
     try { this.child.stdin.end(); } catch { withdrawEof?.(); }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;
@@ -1991,6 +2010,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.signalReleaseGroup("SIGKILL");
     }, this.shutdownGraceMs);
     return true;
+  }
+
+  private releaseAuthorizationRefusal(): { status: 403 | 409; error: string } | null {
+    try { return this.releaseAuthorize?.() ?? null; }
+    catch { return { status: 409, error: "Claude retirement authorization could not be verified" }; }
   }
 
   private rejectPending(error: Error): void {

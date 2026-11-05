@@ -3740,6 +3740,46 @@ describe("ClaudeStreamBrokerHost", () => {
     });
   }
 
+  test("an identity-bound release rechecks retirement after its awaited capture before EOF or signals", async () => {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const root = { pid: child.pid, startIdentity: "5150:owned" };
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: "/repo", deliveryLedger: ledger, eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [], spawnProcess: fakeSpawn(child, {}),
+      processIdentity: () => "5150:owned",
+      captureProcessTree: () => ({ identities: [root], unresolved: [] }),
+    });
+    let enter!: () => void;
+    let finish!: (ok: boolean) => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const admitted = new Promise<boolean>(resolve => { finish = resolve; });
+    let eligible = true;
+    let authorizations = 0;
+    host.setTerminationCapture(() => { enter(); return admitted; });
+
+    const stopped = host.releaseIfOwned(root, () => {
+      authorizations += 1;
+      return eligible ? null : { status: 409, error: "retirement target changed" };
+    });
+    try {
+      await entered;
+      expect(child.signals).toEqual([]);
+      expect(child.stdin.writableEnded).toBe(false);
+      eligible = false;
+      finish(true);
+      await expect(stopped).rejects.toThrow();
+      expect(authorizations).toBeGreaterThanOrEqual(2);
+      expect(child.signals).toEqual([]);
+      expect(child.stdin.writableEnded).toBe(false);
+    } finally {
+      eligible = true;
+      host.setTerminationCapture(null);
+      await host.release();
+    }
+  });
+
   test("an identity-bound release refuses a recycled child before signalling", async () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);

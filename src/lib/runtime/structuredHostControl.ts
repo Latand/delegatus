@@ -374,7 +374,11 @@ export interface StructuredHostTerminationDependencies {
       row and the transcript change because of this termination, so a caller
       comparing them against what it observed beforehand stops comparing. */
   onFirstEffect?(): void;
-  terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
+  terminateOwnedHost?(
+    key: SessionKey,
+    expected: ProcessIdentity,
+    authorize?: () => { status: 403 | 409; error: string } | null,
+  ): Promise<boolean>;
   retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null, confirmedScope?: AgentScopeIdentity | null): boolean | void | Promise<boolean | void>;
   /** Captured from the caller's registry before this termination can await. */
   registryCustody?: StructuredHostCustody | null;
@@ -715,7 +719,7 @@ async function terminateStructuredHostTreeFenced(
     let runtimeFailure = false;
     if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       try {
-        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId }, () => terminateOwned(key, expected))) {
+        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId }, () => terminateOwned(key, expected, dependencies.authorize))) {
           via = "runtime";
           markStarted();
         }
