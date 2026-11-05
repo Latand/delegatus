@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { AgentRegistry, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
 import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
@@ -40,6 +40,8 @@ import {
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
+import { DeliveryProgressStore } from "./deliveryProgress";
+import { observeDeliveryEcho } from "./structuredDeliveryController";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { normalizeQueueEntry, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -237,6 +239,8 @@ class FakeClaude extends EventEmitter {
   readonly pid = 5150;
   readonly signals: NodeJS.Signals[] = [];
   readonly inputs: Array<Record<string, unknown>> = [];
+  readonly userFrameWritten: Promise<Record<string, unknown>>;
+  private resolveUserFrameWritten!: (frame: Record<string, unknown>) => void;
   sessionId = "";
   viewerStatus: unknown[] = [{ name: "viewer", status: "connected", tools: [{ name: "stage_report" }] }];
 
@@ -246,6 +250,7 @@ class FakeClaude extends EventEmitter {
     private readonly ignoreKill = false,
   ) {
     super();
+    this.userFrameWritten = new Promise(resolve => { this.resolveUserFrameWritten = resolve; });
     let buffer = "";
     this.stdin.on("data", (chunk) => {
       buffer += String(chunk);
@@ -263,6 +268,7 @@ class FakeClaude extends EventEmitter {
           }
           const message = input.message as { content?: Array<{ text?: string }> } | undefined;
           if (input.type === "user") {
+            this.resolveUserFrameWritten(input);
             this.ledger.order.push(`stdin:${message?.content?.[0]?.text}`);
           }
         }
@@ -1437,6 +1443,95 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(Date.parse(echo.deliveryEcho!.at)).toBeGreaterThanOrEqual(beforeEcho);
     expect(Date.parse(echo.deliveryEcho!.at)).toBeLessThanOrEqual(Date.now());
     await host.release();
+  });
+
+  test("queue timing observes the real Claude write and attached batch echo; observer refusal cannot stop delivery", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-delivery-timing-"));
+    const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+    const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const conversationId = "conversation-delivery-timing";
+    const events = new MemoryEventStore();
+    const progress = new DeliveryProgressStore(null);
+    const members = ["timing-a", "timing-b"];
+    for (const id of members) progress.note(id, conversationId, { waitReason: "queued" });
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: directory, deliveryLedger: ledger, readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(child, {}),
+      eventStore: {
+        load: id => events.load(id),
+        append: (id, event) => {
+          events.append(id, event);
+          if (event.kind === "item" && event.deliveryEcho) {
+            observeDeliveryEcho(progress, conversationId, event.deliveryEcho);
+          }
+          const projected = projectEngineHostEvent(conversationId, `claude:${id}`, event);
+          if (projected) journal.append(projected);
+        },
+      },
+    });
+    const port = {
+      effects: async (kinds?: readonly string[], after?: number) => journal.effectBatch(100, kinds, after),
+      status: async (id: string) => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: async () => "fixture-owner",
+      transition: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => { journal.transitionOperation(...args); },
+      progress,
+      coalescesConversation: () => true,
+      bindDeliveryBatch: async () => true,
+    };
+    const queue = new StructuredDeliveryQueue(port, () => host);
+    try {
+      journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
+        conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId }, hostKind: "claude-broker",
+        host: "hosted", turn: "idle", activeTurnId: null, capabilities: { steer: false, structuredAttention: true },
+      } });
+      for (const id of members) journal.executeOperation({ kind: "send", operationId: id, idempotencyKey: id,
+        conversationId, text: `message ${members.indexOf(id)}`, policy: "queue", origin: { kind: "operator" } });
+      setSystemTime(new Date("2026-11-04T00:00:00.000Z"));
+      const dispatch = queue.drain();
+      const frame = await child.userFrameWritten;
+      expect(frame).toBeDefined();
+      child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "timing-batch-echo",
+        message: { role: "user", content: (frame.message as { content: unknown[] }).content } });
+      await dispatch;
+
+      const echo = events.load(host.identity.sessionId).findLast(event => event.kind === "item" && event.deliveryEcho);
+      expect(echo?.kind === "item" ? echo.deliveryEcho : undefined).toMatchObject({
+        memberOperationIds: members,
+      });
+      expect(Date.parse(echo!.kind === "item" ? echo.deliveryEcho!.attachedAt! : "")).toBeGreaterThanOrEqual(
+        Date.parse(echo!.kind === "item" ? echo.deliveryEcho!.at! : ""),
+      );
+      for (const id of members) {
+        expect(journal.operationResult(id)?.receipt.status).toBe("delivered");
+        expect(progress.get(id)?.timingMarks?.map(mark => mark.mark)).toEqual([
+          "queue-kick", "host-send", "claude-prepare-start", "claude-prepare-end", "claude-write-start",
+          "claude-write-end", "echo-received", "echo-attached",
+        ]);
+      }
+      expect(child.inputs.filter(frame => frame.type === "user")).toHaveLength(1);
+
+      const refusedId = "timing-observer-refused";
+      const refusedChild = new FakeClaude(new RecordingDeliveryLedger());
+      const refusedHost = await ClaudeStreamBrokerHost.start({
+        cwd: directory, deliveryLedger: new RecordingDeliveryLedger(), eventStore: new MemoryEventStore(), readTranscript: () => [],
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: fakeSpawn(refusedChild, {}),
+      });
+      try {
+        const refusedSend = refusedHost.send({ id: refusedId, text: "one observed input" }, undefined, undefined, () => {
+          throw new Error("timing observer refused");
+        });
+        refusedChild.emitJson({ type: "user", isReplay: true, session_id: refusedHost.identity.sessionId, uuid: "refused-observer-echo",
+          message: { role: "user", content: [{ type: "text", text: "one observed input" }] } });
+        expect(await refusedSend).toMatchObject({ outcome: "turn-started", turnId: refusedId });
+        expect(refusedChild.inputs.filter(frame => frame.type === "user")).toHaveLength(1);
+      } finally { await refusedHost.release(); }
+    } finally {
+      try { queue.retire(); progress.close(); await host.release(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+      finally { setSystemTime(); }
+    }
   });
 
   test("a replayed canonical UUID cannot settle an identical later send", async () => {

@@ -56,7 +56,7 @@ test("F4 descriptor features survive parsing and owner I10 schemas survive uncha
   expect(ownerIndex.some((tool) => tool.name === "owner_me")).toBe(false);
 });
 
-test("N1 preserves every pre-amendment v3 answer, compact, completion and X2 capture byte", () => {
+test("N1 preserves retained pre-amendment fixtures and captures byte for byte", () => {
   const pins = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/owner-tools-off-v3-hashes.json"), "utf8"));
   for (const [name, sha] of Object.entries(pins))
     expect(createHash("sha256").update(fs.readFileSync(path.resolve(name))).digest("hex")).toBe(String(sha));

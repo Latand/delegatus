@@ -335,7 +335,7 @@ export function seatTickSettingsAnswer(
   };
 }
 
-/** The HTTP reader awaits curation without changing the synchronous tool/test
+/** The HTTP reader awaits curation while synchronous callers retain their
  * contract. Re-read settings after yielding so a concurrent edit cannot make
  * the controls disagree with the curation answer. */
 export async function seatTickSettingsAnswerCooperatively(

@@ -2134,8 +2134,23 @@ export async function enqueueStructuredMessage(
         // cannot dispatch this first prompt later as an uncertain send.
         const privacyChanged = error instanceof RoleMemoryChanged;
         const refusal = privacyChanged ? error.message : "autonomous first prompt authorization revoked";
+        // Authorization ran before this call's journal admission. Only an
+        // absent operation and the unchanged first claim prove that no earlier
+        // attempt could have delivered it. Unknown journal outcomes stay fenced.
+        let journalAbsent = false;
+        if (privacyChanged) {
+          try { journalAbsent = await client.operationStatus(assigned.command.operationId) === null; }
+          catch { /* Unavailable evidence retains the uncertain outcome. */ }
+        }
         const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
-          () => registry.terminalizeHeldDelivery(assigned.id, refusal));
+          () => {
+            const current = registry.deliverySnapshotForOperation(assigned.command.operationId).heldDeliveries[assigned.id];
+            if (privacyChanged && journalAbsent && current?.attempts === 1
+              && current.generationId === claimed.generationId && current.state === "delivery-uncertain") {
+              return registry.recordDeliveryOutcome(assigned.id, "failed", refusal, "lost");
+            }
+            return registry.terminalizeHeldDelivery(assigned.id, refusal);
+          });
         if (!ended.acquired) return "caller-revocation-pending" as const;
         return privacyChanged ? "role-memory-changed" as const : "caller-revoked" as const;
       }

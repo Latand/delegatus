@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { onOpenKeys, openKeys } from "@/components/keys/openKeys";
@@ -75,8 +75,12 @@ export function VoiceCompanionSetting() {
   const announce = () => window.dispatchEvent(new Event(COMPANION_SETTINGS_EVENT));
   /* A refusal reads beside the control that was pressed, so it is in view where the person's eyes are. */
   const [pressed, setPressed] = useState<"enabled" | "backend" | "cap" | "callMemory" | "timerTelegram" | "release" | null>(null);
+  const refusalRef = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    if (error) refusalRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [error, pressed]);
   const change = async (value: Parameters<typeof update>[0], control: NonNullable<typeof pressed>) => { setPressed(control); if (await update(value)) announce(); };
-  const refusal = (control: typeof pressed) => error && pressed === control ? <p role="alert" className="mt-1.5 text-[13px] text-danger" data-voice-companion-setting-error={error}>{companionErrorMessage(error, speech)}</p> : null;
+  const refusal = (control: typeof pressed) => error && pressed === control ? <p ref={refusalRef} role="alert" className="mt-1.5 text-[13px] text-danger" data-voice-companion-setting-error={error}>{companionErrorMessage(error, speech)}</p> : null;
   const commitCap = async () => {
     if (capDraft === null || !settings) return;
     const value = Number(capDraft.replace(",", "."));
