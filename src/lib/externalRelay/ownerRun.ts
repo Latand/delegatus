@@ -1,5 +1,5 @@
 import { boundedRelayPrompt, quotedRelayText } from "./promptBudget";
-import { assertStructuredTextEnvelope, StructuredEnvelopeTooLargeError } from "@/lib/runtime/structuredContent";
+import { assertStructuredTextEnvelope, MAX_STRUCTURED_TEXT_BYTES, StructuredEnvelopeTooLargeError } from "@/lib/runtime/structuredContent";
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
 import { projectRootForCwd } from "@/lib/scanner/describe";
 import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
@@ -89,10 +89,18 @@ function boundedOwnerPrompt<T extends { prompt: string; seen: string[] }>(reques
   const localIds = new Set(owner.localContext?.conversation.map(message => message.id));
   const original = new Map([...request.input.conversation, ...(owner.localContext?.conversation ?? [])].map(message => [message.id, message]));
   const optionalSuffix = suffix ? quotedRelayText(suffix, 4096) : "";
-  const boundedWithSuffix = (optional: string) => boundedRelayPrompt(request, value => {
-    const result = render(value, value === request || !owner.localContext ? owner : {
-      ...owner, localContext: { ...owner.localContext, conversation: value.input.conversation.filter(message => localIds.has(message.id)) },
-    });
+  const boundedWithSuffix = (optional: string) => boundedRelayPrompt(request, (value, quotationBytes) => {
+    const conversation = value.input.conversation.filter(message => localIds.has(message.id));
+    const retained = new Set(conversation.map(message => message.id));
+    const instruction = { ...owner,
+      ...(owner.bridgeReport ? { bridgeReport: { ...owner.bridgeReport,
+        reportText: quotedRelayText(owner.bridgeReport.reportText, quotationBytes) } } : {}),
+      ...(value !== request && owner.localContext ? { localContext: { ...owner.localContext, conversation,
+        questionIds: owner.localContext.questionIds.filter(id => retained.has(id)),
+        origins: Object.fromEntries(Object.entries(owner.localContext.origins).filter(([id]) => retained.has(id))),
+      } } : {}),
+    };
+    const result = render(value, instruction);
     return { ...result, prompt: result.prompt + (optional ? "\n" + optional : "") };
   }, owner.localContext?.conversation);
   let bounded;
@@ -253,16 +261,19 @@ function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerIn
   return ownerAnswer(Array.from(explanation).length <= request.answer.max_chars ? explanation : compact, request, owner);
 }
 
-export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerInstruction, _diagnostic: OwnerTurnDiagnostic, credentials: readonly string[] = []): ExternalRelayAnswer | null {
+export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerInstruction, diagnostic: OwnerTurnDiagnostic, credentials: readonly string[] = []): ExternalRelayAnswer | null {
   const ukrainian = /[а-яіїєґ]/iu.test(owner.text);
   // Diagnostics stay in durable custody and the journal. They may contain
   // internal exception names and are never suitable as chat copy.
-  const explanation = ukrainian
+  const oversized = diagnostic.message.includes("structured message text exceeds the 32000-byte envelope bound");
+  const explanation = oversized ? (ukrainian
+    ? "Запит завеликий для запуску агента. Скоротіть своє повідомлення або надішліть довгий текст файлом. Повторення цього самого повідомлення не допоможе."
+    : "This request is too large to start the agent. Shorten your message or attach the long text as a file. Sending the same message again will not help.") : ukrainian
     ? "Не вдалося завершити запит. Спробуйте ще раз."
     : "Your request could not be completed. Please try again.";
   const caps = answerCapabilities(request, "");
   const clean = scrubOwnerOutput(explanation, credentials);
-  const compact = ukrainian ? "Спробуйте ще раз." : "Please try again.";
+  const compact = oversized ? (ukrainian ? "Скоротіть запит." : "Shorten the request.") : ukrainian ? "Спробуйте ще раз." : "Please try again.";
   const text = Array.from(clean).length <= caps.plainMax ? clean : Array.from(scrubOwnerOutput(compact, credentials)).slice(0, caps.plainMax).join("");
   // A failure reply carries no answer parts the interrupted agent staged.
   const answer = checkedAnswerV2({ action: "reply", text, reply_to: owner.messageId, ...(caps.rich ? { format: "plain", buttons: [] } : {}) }, request, caps, { handoff: false, ignore: false });
@@ -986,7 +997,11 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       // Composition can refuse oversized mandatory input. Establish that
       // before recording a launch attempt that would require host recovery.
       const initialPrompt = input.continuation ? null : ownerRunPrompt(input.request, input.owner, input.target.hardCapMinutes, input.inboundContext);
-      const continuationPrompt = input.continuation ? input.continuation.prompt + (input.inboundContext ? "\n" + input.inboundContext : "") : null;
+      const continuationBase = input.continuation?.prompt;
+      const optionalContext = input.inboundContext ? quotedRelayText(input.inboundContext) : "";
+      const withContext = continuationBase && optionalContext ? continuationBase + "\n" + optionalContext : continuationBase;
+      const continuationPrompt = continuationBase === undefined ? null
+        : withContext && Buffer.byteLength(withContext) <= MAX_STRUCTURED_TEXT_BYTES ? withContext : continuationBase;
       if (continuationPrompt !== null) assertStructuredTextEnvelope(continuationPrompt);
       launchAttempted = true;
       let launched: ReportSpawnResult;

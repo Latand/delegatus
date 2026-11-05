@@ -8,24 +8,24 @@ const QUOTED_TEXT_BYTES = 4096;
  * prompt separately, because JSON can expand even short source strings. */
 export function quotedRelayText(text: string, maxBytes = QUOTED_TEXT_BYTES): string {
   if (Buffer.byteLength(text) <= maxBytes) return text;
-  const suffix = "\n[Earlier text omitted]";
-  let result = "", bytes = Buffer.byteLength(suffix);
-  for (const point of text) {
-    const size = Buffer.byteLength(point);
-    if (bytes + size > maxBytes) break;
-    result += point; bytes += size;
-  }
-  return result + suffix;
+  const marker = "\n[Quoted text shortened; beginning and end kept]\n";
+  const bytes = Buffer.from(text);
+  const available = Math.max(0, maxBytes - Buffer.byteLength(marker));
+  let head = Math.floor(available / 2), tail = bytes.length - (available - head);
+  while (head > 0 && (bytes[head]! & 0xc0) === 0x80) head--;
+  while (tail < bytes.length && (bytes[tail]! & 0xc0) === 0x80) tail++;
+  return bytes.subarray(0, head).toString("utf8") + marker + bytes.subarray(tail).toString("utf8");
 }
 
 /** Rebuild complete sections under the receiver's actual UTF-8 bound. Keep
- * current input and its immediate parent whole, including recovered parents.
+ * current input whole and its immediate parent present, including recovered parents.
  * Refuse before dispatch when mandatory content alone cannot fit. */
 export function boundedRelayPrompt<T extends string | { prompt: string }>(request: ExternalRelayRequest,
-  render: (request: ExternalRelayRequest) => T, extraMessages: readonly Message[] = [], maxBytes = MAX_STRUCTURED_TEXT_BYTES,
+  render: (request: ExternalRelayRequest, quotationBytes: number) => T, extraMessages: readonly Message[] = [], maxBytes = MAX_STRUCTURED_TEXT_BYTES,
 ): { request: ExternalRelayRequest; result: T } {
   let current = request;
-  let result = render(current);
+  let quotationBytes = Infinity;
+  let result = render(current, quotationBytes);
   const fits = () => Buffer.byteLength(typeof result === "string" ? result : result.prompt) <= maxBytes;
   if (fits()) return { request: current, result };
   const messages = new Map(request.input.conversation.map(message => [message.id, message]));
@@ -34,8 +34,18 @@ export function boundedRelayPrompt<T extends string | { prompt: string }>(reques
   const protectedIds = new Set([request.input.respond_to, trigger?.reply_to]);
   current = { ...request, input: { ...request.input, conversation: [...messages.values()].map(message =>
     message.author.self && !protectedIds.has(message.id) ? { ...message, text: quotedRelayText(message.text) } : message) } };
-  const refresh = () => { result = render(current); return fits(); };
+  const refresh = () => { result = render(current, quotationBytes); return fits(); };
   if (refresh()) return { request: current, result };
+  // The reply target is data too. Previously its protected identity also
+  // protected its entire text, bypassing the quotation cap in the renderer.
+  // Measure the complete escaped render after each cut, including local
+  // metadata and report context supplied by the owner renderer.
+  for (const budget of [4096, 2048, 1024, 512]) {
+    quotationBytes = budget;
+    current.input.conversation = current.input.conversation.map(message => message.id === request.input.respond_to
+      ? message : { ...message, text: quotedRelayText(message.text, budget) });
+    if (refresh()) return { request: current, result };
+  }
   // Local recovery can add older rows after the service window. Remove the
   // oldest timestamps first, keeping source order for ties. A binary search
   // bounds rebuilds even with the protocol's maximum history and escaping.
