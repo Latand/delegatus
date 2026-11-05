@@ -306,6 +306,10 @@ export function withFileLock<T>(file: string, action: () => T, waitMs = 5_000): 
 export class RelayStoreBusy extends Error {
   constructor() { super("relay store is busy"); this.name = "RelayStoreBusy"; }
 }
+/** Owner custody writes tolerate overloaded hosts without blocking heartbeat
+ * traffic. Admission still uses the request's original absolute deadline. */
+export const OWNER_RELAY_STORE_WAIT_MS = 60_000;
+export const ownerRelayStoreDeadline = () => Date.now() + OWNER_RELAY_STORE_WAIT_MS;
 export async function withFileLockAsync<T>(file: string, action: () => T | Promise<T>, until: number): Promise<T> {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

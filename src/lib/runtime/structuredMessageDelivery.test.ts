@@ -140,7 +140,7 @@ function snapshot(ownedConversationId = conversationId, engine: "codex" | "claud
   };
 }
 
-test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "deadline-json-settlement-held", "revoked", "role-memory"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
+test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "deadline-json-settlement-held", "revoked", "role-memory", "role-memory-journaled", "role-memory-unknown"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
   const { registry, conversation } = registryWithConversation("default", "codex", scenario.startsWith("deadline-json") ? "off" : undefined);
   const journal = new RuntimeJournal(path.join(sandbox, `authorization-${scenario}.sqlite`), { structuredHosts: true });
   let commands = 0;
@@ -150,6 +150,10 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       ? { acquired: false as const } : writeNow(correlation, commit, options));
   const client = {
     readSession: sessionReader(async () => snapshot(conversation.id)),
+    operationStatus: async id => {
+      if (scenario === "role-memory-unknown") throw new Error("journal unavailable");
+      return journal.operationResult(id);
+    },
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       commands += 1;
       return journal.executeOperation(command);
@@ -163,7 +167,15 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       authorizeDispatch: async () => {
         if (scenario.startsWith("deadline")) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
         if (scenario === "revoked") throw new Error("authority revoked");
-        if (scenario === "role-memory") throw new RoleMemoryChanged();
+        if (scenario.startsWith("role-memory")) {
+          if (scenario === "role-memory-journaled") {
+            const delivery = Object.values(registry.snapshot().heldDeliveries)[0]!;
+            journal.executeOperation({ ...delivery.command, kind: "send", conversationId: conversation.id,
+              idempotencyKey: delivery.command.operationId, text: "Stage work",
+              contentDigest: structuredContentDigest({ text: "Stage work", images: [] }) });
+          }
+          throw new RoleMemoryChanged();
+        }
       },
     });
     if (scenario === "allowed") {
@@ -172,7 +184,8 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       return;
     }
     expect(commands).toBe(0);
-    expect(journal.operationResult(`authorization-${scenario}`)).toBeNull();
+    if (scenario === "role-memory-journaled") expect(journal.operationResult(`authorization-${scenario}`)).not.toBeNull();
+    else expect(journal.operationResult(`authorization-${scenario}`)).toBeNull();
     expect(result).toMatchObject({ ok: false, status: scenario.startsWith("deadline") ? 503 : scenario === "revoked" ? 403 : 409 });
     expect(result).not.toHaveProperty("transportUncertain");
     const reopened = new AgentRegistry(registry.filename);
@@ -192,15 +205,22 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       } else {
         expect(result).toMatchObject({ error: scenario === "revoked"
           ? "autonomous first prompt authorization revoked" : "Role-memory privacy changed; retrying before dispatch" });
+        if (scenario.startsWith("role-memory")) {
+          expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition))
+            .toEqual([scenario === "role-memory" ? "lost" : "unverified"]);
+          expect(failed.error).toBe(new RoleMemoryChanged().message + (scenario === "role-memory" ? ""
+            : "; a prior delivery attempt may have been delivered because its journal outcome is unknown"));
+        }
       }
     } finally { reopened.close(); }
   } finally { immediateWriter.mockRestore(); journal.close(); registry.close(); }
 });
 
-test("an admission deadline on a same-key resend keeps the earlier attempt's unknown fate", async () => {
+test.each(["deadline", "role-memory"] as const)("an admission %s on a same-key resend keeps the earlier attempt's unknown fate", async mode => {
   const { registry, conversation } = registryWithConversation();
-  const journal = new RuntimeJournal(path.join(sandbox, "authorization-deadline-resend.sqlite"), { structuredHosts: true });
+  const journal = new RuntimeJournal(path.join(sandbox, `authorization-${mode}-resend.sqlite`), { structuredHosts: true });
   let commands = 0;
+  const admissions: string[] = [];
   let authorizations = 0;
   const session = snapshot(conversation.id).sessions[0]!;
   session.sessionKey.sessionId = conversation.generations.at(-1)!.id;
@@ -212,6 +232,7 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       commands += 1;
       const admitted = journal.executeOperation(command);
+      admissions.push(admitted.receipt.status);
       expect(admitted.receipt.status).toBe("queued");
       expect(journal.transitionOperation(admitted.operationId, "delivering").receipt.status).toBe("delivering");
       expect(journal.transitionOperation(admitted.operationId, "delivered").receipt.status).toBe("delivered");
@@ -219,12 +240,13 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
     },
   } as unknown as RuntimeHostClient;
   const request = { path: artifactPath, conversationId: conversation.id,
-    clientMessageId: "authorization-deadline-resend", operationId: "authorization-deadline-resend", text: "Stage work" };
+    clientMessageId: `authorization-${mode}-resend`, operationId: `authorization-${mode}-resend`, text: "Stage work" };
   const dependencies = () => ({
     enabled: () => true, registry: () => registry, client: () => client, kick: () => {}, progress: new DeliveryProgressStore(null),
     authorizeDispatch: async () => {
       authorizations += 1;
-      if (authorizations > 1) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+      if (authorizations > 1) throw mode === "role-memory" ? new RoleMemoryChanged()
+        : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
     },
   });
   try {
@@ -233,9 +255,14 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
     const resent = await enqueueStructuredMessage(request, dependencies());
     expect(authorizations).toBe(2);
     expect(commands).toBe(1);
+    expect(admissions).toEqual(["queued"]);
     expect(journal.operationResult(request.operationId)?.receipt.status).toBe("delivered");
-    expect(resent).toMatchObject({ ok: false, status: 503, operationId: request.operationId });
-    expect(resent && !resent.ok && resent.error).toContain("a prior delivery attempt may have been delivered");
+    expect(resent).toMatchObject({ ok: false, status: mode === "deadline" ? 503 : 409 });
+    if (mode === "deadline") {
+      expect(resent).toMatchObject({ operationId: request.operationId });
+      expect(resent && !resent.ok && resent.error).toContain("a prior delivery attempt may have been delivered");
+    }
+    expect(Object.values(registry.snapshot().heldDeliveries)[0]!.error).toContain("a prior delivery attempt may have been delivered");
     const reopened = new AgentRegistry(registry.filename);
     try {
       expect(sendReceiptFor(reopened.snapshot(), request.operationId)).toMatchObject({ duplicateRisk: true, resend: "verify-first" });
