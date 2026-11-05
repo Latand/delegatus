@@ -110,7 +110,10 @@ function fixture({ emptyAccepted = false } = {}) {
 }
 
 
-test("retry keeps a producer adopted during its evidence read exclusive", async () => {
+test.each([
+ { label: "pending attention", host: "hosted", turn: "running", attentionIds: ["permission-1"] },
+ { label: "conflicting host", host: "conflict", turn: "idle", attentionIds: [] },
+])("retry treats fresh $label evidence conservatively", async fresh => {
  const h=fixture();
  const { RuntimeJournal }=await import("@/runtime-host/journal");
  const { RuntimeHost }=await import("@/runtime-host/host");
@@ -128,9 +131,9 @@ test("retry keeps a producer adopted during its evidence read exclusive", async 
   expect(h.current().state).toBe("needs_decision");
   const socket=`/proc/${process.pid}/fd/${socketDirectory}/runtime.sock`; process.env.LLV_RUNTIME_HOST_SOCKET=socket;
   server=serveRuntimeHost(socket,{handle:request=>host.handle(request)}); await once(server,"listening");
-  const publish=(state:"dead"|"hosted")=>journal.append({scope:{type:"session",id:"conversation_producer"},kind:"session-status",payload:{
+  const publish=(state:"dead"|"hosted"|"conflict", turn?:"running"|"idle", attentionIds:readonly string[]=[])=>journal.append({scope:{type:"session",id:"conversation_producer"},kind:"session-status",payload:{
    conversationId:"conversation_producer",sessionKey:{engine:"codex",sessionId:"repair-owner"},hostKind:"codex-app-server",
-   host:state,turn:state==="hosted"?"running":"idle",attentionIds:[],activeTurnId:state==="hosted"?"repair-running":null,
+   host:state,turn:turn??(state==="hosted"?"running":"idle"),attentionIds:[...attentionIds],activeTurnId:state==="hosted"?"repair-running":null,
   }});
   publish("dead");
   const native=defaultPipelinePorts();
@@ -142,13 +145,13 @@ test("retry keeps a producer adopted during its evidence read exclusive", async 
   ports.stageRepairDelivery=async()=>({operationId:"uncertain-repair",state:"failed",safeToReplace:false});
   ports.conversationDeliveryOutstanding=()=>false;
   ports.durableTurnEvidence=async()=>{
-   publish("hosted");
+   publish(fresh.host as "hosted"|"conflict",fresh.turn as "running"|"idle",fresh.attentionIds);
    return {turn:"terminal",message:{text:"accepted",ts:Date.parse("2026-10-11T04:01:00Z")}};
   };
   const {patchPipeline}=await import("./engine");
   await patchPipeline(h.lane.id,{action:"retry-stage"},ports);
-  expect(proof.every(gone=>gone===false)).toBe(true);
-  expect(journal.readSession({conversationId:"conversation_producer"})).toMatchObject({host:"hosted",turn:"running"});
+  expect(proof.every(gone=>gone!==true)).toBe(true);
+  expect(journal.readSession({conversationId:"conversation_producer"})).toMatchObject({host:fresh.host,turn:fresh.turn,attentionIds:fresh.attentionIds});
   expect(h.current().runs[0]!.attempts).toHaveLength(1);
  } finally {
   if(server) await new Promise<void>(resolve=>server!.close(()=>resolve()));
@@ -158,7 +161,12 @@ test("retry keeps a producer adopted during its evidence read exclusive", async 
 });
 
 
-test("an expired repair can retry behind an older held message after producer death", async () => {
+test.each([
+ { receipt: "delivered", now: "2026-10-11T04:23:00.000Z" },
+ { receipt: "failed", now: "2026-10-11T04:23:00.000Z" },
+ { receipt: "delivered", now: "2027-10-11T04:23:00.000Z" },
+ { receipt: "failed", now: "2027-10-11T04:23:00.000Z" },
+])("an expired $receipt repair retries behind held work at $now after producer death", async ({ receipt, now }) => {
  const h=fixture();
  const {AgentRegistry,setAgentRegistryForTests}=await import("@/lib/agent/registry");
  const {emptyLaunchProfile}=await import("@/lib/accounts/migration/contracts");
@@ -188,6 +196,11 @@ test("an expired repair can retry behind an older held message after producer de
   await h.tick();h.advance(21*60_000);await h.tick();
   expect(h.current().state).toBe("needs_decision");
   expect(h.current().runs[0]!.attempts[0]!.publicationRepair?.delivery?.safeToReplace).toBe(true);
+  const persisted = h.current();
+  persisted.runs[0]!.attempts[0]!.publicationRepair!.delivery = {
+   operationId:"terminal-repair-operation",state:receipt,safeToReplace:false,
+  };
+  savePipelines([persisted]);
   const override = await patchPipeline(h.lane.id, { action: "override-stage", stageId: "build",
    ["prompt"]: "Use the current stage instruction to repair the refusal." }, h.ports);
   expect(override.error).toBeUndefined();
@@ -201,7 +214,8 @@ test("an expired repair can retry behind an older held message after producer de
    const registry=new AgentRegistry(${JSON.stringify(file)});setAgentRegistryForTests(registry);
    const {defaultPipelinePorts,patchPipeline}=await import("./src/lib/pipelines/engine");
    const {findPipelineRecord}=await import("./src/lib/pipelines/store");
-   const ports={...defaultPipelinePorts(),now:()=>"2027-10-11T04:23:00.000Z",durableTurnEvidence:async()=>null};
+   const ports={...defaultPipelinePorts(),now:()=>${JSON.stringify(now)},durableTurnEvidence:async()=>null,
+    stageRepairDelivery:async()=>({operationId:"terminal-repair-operation",state:${JSON.stringify(receipt)},safeToReplace:false})};
    const gone=await ports.publicationRepairProducerGone(${JSON.stringify(conversation.id)});
    const answer=await patchPipeline(${JSON.stringify(h.lane.id)},{action:"retry-stage"},ports);
    const lane=findPipelineRecord(${JSON.stringify(h.lane.id)});
