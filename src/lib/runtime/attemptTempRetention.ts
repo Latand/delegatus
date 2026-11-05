@@ -265,6 +265,14 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           return false;
         }
         if (!evidence.current()) { disposition = "evidence"; reason = "evidence changed before dispatch"; return false; }
+        // The final producer authority read can await a separate checkout
+        // inventory. Revalidate every consumer checkout snapshot it follows;
+        // a missing, unreadable, replaced, or newly linked checkout is unknown.
+        if (!inventory.unchangedAll()) {
+          disposition = "live";
+          reason = "checkout changed during final authority read";
+          return false;
+        }
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }

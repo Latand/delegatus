@@ -117,6 +117,13 @@ export class RepositoryLinkInventory {
     const read = this.reads.get(repository);
     return !!read?.directories && this.directoriesUnchanged(read.directories);
   }
+  /** Last synchronous fence for every checkout observed during this sweep. */
+  unchangedAll() {
+    for (const read of this.reads.values()) {
+      if (!read.directories || !this.directoriesUnchanged(read.directories)) return false;
+    }
+    return true;
+  }
   /** The nearest enclosing checkout of a process cwd. */
   repositoryOf(cwd: string): string | null {
     // Validate the cwd before walking its parents. A stale process snapshot

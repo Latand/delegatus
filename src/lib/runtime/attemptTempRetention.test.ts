@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
-import { attemptReferencesClear } from "./attemptTempFilesystem";
+import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
@@ -33,6 +33,81 @@ test("a settled attempt removes its scratch without waiting for host release", a
   try { expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse(); }
   finally { f.store.close(); }
 });
+
+test.each(["absent", "unreadable", "restored-with-link"] as const)(
+  "the final producer read revalidates a changed consumer checkout (%s)", async change => {
+    const f = fixture(), directory = f.make(`consumer-${change}`);
+    const producer = path.join(f.root, "producer-checkout"), consumer = path.join(f.root, "consumer-checkout");
+    fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(consumer, ".git"), { recursive: true });
+    const cwd = path.join(consumer, "work"); fs.mkdirSync(cwd);
+    f.store.measure(directory, 4096); f.store.release(directory);
+    const previousConsumer = `${consumer}-previous`;
+    let now = NOW, stateReads = 0, inject = false, injected = false;
+    let sharedInventory: InstanceType<typeof filesystem.RepositoryLinkInventory> | undefined;
+    const readdirApi = fs.promises as unknown as {
+      readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+    };
+    const readdir = readdirApi.readdir.bind(readdirApi);
+    const mutateConsumer = () => {
+      if (change === "absent") fs.renameSync(consumer, previousConsumer);
+      else if (change === "unreadable") fs.chmodSync(consumer, 0);
+      else {
+        fs.renameSync(consumer, previousConsumer);
+        fs.mkdirSync(path.join(consumer, ".git"), { recursive: true });
+        fs.mkdirSync(path.join(consumer, "work"));
+        fs.symlinkSync(directory, path.join(consumer, "dependency"), "dir");
+      }
+    };
+    const observed = spyOn(readdirApi, "readdir").mockImplementation(async (target, options) => {
+      const entries = await readdir(target, options);
+      if (inject && !injected && path.resolve(String(target)) === producer) {
+        injected = true;
+        mutateConsumer();
+      }
+      return entries;
+    });
+    const scan = () => ({ ownNamespace: null, processes: [{ pid: 81, namespace: null, stamped: false, paths: [cwd] }] });
+    const sweep = () => sweepAttemptTemps(f.store, { now: () => now, maxRoots: 1, capBytes: 0,
+      scan,
+      state: async (owner, inventory) => {
+        stateReads++;
+        sharedInventory = inventory;
+        if (stateReads === 4) {
+          fs.writeFileSync(path.join(producer, "refresh-inventory"), "changed");
+          inject = true;
+        }
+        await repositoryReferencesAttemptTemp(producer, owner.directory, owner.directory, inventory);
+        return "closed";
+      },
+      references: (original, current, currentScan) => attemptReferencesClear(original, current, currentScan, async () => true, sharedInventory),
+    });
+    try {
+      // Seed the producer inventory, then arrange injection during the real
+      // awaited producer readdir at dispatch (the fourth state observation).
+      const first = await sweep();
+      expect(injected).toBeTrue();
+      expect(first).toMatchObject({ removed: 0, errors: 0, held: 1 });
+      expect(fs.readFileSync(path.join(directory, "data"))).toHaveLength(4096);
+      expect(fs.readFileSync(path.join(directory, ".delegatus-attempt-owner"), "utf8")).toContain("attempt-temp.sqlite");
+
+      if (change === "absent") fs.renameSync(previousConsumer, consumer);
+      if (change === "unreadable") fs.chmodSync(consumer, 0o700);
+      now += 60_001;
+      if (change === "restored-with-link") {
+        expect((await sweep()).removed).toBe(0);
+        expect(fs.readFileSync(path.join(directory, "data"))).toHaveLength(4096);
+        fs.unlinkSync(path.join(consumer, "dependency"));
+        now += 60_001;
+      }
+      expect((await sweep()).removed).toBe(1);
+      expect(fs.existsSync(directory)).toBeFalse();
+    } finally {
+      observed.mockRestore();
+      try { fs.chmodSync(consumer, 0o700); } catch { /* absent variant */ }
+      f.store.close();
+    }
+  });
 
 test("an absent root with an evidence hold stops contributing stale bytes", async () => {
   const checks = await import("@/lib/recordedChecks/store");
