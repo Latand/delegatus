@@ -6,6 +6,7 @@
  * not stored yet, and the serving release's controller stores it once.
  */
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,18 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-busy-http-")
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 process.env.LLV_CODEX_HOME = path.join(sandbox, "codex");
 fs.mkdirSync(path.join(process.env.LLV_CODEX_HOME, "sessions"), { recursive: true });
+// The source may be a read-only review export without Git metadata. Create
+// only this fixture's tiny repository; never initialize the checkout itself.
+const repoDir = path.join(sandbox, "repo");
+const git = (...args: string[]) => execFileSync("git", args, { stdio: "pipe", env: {
+  ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+  GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid",
+} });
+git("init", "--template=", "--initial-branch=main", repoDir);
+fs.writeFileSync(path.join(repoDir, "README.md"), "HTTP creation fixture\n");
+git("-C", repoDir, "add", "README.md");
+git("-C", repoDir, "-c", "commit.gpgsign=false", "commit", "-m", "Seed fixture");
+git("-C", repoDir, "remote", "add", "origin", "https://example.invalid/project.git");
 
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { agentRegistry } = await import("@/lib/agent/registry");
@@ -33,7 +46,7 @@ function seedCallerPath(): string {
   const store = agentRegistry();
   const begun = beginLegacySpawnFixture(store, {
     engine: "codex",
-    cwd: process.cwd(),
+    cwd: repoDir,
     role: "builder",
     origin: { kind: "operator" },
   });
@@ -44,7 +57,7 @@ function seedCallerPath(): string {
   const settled = store.settleSpawn(begun.receipt.launchId, {
     key: { engine: "codex", sessionId },
     artifactPath,
-    cwd: process.cwd(),
+    cwd: repoDir,
     accountId: "terra",
     status: "live",
     host: null,
@@ -72,7 +85,7 @@ function createRequest(task: string): NextRequest {
   return new NextRequest("http://127.0.0.1:8898/api/pipelines", {
     method: "POST",
     headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1:8898", "content-type": "application/json" },
-    body: JSON.stringify({ task, spec: task, repoDir: process.cwd(), src: callerPath, autoStart: false, stages: [] }),
+    body: JSON.stringify({ task, spec: task, repoDir, src: callerPath, autoStart: false, stages: [] }),
   });
 }
 
@@ -102,8 +115,8 @@ test("two creates racing on the registry lock both succeed", async () => {
     POST(createRequest("http race b")),
   ]);
 
-  expect(first.status).toBe(201);
-  expect(second.status).toBe(201);
+  expect(first.status, await first.clone().text()).toBe(201);
+  expect(second.status, await second.clone().text()).toBe(201);
   expect(pipelinesNamed("http race a")).toHaveLength(1);
   expect(pipelinesNamed("http race b")).toHaveLength(1);
 });
@@ -118,7 +131,7 @@ test("a create refused on the lock is queued, stores nothing yet, and is stored 
     const queued = await POST(createRequest(task));
     const elapsed = Date.now() - startedAt;
 
-    expect(queued.status).toBe(202);
+    expect(queued.status, await queued.clone().text()).toBe(202);
     const body = await queued.json() as { ok: boolean; pipeline: { id: string }; queued?: { reason: string; queuedAt: string } };
     const stored = queuedPipelineCreationStatus(body.pipeline.id);
     expect(stored?.state).toBe("queued");

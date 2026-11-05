@@ -75,6 +75,41 @@ const said = (delta: string, at: number, speaker: "input" | "output" = "input") 
 const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append");
 const large = { input_tokens: 1_050_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 512 };
 
+for (const source of ["sideband", "provider-error", "watchdog"] as const) test(`${source} writes its server drop cause beside the end reason`, async () => {
+  let now = Date.UTC(2026, 10, 4, 12);
+  const f = fixture("synthetic-credential", undefined, () => now);
+  const service = source === "watchdog" ? new CompanionLiveSessions(f.storage, f.admission, f.reads, f.provider, { key: () => "synthetic-credential", now: () => now, closeTimeoutMs: 20 }) : f.service;
+  if (source === "watchdog") jest.useFakeTimers();
+  try {
+    const part = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    if (source === "sideband") f.provider.disconnect(part.providerId);
+    else if (source === "provider-error") f.provider.replay(part.providerId, { type: "error", event_id: "upstream-error" });
+    else { now += 30_001; jest.advanceTimersByTime(5_000); }
+    await service.drain(part.sessionId);
+    await service.close(part.sessionId);
+    expect(f.admission.transcriptRecord(part.sessionId).entries.find(row => row.kind === "session_end")?.data)
+      .toMatchObject({ reason: source === "provider-error" ? "error" : "transport", cause: source });
+  } finally { if (source === "watchdog") jest.useRealTimers(); }
+});
+
+test("a lease set while a resume awaits recovery refuses before creating a part, and the next start follows it", async () => {
+  const f = fixture(); const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("The build passed.", 0, "output")); await f.service.drain(p.sessionId); await f.service.close(p.sessionId, "transport");
+  const reached = deferred(), held = deferred(); const recover = f.service.recover.bind(f.service); let first = true;
+  const hook = spyOn(f.service, "recover").mockImplementation(async () => { if (first) { first = false; reached.resolve(); await held.promise; } return recover(); });
+  try {
+    const delayed = f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "delayed", resume: p.sessionId });
+    const rejected = delayed.then(() => null, error => error as Error);
+    await reached.promise;
+    const n = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", requestId: "winner", resume: p.sessionId });
+    held.resolve(); expect((await rejected)?.message).toBe("PROVIDER_ERROR");
+    expect(f.provider.sessions).toHaveLength(2); expect(Object.keys(f.storage.read().sessions)).toHaveLength(2);
+    const next = await f.service.start({ project: "fixture", locale: "en", sdp: "v=2", requestId: "next", resume: p.sessionId });
+    expect(f.admission.transcriptRecord(next.sessionId).entries.find(row => row.kind === "session_start")?.data.resumes).toBe(n.sessionId);
+    await f.service.close(next.sessionId);
+  } finally { held.resolve(); hook.mockRestore(); }
+});
+
 async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "claude", credential = "synthetic-credential", now = Date.now, timeZone?: string) {
   const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");

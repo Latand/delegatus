@@ -1,6 +1,6 @@
 import { ownerTierFor } from "./profile";
 import { ownerTurnDiagnostic } from "./diagnostic";
-import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
 import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
@@ -16,7 +16,7 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { isStagingMode } from "@/lib/staging";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity } from "./activity";
-import { readAnswerRecord, pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
@@ -109,23 +109,6 @@ export function wakeExternalRelayPoller(id: string) {
   const loop = loops.get(id);
   if (loop?.state !== "rate_limited") loop?.wake?.();
 }
-/** Older custody rows retained the input in the answer record. Reconstruct only
- * from that record and the already verified owner request, never from chat text. */
-function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknown | null {
-  if (run.ownerTurn?.rawRequest) return run.ownerTurn.rawRequest;
-  const record = readAnswerRecord(run.relayId, run.targetId, run.requestId);
-  if (!record?.profile?.owner || !run.ownerTurn?.request) return null;
-  const parsed = requestSchema.safeParse({ request_id: run.requestId, lease_id: run.leaseId,
-    kind: "answer", target_id: run.targetId, claimed_at: record.claimedAt ?? run.startedAt,
-    features: record.features, ...(record.chatKey ? { chat: { key: record.chatKey } } : {}),
-    input: record.input, answer: { max_chars: relay.limits.max_answer_chars, progress: "none" },
-    liveness: { poll_freshness_s: 60, claim_window_s: 5, ack_window_s: 10, heartbeat_interval_s: 10, stall_window_s: 45 } });
-  if (!parsed.success) return null;
-  const owner = ownerTierFor({ ownerTier: true }, parsed.data);
-  return owner && owner.text === run.ownerTurn.request.text && owner.requestText === run.ownerTurn.request.requestText
-    ? parsed.data : null;
-}
-
 const ownerRecoveries = new Set<string>();
 function ownerFailureReplyPending(run: RunRecord): boolean {
   return !!run.ownerTurn?.failureReply && !run.completionAccepted
@@ -152,7 +135,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
           () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
         if (sent.delivery === "accepted") {
           settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", run.conversationId,
-            pending.body.outcome === "answered" ? pending.body.answer : null, true);
+            sent.body.outcome === "answered" ? sent.body.answer : null, true);
           removeRunDirectory(run.runDir);
           dropRun(run.requestId);
         }
@@ -248,22 +231,27 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     // saved scrubbed reason while the request is open and the owner target
     // still authorizes the reply; otherwise the generic restart failure.
     const saved = held.ownerTurn?.failureReply;
-    if (relay && saved && Date.now() >= Date.parse(saved.until)
+    const request = relay && saved && recoveryRequest ? requestSchema.parse(recoveryRequest) : null;
+    const failureOwner = request && (held.ownerTurn?.context ?? ownerTierFor({ ownerTier: true }, request));
+    const failureAnswer = request && failureOwner && saved
+      ? ownerFailureAnswer(request, failureOwner, held.ownerTurn?.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay!.credential])
+      : null;
+    if (relay && saved && failureAnswer && Date.now() >= Date.parse(saved.until)
       && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) {
-      const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: saved.answer,
+      const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: failureAnswer,
         duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) };
       changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { body, files: [] } } }));
       const sent = await deliverOwnerLateAnswer(relay, run.requestId, body, [],
         () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
       if (sent.delivery === "accepted") {
-        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, saved.answer, true);
+        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, failureAnswer, true);
         removeRunDirectory(run.runDir);
         dropRun(run.requestId);
       }
       continue;
     }
-    const answer = saved && Date.now() < Date.parse(saved.until)
-      && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId) ? saved.answer : null;
+    const answer = saved && failureAnswer && Date.now() < Date.parse(saved.until)
+      && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId) ? failureAnswer : null;
     if (relay) {
       const body: ExternalRelayCompletion = answer
         ? { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }
