@@ -1589,6 +1589,7 @@ export type SeatTickVerdictKind =
  */
 export interface SeatTickRunRecord {
   schemaVersion: 1;
+  timing?: import("./seatTickTiming").SeatTickTiming;
   at: string;
   project: string;
   seatEpoch: number | null;

@@ -20,7 +20,7 @@ import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, readPassAuthority, currentPassAuthority, machinePassAuthority, passForConversationAuthority, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
-import { productionCurationController } from "./run";
+import { curationForSweep, productionCurationController } from "./run";
 import { permitCuratorTool } from "@/lib/mcp/toolAllowlist";
 import { reconcileSeatTick, runSeatTickCheck } from "@/lib/monitor/seatTickController";
 import { emptySeatTickState } from "@/lib/monitor/types";
@@ -394,6 +394,32 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+
+test("one sweep shares in-flight and settled machine choices, with N host admissions", async () => {
+  const f = hostingFixture();
+  const projects = Array.from({ length: 8 }, (_, i) => `quiet-seat-${i}`);
+  for (const project of projects) f.seat(project);
+  const liveness = spyOn(f.sources, "liveness");
+  const sweep = curationForSweep(f.controller);
+  const inputs = projects.map(project => ({ ...f.tick, project }));
+  await Promise.all(inputs.map(input => sweep.launchIfDue(input)));
+  expect(liveness).toHaveBeenCalledTimes(projects.length);
+  await sweep.launchIfDue(inputs[0]);
+  expect(liveness).toHaveBeenCalledTimes(projects.length);
+  // New sweeps own a new choice; no durable eligibility cache can outlive it.
+  await curationForSweep(f.controller).launchIfDue(inputs[0]);
+  expect(liveness).toHaveBeenCalledTimes(2 * projects.length);
+  expect(f.bodies).toHaveLength(0);
+});
+
+test("a sweep starting at a disabled project still launches a due eligible project", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  const sweep = curationForSweep(f.controller);
+  await sweep.launchIfDue({ ...f.tick, project: "disabled-seat", settings: { ...f.tick.settings, enabled: false } });
+  expect(await sweep.launchIfDue(f.tick)).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0].project).toBe(PROJECT);
+});
 // Helper lease records carry kernel identities on Linux.
 test.skipIf(process.platform !== "linux")("curation fixture cleanup stops its recorded disk-pressure helper", async () => {
   const f = hostingFixture();

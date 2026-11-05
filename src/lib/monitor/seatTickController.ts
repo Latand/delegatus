@@ -18,7 +18,7 @@ import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
 import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
-import { productionCurationController, type CurationController } from "@/lib/memory/curation/run";
+import { curationForSweep, productionCurationController, type CurationController } from "@/lib/memory/curation/run";
 import { machinePass } from "@/lib/memory/curation/store";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
 import crypto from "node:crypto";
@@ -54,7 +54,7 @@ import type { ProposalIssue } from "./githubEvidence";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { recordedProjectRemote } from "@/lib/projects/aliases";
-import { appendSeatTickRecord, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
+import { appendSeatTickRecord, appendSeatTickRecordAsync, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
@@ -1460,7 +1460,23 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
   const work = new SeatTickWork(project, Math.min(dependencies.workBudgetMs ?? policy.checkIntervalMs / 4, policy.checkIntervalMs / 4),
     dependencies.workClock, dependencies.workScheduler);
   dependencies.workStarted?.(work);
-  const append = dependencies.appendRecord ?? appendSeatTickRecord;
+  const writeRecord = dependencies.appendRecord ?? appendSeatTickRecordAsync;
+  let journalWrites = Promise.resolve();
+  let pendingRecord: SeatTickRunRecord | undefined;
+  const flushRecord = () => {
+    if (!pendingRecord) return;
+    const row = pendingRecord;
+    row.timing = work.timings.snapshot();
+    journalWrites = journalWrites.then(() => writeRecord(row));
+    void journalWrites.catch(() => {});
+    pendingRecord = undefined;
+  };
+  const append = (record: SeatTickRunRecord) => {
+    // Keep only the last line until the check ends, so its phase ends include
+    // success, rejection and cancellation. Settlement lines keep their order.
+    flushRecord();
+    pendingRecord = record;
+  };
   const sourcePorts = dependencies.sources ?? defaultSeatTickSources();
   let snapshotRetried = false;
   const sources = new Proxy(sourcePorts, { get: (target, key, receiver) => {
@@ -1524,7 +1540,7 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
       detail: `the check overflowed or was canceled: ${work.detail()}; ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}; retry within one interval` };
     console.error(`[seat tick] ${record.detail}`);
     append(record);
-  } finally { work.close(); }
+  } finally { work.close(); flushRecord(); await journalWrites; }
   if (record) {
     // This notice must survive the deadline that ended the failed check. It
     // gets one separate, bounded admission and carries no delivery authority.
@@ -2653,12 +2669,14 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   // Recovery must settle a curator whose project no longer has a seat or open work.
   const incumbent = machinePass();
   if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
+  const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
+  const curation = curator ? curationForSweep(curator) : null;
   // Each project starts independently. Its own deadline includes every phase;
   // an overdue project never holds the roster behind its await.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
     ...dependencies, sources, ownsTraffic: dependencies.ownsTraffic ?? releaseOwnsTraffic,
     release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release,
-    curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation,
+    curation,
     maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance,
   })));
   records.push(...checked.filter((record): record is SeatTickRunRecord => record !== null));

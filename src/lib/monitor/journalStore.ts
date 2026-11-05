@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { compactSeatTickTiming, sanitizeSeatTickTiming } from "./seatTickTiming";
 
 import {
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -245,9 +246,11 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
   const delivery = (raw.delivery ?? null) as Record<string, unknown> | null;
   const clientMessageId = delivery ? text(delivery.clientMessageId, 200) : null;
   const outcome = delivery ? text(delivery.outcome, 60) : null;
+  const timing = sanitizeSeatTickTiming(raw.timing);
 
   return {
     schemaVersion: 1,
+    ...(timing ? { timing } : {}),
     at: text(raw.at, 40) ?? "",
     project,
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
@@ -264,6 +267,7 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
 
 export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatTickJournalPath()): void {
   const projectFile = seatTickProjectJournalPath(record.project, filePath);
+  const line = `${JSON.stringify(record.timing ? { ...record, timing: compactSeatTickTiming(record.timing) } : record)}\n`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   // The global ring remains small. Each project's own ring is independent,
   // so unrelated checks cannot consume its diagnostic window.
@@ -275,10 +279,46 @@ export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatT
       if (legacy.length) fs.writeFileSync(projectFile, `${legacy.map(row => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
     }
     for (const target of [projectFile, filePath]) {
-      fs.appendFileSync(target, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+      fs.appendFileSync(target, line, { encoding: "utf8", mode: 0o600 });
       trim(target, SEAT_TICK_RUN_HISTORY);
     }
   }));
+}
+
+/** The check awaits durability, while file I/O stays off the Viewer thread.
+ * Retention scans bytes backwards, avoiding decoding and copying every saved
+ * phase in both rings on every append. Shares the legacy writer's lock. */
+export async function appendSeatTickRecordAsync(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
+  const projectFile = seatTickProjectJournalPath(record.project, filePath);
+  const line = `${JSON.stringify(record.timing ? { ...record, timing: compactSeatTickTiming(record.timing) } : record)}\n`;
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await withFileTransactionAsync(filePath, "the seat tick journal is busy", async () => {
+    await fs.promises.mkdir(path.dirname(projectFile), { recursive: true, mode: 0o700 });
+    try { await fs.promises.access(projectFile); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      let legacy = "";
+      try { legacy = await fs.promises.readFile(filePath, "utf8"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      const rows = legacy.split("\n").flatMap(line => {
+        try { const row = sanitizeSeatTickRecord(JSON.parse(line)); return row ? [row] : []; }
+        catch { return []; }
+      }).slice(-SEAT_TICK_RUN_HISTORY).filter(row => row.project === record.project);
+      if (rows.length) await fs.promises.writeFile(projectFile, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`, { mode: 0o600 });
+    }
+    for (const target of [projectFile, filePath]) {
+      await fs.promises.appendFile(target, line, { mode: 0o600 });
+      const bytes = await fs.promises.readFile(target);
+      let cursor = bytes.length - 1;
+      for (let kept = 0; kept < SEAT_TICK_RUN_HISTORY && cursor >= 0; kept++) cursor = bytes.lastIndexOf(10, cursor - 1);
+      if (cursor < 0) continue;
+      const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+      try {
+        await fs.promises.writeFile(temp, bytes.subarray(cursor + 1), { mode: 0o600 });
+        await fs.promises.rename(temp, target);
+      } finally { await fs.promises.rm(temp, { force: true }); }
+    }
+  }, { waitMs: 1_000 });
 }
 
 function seatTickProjectJournalPath(project: string, filePath: string): string {

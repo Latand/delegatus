@@ -23,6 +23,21 @@ export interface CurationPorts extends CurationAdmissionPorts {
   observe?: (pass: CuratorPass) => Promise<SpawnedTurnObservation>;
   launchTimeoutMs?: number;
 }
+
+/** One ephemeral owner per seat sweep. Retain settled promises too: a quiet or
+ * refused choice must not repeat the machine scan for every project. A new
+ * sweep reads all authority again; launch/recovery keep their own live fences. */
+export function curationForSweep(controller: CurationController): CurationController {
+  let reconcile: Promise<string | null> | undefined;
+  let launch: Promise<string | null> | undefined;
+  return {
+    reconcile: project => reconcile ??= controller.reconcile(project),
+    // A project with wakes disabled cannot suppress another project's choice.
+    launchIfDue: input => !input.settings.enabled
+      ? Promise.resolve("curation: paused, wakes off")
+      : launch ??= controller.launchIfDue(input),
+  };
+}
 async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string | null> {
   const host = await hostAdmission(pass.project, ports, pass);
   if (host.held !== null) return settle(pass, ports, `abandoned: ${host.held}`);

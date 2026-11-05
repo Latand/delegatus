@@ -17,6 +17,7 @@ const {
   SEAT_TICK_RUN_HISTORY,
   appendRunRecord,
   appendSeatTickRecord,
+  appendSeatTickRecordAsync,
   readRunRecords,
   readSeatTickRecords,
   sanitizeRunRecord,
@@ -155,6 +156,44 @@ describe("seat tick check journal", () => {
       ...over,
     };
   }
+
+  test("real timing output survives journal read and a fresh reader process", async () => {
+    const { SeatTickTimings } = await import("./seatTickTiming");
+    const trace = new SeatTickTimings();
+    trace.begin("check.sources.registry")();
+    const timing = trace.snapshot();
+    const file = path.join(SANDBOX, "timing-journal.ndjson");
+    await appendSeatTickRecordAsync(check({ timing }), file);
+    expect(readSeatTickRecords(1, file)[0]?.timing).toEqual(timing);
+    expect(readSeatTickRecords(1, file, "viewer")[0]?.timing).toEqual(timing);
+    const result = spawnSync(process.execPath, ["-e", `import { readSeatTickRecords } from ${JSON.stringify(path.join(import.meta.dir, "journalStore.ts"))}; console.log(JSON.stringify(readSeatTickRecords(1, ${JSON.stringify(file)}, "viewer")[0].timing));`],
+      { env: process.env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(timing);
+    expect(sanitizeSeatTickRecord(check())?.timing).toBeUndefined();
+  });
+
+  test("async timing writes share legacy retention, preserve old rows and propagate write failure", async () => {
+    const { SeatTickTimings } = await import("./seatTickTiming");
+    const file = path.join(SANDBOX, "async-timing.ndjson");
+    appendSeatTickRecord(check({ project: "older-project" }), file);
+    for (let i = 0; i < SEAT_TICK_RUN_HISTORY + 1; i++) {
+      await appendSeatTickRecordAsync(check({ items: i, timing: new SeatTickTimings().snapshot() }), file);
+    }
+    const rows = readSeatTickRecords(SEAT_TICK_RUN_HISTORY + 5, file, "viewer");
+    expect(rows).toHaveLength(SEAT_TICK_RUN_HISTORY);
+    expect(rows[0].items).toBe(1);
+    expect(rows.at(-1)!.items).toBe(SEAT_TICK_RUN_HISTORY);
+    expect(fs.readFileSync(file, "utf8").trim().split("\n")).toHaveLength(SEAT_TICK_RUN_HISTORY);
+    expect(readSeatTickRecords(1, file, "older-project")[0].project).toBe("older-project");
+    const blocked = path.join(SANDBOX, "blocked-parent");
+    fs.writeFileSync(blocked, "fixture");
+    await expect(appendSeatTickRecordAsync(check(), path.join(blocked, "runs.ndjson"))).rejects.toThrow();
+    const legacy = path.join(SANDBOX, "async-legacy.ndjson");
+    fs.writeFileSync(legacy, `${JSON.stringify(check({ items: 7 }))}\n`);
+    await Promise.all([appendSeatTickRecordAsync(check({ items: 8 }), legacy), appendSeatTickRecordAsync(check({ items: 9 }), legacy)]);
+    expect(readSeatTickRecords(5, legacy, "viewer").map(row => row.items).sort()).toEqual([7, 8, 9]);
+  });
 
   test("the journal path lives under the viewer state dir and carries no configuration", () => {
     expect(seatTickJournalPath()).toBe(path.join(SANDBOX, "state", "seat-tick", "runs.ndjson"));

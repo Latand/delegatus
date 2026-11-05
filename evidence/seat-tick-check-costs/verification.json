@@ -1,0 +1,101 @@
+{
+  "verifiedAt": "2026-11-05T14:44:25.839490+00:00",
+  "baseline": "6e8b65d9b316ff2da95b8c94f4a3ea01a8f1cfb8",
+  "tests": [
+    {
+      "file": "src/lib/monitor/seatTickSources.test.ts",
+      "command": "bun run test src/lib/monitor/seatTickSources.test.ts",
+      "exit": 0,
+      "passed": 166,
+      "skipped": 0
+    },
+    {
+      "file": "src/lib/memory/curation/curation.test.ts",
+      "command": "bun run test src/lib/memory/curation/curation.test.ts",
+      "exit": 0,
+      "passed": 154,
+      "skipped": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.scheduling.test.ts",
+      "command": "bun run test src/lib/monitor/seatTickController.scheduling.test.ts",
+      "exit": 0,
+      "passed": 25,
+      "skipped": 1
+    },
+    {
+      "file": "src/lib/monitor/journalStore.test.ts",
+      "command": "bun run test src/lib/monitor/journalStore.test.ts",
+      "exit": 0,
+      "passed": 22,
+      "skipped": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickTiming.test.ts",
+      "command": "bun run test src/lib/monitor/seatTickTiming.test.ts",
+      "exit": 0,
+      "passed": 3,
+      "skipped": 0
+    },
+    {
+      "file": "src/lib/scanner/filesResponseWorker.test.ts",
+      "command": "bun run test src/lib/scanner/filesResponseWorker.test.ts",
+      "exit": 0,
+      "passed": 25,
+      "skipped": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.sources.test.ts",
+      "command": "bun run test src/lib/monitor/seatTickController.sources.test.ts",
+      "exit": 0,
+      "passed": 21,
+      "skipped": 3
+    }
+  ],
+  "totalPassed": 416,
+  "helperCasesSkipped": 4,
+  "helperCases": "native child entry cases; their parent tests exercise them in separate processes",
+  "typecheck": {
+    "command": "bash scripts/gate-slot.sh bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+    "background": true,
+    "freshExport": true,
+    "exit": 0
+  },
+  "privacy": {
+    "command": "bun run privacy:check",
+    "exit": 0
+  },
+  "lint": {
+    "files": 14,
+    "exit": 0,
+    "errors": 0,
+    "warningsOnUnchangedLines": 9
+  },
+  "regressionControls": {
+    "baseOwnerTest": {
+      "expectedReconciliations": 1,
+      "baseActual": 3,
+      "exit": 1
+    },
+    "baseOriginalWithdrawalTests": {
+      "passed": 2,
+      "exit": 0
+    },
+    "independentProductionMutations": [
+      "full registry lookup",
+      "recipient selector",
+      "alias lookup",
+      "exact key",
+      "shared selection",
+      "due launch",
+      "sweep controller ownership",
+      "span cap",
+      "CPU delta",
+      "queue boundary",
+      "journal timing reader"
+    ],
+    "mutationsAllFailedIntendedAssertions": true
+  },
+  "isolation": "Each test file ran directly in its own command with fresh HOME, XDG roots, TMPDIR and LLV_STATE_DIR, control URL on closed port 1, separate combined log and actual exit. Listener fixtures bind ephemeral addresses. No recorded gate or check-wait handoff was used.",
+  "scope": "Viewer source modules and private files-response children; no live Viewer/runtime-host restart, signals, deployment or production comparison."
+}
