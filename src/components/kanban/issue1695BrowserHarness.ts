@@ -1750,7 +1750,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
       const rects: DOMRect[] = [];
       const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
       for (let node = walk.nextNode(); node; node = walk.nextNode()) {
-        if (!(node.textContent ?? "").trim()) continue;
+        if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
         const range = document.createRange();
         range.selectNodeContents(node);
         rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
