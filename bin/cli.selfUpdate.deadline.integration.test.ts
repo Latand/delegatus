@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "bun:test";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
@@ -11,6 +11,19 @@ import { harness, runSeatTickCheck, PROJECT, CONVERSATION, NOW } from "../src/li
 import { availablePort, children, install, readRecord, registerSelfUpdateCleanup, release, served, socketAnswers, start, until } from "./__fixtures__/cli-self-update";
 
 registerSelfUpdateCleanup();
+
+test("startup bounds synchronous Git probes before the launcher watchdog exists", async () => {
+  const fixture = install();
+  const shim = path.join(fixture.root, "slow-git"); mkdirSync(shim, { recursive: true });
+  const executable = path.join(shim, "git");
+  writeFileSync(executable, "#!/bin/sh\nexec /bin/sleep 30\n"); chmodSync(executable, 0o700);
+  fixture.env.PATH = `${shim}${path.delimiter}${fixture.env.PATH}`;
+  const started = Date.now();
+  const running = await start(fixture);
+  expect(Date.now() - started).toBeLessThan(12_000);
+  expect(await served(running.port)).toBe(fixture.checkout);
+  expect(readRecord(fixture.state).launcher.state).toBe("healthy");
+}, 15_000);
 
 test.each([false, true])("a cold launcher preserves a timely completed switch after the original deadline, recovery refuses=%s", async refuses => {
   const fixture = install(), running = await start(fixture), before = readRecord(fixture.state);

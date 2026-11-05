@@ -274,6 +274,43 @@ test("terminal load preflight refuses a candidate that ignores TERM within its c
   expect(readFileSync(f.pointer, "utf8")).toBe(f.rollbackPointer);
 }, 15_000);
 
+test("terminal rollback deadline refuses and reaps its own hung legacy launcher", async () => {
+  const f = await fixture();
+  await stop(f.old); await stopRecorded(f.before);
+  const candidateEntry = path.join(f.candidate, "bin", "cli.mjs");
+  const priorEntry = path.join(f.prior, "bin", "cli.mjs");
+  writeFileSync(candidateEntry, 'throw new Error("candidate load refused");\n');
+  const priorEntered = path.join(path.dirname(f.prior), "prior-entered");
+  writeFileSync(priorEntry, `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(priorEntered)}, String(process.pid));\nwhile (true) await Bun.sleep(1000);\n`);
+  const deadlineModule = path.join(f.candidate, "bin", "launcher-deadline.mjs");
+  writeFileSync(deadlineModule, readFileSync(deadlineModule, "utf8").replace("ROLLBACK_TIMEOUT_MS = 10 * 60_000", "ROLLBACK_TIMEOUT_MS = 600"));
+  const controlDirectory = path.dirname(f.before.requestFile);
+  const applyFile = path.join(controlDirectory, "apply.json");
+  const activeApply = JSON.parse(readFileSync(applyFile, "utf8"));
+  activeApply.deploymentId = "terminal-rollback-deployment";
+  writeFileSync(applyFile, JSON.stringify(activeApply));
+  writeFileSync(path.join(controlDirectory, "deployments.json"), JSON.stringify([{
+    deploymentId: activeApply.deploymentId, idempotencyKey: activeApply.requestId,
+    phase: "host-handoff", terminal: false, error: null, revisionNumber: 1,
+  }]));
+  const bootstrapModule = path.join(f.candidate, "bin", "launcher-relaunch.mjs");
+  const run = f.bootstrap(f.plan, bootstrapModule);
+  await terminalExited(run.child, 5000);
+  expect(run.child.exitCode).toBe(1);
+  expect(run.error()).toContain("rollback exceeded its 10 minute deadline");
+  const trialFile = path.join(path.dirname(f.before.requestFile), path.basename(f.before.requestFile).replace(/^request/, "trial"));
+  expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ state: "rolled-back", refused: true });
+  const apply = JSON.parse(readFileSync(path.join(controlDirectory, "apply.json"), "utf8"));
+  expect(apply).toMatchObject({ state: "failed", rolledBack: false });
+  expect(apply.detail).toContain("rollback exceeded");
+  expect(JSON.parse(readFileSync(path.join(controlDirectory, "deployments.json"), "utf8"))[0]).toMatchObject({
+    phase: "failed", terminal: true, error: expect.stringContaining("rollback exceeded"),
+  });
+  expect(existsSync(path.join(controlDirectory, "auto-drain.json"))).toBe(false);
+  const priorPid = Number(readFileSync(priorEntered, "utf8"));
+  await until(() => !isAlive(priorPid) ? true : null, 3000);
+}, 15_000);
+
 for (const rollback of [false, true]) test(`Windows request-context terminal entrypoint settles rollback=${rollback}`, async () => {
   const f = await fixture();
   if (rollback) writeFileSync(path.join(f.candidate, "bin", "cli.mjs"), 'throw new Error("synthetic import failure");\n');

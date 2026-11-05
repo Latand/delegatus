@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import {
   waitForPageAndChunk,
   exitError,
   hostEntrypoint,
+  headRevision,
   installedRelease,
   probePageAndChunk,
   readStartIdentity,
@@ -88,6 +89,24 @@ describe("installedRelease", () => {
   test("an unreadable pointer falls back to the package root", () => {
     writeFileSync(pointer, "{not json");
     expect(installedRelease(pointer, checkout).dir).toBe(checkout);
+  });
+
+  test.skipIf(process.platform === "win32")("a stalled Git revision probe is killed at its explicit child deadline", () => {
+    const shim = join(root, "slow-git"); mkdirSync(shim, { recursive: true });
+    const executable = join(shim, "git");
+    const childPidFile = join(shim, "child.pid");
+    writeFileSync(executable, `#!/bin/sh\nprintf '%s' "$$" > ${JSON.stringify(childPidFile)}\nexec /bin/sleep 30\n`); chmodSync(executable, 0o700);
+    const originalPath = process.env.PATH;
+    const started = Date.now();
+    try {
+      process.env.PATH = shim;
+      expect(headRevision(checkout, 100)).toBeNull();
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    }
+    const childPid = Number(readFileSync(childPidFile, "utf8"));
+    expect(() => process.kill(childPid, 0)).toThrow();
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 
   test("a package manifest supplies the revision when the package root has no checkout", () => {

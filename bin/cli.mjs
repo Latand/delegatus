@@ -1634,7 +1634,8 @@ async function main() {
    install identity and the fallback when no published build is valid. The
    marker makes the release's own cli.mjs run its body without another hop. */
 function headRevision(dir) {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8",
+    timeout: 2000, killSignal: "SIGKILL" });
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
@@ -1733,6 +1734,7 @@ async function checkoutLauncher() {
   if (!launcherCheckout && existsSync(original)) {
     const committed = spawnSync("git", ["show", "HEAD:bin/cli.mjs"], {
       cwd: checkout, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 4 * 1024 * 1024,
+      timeout: 2000, killSignal: "SIGKILL",
     });
     try {
       savedLauncherIsCurrent = committed.status === 0 && readFileSync(original).equals(committed.stdout);

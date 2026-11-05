@@ -39,6 +39,7 @@ import { appDirIn } from "./appDir.mjs";
 import { RUNTIME_HOST_STARTUP_CEILING_MS } from "./server-runtime.mjs";
 
 export const RECORD_VERSION = 1;
+export const GIT_PROBE_TIMEOUT_MS = 2_000;
 // Runtime host (up to 5min), files (90s), and page+chunk (90s), for both the
 // candidate and rollback release, plus bounded terminal polling/exec slack.
 export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 2 * (RUNTIME_HOST_STARTUP_CEILING_MS + 90_000 + 90_000) + 30_000;
@@ -109,8 +110,12 @@ export function readStartIdentity(pid, platform = process.platform, run = spawnS
   }
 }
 
-export function headRevision(dir) {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+export function headRevision(dir, timeout = GIT_PROBE_TIMEOUT_MS) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8",
+    timeout, killSignal: "SIGKILL" });
+  // An unverifiable pointer is never selected. Callers that own an in-flight
+  // apply can durably refuse it; ordinary starts use the package root.
+  if (result.error?.code === "ETIMEDOUT") return null;
   return result.status === 0 ? result.stdout.trim() : null;
 }
 

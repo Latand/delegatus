@@ -16,6 +16,7 @@ import { releaseLauncherCredentials, restoreLauncherCredentials } from "./launch
 import { lockLauncherStartup } from "./launcher-lock.mjs";
 import { SERVICE_UNIT, unitRunsLauncher } from "./launcher-service-proof.mjs";
 import { boundedWait, switchDeadline, SWITCH_TIMEOUT_MS, ROLLBACK_TIMEOUT_MS, STOP_TIMEOUT_MS, SWITCH_OVERRUN, writeLauncherRefusal } from "./launcher-deadline.mjs";
+import { stopRecorded } from "./launcher-adoption.mjs";
 
 export const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
 
@@ -26,11 +27,12 @@ function atomic(file, value) {
   renameSync(temporary, file);
 }
 
-async function guardLegacyRollback(paths, trial, installRoot) {
-  let recordOwner;
-  try { recordOwner = JSON.parse(readFileSync(paths.record, "utf8")).launcher; } catch { /* startup may have no record yet */ }
+async function guardLegacyRollback(paths, trial, installRoot, owner = { pid: process.pid, identity: readStartIdentity(process.pid) }, recordOwner = undefined) {
+  if (recordOwner === undefined) {
+    try { recordOwner = JSON.parse(readFileSync(paths.record, "utf8")).launcher; } catch { /* startup may have no record yet */ }
+  }
   const plan = { paths, requestId: trial.requestId, target: trial.target, installRoot,
-    pid: process.pid, identity: readStartIdentity(process.pid), recordOwner, deadline: trial.rollbackDeadlineAt };
+    pid: owner.pid, identity: owner.identity, recordOwner, deadline: trial.rollbackDeadlineAt };
   const child = spawn(process.execPath, [...process.execArgv, join(dirname(fileURLToPath(import.meta.url)), "launcher-rollback-guard.mjs"),
     Buffer.from(JSON.stringify(plan)).toString("base64")], { detached: true, stdio: ["ignore", "pipe", "inherit"] });
   await new Promise((resolve, reject) => {
@@ -61,6 +63,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   const trialFile = join(directory, name.replace(/^request/, "trial"));
   const recordFile = join(directory, name.replace(/^request/, "launcher"));
   const applyFile = join(directory, "apply.json");
+  const terminalPaths = { record: recordFile, trial: trialFile, request: plan.requestFile, releasePointer: plan.releasePointer };
   const startupLock = lockLauncherStartup(recordFile);
   assertLauncherAvailable({ record: recordFile });
   const read = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
@@ -71,7 +74,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   }
   const priorEntry = join(prior, "bin", "cli.mjs");
   if (plan.checkout) {
-    const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: prior, encoding: "utf8", timeout: 2000 });
+    const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: prior, encoding: "utf8", timeout: 2000, killSignal: "SIGKILL" });
     if (head.status !== 0 || head.stdout.trim().slice(0, 7) !== plan.priorRevision) throw new Error("The prior release identity changed; no launcher was started.");
   } else if (read(join(prior, "package.json"))?.version !== plan.priorVersion) throw new Error("The prior package identity changed; no launcher was started.");
   let apply = read(applyFile);
@@ -103,7 +106,8 @@ async function terminalBootstrap(encoded, nextEntry, args) {
         LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: plan.root, LLV_LAUNCHER_CHECKOUT: plan.root } }).status === 0;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
   const rollback = detail => {
-    restore(); atomic(trialFile, JSON.stringify({ ...intent, state: "rolled-back", detail }) + "\n");
+    restore(); atomic(trialFile, JSON.stringify({ ...intent, state: "rolled-back", detail,
+      rollbackDeadlineAt: Date.now() + ROLLBACK_TIMEOUT_MS }) + "\n");
   };
   if (!loads) rollback("The replacement launcher failed its load check.");
   startupLock.release();
@@ -113,13 +117,45 @@ async function terminalBootstrap(encoded, nextEntry, args) {
         LLV_LAUNCHER_CHECKOUT: plan.root, LLV_LAUNCHER_TRIAL: intent.requestId } });
     child.on("error", () => {}); child.unref(); return child;
   };
+  const refusePrior = async (detail, priorChild, identity, trial) => {
+    const refused = writeLauncherRefusal(terminalPaths, trial, detail);
+    const currentRecord = read(recordFile);
+    const ownsRecord = currentRecord?.launcher?.pid === priorChild.pid
+      && currentRecord.launcher.startIdentity === identity;
+    if (identity && readStartIdentity(priorChild.pid) === identity) {
+      try { process.kill(priorChild.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+    } else if (!priorChild.killed && priorChild.exitCode === null && priorChild.signalCode === null) {
+      priorChild.kill("SIGKILL");
+    }
+    if (ownsRecord) await Promise.all([
+      stopRecorded(currentRecord.web, currentRecord.socket, currentRecord.port, plan.root, plan.releasePointer),
+      stopRecorded(currentRecord.runtimeHost, currentRecord.socket),
+    ]);
+    throw new Error(refused.detail);
+  };
+  const supervisePrior = async priorChild => {
+    priorIdentity = readStartIdentity(priorChild.pid);
+    const trial = read(trialFile);
+    const previousOwner = read(recordFile)?.launcher;
+    try {
+      await guardLegacyRollback(terminalPaths, trial, plan.root,
+        { pid: priorChild.pid, identity: priorIdentity }, previousOwner);
+    } catch (error) {
+      await refusePrior(`The prior launcher rollback guard could not start: ${error.message}`,
+        priorChild, priorIdentity, trial);
+    }
+  };
   let child = start(loads ? nextEntry : priorEntry);
   let failed = !loads;
   let startedPrior = !loads;
+  let priorIdentity = startedPrior ? readStartIdentity(child.pid) : null;
+  if (startedPrior) await supervisePrior(child);
   const key = viewerBootGateKey(process.env);
   const headers = probeHeadersFrom(dirname(directory));
   if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
-  const deadline = performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS;
+  const rollbackExpiry = failed ? read(trialFile)?.rollbackDeadlineAt : null;
+  const deadline = Math.min(performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+    rollbackExpiry ? performance.now() + Math.max(0, rollbackExpiry - Date.now()) : Infinity);
   while (performance.now() < deadline) {
     const trial = read(trialFile); const record = read(recordFile);
     if (trial?.requestId === intent.requestId && trial.state === "rolled-back") failed = true;
@@ -140,10 +176,21 @@ async function terminalBootstrap(encoded, nextEntry, args) {
       }
     }
     if (child.exitCode !== null || child.signalCode !== null) {
-      if (startedPrior) throw new Error("The prior release could not start; update custody is retained.");
+      if (startedPrior) {
+        const latest = read(trialFile);
+        throw new Error(latest?.refused ? latest.detail : "The prior release could not start; update custody is retained.");
+      }
       failed = true; startedPrior = true; rollback("The replacement launcher failed before readiness."); child = start(priorEntry);
+      await supervisePrior(child);
     }
     await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (startedPrior) {
+    const trial = read(trialFile);
+    const detail = trial?.rollbackDeadlineAt && Date.now() >= trial.rollbackDeadlineAt
+      ? "The launcher rollback exceeded its 10 minute deadline"
+      : "Terminal launcher bootstrap exceeded its deadline";
+    await refusePrior(detail, child, priorIdentity, trial);
   }
   throw new Error("Launcher health could not be verified; update custody is retained.");
 }
