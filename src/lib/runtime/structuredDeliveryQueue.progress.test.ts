@@ -1189,3 +1189,26 @@ test("observer admission barriers retain the failed listing budget without new j
     expect(reads).toBe(1);
   } finally { queue.retire(); setSystemTime(); }
 });
+
+
+test("a live turn renews its boundary deadline without inventing a lost wake, then dispatches once", async () => {
+  const time = clock();
+  const journal = fakeJournal(); journal.admit("long-followup", "working");
+  const progress = new DeliveryProgressStore(null, time.now);
+  let active: string | null = "long-turn";
+  const target = fakeHost(delivered, () => idleState(active));
+  const queue = queueFor(journal.port({ progress }), { working: target.engine }, { now: time.now });
+  await queue.drain();
+  for (const minutes of [31, 91]) {
+    time.advance(minutes * 60_000);
+    await queue.tick(); await queue.drain();
+    expect(progress.get("long-followup")?.phaseHistory?.some(phase => phase.phase === "wake-lost")).toBe(false);
+    expect(progress.get("long-followup")).toMatchObject({ waitReason: "awaiting-turn", deadlinePolicy: "turn-boundary" });
+    expect(Date.parse(progress.get("long-followup")!.deadlineAt!)).toBe(time.now() + 10 * 60_000);
+    expect(target.inputs).toEqual([]);
+  }
+  active = null;
+  await queue.drain(); await queue.drain();
+  expect(target.inputs).toEqual(["long-followup"]);
+  expect(journal.ops.get("long-followup")?.status).toBe("delivered");
+});
