@@ -25,6 +25,13 @@ export async function restoreMissingLaneWorktree(
     const registration = registrations.find(fields => directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) === ownPath);
     if (registration?.some(field => field === "locked" || field.startsWith("locked ")))
       throw new Error(`${prefix}; its worktree registration is locked; resolve the lock and retry the stage`);
+    if (registration) {
+      const registeredBranch = registration.find(field => field.startsWith("branch "))?.slice(7);
+      if (registeredBranch !== ref) {
+        const owner = registeredBranch ?? "detached HEAD";
+        throw new Error(`${prefix}; its worktree registration belongs to ${owner}; restore its checkout or correct the lane directory, then retry the stage`);
+      }
+    }
     return registration;
   };
   const gitCommonDir = async (directory: string) => {

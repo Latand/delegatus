@@ -272,3 +272,65 @@ for (const shape of ["deleted-tip", "other-stale-registration", "other-locked-re
     }
   }, 30000);
 }
+
+for (const shape of ["foreign-branch", "detached"] as const) {
+  test(`recovery parks when the reused lane path is registered to a ${shape} checkout`, async () => {
+    const f = await realWorktreeLane("reused-path-registration", [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null },
+    ]);
+    let peerOffline: string | undefined;
+    try {
+      const lane = loadPipelines()[0]!;
+      const previous = lane.runs[0]!.attempts[0]!;
+      previous.state = "failed";
+      previous.completedAt = f.h.ports.now();
+      previous.error = "interrupted setup";
+      previous.launchId = previous.conversationId = previous.sessionId = previous.agentPath = previous.paneId = null;
+      delete previous.activation;
+      lane.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+      lane.state = "running";
+      savePipelines([lane]);
+
+      await f.git(f.repo, "worktree", "remove", f.worktree);
+      if (shape === "foreign-branch") {
+        await f.git(f.repo, "worktree", "add", "-b", "independent-peer", f.worktree, lane.baseRef);
+      } else {
+        await f.git(f.repo, "worktree", "add", "--detach", f.worktree, lane.baseRef);
+      }
+      fs.writeFileSync(path.join(f.worktree, "staged.txt"), "peer staged version\n");
+      await f.git(f.worktree, "add", "staged.txt");
+      fs.writeFileSync(path.join(f.worktree, "staged.txt"), "peer working version\n");
+      fs.writeFileSync(path.join(f.worktree, "sentinel.tmp"), "unrelated ignored work\n");
+      const peerGitDir = await f.git(f.worktree, "rev-parse", "--absolute-git-dir");
+      const peerIndex = fs.readFileSync(path.join(peerGitDir, "index"));
+      peerOffline = path.join(f.root, "peer-offline");
+      fs.renameSync(f.worktree, peerOffline);
+      f.h.ports.worktreePresent = dir => fs.existsSync(dir);
+      const before = f.h.spawnInputs.length;
+
+      await tickPipelines([], f.h.ports);
+
+      const current = loadPipelines()[0]!;
+      expect(current.state).toBe("needs_decision");
+      expect(current.stateDetail).toContain(`lane worktree is missing at ${f.worktree}`);
+      expect(current.stateDetail).toContain(shape === "detached" ? "detached HEAD" : "independent-peer");
+      expect(f.h.spawnInputs).toHaveLength(before);
+      expect(fs.existsSync(f.worktree)).toBe(false);
+      expect(await f.git(f.repo, "worktree", "list", "--porcelain")).toContain(`worktree ${f.worktree}`);
+
+      fs.renameSync(peerOffline, f.worktree);
+      peerOffline = undefined;
+      expect(peerIndex).toEqual(fs.readFileSync(path.join(peerGitDir, "index")));
+      expect(await f.git(f.worktree, "show", ":staged.txt")).toBe("peer staged version");
+      expect(fs.readFileSync(path.join(f.worktree, "staged.txt"), "utf8")).toBe("peer working version\n");
+      expect(fs.readFileSync(path.join(f.worktree, "sentinel.tmp"), "utf8")).toBe("unrelated ignored work\n");
+      const registrations = await f.git(f.repo, "worktree", "list", "--porcelain");
+      expect(registrations).toContain(`worktree ${f.worktree}`);
+      if (shape === "foreign-branch") expect(registrations).toContain("branch refs/heads/independent-peer");
+      else expect(registrations).toContain("detached");
+    } finally {
+      savePipelines([]);
+      fs.rmSync(f.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+}
