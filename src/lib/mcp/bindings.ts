@@ -91,6 +91,7 @@ import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/a
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -1904,7 +1905,7 @@ async function sendMessage(
   const message = requiredMessageText(args);
   let outcome: Record<string, unknown>;
   try {
-    outcome = await dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", {
+    const body = {
       pid: null,
       path: transcriptPath,
       ...(conversationId ? { conversationId } : {}),
@@ -1916,7 +1917,10 @@ async function sendMessage(
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
       ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
-    }, callerCapabilityHeaders());
+    };
+    outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
+      headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", body,
+        { ...callerCapabilityHeaders(), ...headers }));
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
        anything. Nothing exists under the downstream key, so the send settles
@@ -8181,6 +8185,7 @@ function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
 /** Seats, the gateway and live owner relay agents can message a seat.
     Auto-creation still goes through the unchanged operator-only seat route. */
 function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
+  nativeOrchestratorRelayCaller()?.();
   const caller = attributionOf(dependencies);
   if (caller.kind === "gateway" || ownerRelayCaller(dependencies)) return;
   if (caller.conversationId && !caller.via) {
@@ -8189,6 +8194,41 @@ function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencie
   }
   throw new McpToolRefusal("only a designated orchestrator seat, the voice gateway or a verified owner relay may relay to an orchestrator; continue the requested work with your tools, or explain the failure and the owner's next action", {
     code: "orchestrator_relay_refused", retryable: false,
+  });
+}
+
+/** Pin the real peer's identity before the first project-resolution await.
+ * Never derive this handoff from tool arguments or injected attribution. Each
+ * use resolves authority afresh, outside the tool's memoized attribution. */
+function nativeOrchestratorRelayCaller(): (() => string) | null {
+  if (!currentMcpHttpCaller()?.nativePeer || callerCapability() !== undefined) return null;
+  return resolveMcpCallerValue(productionDomainDependencies, "native-orchestrator-relay", () => {
+    const authority = () => attentionCallerAuthority(attentionCallerSources());
+    const original = authority();
+    const refused = () => { throw new McpDispatchNotExecutedError("the native relay caller changed or could not be verified", { code: "orchestrator_relay_refused" }); };
+    if (original.kind === "unidentified" || !original.conversationId) return refused();
+    const id = original.conversationId;
+    const generation = () => {
+      const conversation = agentRegistry().conversation(id as `conversation_${string}`);
+      const current = conversation?.generations.at(-1);
+      return conversation && !conversation.supersededBy && current && current.archivedAt == null
+        ? JSON.stringify([current.id, current.path, conversation.projectOwnership]) : null;
+    };
+    const pinned = generation();
+    const seat = authorizedManagerSeats(productionManagerAuthoritySources()).find(candidate => candidate.conversationId === id);
+    // This handoff repairs designated-seat relays only. Other relay producers
+    // retain their existing authenticated capability and operator paths.
+    if (!pinned || !seat?.project) return refused();
+    const project = seat.project;
+    const epoch = orchestratorSeatFor(project).active?.seatEpoch;
+    return () => {
+      const current = authority();
+      if (current.kind === "unidentified" || current.conversationId !== id
+        || current.nativeProof !== original.nativeProof || generation() !== pinned
+        || orchestratorSeatFor(project).active?.seatEpoch !== epoch
+        || !authorizedManagerSeats(productionManagerAuthoritySources()).some(candidate => candidate.conversationId === id && candidate.project === project)) return refused();
+      return id;
+    };
   });
 }
 
