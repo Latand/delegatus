@@ -77,6 +77,76 @@ test("owner continuation budgets inbound context with optional memory and advanc
   expect(turn.seen).not.toContain("earlier-0");
 });
 
+test("fresh and resumed turns fit escaping-heavy service instructions under the envelope bound", async () => {
+  const { ownerRunPrompt, ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const root = request.input.conversation[0]!;
+  const parent = { ...root, id: "quoted-parent", text: "Short quoted fact", author: { ...root.author, self: true } };
+  const current = { ...root, id: "current-owner", text: "What did I ask?", reply_to: parent.id };
+  request.input.conversation = [parent, current];
+  request.input.respond_to = current.id;
+  request.input.tools = [];
+  request.input.documents = [];
+  request.input.short_term_memory = null;
+  request.input.instructions = "a".repeat(4096) + "<".repeat(6000);
+  request.input.owner_instructions = "a".repeat(4096) + "<".repeat(6000);
+  const owner = { messageId: current.id, text: current.text, requestText: null };
+  const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
+
+  for (const prompt of [ownerRunPrompt(request, owner, 1), ownerContinuationPrompt(request, owner, 1, record).prompt]) {
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+    expect(section(prompt, "owner_request")).toMatchObject({ text: current.text });
+    expect(section(prompt, "service_instructions")).toContain("[Quoted text shortened; beginning and end kept]");
+    expect(section(prompt, "owner_instructions")).toContain("[Quoted text shortened; beginning and end kept]");
+  }
+});
+
+test("fresh and resumed turns retain the requested fact before removing unrelated history", async () => {
+  const { ownerRunPrompt, ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const root = request.input.conversation[0]!;
+  const target = { ...root, id: "direct-target", text: "L".repeat(1400) + " MIDDLE_FIELD=amber " + "R".repeat(1555),
+    author: { ...root.author, self: true } };
+  const current = { ...root, id: "current-owner", text: "What is MIDDLE_FIELD?", reply_to: target.id };
+  const older = Array.from({ length: 20 }, (_, index) => ({ ...root, id: `older-${index}`, text: `Unrelated <history> ${index}. `.repeat(1000),
+    sent_at: new Date(Date.UTC(2020, 0, index + 1)).toISOString(), author: { ...root.author, self: true } }));
+  request.input.conversation = [...older, target, current];
+  request.input.respond_to = current.id;
+  request.input.tools = [];
+  const owner = { messageId: current.id, text: current.text, requestText: null };
+  const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
+
+  for (const prompt of [ownerRunPrompt(request, owner, 1), ownerContinuationPrompt(request, owner, 1, record).prompt]) {
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+    const conversation = section(prompt, "conversation") as typeof request.input.conversation;
+    expect(conversation.find(message => message.id === target.id)?.text).toBe(target.text);
+    expect(conversation.filter(message => message.id.startsWith("older-")).length).toBeLessThan(older.length);
+    expect(target.text).toContain("MIDDLE_FIELD=amber");
+  }
+});
+
+test("genuinely oversized direct replies remain labelled excerpts in fresh and resumed prompts", async () => {
+  const { ownerRunPrompt, ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const root = request.input.conversation[0]!;
+  const target = { ...root, id: "large-direct-target", text: "Quoted fact 😀 <table> ".repeat(1000),
+    author: { ...root.author, self: true } };
+  const current = { ...root, id: "current-owner", text: "Summarize the quoted message", reply_to: target.id };
+  request.input.conversation = [target, current];
+  request.input.respond_to = current.id;
+  request.input.tools = [];
+  const owner = { messageId: current.id, text: current.text, requestText: null };
+  const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
+
+  for (const prompt of [ownerRunPrompt(request, owner, 1), ownerContinuationPrompt(request, owner, 1, record).prompt]) {
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+    const conversation = section(prompt, "conversation") as typeof request.input.conversation;
+    const excerpt = conversation.find(message => message.id === target.id)?.text;
+    expect(excerpt).toContain("[Quoted text shortened; beginning and end kept]");
+    expect(section(prompt, "owner_reply_context")).toMatchObject({ text: expect.stringContaining("[Quoted text shortened; beginning and end kept]") });
+  }
+});
+
 test("mandatory oversized input is refused whole before a prompt can be dispatched", async () => {
   const { ownerRunPrompt } = await import("./ownerRun");
   const { request, current } = longReplyRequest();
