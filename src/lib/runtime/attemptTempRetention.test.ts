@@ -9,7 +9,7 @@ import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attem
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
-import { attemptTempState } from "./attemptTempProduction";
+import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -140,6 +140,70 @@ test("a failed completion receipt retains custody but never restores removed all
     expect(f.store.owner(directory)?.bytes).toBe(0);
     expect(fs.existsSync(directory)).toBeFalse();
   } finally { receipt.mockRestore(); f.store.close(); }
+});
+
+test.each([false, true])("producer record revision drift preserves native removal and journal replay (journal replay=%s)", async replay => {
+  for (const transition of ["attempt-running", "closed-lane-running"] as const) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-producer-revision-"));
+    const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+    const pipeline = buildPipeline({ id: `producer-revision-${transition}`, task: "Producer revision", project: "fixture", repoDir: parent,
+      stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+      srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+    const producer = pipeline.worktreeDir!;
+    const producerExisted = fs.existsSync(producer);
+    pipeline.state = transition === "closed-lane-running" ? "closed" : "running";
+    if (transition === "closed-lane-running") {
+      pipeline.cursor = null;
+      pipeline.closedAt = "2026-10-22T12:00:00Z";
+    }
+    pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "revision-launch",
+      effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      verdict: null, error: null }] }];
+    if (transition !== "closed-lane-running") fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    savePipelines([pipeline]);
+    const directory = path.join(parent, "llv-stage-revision");
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "preserve me");
+    const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+    const owner = { directory, pipelineId: pipeline.id, launchId: "revision-launch", retainUntilClose: false, createdAt: 1 };
+    store.register(owner);
+    store.measure(directory, 4096); store.release(directory);
+    const trash = path.join(parent, ".delegatus-trash-llv-stage-revision-replay");
+    if (replay) {
+      const stat = fs.lstatSync(directory);
+      fs.renameSync(directory, trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({
+        directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true,
+      }));
+    }
+    const now = NOW;
+    let quarantineReferenceReads = 0, injected = false;
+    const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+      state: attemptTempState, authority: attemptTempAuthority, scan: () => ({ ownNamespace: null, processes: [] }),
+      references: async (_original, current) => {
+        await Promise.resolve();
+        if (path.basename(current).startsWith(".delegatus-trash-")
+          && ++quarantineReferenceReads === (replay ? 4 : 2)) {
+          injected = true;
+          if (transition === "closed-lane-running") pipeline.state = "running";
+          else pipeline.runs[0]!.attempts[0]!.state = "running";
+          savePipelines([pipeline]);
+        }
+        return true;
+      },
+    });
+    try {
+      const changed = await sweep();
+      expect(injected).toBeTrue();
+      expect(changed).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
+      expect(await attemptTempState(owner)).toBe(transition === "attempt-running" ? "live" : "unknown");
+      expect(fs.readFileSync(path.join(replay ? trash : directory, "payload"), "utf8")).toBe("preserve me");
+    } finally {
+      store.close(); savePipelines([]);
+      if (!producerExisted) fs.rmSync(producer, { recursive: true, force: true });
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  }
 });
 
 test.each([false, true])("final dispatch rechecks checkout discovery and external aliases (journal replay=%s)", async replay => {

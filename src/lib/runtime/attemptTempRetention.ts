@@ -11,6 +11,7 @@ import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement } from "@/lib/recordedChecks/store";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "orphan" | "unknown";
+export type AttemptTempAuthority = { state: AttemptTempState; revision: string; isCurrent: () => boolean };
 const authorityDisposition = (state: AttemptTempState): "live" | "held" => state === "live" ? "live" : "held";
 export type AttemptTempOwner = {
   directory: string;
@@ -125,6 +126,7 @@ export class AttemptTempStore {
 export type AttemptTempSweepOptions = {
   now?: () => number;
   state: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempState>;
+  authority?: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority>;
   scan: (directories: readonly string[]) => ProcessScan;
   references?: (original: string, current: string, scan: ProcessScan) => Promise<boolean>;
   maxRoots?: number;
@@ -254,7 +256,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         namespaceOnly = evidence.namespaceOnly;
         // Native/container observations can await I/O. Ownership must still
         // agree after them, at the same dispatch boundary.
-        const authority = await options.state(owner, inventory);
+        const authorityObservation = options.authority
+          ? await options.authority(owner, inventory)
+          : await options.state(owner, inventory);
+        const authority = typeof authorityObservation === "string" ? authorityObservation : authorityObservation.state;
         checkBudget();
         const final = fs.lstatSync(directory, { throwIfNoEntry: false });
         if (recordedRootHeld(owner.directory)) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
@@ -272,6 +277,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const dispatchRoot = fs.lstatSync(directory, { throwIfNoEntry: false });
         if (recordedRootHeld(owner.directory)) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
         if (authority !== state) { disposition = authorityDisposition(authority); reason = `authority changed from ${state} to ${authority} before dispatch`; return false; }
+        if (typeof authorityObservation !== "string" && !authorityObservation.isCurrent()) {
+          disposition = "live";
+          reason = `authority revision ${authorityObservation.revision} changed before dispatch`;
+          return false;
+        }
         if (!dispatchRoot?.isDirectory() || dispatchRoot.isSymbolicLink() || `${dispatchRoot.dev}:${dispatchRoot.ino}` !== owner.identity) {
           reason = "identity changed before dispatch";
           return false;

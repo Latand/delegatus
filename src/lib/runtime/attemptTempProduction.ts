@@ -1,5 +1,5 @@
 import { statePath } from "@/lib/configDir";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
+import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { tempSweepMode } from "@/lib/tempSweep";
@@ -8,26 +8,27 @@ import path from "node:path";
 import fs from "node:fs";
 import { repositoryReferencesAttemptTemp, RepositoryLinkInventory } from "./attemptTempFilesystem";
 
-export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {
-  if (!owner.pipelineId) return "orphan";
+export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<Exclude<AttemptTempAuthority, AttemptTempState>> {
+  if (!owner.pipelineId) return { state: "orphan", revision: "", isCurrent: () => true };
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
+  const observed = (state: AttemptTempState) => ({ state, revision: version, isCurrent: () => reader.version() === version });
   const pipeline = reader.read();
-  if (!pipeline) return "orphan";
-  if (pipeline.state === "closed" || pipeline.state === "completed") return "closed";
+  if (!pipeline) return observed("orphan");
+  if (pipeline.state === "closed" || pipeline.state === "completed") return observed("closed");
   const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
     || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
   const run = pipeline.runs.find(run => run.attempts.some(matches));
   const attempt = run?.attempts.find(matches);
-  if (!attempt) return "unknown";
+  if (!attempt) return observed("unknown");
   const stage = pipeline.stages.find(stage => stage.id === run!.stageId);
   if (!path.basename(owner.directory).startsWith("llv-stage-config-")
-    && (attempt.definition?.outputs?.length || stage?.outputs?.length || stage?.effectiveRole.roleId === "visual-critic")) return "live";
+    && (attempt.definition?.outputs?.length || stage?.outputs?.length || stage?.effectiveRole.roleId === "visual-critic")) return observed("live");
   if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)
     || ["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) {
     if (pipeline.worktreeDir) {
       const checkout = fs.lstatSync(pipeline.worktreeDir, { throwIfNoEntry: false });
       const present = fs.existsSync(pipeline.worktreeDir);
-      if (!present || !checkout?.isDirectory() || checkout.isSymbolicLink()) return "unknown";
+      if (!present || !checkout?.isDirectory() || checkout.isSymbolicLink()) return observed("unknown");
       const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory, owner.directory, inventory);
       const after = fs.lstatSync(pipeline.worktreeDir, { throwIfNoEntry: false });
       // A checkout that disappears or changes while its links are being
@@ -35,13 +36,16 @@ export async function attemptTempState(owner: AttemptTempOwner, inventory = new 
       // contain a link omitted from the inventory snapshot.
       if (!after?.isDirectory() || after.isSymbolicLink()
         || `${after.dev}:${after.ino}` !== `${checkout.dev}:${checkout.ino}`
-        || after.mtimeMs !== checkout.mtimeMs || after.ctimeMs !== checkout.ctimeMs) return "unknown";
-      if (reader.version() !== version) return "unknown";
-      if (referenced) return "live";
+        || after.mtimeMs !== checkout.mtimeMs || after.ctimeMs !== checkout.ctimeMs) return observed("unknown");
+      if (reader.version() !== version) return observed("unknown");
+      if (referenced) return observed("live");
     }
-    return "settled";
+    return observed("settled");
   }
-  return "live";
+  return observed("live");
+}
+export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {
+  return (await attemptTempAuthority(owner, inventory)).state;
 }
 function setting(raw: string | undefined, fallback: number) {
   const value = raw?.trim() ? Number(raw) : fallback;
@@ -66,7 +70,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   const store = new AttemptTempStore();
   try {
     const report = await sweepAttemptTemps(store, {
-      state: attemptTempState, mode, scan: ports.scan,
+      state: attemptTempState, authority: attemptTempAuthority, mode, scan: ports.scan,
       maxRoots: (() => {
         try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
         catch { return undefined; }
