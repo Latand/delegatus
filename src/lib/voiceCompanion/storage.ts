@@ -100,6 +100,8 @@ export interface StoredSession {
   mintRequestId?: string;
   mintDigest?: string;
   answerSdp?: string;
+  /** The next part exclusively continuing this call. Persisted before its provider mint. */
+  resumedBy?: string;
   usage?: { seconds: number; codexTokens?: Record<string, number>; responses: Record<string, { usd: number | null; complete: boolean; tokens?: BackendTokens; responseId?: string }>;
     /** When the voice started, on this server's clock. */
     startedAt?: number;
