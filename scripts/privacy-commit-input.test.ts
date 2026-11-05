@@ -155,6 +155,31 @@ for (const kind of ["utf16", "binary-attribute", "disguised-binary"] as const) t
   refuses(await f.scan(), "home_path");
 });
 
+test("ident checkout conversion cannot hide raw learned-rule bytes", async () => {
+  const f = fixture();
+  const rule = "synthetic $Id$ private rule";
+  writeFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE!, rule);
+  f.write(".gitattributes", "*.txt -diff ident\n");
+  f.write("content.txt", rule);
+  f.commit();
+  f.git("rm", "content.txt"); f.commit();
+  refuses(await f.scan(), "known_value");
+});
+
+for (const attributeState of ["dirty removal", "later committed removal"] as const) test(`historical binary attributes survive ${attributeState}`, async () => {
+  const f = fixture();
+  f.write(".gitattributes", "*.txt -diff\n");
+  f.write("content.txt", `synthetic catalog\n${"\n".repeat(10)}unrelated separator\n${"\n".repeat(10)}phrase\n`);
+  f.commit(); f.rebase();
+  f.write("content.txt", `synthetic catalog\n${"\n".repeat(20)}phrase\n`); f.commit();
+  if (attributeState === "dirty removal") {
+    rmSync(join(f.repo, ".gitattributes"));
+  } else {
+    f.git("rm", ".gitattributes"); f.commit();
+  }
+  refuses(await f.scan(), "known_value");
+});
+
 test("new symbolic links are refused even when removed before HEAD", async () => {
   const f = fixture();
   f.git("update-index", "--add", "--cacheinfo", "120000", f.git("hash-object", "-w", "content.txt"), "link");

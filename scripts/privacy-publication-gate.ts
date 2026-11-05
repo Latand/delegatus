@@ -1248,10 +1248,10 @@ function changedPaths(arguments_: string[], repository: string, resolvedBase?: s
   return { error: false, paths: [...paths] };
 }
 
-function commitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env)): Buffer {
+function commitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env), stdin?: Buffer): Buffer {
   const result = Bun.spawnSync({
     cmd: ["git", "--no-replace-objects", "--literal-pathspecs", "-C", repository, ...args],
-    env, stdout: "pipe", stderr: "pipe",
+    env, stdin, stdout: "pipe", stderr: "pipe",
   });
   if (result.exitCode !== 0) throw new Error("commit input unreadable");
   return result.stdout;
@@ -1306,9 +1306,15 @@ function* commitInputs(repository: string, base: string): Generator<CommitInput>
     const endpoints = parents.length ? [parents[0], commit] : [commit];
     const options = ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv", "-r", "-z"];
     const raw = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository, [...options, "--raw", ...endpoints])).split("\0");
-    const binaryPaths = new Set(commitInputGit(repository, [...options, "--numstat", ...endpoints]).toString()
-      .split("\0").filter(line => line.startsWith("-\t-\t")).map(line => line.slice(4)));
     if (raw.pop() !== "") throw new Error("unframed commit paths");
+    const attributeOutput = commitInputGit(repository, ["check-attr", "--source", commit, "-z", "diff", "--stdin"], undefined,
+      Buffer.from(raw.filter((_, index) => index % 2 === 1).map(path => `${path}\0`).join(""))).toString().split("\0");
+    if (attributeOutput.pop() !== "" || attributeOutput.length % 3 !== 0) throw new Error("invalid commit attributes");
+    const diffAttributes = new Map<string, string>();
+    for (let index = 0; index < attributeOutput.length; index += 3) {
+      if (attributeOutput[index + 1] !== "diff") throw new Error("invalid commit attribute name");
+      diffAttributes.set(attributeOutput[index], attributeOutput[index + 2]);
+    }
     for (let index = 0; index < raw.length; index += 2) {
       const metadata = /^:(\d{6}) (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) [AMDT]$/.exec(raw[index]);
       const path = raw[index + 1];
@@ -1325,7 +1331,7 @@ function* commitInputs(repository: string, base: string): Generator<CommitInput>
       // A symlink blob stores its target as bytes. Materializing those same
       // bytes as a regular file publishes content the old-side diff omits.
       if (changedFromNonRegular) { yield { ...input, kind: "blob" }; continue; }
-      let binary = binaryBlobs.has(blob) || binaryPaths.has(path) || extensionMediaKind(path) !== undefined;
+      let binary = binaryBlobs.has(blob) || diffAttributes.get(path) === "unset" || extensionMediaKind(path) !== undefined;
       if (!binary) {
         const bytes = commitInputGit(repository, ["cat-file", "blob", blob]);
         binary = signatureMediaKind(bytes) !== undefined || bytes.some(byte => byte < 32 && ![9, 10, 13].includes(byte));
@@ -2549,6 +2555,11 @@ function inspectCommitAdditions(repository: string, base: string, requireKnownVa
       const result = Bun.spawnSync({ cmd: ["git", "clone", "--quiet", "--shared", "--no-checkout", "--template=", "--", repository, snapshot],
         env: snapshotEnv, stdout: "pipe", stderr: "pipe" });
       if (result.exitCode !== 0) throw new Error("commit snapshot unavailable");
+      const attributes = join(snapshot, ".git", "info", "attributes");
+      mkdirSync(dirname(attributes), { recursive: true });
+      // Preserve blob bytes while retaining a commit tree for provenance reads.
+      // info/attributes outranks committed .gitattributes files.
+      writeFileSync(attributes, "* -filter -ident -working-tree-encoding -text\n");
     }
     if (snapshotCommit !== commit) {
       commitInputGit(snapshot!, ["-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false", "checkout", "--quiet", "--force", "--detach", "--no-recurse-submodules", commit], snapshotEnv);
