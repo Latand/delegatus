@@ -7,7 +7,7 @@ import { TelegramBotError, sendFailure } from "./errors";
 import { outboundState, releaseUnsentClaim, type PublicationTarget } from "./outbound";
 import type { ChatRow, TelegramBotStore } from "./store";
 import type { BotCallResult, BotTransport } from "./transport";
-import { cloneChatView, cloneInput, clonePayloadSupported, cloneTransport, type ClonePostingPort } from "./clone";
+import { cloneChatView, cloneSupports, cloneTransport, type ClonePostingPort } from "./clone";
 import type { CloneRoute } from "@/lib/externalRelay/cloneDirectory";
 
 export type PostingBot = TelegramPostingBot & { id: string; transport: BotTransport; clone?: CloneRoute };
@@ -253,12 +253,21 @@ export class BotSelector {
       const bots = connected.filter(b => chat.type !== "private" || b.receiving);
       bots.sort((a, b) => Number(b.id === retryBot) - Number(a.id === retryBot) || Number(b.id === assigned) - Number(a.id === assigned));
       const candidates: Array<{ bot: PostingBot; checked?: boolean; membership?: Membership | null }> = bots.map(bot => ({ bot }));
-      if (!assigned && method === "sendMessage" && chat.type !== "private" && this.clones) {
+      if (!assigned && chat.type !== "private" && this.clones) {
         const route = await this.clones.route(chat.chatId);
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)
-          && clonePayloadSupported(cloneInput(route, caller, key, params, options?.partIndex ?? 0))) {
+          && cloneSupports(route, caller, key, method, params, options?.partIndex ?? 0)) {
           candidates.unshift({ bot: { id: route.id, name: route.name, username: null, receiving: false, tokenState: "ok", clone: route,
-            transport: cloneTransport(this.clones, route, caller, key, authorizeClone) }, checked: true });
+            transport: cloneTransport(this.clones, route, caller, key, authorizeClone, async (input, part) => {
+              await outboundState(this.store.filename, true, db => {
+                const row = db.query<{ clone_keys: string }, [string, string]>("SELECT clone_keys FROM sends WHERE caller_key=? AND client_request_id=? AND state='pending'").get(caller, key);
+                if (!row) throw new TelegramBotError("send_uncertain", "the clone send claim is unavailable");
+                const keys = parseSqliteJson(row.clone_keys, db) as Record<string, string>;
+                if (keys[part] && keys[part] !== input.client_key) throw new TelegramBotError("send_uncertain", "the clone send key changed");
+                keys[part] = input.client_key;
+                db.query("UPDATE sends SET clone_keys=? WHERE caller_key=? AND client_request_id=? AND state='pending'").run(JSON.stringify(keys), caller, key);
+              });
+            }) }, checked: true });
         }
       }
       for (const candidate of candidates) {

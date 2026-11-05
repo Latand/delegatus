@@ -1,14 +1,26 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { startTestRelay } from "./testRelay";
 import { clonePairing, cloneReceipt } from "./clone.fixture";
-import { cloneClientKey, clonePayloadSupported, sendAsClone, type CloneSendInput } from "./cloneSend";
+import { classifyCloneFailure, cloneClientKey, clonePayloadSupported, sendAsClone, type CloneSendInput } from "./cloneSend";
 import { publishedRelayReference } from "./publishedReferences";
+import { ExternalRelayError } from "./client";
 
 const servers: Array<Awaited<ReturnType<typeof startTestRelay>>> = [];
 afterEach(async () => { for (const server of servers.splice(0)) await server.close(); });
 async function server(handler: Parameters<typeof startTestRelay>[0]) { const s = await startTestRelay(handler); servers.push(s); return clonePairing(s.origin); }
 const input = (overrides: Partial<CloneSendInput> = {}): CloneSendInput => ({ client_key: cloneClientKey("fixture", "caller", "request", 0),
   chat_id: -1000000000101, text: "Fixture report", parse_mode: null, silent: true, ...overrides });
+
+test.each([
+  [403, "not_enough_rights", "not_enough_rights"], [415, "unsupported_media_type", "document_type"], [413, "too_large", "document_too_large"],
+] as const)("key_state unused maps %s/%s to %s", (status, code, expected) => {
+  expect(classifyCloneFailure(new ExternalRelayError(code, status, null, { error: { code, key_state: "unused" } }), true))
+    .toMatchObject({ kind: "refused", code: expected, fallback: true });
+  for (const key_state of ["pending", "uncertain", "taken"])
+    expect(classifyCloneFailure(new ExternalRelayError(code, status, null, { error: { code, key_state } }), true)).toMatchObject({ kind: "uncertain" });
+  expect(classifyCloneFailure(new ExternalRelayError(code, status), true)).toBeNull();
+  expect(classifyCloneFailure(new ExternalRelayError(code, status, null, { error: { key_state: "pending" } }))).toMatchObject({ kind: "uncertain" });
+});
 
 test("plain and HTML send preserve the contract and record both fresh and replayed references", async () => {
   let count = 0;
