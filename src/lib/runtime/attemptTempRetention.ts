@@ -251,6 +251,20 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           return false;
         }
         checkBudget();
+        // `references` may await container inspection. The lane's producer
+        // checkout is not necessarily represented by a live process cwd, so
+        // refresh its authority after that await too. Keep every synchronous
+        // deletion fence on the far side of the last await before dispatch.
+        const dispatchAuthority = await options.state(owner, inventory);
+        checkBudget();
+        const dispatchRoot = fs.lstatSync(directory, { throwIfNoEntry: false });
+        if (recordedRootHeld(owner.directory)) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
+        if (dispatchAuthority !== state) { disposition = dispatchAuthority === "live" ? "live" : "held"; reason = `authority changed from ${state} to ${dispatchAuthority} before dispatch`; return false; }
+        if (!dispatchRoot?.isDirectory() || dispatchRoot.isSymbolicLink() || `${dispatchRoot.dev}:${dispatchRoot.ino}` !== owner.identity) {
+          reason = "identity changed before dispatch";
+          return false;
+        }
+        if (!evidence.current()) { disposition = "evidence"; reason = "evidence changed before dispatch"; return false; }
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }

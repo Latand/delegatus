@@ -2,10 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
+import { statePath } from "@/lib/configDir";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -128,7 +130,16 @@ test.each(["absent", "unreadable", "restored"] as const)("the final removal chec
     }, inventory);
   let now = 2;
   const sweep = (processes: Array<{ pid: number; namespace: null; stamped: boolean; paths: string[] }>) => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
-    state: async () => "closed", references, scan: () => ({ ownNamespace: null, processes }) });
+    state: async () => {
+      try {
+        const before = fs.lstatSync(repository);
+        if (!before.isDirectory() || before.isSymbolicLink()) return "unknown";
+        await repositoryReferencesAttemptTemp(repository, directory, directory, inventory);
+        const after = fs.lstatSync(repository);
+        return after.isDirectory() && !after.isSymbolicLink() && `${before.dev}:${before.ino}` === `${after.dev}:${after.ino}`
+          ? "closed" : "unknown";
+      } catch { return "unknown"; }
+    }, references, scan: () => ({ ownNamespace: null, processes }) });
   const processes = [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }];
   try {
     const result = await sweep(processes);
@@ -136,12 +147,42 @@ test.each(["absent", "unreadable", "restored"] as const)("the final removal chec
     expect(containerObservations).toBeGreaterThanOrEqual(3);
     expect(result.removed).toBe(0);
     expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
-    if (change === "unreadable") fs.chmodSync(repository, 0o700);
+    if (change === "absent") fs.renameSync(oldRepository, repository);
+    if (change === "unreadable") { fs.chmodSync(repository, 0o700); changed = false; }
     if (change === "restored") fs.unlinkSync(path.join(repository, "dependency"));
     now += 60_001;
     expect((await sweep([])).removed).toBe(1);
     expect(fs.existsSync(directory)).toBeFalse();
   } finally { denied?.mockRestore(); fs.chmodSync(change === "unreadable" ? repository : parent, 0o700); store.close(); }
+});
+
+test("a capture created during the final container observation is preserved before reclaim", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-late-capture");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  const identity = fs.lstatSync(directory), identityKey = `${identity.dev}:${identity.ino}`;
+  const evidenceKey = createHash("sha256").update(directory).update("\0").update(identityKey).digest("hex");
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "late-capture", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  let stateReads = 0;
+  let now = 2;
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+    state: async () => {
+      stateReads++;
+      if (stateReads === 3) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
+      return "closed";
+    }, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+  try {
+    const first = await sweep();
+    expect(stateReads).toBeGreaterThanOrEqual(3);
+    expect(first.removed).toBe(0);
+    expect(fs.readFileSync(path.join(directory, "frame.png"), "utf8")).toBe("late frame");
+    now += 60_001;
+    expect((await sweep()).removed).toBe(1);
+    const saved = path.join(statePath("evidence", "attempt-temp", evidenceKey), "files/frame.png");
+    expect(fs.readFileSync(saved, "utf8")).toBe("late frame");
+  } finally { store.close(); }
 });
 
 test("one tick shares checkout walks and invalidates a negative result after a late link", async () => {
