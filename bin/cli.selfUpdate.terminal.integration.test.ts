@@ -1066,6 +1066,7 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
     const handoffProtocol = "delegatus-checkout-launcher-v2";
     if (process.argv.includes("--version")) process.exit(0);
     writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+    process.on("SIGTERM", () => {});
     await new Promise(() => {});
     console.log(handoffProtocol);
   `);
@@ -1081,6 +1082,11 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
   const running = await start(fixture);
   try {
     const { isAlive } = await import("../src/lib/selfUpdate/pid");
+    await until(() => existsSync(pidFile) ? true : null, 5_000).catch(error => { throw new Error(`${String(error)}\n${running.output()}`); });
+    running.child.kill("SIGTERM");
+    // A signal-resistant replacement must remain supervised until the
+    // persisted startup deadline, then receive the bounded stop escalation.
+    await until(() => JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8")).state === "failed" ? true : null, 5_000);
     expect(isAlive(Number(readFileSync(pidFile, "utf8")))).toBe(false);
     expect(JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8"))).toMatchObject({ state: "failed", detail: expect.any(String) });
     expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
@@ -1090,11 +1096,16 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
   } finally {
     const closed = new Promise(resolve => running.child.once("exit", resolve));
     running.child.kill("SIGTERM");
-    await closed;
+    if (running.child.exitCode === null && running.child.signalCode === null) {
+      await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 4_000))]);
+    }
+    if (running.child.exitCode === null && running.child.signalCode === null) {
+      running.child.kill("SIGKILL");
+      await closed;
+    }
     children.delete(running.child);
   }
 });
-
 
 for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal"] as const) {
   test(`relaunch readiness persists phases across exec and rollback, failure=${failurePhase}`, async () => {

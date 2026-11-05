@@ -10,7 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
-import { boundedWait, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
+import { boundedWait, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -1695,10 +1695,27 @@ function handOffLauncher({ checkout, entry, record }) {
       cwd: checkout, env, stdio: "inherit",
     });
     let forwarded = false;
+    let startupSettled = false;
+    let signalStopTimer;
+    let signalKillTimer;
     const forward = (signal) => {
       if (forwarded) return;
       forwarded = true;
-      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill(signal);
+        if (startupSettled) {
+          signalStopTimer = setTimeout(() => {
+            if (child.exitCode !== null || child.signalCode !== null) return;
+            child.kill("SIGKILL");
+            signalKillTimer = setTimeout(() => {
+              if (child.exitCode === null && child.signalCode === null) child.unref();
+              finish(true);
+            }, STOP_TIMEOUT_MS);
+            signalKillTimer.unref?.();
+          }, STOP_TIMEOUT_MS);
+          signalStopTimer.unref?.();
+        }
+      }
     };
     process.on("SIGINT", forward);
     process.on("SIGTERM", forward);
@@ -1709,6 +1726,8 @@ function handOffLauncher({ checkout, entry, record }) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearTimeout(signalStopTimer);
+      clearTimeout(signalKillTimer);
       process.off("SIGINT", forward);
       process.off("SIGTERM", forward);
       done(started);
@@ -1744,7 +1763,12 @@ function handOffLauncher({ checkout, entry, record }) {
     const deadline = Math.min(Date.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
       Number.isFinite(persistedDeadline) ? persistedDeadline : Infinity);
     timer = setTimeout(() => { void (async () => {
-      if (forwarded) return finish(true);
+      timer = undefined;
+      const observed = json(record);
+      const childIsHealthy = startupHandoffSucceeded(child.pid, child.exitCode == null && child.signalCode == null, forwarded, observed);
+      // The startup bound ends when this exact child has published a complete
+      // healthy generation. Its normal lifetime is then governed by close.
+      if (childIsHealthy) { startupSettled = true; return; }
       const switchOverrun = active && Date.now() >= persistedDeadline;
       const detail = switchOverrun
         ? SWITCH_OVERRUN

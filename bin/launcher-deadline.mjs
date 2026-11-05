@@ -12,6 +12,16 @@ export const RUNTIME_HOST_STARTUP_CEILING_MS = 300_000;
 export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 2 * (RUNTIME_HOST_STARTUP_CEILING_MS + 90_000 + 90_000) + 30_000;
 export const SWITCH_OVERRUN = "The launcher switch exceeded its 10 minute deadline";
 
+export function startupHandoffSucceeded(childPid, childRunning, forwarded, record) {
+  return !forwarded && childRunning && Number.isInteger(childPid) && childPid > 0
+    && record?.launcher?.pid === childPid
+    && typeof record.launcher.startIdentity === "string"
+    && record.launcher.startIdentity.length > 0
+    && record.launcher.state === "healthy"
+    && record.web?.state === "healthy"
+    && record.runtimeHost?.state === "healthy";
+}
+
 /** Shared by the launcher and its guard, which can outlive an exec to an old entry. */
 export function writeLauncherRefusal(paths, trial, detail) {
   if (trial.switchOverrun && !detail.includes(trial.switchOverrun)) detail = `${trial.switchOverrun}; ${detail}`;
