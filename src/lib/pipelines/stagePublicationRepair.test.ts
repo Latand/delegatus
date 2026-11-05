@@ -315,7 +315,7 @@ test.each(["unreserved", "failed", "gone", "unavailable", "completed-gone", "run
       const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine");
       const ports = { ...defaultPipelinePorts(), now: () => "2026-10-11T04:23:00.000Z",
         conversationAgentActive: async () => ${shape === "running" ? "true" : ["gone", "unavailable", "completed-gone", "conflict"].includes(shape) ? "false" : "null"},
-        publicationRepairProducerGone: async () => ${shape === "completed-gone" ? "true" : "null"},
+        publicationRepairProducerGone: async () => ${["gone", "unavailable", "completed-gone"].includes(shape) ? "true" : "null"},
         conversationTurnInterrupted: async () => ${["gone", "unavailable"].includes(shape) ? JSON.stringify("dead") : "null"},
         conversationDeliveryOutstanding: () => ${shape === "conflict"},
         durableTurnEvidence: async () => ({ turn: "${shape === "busy" ? "busy" : "terminal"}",
