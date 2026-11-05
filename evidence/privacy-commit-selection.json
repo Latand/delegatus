@@ -1,0 +1,385 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-11-05",
+  "runtime": "Bun 1.4.0",
+  "baselineScanner": "6e8b65d9b316ff2da95b8c94f4a3ea01a8f1cfb8",
+  "candidateSources": {
+    "scripts/privacy-publication-gate.ts": "f64305daa36c7331164a878e05be0bc07d945e7eaa75766c0d03b588b7e3a846",
+    "scripts/local-gate.ts": "90a6272ebecb175c3a35fc80008bf8e69687d85ad16748c223b46e3c91de9e3c",
+    "package.json": "149fba06f8079c1e463941b6ed71145e0126f9462794bc812a6f5e0224ed1948",
+    "scripts/privacy-commit-input.test.ts": "72f97009aedd04a9123e296c1fbf626930971b5bded5092fd9cc72f4ebc6e924",
+    "scripts/local-gate.test.ts": "99000a875b412aeee6a5ad18cf79bffc308a0588eca073273836765756c0bdcc",
+    "scripts/local-gate.hooks.test.ts": "a772332fa177805a0c04d02bb468ddb82937885b1f140e88594dff3a6efd19f1"
+  },
+  "inputs": {
+    "small": {
+      "base": "f941d3ee0b53e6757dc14691e73f701621a4956c",
+      "head": "3cedb175331c67e654c3a22addba10cc7bf38d2b",
+      "scanner": "6e8b65d9b",
+      "rulesBytes": 2196161,
+      "files": 10,
+      "bytes": 130297,
+      "commits": 2
+    },
+    "large": {
+      "base": "aeded361adde078d895a7d71dfe2fe64e800c24d",
+      "head": "b0db7a5cf7a00ab18fe9018a3d7aebbe5bbd10d2",
+      "scanner": "6e8b65d9b",
+      "rulesBytes": 2196161,
+      "files": 19,
+      "bytes": 7150527,
+      "commits": 6
+    }
+  },
+  "configuration": {
+    "rulesBytes": 2196161,
+    "rulesSha256": "b4c7535a6ca9ccb103d83bec9815a2f97479f8582a5508050f3651784331b0ca",
+    "catalogSha256": "ccdf66815ab6dbe80260a3d6763bf3dd7d840ef215dd6dda1d7746e9348fc6ed",
+    "freshHomeConfigStateTempAndCache": true,
+    "logicalCpus": 24
+  },
+  "samples": [
+    {
+      "range": "small",
+      "selection": "whole-files",
+      "sample": 1,
+      "cpuSeconds": 3.75,
+      "wallSeconds": 3.76,
+      "peakRssMiB": 151.7,
+      "loadBefore": [
+        21.07958984375,
+        26.19384765625,
+        25.56591796875
+      ],
+      "loadAfter": [
+        21.3935546875,
+        26.173828125,
+        25.5625
+      ],
+      "startedAt": "2026-11-05T14:02:20+00:00",
+      "exit": 0,
+      "profile": false
+    },
+    {
+      "range": "small",
+      "selection": "whole-files",
+      "sample": 2,
+      "cpuSeconds": 4.01,
+      "wallSeconds": 4.05,
+      "peakRssMiB": 177.3,
+      "loadBefore": [
+        21.3935546875,
+        26.173828125,
+        25.5625
+      ],
+      "loadAfter": [
+        20.96142578125,
+        26.0048828125,
+        25.5107421875
+      ],
+      "startedAt": "2026-11-05T14:02:23+00:00",
+      "exit": 0,
+      "profile": true
+    },
+    {
+      "range": "small",
+      "selection": "whole-files",
+      "sample": 3,
+      "cpuSeconds": 3.79,
+      "wallSeconds": 4.24,
+      "peakRssMiB": 154.4,
+      "loadBefore": [
+        51.52587890625,
+        46.7958984375,
+        35.7294921875
+      ],
+      "loadAfter": [
+        51.72412109375,
+        46.91552734375,
+        35.82763671875
+      ],
+      "startedAt": "2026-11-05T14:22:12+00:00",
+      "exit": 0,
+      "profile": false
+    },
+    {
+      "range": "small",
+      "selection": "commit-additions",
+      "sample": 1,
+      "cpuSeconds": 2.21,
+      "wallSeconds": 3.04,
+      "peakRssMiB": 117.5,
+      "loadBefore": [
+        51.46826171875,
+        73.8447265625,
+        56.10791015625
+      ],
+      "loadAfter": [
+        51.46826171875,
+        73.8447265625,
+        56.10791015625
+      ],
+      "startedAt": "2026-11-05T14:32:14+00:00",
+      "exit": 0,
+      "profile": false
+    },
+    {
+      "range": "small",
+      "selection": "commit-additions",
+      "sample": 2,
+      "cpuSeconds": 2.37,
+      "wallSeconds": 4.2,
+      "peakRssMiB": 123.6,
+      "loadBefore": [
+        51.46826171875,
+        73.8447265625,
+        56.10791015625
+      ],
+      "loadAfter": [
+        50.6298828125,
+        73.29931640625,
+        56.0263671875
+      ],
+      "startedAt": "2026-11-05T14:32:17+00:00",
+      "exit": 0,
+      "profile": true
+    },
+    {
+      "range": "small",
+      "selection": "commit-additions",
+      "sample": 3,
+      "cpuSeconds": 2.18,
+      "wallSeconds": 3.16,
+      "peakRssMiB": 119.0,
+      "loadBefore": [
+        50.6298828125,
+        73.29931640625,
+        56.0263671875
+      ],
+      "loadAfter": [
+        48.7373046875,
+        72.5302734375,
+        55.8701171875
+      ],
+      "startedAt": "2026-11-05T14:32:21+00:00",
+      "exit": 0,
+      "profile": false
+    },
+    {
+      "range": "large",
+      "selection": "commit-additions",
+      "sample": 1,
+      "cpuSeconds": 9.63,
+      "wallSeconds": 10.0,
+      "peakRssMiB": 151.4,
+      "loadBefore": [
+        30.15380859375,
+        47.21240234375,
+        50.25537109375
+      ],
+      "loadAfter": [
+        28.39013671875,
+        46.267578125,
+        49.9150390625
+      ],
+      "startedAt": "2026-11-05T14:39:08+00:00",
+      "exit": 0,
+      "profile": false
+    },
+    {
+      "range": "large",
+      "selection": "commit-additions",
+      "sample": 2,
+      "cpuSeconds": 9.62,
+      "wallSeconds": 10.77,
+      "peakRssMiB": 189.1,
+      "loadBefore": [
+        28.39013671875,
+        46.267578125,
+        49.9150390625
+      ],
+      "loadAfter": [
+        26.98779296875,
+        45.3837890625,
+        49.58837890625
+      ],
+      "startedAt": "2026-11-05T14:39:18+00:00",
+      "exit": 0,
+      "profile": true
+    },
+    {
+      "range": "large",
+      "selection": "commit-additions",
+      "sample": 3,
+      "cpuSeconds": 6.62,
+      "wallSeconds": 6.39,
+      "peakRssMiB": 156.3,
+      "loadBefore": [
+        26.98779296875,
+        45.3837890625,
+        49.58837890625
+      ],
+      "loadAfter": [
+        25.46728515625,
+        44.7626953125,
+        49.36474609375
+      ],
+      "startedAt": "2026-11-05T14:39:29+00:00",
+      "exit": 0,
+      "profile": false
+    }
+  ],
+  "baselineLarge": {
+    "outcome": "execution deadline; no gate verdict",
+    "wrapperExit": 124,
+    "executionLimitSeconds": 900,
+    "cpuSeconds": null,
+    "peakRssMiB": null
+  },
+  "excludedSetupRuns": {
+    "count": 3,
+    "reason": "symlinked configuration correctly refused; replaced by identical regular files before final large samples"
+  },
+  "baselineProfileSelfTimePercent": {
+    "learnedRuleSearch": 67.6,
+    "nativeSha256": 2.4,
+    "git": 5.9,
+    "lowercaseAndCompactNormalization": 2.1,
+    "other": 22.0
+  },
+  "mutationChecks": [
+    {
+      "mutation": "selection",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "rules",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "catalog",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "binary",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "metadata",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "ocr",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "tools",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "provenance-missing",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "provenance-invalid",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "media-source",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "messages",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "identities",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "context",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "configuration",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "unsafe",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "pathspec",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "blob-cache",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "snapshot",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "explicit",
+      "testExit": 1,
+      "killed": true
+    },
+    {
+      "mutation": "working-tree",
+      "testExit": 1,
+      "killed": true
+    }
+  ],
+  "verification": {
+    "typecheck": {
+      "command": "bash scripts/gate-slot.sh bunx tsc --noEmit",
+      "exit": 0
+    },
+    "tests": [
+      {
+        "path": "scripts/privacy-commit-input.test.ts",
+        "command": "bun run test scripts/privacy-commit-input.test.ts",
+        "pass": 31,
+        "exit": 0
+      },
+      {
+        "path": "scripts/privacy-publication-gate.test.ts",
+        "command": "bun run test scripts/privacy-publication-gate.test.ts",
+        "pass": 652,
+        "exit": 0
+      },
+      {
+        "path": "scripts/local-gate.test.ts",
+        "command": "bun run test scripts/local-gate.test.ts",
+        "pass": 63,
+        "exit": 0
+      },
+      {
+        "path": "scripts/local-gate.hooks.test.ts",
+        "command": "bun run test scripts/local-gate.hooks.test.ts",
+        "pass": 34,
+        "exit": 0
+      }
+    ],
+    "hostedWorkflowUnchanged": true
+  }
+}
