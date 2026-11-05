@@ -1,5 +1,6 @@
 import { expect, test, Database, path, harness, rawPatchPipeline, closeAndDrain, AgentRegistry, setAgentRegistryForTests,
   loadPipelines, savePipelines, activationDrainFixture, reserveActivationOnly } from "./engine.fixture";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { buildPipeline, findPipelineRecord, loadPipelinesForProjection, loadPipelinesForList,
   loadPipelinesForStartup, isStoredPipeline, pipelineRevision, loadArchivedPipelinesForList } from "./store";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -95,7 +96,7 @@ test("closed pending history with an unresolved original launch remains pending"
   expect(pipeline.runs[1]!.attempts[0]!.state).toBe("pending");
 });
 
-test.each([1, undefined] as const)("close binds an unresolved registry reservation with spawnCalls=%s", async (spawnCalls) => {
+test.each([1, undefined] as const)("close retains a starting registry reservation with spawnCalls=%s", async (spawnCalls) => {
   const h = harness();
   const pipeline = lane();
   const attempt = pipeline.runs[0]!.attempts[1]!;
@@ -120,17 +121,128 @@ test.each([1, undefined] as const)("close binds an unresolved registry reservati
     savePipelines([pipeline]);
     expect(isStoredPipeline(loadPipelines().find(row => row.id === pipeline.id))).toBe(true);
 
-    const result = await rawPatchPipeline(pipeline.id, { action: "close" }, h.ports);
+    const result = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
     expect(result.error).toBeUndefined();
     const closed = stored("pipelines", pipeline.id).pipeline;
     expect({ ...closed.runs[0]!.attempts[1], spawnCalls: closed.runs[0]!.attempts[1]!.spawnCalls ?? null }).toMatchObject({
-      state: "pending", spawnCalls: spawnCalls ?? null,
-      launchId: reservation.receipt.launchId, conversationId });
+      state: "pending", spawnCalls: spawnCalls ?? null, launchId: null, conversationId: null });
     expect(result.close!.pending).toMatchObject([{ stageId: "review", attempt: 2,
       launchId: reservation.receipt.launchId, conversationId }]);
+    expect(result.close!.status).toBe("pending");
+    expect(result.close!.notes).toContainEqual(expect.objectContaining({ launchId: reservation.receipt.launchId,
+      detail: expect.stringContaining("still starting") }));
+    expect(h.calls.filter(call => call.startsWith("stop-host:") || call.startsWith("stop-pane:"))).toEqual([]);
+    expect(registry.spawnReceipt(reservation.receipt.launchId)).toMatchObject({ state: "starting", admissionOwner: expect.objectContaining({ pid: process.pid }) });
     expect(loadPipelines().find(row => row.id === pipeline.id)!.runs[0]!.attempts[1]).toMatchObject({ state: "pending",
-      launchId: reservation.receipt.launchId, conversationId });
+      launchId: null, conversationId: null });
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("a launch that finishes after close remains the same pending receipt until teardown acts on it", async () => {
+  const h = harness();
+  h.ports.now = () => CLOSED;
+  const pipeline = lane();
+  const attempt = pipeline.runs[0]!.attempts[1]!;
+  attempt.spawnCalls = 1;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "close-late-launch.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const membership = { kind: "pipeline" as const, containerId: pipeline.id, role: "agent", slot: "review:2",
+      stageId: "review", stageOrder: 0, round: 2, parentConversationId: null };
+    const reservation = registry.beginSpawnRequest({ engine: "codex", cwd: pipeline.worktreeDir, transport: "structured",
+      clientAttemptId: `pipeline_${pipeline.id}_review_2`, conversationId: "conversation_late_launch", role: "agent",
+      memberships: [membership], launchProfile: { title: "Late pipeline launch" } });
+    expect(reservation.kind).toBe("created");
+    savePipelines([pipeline]);
+
+    const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+    expect(closed.close!.status).toBe("pending");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.state).toBe("pending");
+
+    const owner = captureProcessIdentity(process.pid);
+    const staged = registry.stageStructuredSpawn(reservation.receipt.launchId, {
+      key: { engine: "codex", sessionId: "late-launch-session" },
+      artifactPath: "/codex/late-launch.jsonl", cwd: pipeline.worktreeDir, accountId: null,
+      launchProfile: reservation.receipt.launchProfile, status: "idle", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:close-test", process: owner,
+        eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null,
+        pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(owner)}`, pendingAction: null,
+      structuredHostOperationId: reservation.receipt.launchId,
+    });
+    expect(staged.kind).toBe("settled");
+    expect(registry.spawnReceipt(reservation.receipt.launchId)).toMatchObject({ state: "path-pending" });
+
+    const drained = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+    expect(drained.close!.status).toBe("settled");
+    expect(drained.close!.alreadyStopped).toContainEqual(expect.objectContaining({ launchId: reservation.receipt.launchId }));
+    expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.state).toBe("failed");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.completedAt).toBe(CLOSED);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("close retains every unresolved original request, including handshake retries", async () => {
+  const h = harness();
+  const pipeline = lane();
+  const attempt = pipeline.runs[0]!.attempts[1]!;
+  attempt.spawnCalls = 2;
+  const base = `pipeline_${pipeline.id}_review_2`;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "close-launch-retries.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const make = (clientAttemptId: string, conversationId: `conversation_${string}`, slot: string) => {
+      const membership = { kind: "pipeline" as const, containerId: pipeline.id, role: "agent", slot,
+        stageId: "review", stageOrder: 0, round: 2, parentConversationId: null };
+      return registry.beginSpawnRequest({ engine: "codex", cwd: pipeline.worktreeDir, transport: "structured",
+        clientAttemptId, conversationId, role: "agent", memberships: [membership], launchProfile: { title: "Reserved pipeline stage" } });
+    };
+    const first = make(base, "conversation_original_initial", "review:2");
+    const retry = make(`handshake_retry_1_${base}`, "conversation_original_retry", "review:2");
+    expect(first.kind).toBe("created");
+    expect(retry.kind).toBe("created");
+    savePipelines([pipeline]);
+
+    const result = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+
+    expect(result.close!.status).toBe("pending");
+    expect(result.close!.pending).toMatchObject([
+      { stageId: "review", attempt: 2, launchId: first.receipt.launchId, conversationId: first.receipt.conversationId },
+      { stageId: "review", attempt: 2, launchId: retry.receipt.launchId, conversationId: retry.receipt.conversationId },
+    ]);
+    expect(registry.pipelineSpawnHistory(base).map(receipt => receipt.state)).toEqual(["starting", "starting"]);
+    expect(h.calls.filter(call => call.startsWith("stop-host:") || call.startsWith("stop-pane:"))).toEqual([]);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.state).toBe("pending");
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("conflicting original receipt remains an explicit close obligation without host actuation", async () => {
+  const h = harness();
+  const pipeline = lane();
+  const attempt = pipeline.runs[0]!.attempts[1]!;
+  attempt.spawnCalls = 1;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "close-conflicting-receipt.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const key = `pipeline_${pipeline.id}_review_2`;
+    const reservation = registry.beginSpawnRequest({ engine: "codex", cwd: "/different-worktree", transport: "structured",
+      clientAttemptId: key, conversationId: "conversation_conflicting_receipt", role: "agent",
+      memberships: [{ kind: "pipeline", containerId: pipeline.id, role: "agent", slot: "review:2",
+        stageId: "review", stageOrder: 0, round: 2, parentConversationId: null }],
+      launchProfile: { title: "Conflicting pipeline stage" } });
+    expect(reservation.kind).toBe("created");
+    savePipelines([pipeline]);
+
+    const result = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+
+    expect(result.close!.status).toBe("pending");
+    expect(result.close!.pending).toContainEqual(expect.objectContaining({ launchId: reservation.receipt.launchId }));
+    expect(result.close!.notes).toContainEqual(expect.objectContaining({ launchId: reservation.receipt.launchId,
+      detail: expect.stringContaining("could not be verified") }));
+    expect(result.close!.unconfirmed).toEqual([]);
+    expect(result.close!.stillRunning).toEqual([]);
+    expect(h.calls.filter(call => call.startsWith("stop-host:") || call.startsWith("stop-pane:"))).toEqual([]);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "pending", launchId: null, conversationId: null });
   } finally { setAgentRegistryForTests(null); }
 });
 

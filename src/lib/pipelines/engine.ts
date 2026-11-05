@@ -2928,6 +2928,14 @@ function bindStageReservation(attempt: PipelineStageAttempt, receipt: NonNullabl
     accountId: receipt.accountId ?? attempt.accountId ?? null });
 }
 
+function isVerifiedNoHostStageReceipt(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt,
+  receipt: NonNullable<ReturnType<typeof stageReservationReceipt>>): boolean {
+  if (receipt.state !== "failed" || receipt.membershipAdmitted !== false || receipt.key || receipt.pane
+    || receipt.verifiedHost || receipt.artifactPath || !receipt.clientAttemptId) return false;
+  try { return stageReservationReceipt(pipeline, stageId, attempt, receipt.clientAttemptId)?.launchId === receipt.launchId; }
+  catch { return false; }
+}
+
 async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, bound = false, stopHosts = false): Promise<string | null> {
   if (!bound && (attempt.launchId || attempt.conversationId || attempt.sessionId || attempt.agentPath || attempt.paneId
@@ -15954,6 +15962,16 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
           const current = runFor(live, candidate.target.stageId)?.attempts.find((item) => item.n === candidate.target.attempt);
           const host = plan.hosts?.find((item) => closeHostIdentity(item.target) === closeHostIdentity(candidate.target));
           if (host) host.evidence = closeHostEvidence(candidate.attempt);
+          if (current && current.state === "pending" && candidate.target.launchId
+            && (!current.launchId || current.launchId === candidate.target.launchId)
+            && (!current.conversationId || current.conversationId === candidate.target.conversationId)
+            && (!current.agentPath || current.agentPath === candidate.target.agentPath)
+            && (!current.paneId || current.paneId === candidate.target.paneId)) {
+            current.launchId = candidate.target.launchId;
+            current.conversationId = candidate.target.conversationId;
+            current.agentPath = candidate.target.agentPath;
+            current.paneId = candidate.target.paneId;
+          }
           // The outcome belongs to the frozen host. A scanner may already have
           // bound this attempt to the next reviewer while the stop was in flight.
           if (current && closeHostIdentity(current) === closeHostIdentity(candidate.target)) {
@@ -16004,6 +16022,70 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         if (budget) budget.used++;
         const attempt = runFor(claimed, target.stageId)?.attempts.find((item) => item.n === target.attempt);
         if (!attempt) throw new Error("close target attempt disappeared");
+        const launchObligation = report.notes.some(note => closeHostIdentity(note) === closeHostIdentity(target)
+          && note.detail.startsWith("original stage launch"));
+        const hasAttemptHostAddress = Boolean(attempt.conversationId || attempt.agentPath || attempt.paneId);
+        if (attempt.state === "pending" && (launchObligation || !hasAttemptHostAddress)) {
+          const stage = claimed.stages.find(item => item.id === target.stageId);
+          try {
+            if (!stage) throw new Error("original stage is unavailable");
+            const receipt = target.launchId ? agentRegistry().spawnReceipt(target.launchId) : null;
+            if (!target.launchId) {
+              const base = clientAttemptId(claimed, stage, attempt);
+              const history = agentRegistry().pipelineSpawnHistory(base);
+              const noHost = (item: (typeof history)[number]) => isVerifiedNoHostStageReceipt(claimed, target.stageId, attempt, item);
+              if (history.length && history.every(noHost)) {
+                report.pending = report.pending.filter(item => item !== target);
+                attempt.spawnCalls = 0;
+                attempt.state = "skipped";
+                attempt.completedAt = claimed.closedAt;
+                attempt.error = "pipeline closed before this attempt started";
+                report.notes = report.notes.filter(note => !(note.stageId === target.stageId && note.attempt === target.attempt));
+                await checkpoint();
+                continue;
+              }
+              const found = history.filter(item => !noHost(item));
+              if (!found.length) throw new Error("original stage launch history is still unavailable");
+              const targets = found.map(item => ({ stageId: target.stageId, attempt: target.attempt,
+                conversationId: item.conversationId, agentPath: null, paneId: item.pane?.paneId ?? null, launchId: item.launchId }));
+              report.pending = [...report.pending.filter(item => item !== target), ...targets];
+              for (const item of found) report.notes.push({ stageId: target.stageId, attempt: target.attempt,
+                conversationId: item.conversationId, agentPath: null, paneId: item.pane?.paneId ?? null,
+                launchId: item.launchId, detail: "original stage launch is awaiting receipt validation" });
+              await checkpoint();
+              continue;
+            }
+            if (!receipt?.clientAttemptId) throw new Error("original launch receipt is unavailable");
+            const verified = stageReservationReceipt(claimed, target.stageId, attempt, receipt.clientAttemptId);
+            if (!verified || verified.launchId !== receipt.launchId) throw new Error("original launch receipt conflicts with stage membership or worktree");
+            if (receipt.state === "starting") {
+              upsertCloseLaunchNote(report, target, "original stage launch is still starting; close retains its dispatch custody");
+              continue;
+            }
+            const noHost = receipt.state === "failed" && receipt.membershipAdmitted === false
+              && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath;
+            report.notes = report.notes.filter(note => closeHostIdentity(note) !== closeHostIdentity(target));
+            if (noHost) {
+              report.pending = report.pending.filter(item => item !== target);
+              const other = report.pending.some(item => item.stageId === target.stageId && item.attempt === target.attempt);
+              if (!other) {
+                attempt.spawnCalls = 0;
+                attempt.state = "skipped";
+                attempt.completedAt = claimed.closedAt;
+                attempt.error = "pipeline closed before this attempt started";
+              }
+              await checkpoint();
+              continue;
+            }
+            bindStageReservation(attempt, verified);
+            attempt.paneId = verified.pane?.paneId ?? attempt.paneId;
+            target.paneId = verified.pane?.paneId ?? target.paneId;
+          } catch (error) {
+            upsertCloseLaunchNote(report, target,
+              `original stage launch could not be verified; close retains the obligation: ${String(error)}`);
+            continue;
+          }
+        }
         const host = plan.hosts!.find((item) => closeHostIdentity(item.target) === closeHostIdentity(target));
         // Older obligations have no snapshot. Keep their recorded address and
         // only borrow survivor evidence when the current identity still matches.
@@ -18151,14 +18233,15 @@ export async function patchPipeline(
         const pendingSwitch = openRuntimeSwitch(item);
         if (pendingSwitch) { pendingSwitch.phase = "superseded"; pendingSwitch.settledAt = ports.now(); pendingSwitch.outcome = "pipeline closed"; }
       }
-      reconcileClosedAttemptLaunches(pipeline);
+      const launchCustody = reconcileClosedAttemptLaunches(pipeline);
       const activations = pipeline.runs.flatMap((run) => run.attempts).filter((item) => item.activation);
       for (const item of activations) item.activation!.closeRequested = true;
       // Freeze recorded identities before releasing the collection. A permitted
       // activation appends its original launch only after reconciliation.
-      const pending = launchedStageHosts(pipeline).map(({ target }) => target);
+      const pending = [...launchedStageHosts(pipeline).map(({ target }) => target), ...launchCustody.pending]
+        .filter((target, index, all) => all.findIndex(item => closeHostIdentity(item) === closeHostIdentity(target)) === index);
       pipeline.closeReport = { status: "pending", pending, ...(pendingContinuations.length ? { pendingContinuations } : {}), stopped: [], alreadyStopped: [],
-        unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
+        unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: launchCustody.notes, worktree: null };
       pipeline.closeTeardown = {
         id: crypto.randomUUID(), phase: "pending", waitingForActivation: activations.length > 0,
         acknowledgeHosts: req.acknowledgeHosts === true,
@@ -18194,36 +18277,62 @@ export async function patchPipeline(
 
 /** Reconcile every original request key before close decides an unbound
  * pending row never launched. Registry read failures retain the attempt. */
-function reconcileClosedAttemptLaunches(pipeline: Pipeline): void {
+function reconcileClosedAttemptLaunches(pipeline: Pipeline): {
+  pending: PipelineStageHostRef[];
+  notes: NonNullable<Pipeline["closeReport"]>["notes"];
+} {
+  const pending: PipelineStageHostRef[] = [];
+  const notes: NonNullable<Pipeline["closeReport"]>["notes"] = [];
   const registry = agentRegistry();
   for (const run of pipeline.runs) for (const attempt of run.attempts) {
-    if (attempt.state !== "pending" || attempt.activation || attempt.launchId || attempt.conversationId
+    if (attempt.state !== "pending" || attempt.activation || attempt.conversationId
       || attempt.sessionId || attempt.agentPath || attempt.paneId || attempt.flowId) continue;
-    if (attempt.spawnCalls === 0) continue;
+    if (attempt.spawnCalls === 0 && !attempt.launchId) continue;
     try {
       const stage = pipeline.stages.find(candidate => candidate.id === run.stageId);
-      if (!stage) continue;
+      if (!stage) throw new Error("original stage is unavailable");
       const base = clientAttemptId(pipeline, stage, attempt);
       const history = registry.pipelineSpawnHistory(base);
-      const receipts = history.map(receipt => {
-        if (!receipt.clientAttemptId) throw new Error("original spawn request has no key");
-        return stageReservationReceipt(pipeline, run.stageId, attempt, receipt.clientAttemptId);
-      });
-      const noHostFailure = (receipt: NonNullable<typeof receipts[number]>) => receipt.state === "failed"
-        && receipt.membershipAdmitted === false && !receipt.key && !receipt.pane
-        && !receipt.verifiedHost && !receipt.artifactPath;
-      if ((!receipts.length && (attempt.spawnCalls !== undefined || !attempt.startedAt))
-        || receipts.length > 0 && receipts.every(receipt => receipt && noHostFailure(receipt))) {
+      if (attempt.launchId && !history.some(receipt => receipt.launchId === attempt.launchId)) {
+        const boundReceipt = registry.spawnReceipt(attempt.launchId);
+        if (!boundReceipt) throw new Error("bound original stage launch receipt is unavailable");
+        history.push(boundReceipt);
+      }
+      const noHostFailure = (receipt: (typeof history)[number]) => isVerifiedNoHostStageReceipt(pipeline, run.stageId, attempt, receipt);
+      if (!history.length || history.every(noHostFailure)) {
         attempt.spawnCalls = 0;
         continue;
       }
-      const unresolved = receipts.find(receipt => receipt && receipt.state === "starting")
-        ?? receipts.find(receipt => receipt && !noHostFailure(receipt));
-      if (unresolved) bindStageReservation(attempt, unresolved);
-    } catch {
+      for (const receipt of history) {
+        if (noHostFailure(receipt)) continue;
+        const target: PipelineStageHostRef = { stageId: run.stageId, attempt: attempt.n,
+          conversationId: receipt.conversationId, agentPath: null, paneId: receipt.pane?.paneId ?? null,
+          launchId: receipt.launchId };
+        pending.push(target);
+        try {
+          if (!receipt.clientAttemptId || stageReservationReceipt(pipeline, run.stageId, attempt, receipt.clientAttemptId)?.launchId !== receipt.launchId) {
+            throw new Error("original spawn request identity is unavailable");
+          }
+          notes.push({ ...target, detail: receipt.state === "starting"
+            ? "original stage launch is still starting; close is retaining its dispatch custody"
+            : "original stage launch receipt is retained for close reconciliation" });
+        } catch (error) {
+          notes.push({ ...target, detail: `original stage launch could not be verified; close is retaining it: ${String(error)}` });
+        }
+      }
+    } catch (error) {
       // A missing or conflicting registry read never proves non-execution.
+      const target: PipelineStageHostRef = { stageId: run.stageId, attempt: attempt.n,
+        conversationId: null, agentPath: null, paneId: null, launchId: null };
+      pending.push(target);
+      notes.push({ ...target, detail: `original stage launch history could not be read; close retains the obligation: ${String(error)}` });
     }
   }
+  return { pending, notes };
+}
+
+function upsertCloseLaunchNote(report: PipelineCloseReport, target: PipelineStageHostRef, detail: string): void {
+  report.notes = [...report.notes.filter(note => closeHostIdentity(note) !== closeHostIdentity(target)), { ...target, detail }];
 }
 
 /**
