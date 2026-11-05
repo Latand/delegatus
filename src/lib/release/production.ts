@@ -216,6 +216,9 @@ export function releaseControllerForSources(sources: SeatTickSources) {
           // A completed publisher is terminal; consulting the merge-successor
           // index here would copy and scan the cold archive on every seat tick.
           if (p.state === "completed" && publishOnly) return false;
+          // A merged preparation already has its terminal merge receipt. It
+          // cannot be made more terminal by finding a later delivery owner.
+          if (p.state === "completed" && p.merge?.state === "merged") return false;
           const lane = snapshot.resolve(p);
           const published = !lane.stages.some(stage => stage.id === "prepare")
             && lane.stages.some(stage => isReleasePublishStage(stage));

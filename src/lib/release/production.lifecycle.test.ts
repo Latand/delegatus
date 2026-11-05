@@ -134,6 +134,15 @@ test("a successful publish lane ceases to block future releases", async () => {
   expect(archiveReads).toBe(0);
   expect(await releaseState({ ...ready(), live: policy.live })).toMatchObject({ state: "due" });
 });
+test("a completed merged preparation needs no archived successor lookup", async () => {
+  const preparation = lane("completed-merged-preparation");
+  preparation.merge = merge("merged");
+  preparation.delivery = { target: { repository: project, remote: "fixture", branch: "refs/heads/release", pr: 7 },
+    disposition: "owner", publish: "enabled", active: false, ownerId: preparation.id, epoch: 1, journal: [] };
+  const { policy, archiveReads } = await observe([preparation], Array.from({ length: 256 }, (_, i) => lane(`cold-${i}`)));
+  expect(policy.live).toBe(false);
+  expect(archiveReads).toBe(0);
+});
 test.each(["running", "needs_decision", "preparing", "legacy"])("%s release still blocks another release", async state => {
   const row = lane("blocking", state !== "preparing");
   if (state === "running" || state === "needs_decision") row.state = state;
