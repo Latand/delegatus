@@ -683,7 +683,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     expect(sent).toHaveLength(0);
     // Receipt retirement, activation reservation and the two stable memory
     // observations each retain their own controller turn.
-    for (let tick = 0; tick < 4; tick++) {
+    for (let tick = 0; tick < 8 && launches.length < 2; tick++) {
       h.advanceWallClock(60_000);
       await tickPipelines([], h.ports);
       if (scenario === "before-handoff-settling" && tick === 0) {

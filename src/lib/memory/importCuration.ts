@@ -96,13 +96,15 @@ function selectBatch(project: string): ImportBatch | null {
   const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = openCurrentDatabase(statePath("state.sqlite"), () => new sqlite.Database(statePath("state.sqlite"), { readonly: true, strict: true }));
   try {
+    // Keep dispositions before their pass lookup. Reordering this join makes
+    // SQLite scan the retained pass collection for each candidate.
     const rows = db.query<{ value_json: string; bytes: number }, [string, string, string, string]>(`SELECT json_remove(c.value_json,'$.body') AS value_json, length(CAST(json_extract(c.value_json,'$.body') AS BLOB)) AS bytes FROM state_rows c
       WHERE c.collection='role_memory_import' AND c.row_key>? AND c.row_key<?
       AND COALESCE(json_extract(c.value_json,'$.curationProject'), json_extract(c.value_json,'$.occurrences[0].project'), ?) IN (SELECT value FROM json_each(?))
       AND (json_array_length(c.value_json,'$.dispositions')=0
         OR EXISTS (SELECT 1 FROM json_each(c.value_json,'$.occurrences') o WHERE NOT EXISTS
           (SELECT 1 FROM json_each(c.value_json,'$.dispositions') d, json_each(d.value,'$.occurrences') covered WHERE covered.value=json_extract(o.value,'$.id')))
-        OR EXISTS (SELECT 1 FROM json_each(c.value_json,'$.dispositions') d JOIN state_rows p
+        OR EXISTS (SELECT 1 FROM json_each(c.value_json,'$.dispositions') d CROSS JOIN state_rows p
           ON p.collection='role_memory_curation' AND p.row_key='r:'||json_extract(d.value,'$.pass')
           WHERE json_extract(p.value_json,'$.revertedAt') IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM json_each(d.value,'$.ruleIds') r JOIN json_each(p.value_json,'$.skipped') s ON r.value=s.value)

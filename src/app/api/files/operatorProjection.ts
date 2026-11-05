@@ -825,9 +825,11 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
 
 /** The operator's summary representation, sharing the poll's scan and cache.
     Internal reads neither mark presence nor run the board migration. */
-async function operatorBoardBody(): Promise<string> {
+async function operatorBoardBody(signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const request = new Request("http://localhost/api/files?view=summary");
   const scan = await cachedFileScan(undefined, undefined, Date.now(), undefined, undefined, { copySnapshot: false });
+  signal?.throwIfAborted();
   const scope = projectionScopeKey(undefined, true, false);
   const cached = projectionCache().get(scope)?.representation;
   const projected = filesystemExhausted() && cached ? { representation: cached } : await projectionFor(scope, projectionKey(projectionBaseKey(scan, undefined)), request, scan, true);
@@ -835,8 +837,10 @@ async function operatorBoardBody(): Promise<string> {
 }
 
 
-export async function operatorBoardRepresentation(): Promise<import("@/lib/attention/needsYouRead").NeedsYouBody> {
-  return JSON.parse(await operatorBoardBody());
+export async function operatorBoardRepresentation(signal?: AbortSignal): Promise<import("@/lib/attention/needsYouRead").NeedsYouBody> {
+  const body = await operatorBoardBody(signal);
+  signal?.throwIfAborted();
+  return JSON.parse(body);
 }
 
 /** The exact panel representation, decoded and reduced outside the Viewer. */

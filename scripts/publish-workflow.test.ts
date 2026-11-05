@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const workflow = readFileSync(
   join(import.meta.dir, "..", ".github", "workflows", "publish.yml"),
@@ -646,4 +647,35 @@ test("GitHub publication failures remain visible in their own job", () => {
   expect(result.exitCode).toBe(43);
   expect(result.stderr.toString()).toContain("Synthetic GitHub publication refusal");
   expect(existsSync(join(fixture.directory, "release.json"))).toBe(false);
+});
+
+test("the publishing script refuses an unmerged tag and accepts a main ancestor", () => {
+  const root = mkdtempSync(join(tmpdir(), "publish-main-"));
+  temporaryDirectories.push(root);
+  const lane = join(root, "lane"), remote = join(root, "origin.git");
+  mkdirSync(lane);
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(root, "no-config"), GIT_CONFIG_COUNT: "0",
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: ["noreply", "example.invalid"].join("@"), GIT_COMMITTER_EMAIL: ["noreply", "example.invalid"].join("@"),
+    GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
+    RELEASE_TAG: "v1.2.0", GITHUB_OUTPUT: join(root, "output") };
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: lane, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--bare", "--initial-branch=main", remote); git("init", "--initial-branch=release");
+  writeFileSync(join(lane, "package.json"), JSON.stringify({ version: "1.1.0" }));
+  git("add", "."); git("commit", "-m", "base");
+  git("remote", "add", "origin", remote); git("push", "origin", "HEAD:refs/heads/main");
+  writeFileSync(join(lane, "package.json"), JSON.stringify({ version: "1.2.0" }));
+  git("add", "."); git("commit", "-m", "release");
+  const release = git("rev-parse", "HEAD");
+  git("tag", "-a", "v1.2.0", "-m", "Delegatus 1.2.0"); git("push", "origin", "refs/tags/v1.2.0");
+  git("update-ref", "refs/remotes/origin/main", release);
+  const run = () => spawnSync("bash", ["-c", workflowStepScript("Verify immutable release tag")], { cwd: lane, env, encoding: "utf8", timeout: 15_000 });
+  const denied = run();
+  expect(denied.status, denied.stderr).not.toBe(0);
+  expect(denied.stderr).toContain("not on main; merge the reviewed release PR");
+  expect(linesFrom(env.GITHUB_OUTPUT)).toEqual([]);
+  git("commit", "--allow-empty", "-m", "main advances"); git("push", "origin", "HEAD:refs/heads/main");
+  git("checkout", "--detach", release);
+  const accepted = run();
+  expect(accepted.status, accepted.stderr).toBe(0);
+  expect(linesFrom(env.GITHUB_OUTPUT)).toEqual([`revision=${release}`]);
 });

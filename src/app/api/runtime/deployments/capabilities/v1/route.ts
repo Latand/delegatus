@@ -77,6 +77,7 @@ export function GET(): Response {
     {
       capability: "viewer-deployments",
       version: 1,
+      admissionFence: true,
       registryBackendMode: sqliteModeFromEnvironment(),
       releaseReady,
       structuredDeliveryController,
