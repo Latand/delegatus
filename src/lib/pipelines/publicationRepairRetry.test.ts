@@ -103,7 +103,7 @@ test.each([
   try {
     const accepted = await parkedRepair(f);
     const file = path.join(f.root, "legacy-registry.json");
-    registry = new AgentRegistry(file, undefined, undefined, { sqliteMode: "json" });
+    registry = new AgentRegistry(file, undefined, undefined, { sqliteMode: "off" });
     const conversation = registry.ensureForkedConversation("codex", path.join(f.root, "producer.jsonl"),
       "fixture-account", emptyLaunchProfile({ cwd: f.lane() }));
     registry.requestConversationReseat(conversation.id, "successor-account");
@@ -128,7 +128,7 @@ test.each([
     const now = new Date(Date.parse(original.publicationRepair!.refusedAt) + age).toISOString();
     const result = await realExec(process.execPath, ["-e", `
       const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry");
-      const registry = new AgentRegistry(${JSON.stringify(file)}, undefined, undefined, { sqliteMode: "json" });
+      const registry = new AgentRegistry(${JSON.stringify(file)}, undefined, undefined, { sqliteMode: "off" });
       setAgentRegistryForTests(registry);
       const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine");
       const { findPipelineRecord } = await import("./src/lib/pipelines/store");
