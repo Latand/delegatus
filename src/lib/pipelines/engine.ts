@@ -2453,7 +2453,11 @@ export function defaultPipelinePorts(
         if (!sessions.length || sessions.some(session => session.host === "conflict" || session.attentionIds.length > 0)
           || exitStatusPending(conversationId)) return null;
         const gone = sessions.every(session => ["dead", "unhosted"].includes(session.host));
-        if (gone) runtimeReads.reset();
+        // This read is ordered after transcript and durable evidence reads.
+        // Reset the shared activity cache on either outcome so a fresh host
+        // adoption invalidates an earlier cached dead session before the
+        // retry decision consumes conversationAgentActive.
+        runtimeReads.reset();
         return gone;
       } catch { return null; }
     },
@@ -5730,9 +5734,12 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
   const hostGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
-  const active = hostGone === true ? false : await ports.conversationAgentActive(conversationId).catch(() => null);
+  const active = await ports.conversationAgentActive(conversationId).catch(() => null);
   return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle",
-    dead: interrupted === "dead" || hostGone === true, hostGone };
+    // The interruption read can precede a host adoption while durable evidence
+    // is awaited. A fresh host observation that says it is present supersedes
+    // that earlier death result.
+    dead: active !== true && (hostGone === true || (hostGone !== false && interrupted === "dead")), hostGone };
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
@@ -5772,9 +5779,18 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   if (!worker.conversationId) return abandon("the producer has no conversation.");
   const { active, durable } = evidence;
   const bounded = !passedStageCustodyPark(pipeline, attempt);
-  if (ports.conversationDeliveryOutstanding?.(worker.conversationId)) return refusal;
+  const outstanding = ports.conversationDeliveryOutstanding?.(worker.conversationId) === true;
+  const repairDeliverySettled = delivery?.state === "failed" && delivery.safeToReplace
+    || delivery?.state === "unreserved" && delivery.safeToReplace && !repair?.requestedAt;
+  const canProceedWithUnrelatedHeldDelivery = outstanding && evidence.hostGone === true && expired && repairDeliverySettled;
+  // An unrelated message can remain held behind account migration after the
+  // repair itself has failed. Once the old producer is freshly confirmed gone
+  // and this repair's original window has elapsed, that older reservation
+  // cannot keep the accepted head parked forever. Keep it in the registry so
+  // its own lifecycle can settle it later.
+  if (outstanding && !canProceedWithUnrelatedHeldDelivery) return refusal;
   if (active === true) return refusal;
-  if (active === false && (repair || bounded)) return abandon("the producer is gone or idle.");
+  if (active === false && evidence.hostGone !== false && (repair || bounded)) return abandon("the producer is gone or idle.");
   const background = liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(now));
   const progressAt = durable?.lastRecordAt ?? durable?.message?.ts;
   if ((durable?.turn === "busy" && typeof progressAt === "number"
@@ -5787,7 +5803,7 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
     && (durable.message?.ts ?? 0) > (repair?.messageTs ?? 0)
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repairStartedAt);
   const failed = delivery?.state === "failed";
-  if (durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
+  if (durable?.turn === "busy" || outstanding && !canProceedWithUnrelatedHeldDelivery
     || background.length > 0 || active !== false && !finished && !failed) return refusal;
   if (repair) {
     if (delivery) repair.delivery = delivery;
