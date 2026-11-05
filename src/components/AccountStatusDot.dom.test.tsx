@@ -138,3 +138,22 @@ test("while open it hides the lines it lies over whole, and a row whose head it 
   expect(view.host.querySelector<HTMLElement>('[data-account-row="other"] [data-account-head]')!.style.visibility).toBe("");
   await view.unmount();
 });
+
+test("a status opened by the keyboard closes when focus leaves the dot, restores what it hid and leaves the next control reachable", async () => {
+  const view = await mount("");
+  const dot = view.host.querySelector<HTMLButtonElement>("[data-account-status]")!;
+  const next = view.host.querySelector<HTMLButtonElement>("[data-account-toggle='own']")!;
+  await act(async () => dot.focus());
+  await act(async () => dot.click());
+  await run();
+  await run();
+  expect(dot.getAttribute("aria-expanded")).toBe("true");
+  expect(hidden(view.host, "near")).toBe(true);
+  await act(async () => next.focus());
+  expect(document.activeElement).toBe(next);
+  expect(dot.getAttribute("aria-expanded")).toBe("false");
+  expect(document.querySelector("[role='tooltip']")).toBeNull();
+  expect(hidden(view.host, "near")).toBe(false);
+  expect(view.host.querySelector<HTMLElement>('[data-account-row="other"] [data-account-head]')!.style.visibility).toBe("");
+  await view.unmount();
+});

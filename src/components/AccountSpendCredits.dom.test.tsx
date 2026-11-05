@@ -262,3 +262,35 @@ test.each(["en", "uk"] as const)("the credits block shows only with paid credits
   expect(shown({ spendCredits: true }, null)).toBe(true);
   expect(limitLeftPercent(quotaLeft(80, 4))).toBe(4);
 });
+
+test("turning the switch off above the band moves focus to the row's toggle; a refused save keeps the switch and its error", () => {
+  setLocale("en");
+  const HIGH = quotaLeft(42);
+  const paidCredits = { balance: "1250.00", checkedAt: null };
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+  const writes: boolean[] = [];
+  const draw = (account: object) => flushSync(() => root.render(
+    <div data-account-row="account-h">
+      <button type="button" data-account-toggle="account-h">H</button>
+      <AccountSpendCredits quota={HIGH} account={{ id: "account-h", label: "H", authPresent: true, paidCredits, ...account } as never}
+        state={{ engine: "codex", setSpendCredits: async (_id: string, enabled: boolean) => { writes.push(enabled); return true; } } as never} />
+    </div>));
+  draw({ spendCredits: true });
+  const toggle = host.querySelector<HTMLElement>("[data-account-toggle]")!;
+  const switchOf = () => host.querySelector<HTMLButtonElement>('[role="switch"]');
+  switchOf()!.focus();
+  expect(document.activeElement).toBe(switchOf());
+  flushSync(() => switchOf()!.click());
+  expect(writes).toEqual([false]);
+  // The save is refused: the switch stays with its error and focus does not jump.
+  draw({ spendCredits: true, spendCreditsError: true });
+  expect(switchOf()).not.toBeNull();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  expect(document.activeElement).toBe(switchOf());
+  // The save lands: the block leaves with the switch focused, and focus stays in the row.
+  flushSync(() => switchOf()!.click());
+  draw({ spendCredits: false });
+  expect(switchOf()).toBeNull();
+  expect(document.activeElement).toBe(toggle);
+});

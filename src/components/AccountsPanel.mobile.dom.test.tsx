@@ -630,3 +630,26 @@ test("a hidden Main is offered back under the add row on the phone", async () =>
   await act(async () => button.click());
   expect(restored).toEqual(["default"]);
 });
+
+test("the phone's device sign-in line shows until the next read says the account is authenticated or signed out", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    return Response.json({ account: { id: "cx-spare" }, deviceAuth: { url: "https://example.invalid/device", code: "ABCD-EFGH" } });
+  }) as typeof fetch;
+  const view = await mount([engineState("codex", [codexMain, codexSpare], "cx-main")]);
+  const line = () => view.host.querySelector('[data-account-signin="cx-spare"]');
+  const pressed = async () => {
+    await click(view.host.querySelector('[data-account-signin-start="cx-spare"]'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  };
+  await pressed();
+  expect(text(line())).toContain("ABCD-EFGH");
+  await view.rerender([engineState("codex", [codexMain, { ...codexSpare, authPresent: true, authHealth: "authenticated" }], "cx-main")]);
+  expect(line()).toBeNull();
+  // Signed out again with no pending login: pressed anew, then a read that leaves it so.
+  await view.rerender([engineState("codex", [codexMain, codexSpare], "cx-main")]);
+  await pressed();
+  expect(line()).not.toBeNull();
+  await view.rerender([engineState("codex", [codexMain, { ...codexSpare }], "cx-main")]);
+  expect(line()).toBeNull();
+});

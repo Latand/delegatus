@@ -167,7 +167,8 @@ export function AccountStatusDot({ accountId, label, word, tone, plan, note, pho
         onPointerEnter={(event) => { if (event.pointerType === "mouse") setHovered(true); }}
         onPointerLeave={() => setHovered(false)}
         onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        // Leaving the dot by keyboard closes the status, so what it hid shows again and the next control is reachable.
+        onBlur={() => { setFocused(false); setTapped(false); }}
         onClick={() => { setTapped((value) => !value); setFocused(false); }}
         // Escape on an open status closes the status; the dialog around it stays.
         onKeyDown={(event) => {

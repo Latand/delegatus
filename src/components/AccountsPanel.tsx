@@ -22,7 +22,7 @@ import { quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQ
 import { tierWindowKey, type TierWindowKey } from "@/lib/types";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
-import { AccountRowOpening } from "./AccountRowOpening";
+import { AccountRowOpening, revealRow } from "./AccountRowOpening";
 import { AccountSpendCredits, paidSpendingActive, showsCreditsBlock } from "./AccountSpendCredits";
 import { AccountRemovalRefusal, liveWorkHref, refusalText } from "./AccountRemovalRefusal";
 import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, ArchivePath, HiddenAccountOffer } from "./AccountRemovalSummary";
@@ -228,7 +228,7 @@ function WindowLines({ account, facts, now, engine, wide }: { account: AccountOp
 }
 
 /** What the row says at rest besides its name and numbers: one fact per line, and only when there is something to act on or to know. */
-function RowNotes({ account, facts, now }: { account: AccountOption; facts: RowFacts; now: number }) {
+function RowNotes({ account, facts, now, open }: { account: AccountOption; facts: RowFacts; now: number; open: boolean }) {
   const { t } = useLocale();
   const s = useSizes();
   const lines: { key: string; ink: string; text: string }[] = [];
@@ -237,7 +237,9 @@ function RowNotes({ account, facts, now }: { account: AccountOption; facts: RowF
       ? { key: "past", ink: "font-semibold text-secondary", text: t("accounts.pastLimitOnPaid") }
       : { key: "limit", ink: "font-semibold text-danger", text: facts.until === null ? t("rateLimit.badge") : t("rateLimit.badgeUntil", { time: formatResetClock(facts.until, now) }) });
   }
-  if (facts.stale) lines.push({ key: "stale", ink: "text-muted", text: formatQuotaAsOf(facts.observedAt) ?? t("accounts.limitsStale") });
+  /* The open row's Refresh line names the moment the numbers were read, so the note leaves it out there. */
+  const refreshNamesIt = open && facts.checked !== null && !account.provider && account.authPresent;
+  if (facts.stale && !refreshNamesIt) lines.push({ key: "stale", ink: "text-muted", text: formatQuotaAsOf(facts.observedAt) ?? t("accounts.limitsStale") });
   if (account.provider && facts.status !== "error") lines.push({ key: "provider", ink: "text-muted", text: t("accounts.provider.limitsUnknown") });
   return <>{lines.map((line) => <p key={line.key} data-account-note={line.key} data-account-line className={`break-words ${s.line} ${line.ink}`}>{line.text.charAt(0).toUpperCase() + line.text.slice(1)}</p>)}</>;
 }
@@ -554,16 +556,22 @@ type RowSurface = {
 };
 
 type AccountSignIn = {
+  /** The link and code a press was handed, for as long as the account is signing in. */
   challenge: { accountId: string; deviceAuth: DeviceAuth } | null;
   start: (account: AccountOption) => void;
   cancel: (account: AccountOption) => void;
 };
 
-/** The sign-in a row can start. A Codex device sign-in hands its link and code back in the answer to the tap only, so the surface keeps them for the row. */
+/** The sign-in a row can start. A Codex device sign-in hands its link and code back in the answer to the tap only, so the surface keeps them for the row. They are kept while the account is signing in: the first list read after the answer that no longer shows the account signing in ends them, whether it signed in or gave up. */
 function useAccountSignIn(state: EngineAccountsState, receipts?: ReceiptStore): AccountSignIn {
   const { t } = useLocale();
-  const [challenge, setChallenge] = useState<AccountSignIn["challenge"]>(null);
+  const [held, setHeld] = useState<{ accountId: string; deviceAuth: DeviceAuth; read: AccountOption[] } | null>(null);
   const engine = state.engine;
+  const accounts = useRef(state.accounts);
+  useEffect(() => { accounts.current = state.accounts; });
+  const ended = held !== null && state.accounts !== held.read && !state.accounts.some((account) => account.id === held.accountId && account.loginPending);
+  if (ended) setHeld(null);
+  const challenge = held && !ended ? { accountId: held.accountId, deviceAuth: held.deviceAuth } : null;
   return {
     challenge,
     start: (account) => {
@@ -571,12 +579,12 @@ function useAccountSignIn(state: EngineAccountsState, receipts?: ReceiptStore): 
         ? state.retryLogin(account.id).then((ok) => ({ ok, deviceAuth: null as DeviceAuth | null }))
         : startCodexDeviceSignIn(state, account.id);
       void started.then(({ ok, deviceAuth }) => {
-        setChallenge(ok && deviceAuth ? { accountId: account.id, deviceAuth } : null);
+        setHeld(ok && deviceAuth ? { accountId: account.id, deviceAuth, read: accounts.current } : null);
         receipts?.show(t(ok ? "mobile2.accounts.signInStarted" : "mobile2.accounts.signInFailed", { label: account.label }));
       });
     },
     cancel: (account) => {
-      setChallenge((current) => (current?.accountId === account.id ? null : current));
+      setHeld((current) => (current?.accountId === account.id ? null : current));
       void cancelCodexDeviceSignIn(state, account.id);
     },
   };
@@ -598,6 +606,8 @@ function AccountRow({ account, engine, quota, surface }: {
   const open = openId === account.id;
   const toggle = () => setOpenId(open ? null : account.id);
   const removal = useRemoval(() => void state.remove(account.id));
+  // An armed removal belongs to the open row: closing the row disarms it.
+  if (!open && removal.armed) removal.disarm();
   const [providerOpen, setProviderOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -662,7 +672,7 @@ function AccountRow({ account, engine, quota, surface }: {
         </div>
         <div data-account-below className={`flex flex-col gap-0.5 ${s.indent} ${s.below} empty:hidden`}>
           <WindowLines account={account} facts={facts} now={now} engine={engine} wide={wide} />
-          <RowNotes account={account} facts={facts} now={now} />
+          <RowNotes account={account} facts={facts} now={now} open={open} />
           {engine === "codex" ? <AccountSpendCredits account={account} state={state} quota={quota} phone={phone} column={s.column(wide)} className={`${s.line} ${s.credits}`} /> : null}
           <ResetLine account={account} state={state} facts={facts} now={now} receipts={receipts} />
           {challenge ? (
@@ -671,7 +681,7 @@ function AccountRow({ account, engine, quota, surface }: {
           {engine === "claude" && !account.provider
             ? <ClaudeLoginRow key={account.login?.operationId ?? account.id} account={account} state={state} loginBusy={loginBusy} headSignIn={canSignIn} inRow />
             : null}
-          <AccountRowOpening open={open} phone={phone}>
+          <AccountRowOpening open={open} phone={phone} onOpened={() => { if (rowRef.current) revealRow(rowRef.current); }}>
             {/* The separate way to make an account the default, only where it can become one. */}
             {!isActive && facts.usable ? (
               <button
@@ -1152,8 +1162,8 @@ function ClaudeProviderEditor({ state, account, phone = false, inRow = false, op
 
 /**
  * Unified, engine-parameterized Accounts panel. Symmetric for Claude and Codex:
- * account list with capacity chips, direct active-account selection, clear
- * operation state, and the add-account form.
+ * account list with every limit window on its row, a separate Make default
+ * inside the open row, clear operation state, and the add-account form.
  *
  * `placement` picks the desktop anchor for the caller's surface (mobile always
  * uses the bottom sheet):
@@ -1405,20 +1415,19 @@ export function AccountsPanel({
  * ────────────────────────────────────────────────────────────────────────── */
 
 /*
- * docs/design/mobile-v2/README.md §4.8: a screen from `⋯`, per engine. The
- * active account is a card — filled engine mark, label, `active`, plan,
- * "checked 14:32", the lowest window in the corner as `38% left / Week`,
- * coloured by what remains — with its windows as `label · meter · % left` and
- * the reset line under each, the resets line, and Refresh / Use one reset as
- * 44 px text buttons. Other authenticated accounts are quiet rows (`ready`)
- * that switch future launches on the tap, with Switch back in the receipt.
- * Accounts that are not signed in are quiet rows with a trailing `sign in →`
- * that opens the device sign-in; they become active only after it returns.
- * "Add a … account" is last.
+ * docs/design/mobile-v2/README.md §4.8: a screen from `⋯`, per engine. Each
+ * account is the same row the dialog draws (AccountRow): the default leads,
+ * every limit window sits under the name as `label · meter · % left · reset`,
+ * and a press on the row opens it in place with Refresh, Use one reset, Copy
+ * CLI and Remove as 44 px text buttons. A press never selects an account:
+ * Make default is its own control in the open row, with Switch back in the
+ * receipt. An account that is not signed in carries a Sign in beside its name
+ * that opens the device sign-in; it becomes the default only by being made
+ * one. "Add a … account" is last.
  *
- * Every meter fills with what REMAINS (§5); the corner names its window; no
- * action asks for confirmation (§2 rule 9). The desktop dialog above is
- * untouched: this is the phone's layout over the same account store.
+ * Every meter fills with what REMAINS (§5); each percent names its window; no
+ * action asks for confirmation (§2 rule 9), except the removal that moves a
+ * home into the archive. The dialog and this screen differ in sizes only.
  */
 
 export type MobileAccountState = "active" | "ready" | "needsSignIn" | "error" | "pending";

@@ -61,18 +61,28 @@ export function AccountSpendCredits({ account, state, quota, phone = false, colu
   const failed = account.spendCreditsError === true;
   const enabled = account.spendCredits === true;
   const wasEnabled = useRef(enabled);
+  // The row's toggle, where focus goes if the switch leaves with the block.
+  const heir = useRef<HTMLElement | null>(null);
+  const shown = state.engine === "codex" && showsCreditsBlock(account, quota);
   // The error sits at the end of the row, which can be below the scroller's
   // fold: bring it fully into view when it appears.
   useEffect(() => {
-    if (failed) alertRef.current?.scrollIntoView?.({ block: "nearest" });
+    if (failed) { heir.current = null; alertRef.current?.scrollIntoView?.({ block: "nearest" }); }
   }, [failed]);
+  // Turning the switch off above the band unmounts the block with the switch focused: focus stays in the row.
+  useEffect(() => {
+    if (shown || !heir.current) return;
+    const target = heir.current;
+    heir.current = null;
+    if (target.isConnected && (!document.activeElement || document.activeElement === document.body)) target.focus();
+  }, [shown]);
   // Turning the switch on adds a line to the open row: keep the row whole in
   // the scroller.
   useEffect(() => {
     if (enabled && !wasEnabled.current) detailRef.current?.scrollIntoView?.({ block: "nearest" });
     wasEnabled.current = enabled;
   }, [enabled]);
-  if (state.engine !== "codex" || !showsCreditsBlock(account, quota)) return null;
+  if (!shown) return null;
   const paid = account.paidCredits;
   const checked = quota ? limitsCheckedClock(quota) : null;
   const readAt = paid?.checkedAt && !Number.isNaN(new Date(paid.checkedAt).getTime()) ? formatReadClock(paid.checkedAt) : null;
@@ -88,7 +98,11 @@ export function AccountSpendCredits({ account, state, quota, phone = false, colu
           {shownRead ? ` · ${t("accounts.paidRead", { at: shownRead })}` : ""}
         </span>
         <SettingSwitch id={switchId} aria-label={t("accounts.spendCredits")} enabled={enabled} size={phone ? "sheet" : "row"}
-          onClick={() => void state.setSpendCredits?.(account.id, !enabled)} />
+          onClick={(event) => {
+            const hides = enabled && !showsCreditsBlock({ ...account, spendCredits: false }, quota);
+            heir.current = hides ? event.currentTarget.closest("[data-account-row]")?.querySelector<HTMLElement>("[data-account-toggle]") ?? null : null;
+            void state.setSpendCredits?.(account.id, !enabled);
+          }} />
       </div>
       {failed ? <p ref={alertRef} role="alert" className="break-words text-danger">{t("accounts.spendCreditsFailed")}</p> : null}
     </div>

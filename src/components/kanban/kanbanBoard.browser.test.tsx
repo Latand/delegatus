@@ -189,19 +189,25 @@ describe("account row", () => {
      schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the frames and `readings.json`;
      `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
   browserTest("the dialog's rows hold every state at every width, language and scheme, with the keyboard and reduced motion", async () => {
-    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard } = await import("@/components/accountRowFrames");
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
     const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "dialog"); fs.mkdirSync(out, { recursive: true });
     const rows = accountRowRoutes();
     const server = await serveEvidenceFixture(out, undefined, rows.routes);
     // The desktop's scrollbars are part of the width a row has.
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+        return;
+      }
       const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
       const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [640, 900, 1170, 1440], height: 900, only });
       expect(failures).toEqual([]);
       expect(frames).toBeGreaterThan(0);
       if (!only) {
         expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 900 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
       }
     } finally { await browser.close(); server.stop(); }
   }, 7_200_000);

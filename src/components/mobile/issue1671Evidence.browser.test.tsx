@@ -14685,18 +14685,24 @@ describe("account row on the phone", () => {
      in both languages and both schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the
      frames and `readings.json`; `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
   browserTest("390 px: every state of the row on the accounts screen, in both languages and schemes, with the keyboard and reduced motion", async () => {
-    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard } = await import("@/components/accountRowFrames");
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
     const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "phone"); fs.mkdirSync(out, { recursive: true });
     const rows = accountRowRoutes();
     const server = await serveEvidenceFixture(out, undefined, rows.routes);
     const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
     try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+        return;
+      }
       const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
       const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "phone", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [360, 390, 430], height: 844, only });
       expect(failures).toEqual([]);
       expect(frames).toBeGreaterThan(0);
       if (!only) {
         expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
       }
     } finally { await browser.close(); server.stop(); }
   }, 7_200_000);

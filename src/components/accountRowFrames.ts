@@ -585,3 +585,59 @@ export async function captureAccountRowKeyboard(options: Pick<FrameOptions, "bro
   }
   return failures;
 }
+
+/**
+ * A row opened below the fold shows what opened: the press is the only thing
+ * done, and the row's last control ends whole in every scroller that holds it
+ * with its head visible below any sticky header. A row taller than its room
+ * aligns its head to the top. Nothing here scrolls on its own, so a missing
+ * scroll on open cannot be hidden by the driver.
+ */
+export async function captureAccountRowReveal(options: Pick<FrameOptions, "browser" | "base" | "out" | "routes" | "surface"> & { width: number; height: number }): Promise<string[]> {
+  const { browser, base, out, routes, surface, width, height } = options;
+  const phone = surface === "phone";
+  const failures: string[] = [];
+  fs.mkdirSync(out, { recursive: true });
+  for (const locale of ["uk", "en"] as const) for (const motion of ["no-preference", "reduce"] as const) for (const id of ["team-seat", "reserve"]) {
+    routes.control.reset("core");
+    const { page, context, pageErrors } = await openFixture(browser, `${base}?scenario=account-row&surface=${surface}&engine=codex`, { width, height }, "light", locale, motion, phone);
+    const key = `${surface}-${width}x${height}-${locale}-${motion}-reveal-${id}`;
+    try {
+      await page.locator(rowOf(id)).waitFor();
+      // The closed row at the bottom edge of what shows it, then one press on its toggle.
+      await page.locator(rowOf(id)).evaluate((row) => row.scrollIntoView({ block: "end" }));
+      await page.locator(toggleOf(id)).click();
+      await settle(page);
+      await page.waitForTimeout(120);
+      const reading = await page.evaluate((target) => {
+        const row = document.querySelector<HTMLElement>(`[data-account-row="${target}"]`)!;
+        const controls = [...row.querySelectorAll<HTMLElement>("[data-account-opening] button")].filter((button) => button.getClientRects().length > 0);
+        const last = controls.at(-1) ?? null;
+        const head = row.querySelector<HTMLElement>("[data-account-head]")!;
+        // What clips the row from outside: every scrolling ancestor, less its sticky header, and the window.
+        let top = 0;
+        let bottom = window.innerHeight;
+        for (let node = row.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+          if (!/auto|scroll/.test(getComputedStyle(node).overflowY)) continue;
+          const edge = node.getBoundingClientRect();
+          const bar = node.querySelector<HTMLElement>(":scope > header");
+          top = Math.max(top, edge.top + (bar && getComputedStyle(bar).position === "sticky" ? bar.getBoundingClientRect().height : 0));
+          bottom = Math.min(bottom, edge.bottom);
+        }
+        const rect = (element: HTMLElement | null) => element && { top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom };
+        return { open: row.querySelector("[data-account-toggle]")?.getAttribute("aria-expanded"), top, bottom, last: rect(last), head: rect(head), row: rect(row) };
+      }, id);
+      await page.screenshot({ path: path.join(out, `${key}.png`) });
+      if (reading.open !== "true") failures.push(`${key}: the press did not open the row`);
+      else if (!reading.last || !reading.head || !reading.row) failures.push(`${key}: no control or head to measure`);
+      else {
+        const room = reading.bottom - reading.top;
+        if (reading.head.top < reading.top - 0.75) failures.push(`${key}: the head is cut at the top (${Math.round(reading.head.top)} under ${Math.round(reading.top)})`);
+        if (reading.row.bottom - reading.row.top <= room && reading.last.bottom > reading.bottom + 0.75) failures.push(`${key}: the last control ends at ${Math.round(reading.last.bottom)}, past the room's edge ${Math.round(reading.bottom)}`);
+        if (reading.row.bottom - reading.row.top > room && Math.abs(reading.head.top - reading.top) > 8) failures.push(`${key}: a row taller than its room has its head at ${Math.round(reading.head.top)}, not at ${Math.round(reading.top)}`);
+      }
+      if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+    } finally { await context.close(); }
+  }
+  return failures;
+}

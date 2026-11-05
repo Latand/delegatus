@@ -9,7 +9,7 @@ import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
-import { formatQuotaAsOf, formatResetClock } from "./rateLimit";
+import { formatCheckedClock, formatQuotaAsOf, formatResetClock } from "./rateLimit";
 
 /** An archive under an invented home, composed so the `~` fold is exercised
     without a home path written out in a published source. */
@@ -1141,4 +1141,88 @@ test("a row with credits shows a whole balance, each percentage once and its nam
   expect(row.textContent!.match(/Spare/g)).toHaveLength(1);
   // What spending does while on is the open row's line, and only while the switch is on.
   expect(row.textContent).not.toContain("keeps working on credits");
+});
+
+// ── The row's lifecycle: closing, sign-in ending, one statement of the reading ─────
+
+test("closing a row disarms its removal, by its toggle and by opening another row", async () => {
+  const removed: string[] = [];
+  const other = { ...managedAcc, id: "other", label: "Other" };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc, other], active: "other", remove: async (id) => { removed.push(id); return true; } }));
+  mounted.push(view);
+  const armedOf = (id: string) => view.host.querySelector(`[data-account-remove-armed="${id}"]`);
+  const arm = (id: string) => {
+    openRow(view.host, id);
+    flushSync(() => { view.host.querySelector<HTMLButtonElement>(`[data-account-remove="${id}"]`)!.click(); });
+    expect(armedOf(id)).not.toBeNull();
+  };
+  arm("acc");
+  openRow(view.host, "acc");
+  expect(view.host.querySelector('[data-account-toggle="acc"]')!.getAttribute("aria-expanded")).toBe("false");
+  expect(armedOf("acc")).toBeNull();
+  arm("acc");
+  openRow(view.host, "other");
+  expect(armedOf("acc")).toBeNull();
+  expect(view.host.querySelector('[data-account-toggle="other"]')!.getAttribute("aria-expanded")).toBe("true");
+  expect(removed).toEqual([]);
+});
+
+/** A Codex account that is signed out, as the list names it. */
+const signedOutCodex = { id: "old", label: "Old", kind: "managed" as const, authPresent: false, authHealth: "signed_out" as const, loginPending: false, loginState: "idle" as const, deviceAuth: null, login: null };
+
+async function signInPressed(accounts: Array<typeof signedOutCodex | typeof managedAcc>) {
+  const saved = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    return Response.json({ account: { id: "old" }, deviceAuth: { url: "https://example.invalid/device", code: "QXWT-7KPL" } });
+  }) as typeof fetch;
+  try {
+    const initial = state(login(), { engine: "codex", accounts, active: "old" });
+    const view = await mount(initial);
+    mounted.push(view);
+    flushSync(() => { view.host.querySelector<HTMLButtonElement>('[data-account-signin-start="old"]')!.click(); });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return { view, initial };
+  } finally { globalThis.fetch = saved; }
+}
+
+test("a device sign-in line shows between the press and the next read, and ends when that read says authenticated", async () => {
+  const { view, initial } = await signInPressed([signedOutCodex]);
+  const line = () => view.host.querySelector('[data-account-signin="old"]');
+  expect(line()?.textContent).toContain("QXWT-7KPL");
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex, authPresent: true, authHealth: "authenticated", loginState: "authenticated" }] });
+  expect(line()).toBeNull();
+  // A later read does not bring a finished sign-in's code back.
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex, loginPending: true, loginState: "pending" }] });
+  expect(line()).toBeNull();
+});
+
+test("a device sign-in line ends when the next read shows the account signed out with no pending login, and stays while it is pending", async () => {
+  const { view, initial } = await signInPressed([signedOutCodex]);
+  const line = () => view.host.querySelector('[data-account-signin="old"]');
+  expect(line()).not.toBeNull();
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex, loginPending: true, loginState: "pending" }] });
+  expect(line()?.textContent).toContain("QXWT-7KPL");
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex }] });
+  expect(line()).toBeNull();
+});
+
+test("an opened row with a stale reading says when it was read once, on the Refresh line; the closed row keeps its note", async () => {
+  const observedAt = Date.parse("2020-01-01T09:00:00.000Z") / 1000;
+  const view = await mount(state(login({ phase: "authenticated" }), {
+    accounts: [{
+      ...managedAcc,
+      limits: { freshness: "stale", session: null, weekly: { usedPercent: 33, resetsAt: null, windowMinutes: 10_080, observedAt }, checkedAt: "2020-01-01T09:00:00.000Z" },
+    }],
+  }));
+  mounted.push(view);
+  const row = view.host.querySelector('[data-account-row="acc"]')!;
+  const note = () => row.querySelector('[data-account-note="stale"]');
+  expect(note()?.textContent).toBe(asOfNote(observedAt));
+  openRow(view.host, "acc");
+  expect(note()).toBeNull();
+  const clock = formatCheckedClock(new Date(observedAt * 1000).toISOString());
+  expect(row.textContent!.split(clock)).toHaveLength(2);
+  openRow(view.host, "acc");
+  expect(note()?.textContent).toBe(asOfNote(observedAt));
 });
