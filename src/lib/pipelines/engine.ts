@@ -5738,11 +5738,13 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
   const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
-  const hostGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
+  const observedGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
   const observedActive = await ports.conversationAgentActive(conversationId).catch(() => null);
-  // A gone-confirming read is authoritative for death. In particular, the
-  // generic liveness cache can still contain an earlier dead/conflict result
-  // when the runtime journal now reports attention or an unknown host.
+  // Activity is read last and can observe adoption after the absence proof.
+  // Invalidate that older death evidence everywhere the retry consumes it.
+  const hostGone = observedActive === true ? false : observedGone;
+  // An earlier cached dead/conflict result cannot override a fresh absence
+  // probe reporting attention or an unknown host.
   const active = proveGone && hostGone !== true && observedActive !== true ? null
     : proveGone && hostGone === true ? false : observedActive;
   return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle",
@@ -5796,8 +5798,11 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   const priorDeliveryId = repair?.delivery?.operationId;
   const sameRepairOperation = !!delivery?.operationId && (!priorDeliveryId || delivery.operationId === priorDeliveryId);
   const terminalRepairDelivery = sameRepairOperation && (delivery?.state === "delivered" || delivery?.state === "failed");
+  // Legacy history cannot prove reservation identity. Its failed key-specific
+  // read still bounds this repair after confirmed death and the original cutoff.
+  const failedOperationlessRepair = delivery?.state === "failed" && !delivery.operationId && !priorDeliveryId;
   const canProceedWithUnrelatedHeldDelivery = outstanding && evidence.hostGone === true && expired
-    && (repairDeliverySettled || terminalRepairDelivery);
+    && (repairDeliverySettled || terminalRepairDelivery || failedOperationlessRepair);
   // An unrelated message can remain held behind account migration after the
   // repair itself has failed. Once the old producer is freshly confirmed gone
   // and this repair's original window has elapsed, that older reservation
