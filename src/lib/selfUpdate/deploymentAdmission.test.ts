@@ -7,6 +7,31 @@ import { saveCheckoutDeployment } from "./deployments";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 
 const SHA = "a".repeat(40);
+test("a Node page-data worker can load admission and refuses execution without Bun", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-admission-node-"));
+  try {
+    const build = await Bun.build({
+      entrypoints: [path.join(import.meta.dir, "deploymentAdmission.ts")],
+      outdir: directory, target: "node", format: "cjs", naming: "admission.cjs",
+      external: ["bun:sqlite"],
+    });
+    expect(build.success).toBe(true);
+    const child = Bun.spawn(["node", "-e", `
+      const { checkoutAdmission } = require(process.argv[1]);
+      const fs = require("node:fs");
+      (async () => {
+        let effects = 0, error;
+        try { await checkoutAdmission(process.argv[2], { revision: "a".repeat(40), idempotencyKey: "node-admission" }, undefined, () => ++effects); }
+        catch (failure) { error = failure.message; }
+        console.log(JSON.stringify({ loaded: typeof checkoutAdmission === "function", error, effects, created: fs.existsSync(process.argv[2]) }));
+      })().catch(error => { console.error(error); process.exitCode = 1; });
+    `, build.outputs[0]!.path, path.join(directory, "state")], { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toEqual({ loaded: true, error: "Checkout deployment admission requires the Bun runtime", effects: 0, created: false });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}, 15_000);
+
 test("checkout fence serializes with real admission writes and survives process restart", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-admission-"));
   const request = { revision: SHA, idempotencyKey: "closed-checkout-request" };

@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite";
 import { mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { DeploymentAdmissionClosedError, type ViewerDeploymentRequest, type ViewerDeploymentReceipt } from "@/lib/runtime/contracts";
@@ -13,9 +12,13 @@ export async function checkoutAdmission<T>(directory: string, request: ViewerDep
   if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
   const target = request.ref ?? request.revision;
   if (!target) throw new Error("deployment target is required");
+  // Next loads route modules in Node page-data workers. Resolve Bun's driver
+  // only when serving an admission, as the other state stores do.
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) throw new Error("Checkout deployment admission requires the Bun runtime");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const filename = join(directory, "deployment-admission.sqlite");
-  const db = new Database(filename);
+  const db = new sqlite.Database(filename);
   chmodSync(filename, 0o600);
   let closed = false;
   try {
