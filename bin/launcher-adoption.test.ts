@@ -14,8 +14,8 @@ afterEach(async () => {
 test("the port probe closes a connection accepted before its listener closes", async () => {
   const createServer = net.createServer;
   let accepted = false;
-  const interception = spyOn(net, "createServer").mockImplementation((...args: Parameters<typeof net.createServer>) => {
-    const server = createServer(...args);
+  const interception = spyOn(net, "createServer").mockImplementation((options?: net.ServerOpts | ((socket: net.Socket) => void), listener?: (socket: net.Socket) => void) => {
+    const server = typeof options === "function" ? createServer(options) : createServer(options, listener);
     servers.add(server);
     const listen = server.listen.bind(server);
     server.listen = ((port: number, host: string, ready: () => void) => listen(port, host, () => {
