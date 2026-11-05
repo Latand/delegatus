@@ -11,7 +11,9 @@ export async function stageRepairDelivery(
 ): Promise<PipelineRepairDelivery> {
   const admission = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
   if (admission.outcome !== "admitted") return { operationId: null,
-    state: admission.outcome === "not-executed" ? "unreserved" : "unavailable",
+    state: admission.outcome === "not-executed"
+      ? (ports.now?.() ?? Date.now()) >= deadline ? "failed" : "unreserved"
+      : "unavailable",
     safeToReplace: admission.outcome === "not-executed" };
   if ((ports.now?.() ?? Date.now()) >= deadline && admission.state === "held") {
     await registry.deliveryWriteOrBusy({ label: "pipeline.repair-delivery-expiry", operationId: admission.operationId }, () =>
