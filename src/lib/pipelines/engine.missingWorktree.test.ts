@@ -219,7 +219,7 @@ for (const shape of ["deleted-tip", "other-stale-registration", "other-locked-re
       if (other && parkedOther && otherGitDir) {
         if (shape !== "other-present-registration") fs.renameSync(parkedOther, other);
         expect(fs.existsSync(otherGitDir)).toBe(true);
-        expect(fs.readFileSync(path.join(otherGitDir, "index"))).toEqual(otherIndex);
+        expect(otherIndex).toEqual(fs.readFileSync(path.join(otherGitDir, "index")));
         expect(await f.git(other, "show", ":staged.txt")).toBe("unique staged version");
         expect(await f.git(other, "rev-parse", "HEAD")).toBe(otherTip!);
         expect(await f.git(other, "symbolic-ref", "HEAD")).toBe("refs/heads/other-work");
