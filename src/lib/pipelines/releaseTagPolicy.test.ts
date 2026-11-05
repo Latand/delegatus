@@ -206,12 +206,19 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
   } finally { await f.close(); }
 });
 
-test.each(["approved stage", "approved stage with expired outer deadline", "wrong commit", "replaced wrong commit"])("the real repository pre-push checks an annotated tag's commit: %s", async scenario => {
+test.each(["approved stage", "approved stage with expired outer deadline", "merged tree", "unmerged tree", "wrong commit", "replaced wrong commit"])("the real repository pre-push checks an annotated tag's commit: %s", async scenario => {
   const f = await fixture();
-  const approvedStage = scenario === "approved stage" || scenario === "approved stage with expired outer deadline";
+  const approvedStage = scenario === "approved stage" || scenario === "approved stage with expired outer deadline" || scenario === "merged tree";
   const outerDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
   try {
     if (scenario === "approved stage with expired outer deadline") process.env.LLV_GATE_PUSH_DEADLINE = "1";
+    let target = f.head;
+    if (scenario === "merged tree" || scenario === "unmerged tree") {
+      target = await f.git("commit-tree", await f.git("rev-parse", `${f.head}^{tree}`), "-p", f.ancestor, "-m", "squash release");
+      expect((await f.run(f.lane, ["push", "origin", `${f.head}:refs/heads/release`], f.source)).code).toBe(0);
+      f.pipeline.delivery!.target.branch = "refs/heads/release";
+      if (scenario === "merged tree") expect((await f.run(f.lane, ["push", "--force", "origin", `${target}:refs/heads/main`], f.source)).code).toBe(0);
+    }
     // Use the running checkout's real gate, dependencies and hook. The support
     // links are ignored fixture tools, so the push has no source diff to check.
     const source = process.cwd();
@@ -246,7 +253,7 @@ test.each(["approved stage", "approved stage with expired outer deadline", "wron
       await f.tag(); approved = await f.git("rev-parse", "refs/tags/v1.2.3"); await f.git("tag", "-d", "v1.2.3");
     }
     if (approvedStage) await f.bind();
-    await f.tag(approvedStage ? f.head : f.ancestor);
+    await f.tag(approvedStage || scenario === "unmerged tree" ? target : f.ancestor);
     const object = await f.git("rev-parse", "refs/tags/v1.2.3");
     if (approved) {
       await f.git("replace", "--force", object, approved);
@@ -263,7 +270,7 @@ test.each(["approved stage", "approved stage with expired outer deadline", "wron
       expect(pushed.stderr).toContain("pushed head differs from checkout");
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
     }
-    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(f.head);
+    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(scenario === "merged tree" ? target : f.head);
   } finally {
     if (outerDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
     else process.env.LLV_GATE_PUSH_DEADLINE = outerDeadline;
@@ -818,5 +825,32 @@ test.each(["builder", "reviewer", "verifier", "architect", "cleaner", "prod-audi
     expect(lightweight.code).not.toBe(0);
     expect(lightweight.stderr).toContain("tag publication requires a release-mode deployer stage");
     expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
+  } finally { await f.close(); }
+});
+
+test.each(["reviewed", "squash", "unmerged", "different tree"])("sanctioned release push requires remote main and the reviewed tree: %s", async scenario => {
+  const f = await fixture();
+  try {
+    expect((await f.run(f.lane, ["push", "origin", `${f.head}:refs/heads/release`], f.source)).code).toBe(0);
+    f.pipeline.delivery!.target.branch = "refs/heads/release";
+    const tree = await f.git("rev-parse", scenario === "different tree" ? `${f.ancestor}^{tree}` : `${f.head}^{tree}`);
+    const target = scenario === "reviewed" || scenario === "unmerged" ? f.head
+      : await f.git("commit-tree", tree, "-p", f.ancestor, "-m", "squash release");
+    // Keep a stale tracking ref containing the release to prove it grants no authority.
+    const main = scenario === "unmerged" ? f.ancestor : target;
+    const updated = await f.run(f.lane, ["push", "--force", "origin", `${main}:refs/heads/main`], f.source);
+    expect(updated.code, updated.stderr).toBe(0);
+    await f.git("update-ref", "refs/remotes/origin/main", f.head);
+    await f.bind(); await f.tag(target);
+    const result = await f.push("origin", "refs/tags/v1.2.3");
+    if (scenario === "reviewed" || scenario === "squash") {
+      expect(result.code, result.stderr).toBe(0);
+      expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{commit}"], f.source)).stdout.trim()).toBe(target);
+    } else {
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(scenario === "unmerged" ? "not on remote main" : "identical merged tree");
+      expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+    }
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.head);
   } finally { await f.close(); }
 });

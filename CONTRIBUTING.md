@@ -82,10 +82,17 @@ settings apply to newly launched agents after the next deploy.
 ## Release tags from pipeline stages
 
 A run stage using the Deployer role with `mode=release` owns its approved tag
-publication. After current approval and the project's release preflight, use
-`git push origin refs/tags/vX.Y.Z`. The native stage guard admits only that
+publication. After current approval, green checks and an enabled `mergeOnReview`,
+merge the release PR through `gh pr merge <number> --squash --match-head-commit <reviewed-sha>`
+(use an allowed fallback method if squash is unavailable). A queued or open PR
+stops tagging. Run `bun scripts/release-verify.ts --preflight --cut <cut-sha> --tag vX.Y.Z --pr <number>`
+after it merges. Preflight refreshes `origin/main` and returns `tagCommit`, the
+PR's merged commit on main. Its tree must equal the reviewed checkout; a changed
+tree or PR head needs another review. Create the annotated tag on that explicit
+commit, then use `git push origin refs/tags/vX.Y.Z`. The native stage guard admits only that
 annotated tag: its name must match `package.json` in the lane's last passed,
-published commit, and its direct target must be that commit. The lane must have
+published commit, and its direct target must have that exact tree and already
+be on the bound remote's main. The lane must have
 accepted that exact head through a passing review or explicit head acceptance.
 A successful fix after an exhausted review requires a new passing review or
 explicit acceptance of its final commit before tag publication. Publication is
@@ -98,6 +105,9 @@ The installation's declared GitHub App transport for that same repository is
 also admitted; the live publication check still uses the bound delivery remote.
 An existing matching local tag from an earlier attempt may be pushed as it is.
 If the remote tag already matches, verify it without pushing again.
+The project pre-push gate accepts a different commit identity only for an
+identical checkout tree already on `origin/main`, allowing a squash result
+while the worktree and delivery branch keep their reviewed head.
 
 The guard refuses lightweight or nested tags, other names or targets, tag
 deletion or replacement, and every branch push from this release stage. Other

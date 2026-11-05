@@ -935,8 +935,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     // once the cleanup owner is present; the bootstrap re-enters below.
     process.env.PATH = `${git(root, ["--exec-path"])}${path.delimiter}${process.env.PATH ?? ""}`;
   }
+  let publishedTree: string | undefined;
   if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {
-    throw new Error("pushed head differs from checkout");
+    // A release squash can change the commit identity while retaining the
+    // reviewed checkout. Only an already published main commit may use that tree.
+    const pushed = process.env.LLV_GATE_PUSH_HEAD;
+    const sameTree = git(root, ["--no-replace-objects", "rev-parse", `${pushed}^{tree}`]) === git(root, ["--no-replace-objects", "rev-parse", "HEAD^{tree}"]);
+    const onMain = spawnSync("git", ["--no-replace-objects", "merge-base", "--is-ancestor", pushed, "refs/remotes/origin/main"], { cwd: root }).status === 0;
+    if (!sameTree || !onMain) throw new Error("pushed head differs from checkout");
+    publishedTree = pushed;
   }
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   const until = deadline?.at ?? Infinity;
@@ -944,15 +951,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     const fetch = await fetchMain(root, until, deadline ?? undefined);
     if (fetch === "failed") console.warn("pre-push: fetch failed; using the last origin/main (base resolution must still succeed)");
     if (fetch === "stopped") console.warn("pre-push: fetch stopped at the push deadline; using the last origin/main");
-    base = git(root, ["merge-base", "HEAD", "origin/main"]);
+    base = publishedTree ?? git(root, ["merge-base", "HEAD", "origin/main"]);
     const behind = Number(git(root, ["rev-list", "--count", "HEAD..origin/main"]));
     if (behind) console.warn(`pre-push: branch is ${behind} commit(s) behind origin/main; the hosted privacy gate may flag main-only commits. Merge origin/main before pushing.`);
   }
-  if (admitted || transport) base = git(root, ["merge-base", "HEAD", "origin/main"]);
+  if (admitted || transport) base = publishedTree ?? git(root, ["merge-base", "HEAD", "origin/main"]);
   const files = mode === "pre-commit"
     ? git(root, ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"]).split("\0").filter(Boolean)
     : [...new Set([
-      ...(changedSinceBase(root, base) ?? (() => { throw new Error("cannot read push diff"); })()),
+      ...(publishedTree ? [] : changedSinceBase(root, base) ?? (() => { throw new Error("cannot read push diff"); })()),
       ...git(root, ["diff", "--name-only", "-z"]).split("\0"),
       ...git(root, ["diff", "--cached", "--name-only", "-z"]).split("\0"),
       ...git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
