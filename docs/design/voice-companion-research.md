@@ -559,6 +559,45 @@ same control as the open block's, reachable by mouse and keyboard, and it is
 the only way to end the call when the companion was collapsed for want of room
 and the microphone is muted. It leaves with the conversation.
 
+**A call in trouble says so with no click.** While a call is reconnecting, offered
+back or just back, a companion that gave way to its tile looks for a shorter lane, 170
+down to 140 px (`CALL_LANE_HEIGHTS`), still off every label and control. Those heights
+are tried only after every usual one, so a place that holds a usual lane does not move.
+At 1000 × 700 the sidebar's free block is 2 px too short for a 180 px lane, so the
+companion stands there with a 240 by 170 px lane above it. What does not fit that lane
+leaves from the far end, as in any lane, and the state's line is the newest. A healthy
+call, or no call at all, stays a tile while there is no room, and the short lane gives
+way again when the line leaves.
+
+**The line alone beside the tile.** A real project list takes that column too: at
+1000 × 700 six projects leave it 135 px and sixteen leave nothing. The tile then keeps
+its place and the state's line stands alone in the nearest room for one row, 320 by
+46 px (`CALL_LINE`), off every label and control and off the tile: on the board, the
+active column's head row. It says the state's first words beside its Reconnect
+(`Couldn't reconnect.`), and End stays on the tile. The whole sentence is a click away
+and is what a screen reader hears. Where no row holds that room, as beside a board 860 px
+wide, a room of 200 by 46 px is tried (`CALL_LINE_NARROW`): the icon gives way beside
+Reconnect, and Reconnect's label may take two lines. With no such row the tile stands
+alone. A tile the operator collapsed has no line: that choice is theirs.
+
+**Opening the tile of a call in trouble.** A click on the tile is always answered
+while a call is reconnecting or offered back. Where not even a short lane fits, it opens
+over the page, since the tile has no other way to give that call's whole sentence and
+the rest of its controls. It stands on the page's work and keeps off what says which page
+this is and leads around it (the title, its count, search, the tabs, a column's head, the
+project rail: `COMPANION_HEAD`) while any other place is left, in a lane of 220 px down to
+140 px (`PAGE_LANE_HEIGHTS`), which holds the call's notice and the reply it cut. It still
+keeps off what the shell draws above its own layer (a toast), as every place of the
+companion's does, with the same 8 px. Wherever it stands over the page's text or controls
+its speech bubbles lose their glass and read as flat as a notice. Opened there by a click
+it also stands on one surface in the page's own colour (`veilOver`): the box around its
+parts, grown until every line of text and every small control it meets lies wholly inside
+it. No line is cut through by a part and none shows between them; a card as a whole stays.
+Moved over the page by hand, it has no such surface, since the operator chose what stays
+in view around it, unless the call is in trouble and it was opened for that. Collapsed
+from there it opens again at the same place, wherever its tile went.
+The operator's collapse, Home or the end of the call gives the rule back.
+
 **Send reads in both themes.** The Send button was white on the delegation's
 teal, which in the dark theme is a bright colour. Its fill is now that teal a
 step deeper and its label takes the surface colour: the driver reads 5.17:1
