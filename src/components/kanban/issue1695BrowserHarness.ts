@@ -1745,7 +1745,8 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   /* The defining element is on the first screen or scrolled whole. */
   if (defining) {
     const element = document.querySelector<HTMLElement>(defining);
-    /* Read from its text where it has any: a padding above the first line is no cut line. */
+    /* Its top and bottom are read from its text where it has any, so a padding above the first line is no cut line; its sides
+       from its box, since a truncated line's range runs past the clip. */
     const textBox = (target: HTMLElement): DOMRect => {
       const rects: DOMRect[] = [];
       const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
@@ -1755,9 +1756,10 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
         range.selectNodeContents(node);
         rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
       }
-      if (!rects.length) return target.getBoundingClientRect();
-      const left = Math.min(...rects.map((rect) => rect.left)), top = Math.min(...rects.map((rect) => rect.top));
-      return new DOMRect(left, top, Math.max(...rects.map((rect) => rect.right)) - left, Math.max(...rects.map((rect) => rect.bottom)) - top);
+      const own = target.getBoundingClientRect();
+      if (!rects.length) return own;
+      const top = Math.min(...rects.map((rect) => rect.top));
+      return new DOMRect(own.left, top, own.width, Math.max(...rects.map((rect) => rect.bottom)) - top);
     };
     const box = element ? textBox(element) : undefined;
     const scrollerBox = scroller.getBoundingClientRect();
