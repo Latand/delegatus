@@ -11,7 +11,7 @@ import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { AgentRegistry, RegistryConversation } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
-import { findPipelineRecord, loadPipelinesForRetirement, pipelineIntegrationResolverCandidates } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadPipelinesForRetirement, pipelineIntegrationResolverCandidates, pipelineRequiresNewerReader, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { openRuntimeSwitch } from "@/lib/pipelines/runtimeSwitch";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
@@ -37,6 +37,22 @@ function pipelineOwner(conversationId: string, registry?: AgentRegistry) {
     }
   }
   return null;
+}
+
+/** A rollback reader retains queued work whose pipeline semantics it cannot
+ * execute. Read the raw keyed owner because ordinary projections quarantine it. */
+export function pipelineRequiresReaderUpgrade(conversationId: string, registry: AgentRegistry): boolean {
+  if (PIPELINES_SCHEMA_VERSION >= 6) return false;
+  try {
+    return registry.conversationMemberships(conversationId as ViewerConversationId).some(member => {
+      if (member.kind !== "pipeline") return false;
+      if (pipelineRequiresNewerReader(member.containerId)) return true;
+      return ["integration-resolve", "integration-review", "integration-fix"].includes(member.stageId ?? "")
+        && !findPipelineRecord(member.containerId);
+    });
+  } catch {
+    throw new StructuredDispatchDeferredError("pipeline format authority is temporarily unreadable");
+  }
 }
 
 /** Metadata already retained by the held delivery or native queue version. */
@@ -69,6 +85,9 @@ export function pipelineRequiresDispatchGuard(conversationId: string, registry: 
  * At actual dispatch, resolve current integration authority from durable state;
  * a request-local admission closure cannot authorize a delayed journal entry. */
 export function assertPipelineTurnAllowed(conversationId: string, registry?: AgentRegistry, dispatch?: PipelineDispatchContext): void {
+  if (registry && pipelineRequiresReaderUpgrade(conversationId, registry)) {
+    throw new StructuredDispatchDeferredError("pipeline requires a newer reader; queued input is retained");
+  }
   try { assertCurrentPipelineTurn(conversationId, registry, dispatch); }
   catch (error) {
     if (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError) throw error;
@@ -248,6 +267,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     const owner = pipelineOwner(conversation.id, registry);
     const eligible = () => {
+      if (pipelineRequiresReaderUpgrade(conversation.id, registry)) return false;
       const current = pipelineOwner(conversation.id, registry);
       return !current || current.pipeline.state === "running" && !current.pipeline.closedAt
         && !current.attempt.suspension && !openRuntimeSwitch(current.attempt);

@@ -30,6 +30,55 @@ function fixture(reports: import("@/lib/bridge/types").BridgeReportV1[] = [], no
 function request(body: unknown, headers = {}) {
   return new NextRequest("http://127.0.0.1/api/voice-companion/session", { method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers }, body: JSON.stringify(body) });
 }
+
+test("browser drop causes and ICE episodes are validated and journalled without ending a recovered blip", async () => {
+  const f = fixture([], () => Date.UTC(2026, 10, 4, 12));
+  const first = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "episode" }))).json();
+  for (const command of [{ type: "episode", ms: -1, speaking: "voice" }, { type: "episode", ms: 3000, speaking: "other" }, { type: "episode", ms: "3000", speaking: null }])
+    expect((await POST(request({ action: "command", sessionId: first.sessionId, command }))).status).toBe(400);
+  expect((await POST(request({ action: "command", sessionId: first.sessionId, command: { type: "episode", ms: 3000, speaking: "voice" } }))).status).toBe(200);
+  expect(f.admission.transcriptRecord(first.sessionId).entries.filter(row => row.kind === "connection")).toMatchObject([{ data: { ms: 3000, speaking: "voice" } }]);
+  expect(f.admission.session(first.sessionId).closed).toBe(false);
+  expect((await POST(request({ action: "close", sessionId: first.sessionId, reason: "transport", cause: "sideband" }))).status).toBe(400);
+  for (const cause of ["ice-failed", "ice-grace", "channel-closed", "viewer-unreachable", "audio-refused"]) {
+    const part = cause === "ice-failed" ? first : await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: cause }))).json();
+    expect((await POST(request({ action: "close", sessionId: part.sessionId, reason: "transport", cause }))).status).toBe(200);
+    expect(f.admission.transcriptRecord(part.sessionId).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause });
+  }
+});
+
+test("a resume start accepts only browser drop diagnostics and journals them when it closes the named part", async () => {
+  const f = fixture([], () => Date.UTC(2026, 10, 4, 12));
+  const first = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "resume-diagnostic-original" }))).json();
+  f.provider.replay(first.providerId, { type: "session.output_transcript.delta", event_id: "resume-diagnostic-speech", delta: "The check passed.", start_ms: 0, end_ms: 900 });
+  await f.service.drain(first.sessionId);
+  const resume = { action: "start", project: "fixture", locale: "en", sdp: "v=1", requestId: "resume-diagnostic-next", resume: first.sessionId };
+  for (const drop of [{ cause: "watchdog" }, { cause: "ice-failed", episode: { ms: -1, speaking: "voice" } }, { cause: "ice-failed", episode: { ms: 500, speaking: "operator" }, extra: true }])
+    expect((await POST(request({ ...resume, drop }))).status).toBe(400);
+  const response = await POST(request({ ...resume, drop: { cause: "ice-failed", episode: { ms: 800, speaking: "operator" } } }));
+  expect(response.status, JSON.stringify(await response.clone().json())).toBe(201);
+  expect(f.admission.transcriptRecord(first.sessionId).entries.find(row => row.kind === "session_end")?.data)
+    .toMatchObject({ reason: "transport", cause: "ice-failed", episode: { ms: 800, speaking: "operator" } });
+  expect(f.provider.sessions).toHaveLength(2);
+  await f.service.close((await response.json()).sessionId);
+});
+
+test("resume timing is bounded at the route and survives in the new part's journal", async () => {
+  const f = fixture([], () => Date.UTC(2026, 10, 4, 12));
+  const p = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "timed-original" }))).json();
+  f.provider.replay(p.providerId, { type: "session.output_transcript.delta", event_id: "timed-speech", delta: "The build passed.", start_ms: 0, end_ms: 1000 });
+  await f.service.drain(p.sessionId);
+  await POST(request({ action: "close", sessionId: p.sessionId, reason: "transport", cause: "ice-failed", episode: { ms: 3000, speaking: "voice" } }));
+  const input = { action: "start", project: "fixture", locale: "en", sdp: "v=1", requestId: "timed-resume", resume: p.sessionId };
+  const reconnect = { tier: 2, attempts: 1, automatic: true, noticedToStartMs: 150 };
+  for (const invalid of [null, { ...reconnect, attempts: 9 }, { ...reconnect, noticedToStartMs: -1 }, { ...reconnect, automatic: "yes" }])
+    expect((await POST(request({ ...input, reconnect: invalid }))).status).toBe(400);
+  const response = await POST(request({ ...input, reconnect })); expect(response.status).toBe(201);
+  const n = await response.json();
+  expect(f.admission.transcriptRecord(n.sessionId).entries.find(row => row.kind === "session_start")?.data.reconnect).toEqual({ ...reconnect, noticedToReadyMs: 150 });
+  expect(f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "session_end")?.data.episode).toEqual({ ms: 3000, speaking: "voice" });
+  await POST(request({ action: "close", sessionId: n.sessionId }));
+});
 test("operator admission precedes minting; frontend cannot submit tool calls, transcripts or usage", async () => {
   const f = fixture();
   const input = { action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "attempt-a" };
@@ -237,6 +286,7 @@ test("a mint the provider refused outright leaves no barrier and no charge", asy
   expect(await refused.json()).toEqual({ code: "PROVIDER_ERROR" });
   const [row] = Object.values(f.service.storage.read().sessions);
   expect(row).toMatchObject({ closed: true, remoteOpen: false });
+  expect(f.admission.transcriptRecord(row.id).entries.find(entry => entry.kind === "session_end")?.data.cause).toBe("mint-failed");
   expect(f.service.storage.read().charges[row.id]).toMatchObject({ reserved: false, usd: 0 });
   const next = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "next" }));
   expect(next.status).toBe(201);
