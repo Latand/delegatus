@@ -261,9 +261,35 @@ system's final quality and how much human repair was needed.
 | Recurrence | Independent comparable later tasks repeating the principle violation / independently adjudicated later opportunities | Freeze the valid preference; exclude same-task repair and copied imports |
 | Corrective rework after done | Reopened repair episodes after stage, artifact, system or delivered-task completion, separately / observed completions at each level | Preserve who declared which endpoint and whether ordinary review was still pending |
 | Review containment | Valid defects caught before delivery, escaped defects and late defects / defects independently observable in the evaluation window | More findings can reflect better review or harder tasks |
+| Review precision | Independently judged, deduplicated true findings / all independently judged true and false findings: TP / (TP + FP) | Judge validity against the artifact and agreed requirement at the review checkpoint; retain unknown judgments separately |
+| Defect recall | Unique independently confirmed checkpoint defects found by review / all independently confirmed defects at that checkpoint: TP / (TP + FN) | Establish the defect inventory independently of the reviewer's findings; report observation-window and inspection limits |
+| Reviewer-induced rework | Unnecessary changes, repair effort and regressions caused by false findings / independently adjudicated review opportunities | Keep this cost separate from precision, recall and escaped defects |
 | Transfer | New tasks satisfying a previously established principle across changed domains / adjudicated transfer opportunities | Label explicit prompt, skill, human and coordinator assistance |
 | Investment benefit | Later accepted quality/autonomy versus matched controls, including the initial learning/architecture cost | Report cumulative sequence results and later-task results; no retrospective causal estimate here |
 | Interference/staleness | Applicable-looking stale, conflicting or overbroad guidance that changes an action / opportunities with observable guidance and actions | Require the contemporary version and concrete action; retain unknowns |
+
+For review precision and recall, an independent judge maps findings to unique
+defects at a fixed artifact checkpoint and labels each finding true, false or
+unknown. Repeated reports of one defect count once; overlapping claims about
+that defect share one entry. Deduplicate false and unknown claims as well.
+Unreported defects in the independent inventory are false negatives (FN).
+Keep checkpoints separate so later edits cannot retroactively validate a finding.
+
+Retain unknown finding and defect judgments with their counts and reasons.
+Precision remains unknown while finding judgments are incomplete. Recall
+remains unknown while finding judgments or the independent defect inventory
+are incomplete. A judged-subset estimate must name its numerator, denominator,
+excluded unknown count and coverage limit. Unknowns never count as correct,
+false or absent by default. A zero denominator is undefined (N/A), with the
+counts shown. No findings with confirmed defects gives undefined precision
+and zero recall; no confirmed defects gives undefined recall.
+
+For the same artifact with two independently confirmed defects, a review with
+one true and 99 false findings has 1% precision. A review finding the same true
+defect with zero false findings has 100% precision. Both have 50% recall and
+the same containment if that defect is caught before delivery and the other
+escapes. Containment alone cannot distinguish their false-finding burden.
+These examples are calibration checks, with no new historical measurements.
 
 A missing final record needs a row containing task identity, last known action,
 assistance already spent, endpoint status and the reason observation ended.
@@ -340,6 +366,11 @@ blocked document delivery, skill-assisted transfer, legacy/import controls and
 current human-interface correction. It must verify chronology, authorship,
 delivery proofs, opportunity denominators and privacy before accepting findings.
 
-Document/privacy checks and the final output/evidence digests are recorded in
-the private verification receipt. No build, broad suite, model trial or live
-state check is required for this prose-only audit.
+Document/privacy checks and the exact saved output bytes are bound by a
+versioned private final-state verification receipt. It records the source
+revision, checked final commit and report SHA-256 after the last edit, including
+EOF changes. The original receipt describes an earlier EOF state and remains
+unchanged as historical evidence. A new versioned hash index covers the final
+receipt and its evidence; the index excludes itself, and the receipt contains
+no digest of itself. No build, broad suite, model trial or live state check is
+required for this prose-only audit.
