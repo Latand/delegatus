@@ -1006,7 +1006,7 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
   const endedAt = run ? seatTickLocalTime(run.endedAt ?? run.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
   const startedAt = running ? seatTickLocalTime(running.claimedAt, now, locale) : null;
   const nextAt = seatTickLocalTime(value.nextRunAt, now, locale);
-  const counts = run ? ([
+  const counts = run && !value.runsError ? ([
     ["calls", "seatTick.curation.count.calls"],
     ["changed", "seatTick.curation.count.changed"],
     ["rewritten", "seatTick.curation.count.rewritten"],
@@ -1052,7 +1052,7 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
           <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.last")}</span>
           <span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{run
             ? t(run.state === "succeeded" ? "seatTick.maintenance.status.done" : "seatTick.maintenance.status.failed", { time: endedAt ?? t("seatTick.unknown") })
-            : t("seatTick.curation.never")}</span>
+            : t(value.runsError ? "seatTick.unknown" : "seatTick.curation.never")}</span>
         </div>
         {counts ? <span data-seat-tick-curation-counts className="break-words text-right text-caption text-secondary">{counts}</span> : null}
         {run?.failure ? <span role="status" className="break-words text-right text-caption text-warning">{run.failure}</span> : null}
@@ -1065,7 +1065,9 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
         <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.next")}</span><span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{next}</span>
       </div>
     </div>
-    {value.runsError ? <p role="status" className="break-words text-caption text-warning">{value.runsError}</p> : null}
+    {value.runsError ? <p role="status" className="break-words text-caption text-warning">{
+      /^curation (?:status|panel) read timed out$/.test(value.runsError) ? t("seatTick.curation.readTimeout") : value.runsError
+    }</p> : null}
   </div>;
 }
 

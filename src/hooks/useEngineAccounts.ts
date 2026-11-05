@@ -137,6 +137,9 @@ export type AccountResetCredits = { availableCount: number; expiresAt: number | 
 export type AccountAuthHealth = "authenticated" | "signed_out" | "unknown" | "error";
 
 export type AccountOption = {
+  spendCredits?: boolean;
+  spendCreditsError?: boolean;
+  paidCredits?: { balance: string | null; checkedAt: string | null } | null;
   id: string;
   label: string;
   /** Managed accounts own the sign-in/retry affordances; legacy ones never do. */
@@ -240,8 +243,8 @@ export function parseResetCredits(raw: unknown): AccountResetCredits | null {
     windows and reset credits — exactly as `GET /api/accounts`, the per-account
     re-read (#1418) and the reset-credit redemption (#1373) all send it, so one
     parse serves the list read and the in-place card updates alike. */
-export function observedAccountFields(raw: unknown, authPresent: boolean): Pick<AccountOption, "authHealth" | "plan" | "limits" | "resetCredits"> {
-  const record = (typeof raw === "object" && raw !== null ? raw : {}) as { auth?: unknown; limits?: unknown; resetCredits?: unknown };
+export function observedAccountFields(raw: unknown, authPresent: boolean): Pick<AccountOption, "authHealth" | "plan" | "limits" | "resetCredits" | "spendCredits" | "paidCredits"> {
+  const record = (typeof raw === "object" && raw !== null ? raw : {}) as { auth?: unknown; limits?: unknown; resetCredits?: unknown; paidCredits?: unknown; spendCredits?: unknown };
   const auth = typeof record.auth === "object" && record.auth !== null
     ? record.auth as { state?: unknown; plan?: unknown }
     : null;
@@ -250,7 +253,10 @@ export function observedAccountFields(raw: unknown, authPresent: boolean): Pick<
     ? authState
     : authPresent ? "unknown" : "signed_out";
   const plan = typeof auth?.plan === "string" && auth.plan.trim() ? auth.plan : null;
-  return { authHealth, plan, limits: parseAccountLimits(record.limits), resetCredits: parseResetCredits(record.resetCredits) };
+  const paid = record.paidCredits && typeof record.paidCredits === "object" ? record.paidCredits as Record<string, unknown> : null;
+  return { ...(Object.hasOwn(record, "spendCredits") ? { spendCredits: record.spendCredits === true } : {}),
+    ...(Object.hasOwn(record, "paidCredits") ? { paidCredits: paid ? { balance: typeof paid.balance === "string" ? paid.balance : null, checkedAt: typeof paid.checkedAt === "string" ? paid.checkedAt : null } : null } : {}),
+    authHealth, plan, limits: parseAccountLimits(record.limits), resetCredits: parseResetCredits(record.resetCredits) };
 }
 export type AccountLoadState = "loading" | "ready" | "error";
 export type AccountOperation = "refresh" | "add" | "switch" | "login" | "remove" | "restore" | "cleanup" | "terminal" | "refreshLimits" | "resetCredit";
@@ -497,6 +503,7 @@ export interface EngineAccountsSnapshot {
 
 export interface EngineAccountsState extends EngineAccountsSnapshot {
   engine: Engine;
+  setSpendCredits?: (accountId: string, enabled: boolean) => Promise<boolean>;
   refresh: () => Promise<boolean>;
   add: (label: string) => Promise<boolean>;
   retryNotice: () => Promise<boolean>;
@@ -723,6 +730,50 @@ export function createEngineAccountsStore(
     activeRequest = null;
   };
 
+  type SpendingWrite = { value: boolean; resolve: (ok: boolean) => void };
+  const spendingWrites = new Map<string, { confirmed: boolean; queue: SpendingWrite[] }>();
+  const spendingOverlay = (accounts: AccountOption[]) => accounts.map(account => {
+    const pending = spendingWrites.get(account.id);
+    const error = snapshot.accounts.find(row => row.id === account.id)?.spendCreditsError;
+    return { ...account, ...(error ? { spendCreditsError: true } : {}),
+      ...(pending ? { spendCredits: pending.queue.at(-1)?.value ?? pending.confirmed } : {}) };
+  });
+  const setSpendCredits = (accountId: string, enabled: boolean): Promise<boolean> => {
+    const account = snapshot.accounts.find(row => row.id === accountId);
+    if (engine !== "codex" || !account) return Promise.resolve(false);
+    let writes = spendingWrites.get(accountId);
+    const start = !writes;
+    if (!writes) {
+      writes = { confirmed: account.spendCredits === true, queue: [] };
+      spendingWrites.set(accountId, writes);
+    }
+    const current = writes;
+    const result = new Promise<boolean>(resolve => current.queue.push({ value: enabled, resolve }));
+    abortRead();
+    patchSnapshot({ accounts: spendingOverlay(snapshot.accounts).map(row => row.id === accountId ? { ...row, spendCreditsError: false } : row) });
+    if (start) void (async () => {
+      while (current.queue.length) {
+        const write = current.queue[0]!;
+        let ok = false;
+        try {
+          const response = await fetcher("/api/accounts/codex/spend-credits", { method: "PATCH", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ accountId, spendCredits: write.value }), signal: AbortSignal.timeout(timeoutMs) });
+          if (!response.ok) throw new Error("paid spending update failed");
+          const body = await response.json();
+          if (body.accountId !== accountId || body.spendCredits !== write.value) throw new Error("paid spending reply mismatch");
+          current.confirmed = write.value;
+          ok = true;
+        } catch { /* Keep the confirmed value and show the error on its row. */ }
+        current.queue.shift();
+        abortRead();
+        patchSnapshot({ accounts: spendingOverlay(snapshot.accounts).map(row => row.id === accountId ? { ...row, spendCreditsError: !ok } : row) });
+        write.resolve(ok);
+      }
+      spendingWrites.delete(accountId);
+    })();
+    return result;
+  };
+
   const refresh = async (): Promise<boolean> => {
     abortRead();
     const generation = requestGeneration;
@@ -745,7 +796,7 @@ export function createEngineAccountsStore(
       setSnapshot({
         ...snapshot,
         active,
-        accounts: currentLogins(accounts),
+        accounts: spendingOverlay(currentLogins(accounts)),
         limitsVersion: snapshot.limitsVersion + (loginSucceeded ? 1 : 0),
         hidden,
         migration,
@@ -1305,6 +1356,7 @@ export function createEngineAccountsStore(
     get removing() { return snapshot.removing; },
     get removal() { return snapshot.removal; },
     refresh,
+    setSpendCredits,
     add,
     retryNotice,
     select,
@@ -1352,6 +1404,7 @@ export function useEngineAccounts(engine: Engine): EngineAccountsState {
     ...snapshot,
     engine,
     refresh: store.refresh,
+    setSpendCredits: store.setSpendCredits,
     add: store.add,
     retryNotice: store.retryNotice,
     select: store.select,

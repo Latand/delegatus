@@ -9,7 +9,7 @@ const shared = process as typeof process & { __delegatusRecordedHostFence?: Asyn
 const context = shared.__delegatusRecordedHostFence ??= new AsyncLocalStorage<Admission>();
 /** Shared by registration and the complete signal ladder. A nested native
  * release retains the outer reservation until its last possible signal. */
-export async function withRecordedHostFence<T>(owner: Owner, operation: () => Promise<T>): Promise<T> {
+export async function withRecordedHostFence<T>(owner: Owner, operation: () => Promise<T>, options: { waitMs?: number } = {}): Promise<T> {
   // A fixed set bounds lock artifacts after old hosts leave. Collisions only
   // serialize admission; they never substitute one host's identity proof.
   const slot = parseInt(digest([owner.pid, owner.startIdentity, owner.bootEpoch]).slice(0, 8), 16) % 128;
@@ -20,5 +20,5 @@ export async function withRecordedHostFence<T>(owner: Owner, operation: () => Pr
     const admission: Admission = { file, active: true };
     try { return await context.run(admission, operation); }
     finally { admission.active = false; }
-  });
+  }, options);
 }

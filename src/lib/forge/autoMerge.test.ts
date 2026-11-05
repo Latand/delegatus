@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { caseSensitiveAppFixture } from "./appWrite.fixture";
 
 import { deepFreeze } from "@/lib/deepFreeze";
 import type { Pipeline, PipelineMerge } from "@/lib/pipelines/types";
@@ -420,6 +421,35 @@ describe("GitHub read failure recovery through production ports", () => {
     expect(h.merge("L1")?.reason).toStartWith("GitHub App read refused:");
     expect(cliReads).toBe(0);
     expect(h.writes).toEqual([]);
+  });
+
+  test.skipIf(process.platform === "win32")("an existing lower-case merge record reads and merges with the declared App credential", async () => {
+    const { githubRunner } = await import("../monitor/githubEvidence");
+    const fixture = caseSensitiveAppFixture(fs.mkdtempSync(path.join(sandbox, "app-case-")));
+    const declaration = path.join(sandbox, "forge-app-repositories.json");
+    fs.writeFileSync(declaration, JSON.stringify([fixture.repository]));
+    try {
+      const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+      // Persist the scheduling output before resuming it through the App read path.
+      await sweepAutoMerge(h.ports);
+      const persisted = structuredClone(h.merge("L1"));
+      expect(persisted?.repository).toBe(REPO);
+      expect(persisted?.state).toBe("waiting-checks");
+      let cliReads = 0;
+      const asApp = forgeAppWriter(fixture.cwd, 30_000, { source: fixture.source, exec: async (args, env) => {
+        expect(env.GH_TOKEN).toBe("fixture");
+        expect(env.GITHUB_TOKEN).toBeUndefined();
+        return args[0] === "pr" && args[1] === "merge" ? h.ports.write(args, REPO) : h.ports.run(args);
+      } });
+      const run = githubRunner(fixture.cwd, 30_000, { asApp, exec: async () => { cliReads++; throw new Error("forbidden fallback"); } });
+      const ports = productionAutoMergePorts({ ...h.ports, run, write: forgeWriter(run, asApp) });
+      h.advance(MERGE_SETTLE_MS);
+      await sweepAutoMerge(ports);
+      expect(h.merge("L1")).toMatchObject({ state: "merged", repository: REPO, readFailures: 0 });
+      expect(h.writes).toHaveLength(1);
+      expect(cliReads).toBe(0);
+      expect(fixture.lookups().at(-1)?.at(-1)).toBe(fixture.repository);
+    } finally { fs.unlinkSync(declaration); }
   });
 
   test.each([

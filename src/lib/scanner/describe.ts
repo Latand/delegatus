@@ -30,6 +30,7 @@ import { openclawMessage } from "./openclawNative";
 import { copilotWorkspaceTitle } from "./copilotNative";
 import { projectResolutionStateKey } from "./projectState";
 
+
 export interface FileDescription {
   project: string;
   projectName: string;
@@ -1561,8 +1562,22 @@ export function describe(
   root: string,
   pathname: string,
   st: fs.Stats,
-  stateKey = projectResolutionStateKey(),
-  identity = fileDescriptionIdentity(rootName, pathname, st),
+  stateKey?: string,
+  identity?: FileDescriptionIdentity,
+  options: { readOnly?: boolean } = {},
 ): FileDescription {
-  return describeFile(rootName, root, pathname, st, stateKey, identity).description;
+  if (options.readOnly) {
+    // The protected-host consumer needs native metadata, never project
+    // attribution. Project documents can open a writer even on a read (and
+    // checkpoint its WAL on close); keep that entire overlay out of this
+    // opt-in path. Do not populate production attribution caches either.
+    const { metadata, complete } = deriveTranscriptMetadata(rootName, pathname, st,
+      identity === undefined ? fileDescriptionIdentity(rootName, pathname, st) : identity);
+    if (!complete) throw new Error("Read-only native description incomplete");
+    return { ...metadata, project: UNRESOLVED_PROJECT, projectName: UNRESOLVED_PROJECT_NAME, projectUnresolved: true };
+  }
+  // Preserve the production defaults' original order: state, then identity.
+  const resolvedState = stateKey === undefined ? projectResolutionStateKey() : stateKey;
+  const resolvedIdentity = identity === undefined ? fileDescriptionIdentity(rootName, pathname, st) : identity;
+  return describeFile(rootName, root, pathname, st, resolvedState, resolvedIdentity).description;
 }

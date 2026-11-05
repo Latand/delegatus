@@ -14511,3 +14511,171 @@ describe("model icon motion", () => {
     finally { await browser.close(); server.stop(); }
   }, 600_000);
 });
+
+describe("a task card without inline conversations, on the phone", () => {
+  /* docs/design/task-card-no-inline-conversations.md §6: the phone does not
+     change. Its card never held a conversation, a first message or a graph; a
+     started stage opens full screen, and a stage that has not started leads
+     to the pipeline screen with that stage's ⚙ sheet already open, which
+     shows the message it will be sent and edits it. The kanban fixture's
+     `stages` scenario at 390×844 with a touch screen, in English and
+     Ukrainian, light and dark: the board, the task screen, a started stage
+     tapped, a waiting stage tapped on the task screen (its sheet, then its
+     editor), and the same stage's row tapped on the pipeline screen. Frames go
+     to LLV_NO_INLINE_PHONE_OUT
+     (default `.artifacts/task-card-no-inline-conversations-phone`), readings to
+     evidence/task-card-no-inline-conversations/phone.json. */
+  browserTest("390×844, en and uk, light and dark: no card holds a conversation, a first message or a graph; stages open their own screens", async () => {
+    const out = path.resolve(process.env.LLV_NO_INLINE_PHONE_OUT ?? ".artifacts/task-card-no-inline-conversations-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    /* A short browser-owned temp path avoids the Linux singleton socket limit. */
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const INLINE = ":is([data-stage-detail], .readers, [data-graph], .pgraph-box, .pgraph, [data-kanban-reader], [data-draft-message], [data-graph-toggle])";
+    const LANE = '[data-phone-task-lane="p-search"]';
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const label = `390-${lang}-${scheme}`;
+        const fail = (message: string) => failures.push(`${label}: ${message}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+        const taskScreen = async () => {
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card="task:t-search"]', { timeout: 30_000 });
+          await page.locator('[data-phone-card="task:t-search"]').first().tap();
+          await page.waitForSelector(`${LANE} [data-stage-open="merge"]`, { timeout: 15_000 });
+          await page.locator(`${LANE} [data-stage-open="merge"]`).scrollIntoViewIfNeeded();
+          await pause(page, 500);
+        };
+        try {
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card="task:t-search"]', { timeout: 30_000 });
+          await pause(page, 600);
+          const onCards = await page.evaluate((inline) => document.querySelectorAll(`[data-phone-card] ${inline}`).length, INLINE);
+          if (onCards) fail(`${onCards} phone cards hold a conversation, a first message or a graph`);
+          await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+          await taskScreen();
+          const onTask = await page.evaluate(([lane, inline]) => document.querySelectorAll(`${lane} ${inline}`).length, [LANE, INLINE] as const);
+          if (onTask) fail(`the task screen's lane holds ${onTask} conversations, first messages or graphs`);
+          await page.screenshot({ path: path.join(out, `${label}-task.png`) });
+          /* A started stage opens its conversation full screen (the passed ones are folded on this screen). */
+          await page.locator(`${LANE} [data-open-conversation="verify"]`).tap();
+          await page.waitForSelector("[data-mobile2-chat-title]", { timeout: 15_000 });
+          await pause(page, 600);
+          const chat = await page.evaluate(() => document.querySelector("[data-mobile2-chat-title]")?.textContent ?? null);
+          await page.screenshot({ path: path.join(out, `${label}-started.png`) });
+          /* A waiting stage opens the pipeline screen on its own ⚙ sheet: the
+             message it will be sent and the control that edits it are whole
+             on the first screen after the tap. */
+          await page.goto(`${server.base}?scenario=stages`);
+          await taskScreen();
+          await page.locator(`${LANE} [data-stage-open="merge"]`).tap();
+          const SHEET = '[data-mobile2-sheet="stage"] [data-mobile2-stage-config="merge"]';
+          await page.waitForSelector(SHEET, { timeout: 15_000 });
+          await page.waitForFunction(() => {
+            const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="stage"]');
+            if (!sheet || sheet.getAnimations({ subtree: true }).some((animation) => animation.playState === "running")) return false;
+            return sheet.getBoundingClientRect().top < window.innerHeight - 100;
+          }, undefined, { polling: "raf", timeout: 15_000 });
+          const editLabel = translate(lang, "groupOverride.applyStage");
+          const promptLabel = translate(lang, "pipelineSlot.promptLabel");
+          /* Text is whole when every line box of its range lies inside the
+             viewport and inside each ancestor that clips. */
+          const whole = (selectors: string[]) => page.evaluate((list) => {
+            const clipped = (rect: DOMRect, from: Element) => {
+              if (rect.width === 0 || rect.height === 0) return true;
+              if (rect.left < -0.5 || rect.top < -0.5 || rect.right > window.innerWidth + 0.5 || rect.bottom > window.innerHeight + 0.5) return true;
+              for (let node = from.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const box = node.getBoundingClientRect();
+                if (rect.left < box.left - 0.5 || rect.top < box.top - 0.5 || rect.right > box.right + 0.5 || rect.bottom > box.bottom + 0.5) return true;
+              }
+              return false;
+            };
+            return list.map((selector) => {
+              const element = document.querySelector<HTMLElement>(selector);
+              if (!element) return { selector, text: null, cut: true };
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const rects = element.textContent?.trim() ? [...range.getClientRects()] : [element.getBoundingClientRect()];
+              return { selector, text: element.textContent?.trim() ?? "", cut: rects.length === 0 || rects.some((rect) => clipped(rect, element)) };
+            });
+          }, selectors);
+          const sheetRead = await page.evaluate(([sheet, edit, label]) => {
+            const root = document.querySelector<HTMLElement>(sheet)!;
+            const prompt = [...root.querySelectorAll<HTMLElement>("p")].find((element) => element.textContent?.trim() === label) ?? null;
+            const message = prompt?.nextElementSibling as HTMLElement | null;
+            prompt?.setAttribute("data-evidence-prompt-label", "");
+            message?.setAttribute("data-evidence-first-message", "");
+            root.querySelector(`button[aria-label="${edit}"]`)?.setAttribute("data-evidence-edit", "");
+            return {
+              screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? null,
+              message: message?.textContent?.trim() ?? null,
+              graph: document.querySelectorAll("[data-mobile2-screen] :is(.pgraph, [data-graph])").length,
+              scrollWidth: document.documentElement.scrollWidth,
+            };
+          }, [SHEET, editLabel, promptLabel] as const);
+          /* The first message's opening line stands for its text: the preview is clamped by design. */
+          const firstLine = await page.evaluate(() => {
+            const message = document.querySelector<HTMLElement>("[data-evidence-first-message]");
+            if (!message?.firstChild) return null;
+            const range = document.createRange();
+            range.selectNodeContents(message);
+            const first = range.getClientRects()[0];
+            return first ? { top: first.top, bottom: first.bottom } : null;
+          });
+          const sheetWhole = await whole(['[data-mobile2-sheet="stage"] h2', "[data-evidence-prompt-label]", "[data-evidence-edit]"]);
+          if (sheetRead.screen !== "pipeline" || sheetRead.graph || sheetRead.scrollWidth > 390) fail(`the waiting stage's screen: ${JSON.stringify(sheetRead)}`);
+          if (!sheetRead.message) fail("the waiting stage's sheet shows no first message");
+          if (!firstLine || firstLine.top < 0 || firstLine.bottom > 844) fail(`the first message's first line is off the first screen: ${JSON.stringify(firstLine)}`);
+          for (const read of sheetWhole) if (read.cut) fail(`cut on the waiting stage's sheet: ${JSON.stringify(read)}`);
+          await page.screenshot({ path: path.join(out, `${label}-waiting.png`) });
+          /* Its edit control opens the editor for that message, in the same sheet. */
+          await page.locator("[data-evidence-edit]").tap();
+          const FIELD = `${SHEET} textarea[id^="slot-prompt-"]`;
+          await page.waitForSelector(FIELD, { timeout: 10_000 });
+          await page.locator(FIELD).scrollIntoViewIfNeeded();
+          await page.evaluate((field) => document.querySelector(field)!.closest("form")!.querySelector("label")!.setAttribute("data-evidence-field-label", ""), FIELD);
+          const editor = await whole(["[data-evidence-field-label]"]);
+          const field = await page.evaluate((selector) => {
+            const element = document.querySelector<HTMLTextAreaElement>(selector)!;
+            const rect = element.getBoundingClientRect();
+            return { disabled: element.disabled, inside: rect.top >= 0 && rect.bottom <= window.innerHeight && rect.left >= 0 && rect.right <= window.innerWidth };
+          }, FIELD);
+          for (const read of editor) if (read.cut) fail(`cut on the waiting stage's editor: ${JSON.stringify(read)}`);
+          if (field.disabled || !field.inside) fail(`the waiting stage's message field: ${JSON.stringify(field)}`);
+          await page.screenshot({ path: path.join(out, `${label}-waiting-edit.png`) });
+          /* Back closes only the sheet; the stage's row on the pipeline screen opens the same sheet. */
+          await page.goBack();
+          await page.waitForSelector('[data-mobile2-sheet="stage"]', { state: "detached", timeout: 10_000 });
+          const pipeline = await page.evaluate(() => ({
+            screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? null,
+            graph: document.querySelectorAll("[data-mobile2-screen] :is(.pgraph, [data-graph])").length,
+            scrollWidth: document.documentElement.scrollWidth,
+          }));
+          if (pipeline.screen !== "pipeline" || pipeline.graph || pipeline.scrollWidth > 390) fail(`the pipeline screen under the sheet: ${JSON.stringify(pipeline)}`);
+          await page.locator('[data-mobile2-screen="pipeline"] [data-stage-configure="merge"]').scrollIntoViewIfNeeded();
+          await page.locator('[data-mobile2-screen="pipeline"] [data-stage-configure="merge"]').tap();
+          await page.waitForSelector(SHEET, { timeout: 10_000 });
+          const fromRow = await page.locator(SHEET).count() === 1;
+          if (!fromRow) fail("the pipeline screen's waiting row opens no sheet");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings[label] = { onCards, onTask, chat, sheet: { ...sheetRead, firstLine, whole: sheetWhole }, editor: { whole: editor, field }, pipeline, fromRow };
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(out, `${label}-failed.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      if (fd !== null) fs.closeSync(fd);
+    }
+    fs.mkdirSync("evidence/task-card-no-inline-conversations", { recursive: true });
+    fs.writeFileSync("evidence/task-card-no-inline-conversations/phone.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

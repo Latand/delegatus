@@ -1,7 +1,9 @@
+import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
+import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -90,8 +92,14 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" || lintFiles.length > 40 });
   if (mode === "pre-commit") return steps;
   const touched = new Set<string>();
-  if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.receipts|-tests)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+  if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+  }
+  if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
+    for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
+  }
+  if (changedFiles.includes("scripts/local-gate-tests.ts") && env.tests.includes("scripts/local-gate.checkpoints.test.ts")) {
+    touched.add("scripts/local-gate.checkpoints.test.ts");
   }
   for (const file of files.filter(isTest)) touched.add(file);
   for (const file of files.filter(lintable)) {
@@ -215,10 +223,10 @@ export function createGateSandbox(
   create: (prefix: string) => string = mkdtempSync,
 ): string {
   try {
-    return create(path.join(gateTemporaryRoot(platform), "delegatus-local-gate-"));
+    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform), "delegatus-local-gate-")));
   } catch (error) {
     if (platform === "win32" || !["EROFS", "EACCES", "ENOENT"].includes((error as NodeJS.ErrnoException)?.code ?? "")) throw error;
-    return create(path.join("/tmp", "delegatus-local-gate-"));
+    return recordGateSandbox(create(path.join("/tmp", "delegatus-local-gate-")));
   }
 }
 
@@ -922,9 +930,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     }
   };
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  if (publicationPrepare) {
-    // Git prepends its exec directory before invoking native hooks. Checks
-    // must receive that same PATH in both halves of this handoff.
+  if (publicationPrepare && process.env.LLV_GATE_SANDBOX_RECORD) {
+    // Git prepends its exec directory before invoking native hooks. Match it
+    // once the cleanup owner is present; the bootstrap re-enters below.
     process.env.PATH = `${git(root, ["--exec-path"])}${path.delimiter}${process.env.PATH ?? ""}`;
   }
   if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {
@@ -968,6 +976,23 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   let runtime: Promise<string> | undefined;
   let runtimeTree: string | undefined;
   const fixtures = new Map<string, Promise<string>>();
+  // The outer hook also allocates logs and Cloud input. Acquire its cleanup
+  // owner before allocation; admitted children inherit the same journal.
+  if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) };
+    if (deadline) {
+      const inherited = Number(env.LLV_OWNED_RUN_TIMEOUT_MS);
+      const allowance = supervisorTimeoutMs(deadline.at, env);
+      env.LLV_OWNED_RUN_TIMEOUT_MS = String(Number.isFinite(inherited) && inherited > 0 ? Math.min(inherited, allowance) : allowance);
+      env.LLV_GATE_PUSH_DEADLINE = String(deadline.at);
+    }
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "owned-runner.ts"),
+      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, import.meta.path, ...process.argv.slice(2)],
+      { cwd: root, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    const code = await child.exited;
+    if (code !== 0) throw new AdmittedGateFailed(code);
+    return;
+  }
   const sandbox = createGateSandbox();
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and
@@ -1120,7 +1145,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
     }
   } finally {
-    rmSync(sandbox, { recursive: true, force: true });
+    releaseGateSandbox(sandbox);
   }
 }
 

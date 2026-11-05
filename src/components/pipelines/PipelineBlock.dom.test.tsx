@@ -402,10 +402,10 @@ test("the stage chain is the lane's head where the card's ⋯ holds its actions;
   const opened: string[] = [];
   const menus: string[] = [];
   const summary = summarizePipeline(searchPipeline());
-  const chain = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onToggleGraph={() => {}} onOpenStages={(pipeline) => opened.push(pipeline.id)} />);
+  const chain = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onOpenGraph={() => {}} onOpenStages={(pipeline) => opened.push(pipeline.id)} />);
   expect(chain.querySelector(".pb-head")).toBeNull();
   const row = chain.querySelector(".pb-chain")!;
-  /* One row: the pills, then the graph toggle and the age with its chevron,
+  /* One row: the pills, then «Graph» and the age with its chevron,
      which ends the row. */
   expect([...row.children].map((child) => child.className)).toEqual(["pb-pills", "pb-tail"]);
   expect([...row.querySelector(".pb-tail")!.children].map((child) => child.getAttribute("data-graph-toggle") !== null ? "graph" : child.getAttribute("data-open-stages") !== null ? "open" : child.className)).toEqual(["graph", "open"]);
@@ -451,16 +451,20 @@ test("a stop the orchestrator handles takes no amber, and the closed card's chai
   expect(card.querySelector<HTMLElement>(".pblock")?.dataset.seatStop).toBe("1");
 });
 
-test("the graph is the operator's toggle on the task row, and it replaces the chain in place", () => {
-  const toggles: boolean[] = [];
-  const closed = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} onToggleGraph={(open) => toggles.push(open)} />);
-  click(closed.querySelector("[data-graph-toggle]"));
-  expect(toggles).toEqual([true]);
-  expect(closed.querySelector(".pb-graph")).toBeNull();
-  const open = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} graphOpen onOpenStage={() => {}} onToggleGraph={() => {}} />);
-  expect(open.querySelector("[data-graph-toggle]")?.getAttribute("aria-pressed")).toBe("true");
-  expect(open.querySelector('.pb-graph[data-open="1"]')).toBeTruthy();
-  expect(open.querySelector(".pb-chain")).toBeNull();
+test("«Graph» on the task row opens the pipeline's graph outside the card, and the row keeps its chain (docs/design/task-card-no-inline-conversations.md §3)", () => {
+  const graphs: string[] = [];
+  const row = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} onOpenGraph={(pipeline) => graphs.push(pipeline.id)} />);
+  const button = row.querySelector<HTMLElement>("[data-graph-toggle]")!;
+  /* It opens and toggles nothing: no pressed state. */
+  expect(button.hasAttribute("aria-pressed")).toBe(false);
+  click(button);
+  click(button);
+  expect(graphs).toEqual(["p-search", "p-search"]);
+  expect(row.querySelector(".pgraph, [data-graph]")).toBeNull();
+  expect(row.querySelector(".pb-chain .pb-pills")).toBeTruthy();
+  /* With nothing to open it, the row draws no «Graph». */
+  const bare = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(bare.querySelector("[data-graph-toggle]")).toBeNull();
 });
 
 /* A completed lane whose Implement conversation took more work (#1744): the

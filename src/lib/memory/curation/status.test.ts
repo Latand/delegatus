@@ -93,6 +93,49 @@ test("cooperative status agrees with authority and callers cannot modify its cac
   expect(await store.curationStatusCooperatively(PROJECT, NOW, SETTING)).toEqual(store.curationStatus(PROJECT, NOW, SETTING));
 });
 
+test("another project's curator progress keeps warm summaries and pass counts reusable", () => {
+  seed();
+  const pass = store.claimPass({ project: PROJECT, repoDir: null, now: NOW, setting: SETTING })!;
+  store.patchPass(pass.id, { state: "succeeded", endedAt: AT, counts: { ...pass.counts, calls: 3 } });
+  const expectedStatus = store.curationStatus(PROJECT, NOW, SETTING);
+  const expectedPass = store.readPass(pass.id);
+  store.curationCollection()!.boundedPatch(1, tx => {
+    tx.put({ ...pass, id: "curate_other_project", project: "other-project", counts: { ...pass.counts, calls: 9 } });
+  });
+  const original = source.curationScopeInputs;
+  let historyReads = 0;
+  const histories = spyOn(source, "curationScopeInputs").mockImplementation(function* (...args) {
+    historyReads++;
+    return yield* original(...args);
+  });
+  try {
+    expect(store.curationStatus(PROJECT, NOW, SETTING)).toEqual(expectedStatus);
+    expect(store.readPass(pass.id)).toEqual(expectedPass);
+    expect(historyReads).toBe(0);
+    store.patchPass(pass.id, { counts: { ...pass.counts, calls: 7 } });
+    expect(store.readPass(pass.id)?.counts.calls).toBe(7);
+  } finally { histories.mockRestore(); }
+});
+
+test("a timed-out curation panel retains the completed run's durable identity", async () => {
+  seed();
+  const pass = store.claimPass({ project: PROJECT, repoDir: null, now: NOW, setting: SETTING })!;
+  store.patchPass(pass.id, { state: "succeeded", endedAt: AT, conversationId: "conversation_completed_curator" });
+  let now = 0;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const original = cooperative.yieldToRuntime;
+  const waiting = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => { await original(); now = 5001; });
+  try {
+    const response = await GET(request());
+    expect(response.status).toBe(200);
+    expect((await response.json()).curation).toMatchObject({
+      lastRun: { id: pass.id, state: "succeeded", endedAt: AT, conversationId: "conversation_completed_curator" },
+      nextRunAt: null, runsError: "curation status read timed out",
+    });
+  } finally { waiting.mockRestore(); clock.mockRestore(); }
+  checkpoint();
+});
+
 for (const afterYield of [1, 2, 3, 4, 5, 6, 7, 8]) test(`a write after yield ${afterYield} restarts with fresh rule and scope membership`, async () => {
   const memory = seed();
   const original = cooperative.yieldToRuntime;
