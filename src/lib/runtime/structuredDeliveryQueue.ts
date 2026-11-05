@@ -17,7 +17,7 @@ import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
 import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
-import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
+import type { CompactCapableHost, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
 import { hostSupportsCompact, hostSupportsInject, StructuredDispatchDeferredError, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
   parseStructuredImageRefs,
@@ -808,11 +808,12 @@ function isThreadReadTimeout(error: unknown): boolean {
   return /thread\/read.*timed out|request timed out:\s*thread\/read/i.test(failureReason(error));
 }
 
-async function sendWithReadRetry(host: EngineHost, entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorize?: () => void): Promise<DeliveryReceipt> {
+async function sendWithReadRetry(host: EngineHost, entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorize?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
   for (let attempt = 1; attempt <= THREAD_READ_ATTEMPTS; attempt += 1) {
     try {
       authorize?.();
-      return await (attempt === 1 && firstDispatch ? host.send(entry, firstDispatch, authorize) : host.send(entry, undefined, authorize));
+      observeTiming?.("host-send");
+      return await host.send(entry, attempt === 1 ? firstDispatch : undefined, authorize, observeTiming);
     } catch (error) {
       if (attempt > 1 && error instanceof RoleMemoryRefusal && error.message === ROLE_MEMORY_CHANGED_MESSAGE) {
         // An earlier call may have written before its confirmation read failed.
@@ -1007,7 +1008,7 @@ export class StructuredDeliveryQueue {
     const run = (async () => {
       do {
         this.freshReruns.delete(conversationId);
-        await this.drainPass(true, conversationId);
+        await this.drainPass(true, conversationId, this.timing.now());
         // A lane outliving the pass takes over the owed wake when it ends.
         if (this.lanes.has(conversationId)) break;
       } while (this.freshReruns.has(conversationId) && !this.retirementExecutor.retired);
@@ -1049,7 +1050,7 @@ export class StructuredDeliveryQueue {
     } while (this.rerun && !this.retirementExecutor.retired);
   }
 
-  private async drainPass(safety = false, freshConversationId?: string): Promise<void> {
+  private async drainPass(safety = false, freshConversationId?: string, kickAt?: number): Promise<void> {
     const listingStartedAt = this.timing.now();
     if (freshConversationId === undefined) {
       this.lastPassStartedAt = listingStartedAt;
@@ -1151,6 +1152,7 @@ export class StructuredDeliveryQueue {
           : left.eventSeq - right.eventSeq);
     });
     for (const effect of effects) {
+      this.markTiming(effect.operationId, "queue-kick", new Date(kickAt ?? listingStartedAt).toISOString());
       const target = grouped.get(effect.conversationId) ?? [];
       target.push(effect);
       grouped.set(effect.conversationId, target);
@@ -1454,6 +1456,11 @@ export class StructuredDeliveryQueue {
     };
     try { progress.note(effect.operationId, effect.conversationId, note); }
     catch (error) { this.diagnosticError("[structured delivery] progress record failed", { error: failureReason(error) }); }
+  }
+
+  private markTiming(operationId: string, mark: DeliveryTimingMark, at = new Date(this.timing.now()).toISOString()): void {
+    try { this.port.progress?.mark?.(operationId, mark, at); }
+    catch { /* Diagnostics cannot affect delivery. */ }
   }
 
   private settleProgress(operationId: string, status: string, reason: string | null | undefined): void {
@@ -1941,7 +1948,11 @@ export class StructuredDeliveryQueue {
       let outcome: { receipt: DeliveryReceipt } | { error: unknown };
       try {
         authorize();
-        outcome = { receipt: await first.host.send(composed.entry, undefined, authorize) };
+        const observeTiming: DeliveryTimingObserver = mark => {
+          for (const p of selected) this.markTiming(p.effect.operationId, mark);
+        };
+        observeTiming("host-send");
+        outcome = { receipt: await first.host.send(composed.entry, undefined, authorize, observeTiming) };
       } catch (error) { outcome = { error }; }
       pendingBatch = [];
       if (memberRefused && "error" in outcome) {
@@ -2585,7 +2596,7 @@ export class StructuredDeliveryQueue {
           void settling.catch(() => undefined);
           continue;
         }
-        const receiving = sendWithReadRetry(host, entry, firstDispatch, authorize);
+        const receiving = sendWithReadRetry(host, entry, firstDispatch, authorize, mark => this.markTiming(effect.operationId, mark));
         if (queuesDuringTurn && !shouldInterrupt && !steersIntoTurn) {
           /* The engine confirms a queued input only when its own turn starts,
              which may wait on an answer to this conversation's attention. The

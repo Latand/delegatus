@@ -1733,7 +1733,7 @@ function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>
     spawnReceipt: (launchId: string) => ports().spawnReceipt(launchId),
     transcriptPresent: (pathname: string) => ports().transcriptPresent!(pathname),
     failStageLaunch: (launchId: string, conversationId: string, reason: string) => ports().failStageLaunch!(launchId, conversationId, reason),
-    failStoppedStageLaunch: (launchId: string, conversationId: string, reason: string, eligible: () => boolean) => ports().failStoppedStageLaunch!(launchId, conversationId, reason, eligible),
+    failStoppedStageLaunch: (...args: Parameters<NonNullable<PipelinePorts["failStoppedStageLaunch"]>>) => ports().failStoppedStageLaunch!(...args),
     releaseFailedStageLaunchContinuation: (launchId: string, conversationId: string) => ports().releaseFailedStageLaunchContinuation!(launchId, conversationId),
     conversationHostUnavailableSince: (conversationId: string) => ports().conversationHostUnavailableSince!(conversationId),
     conversationHostProcess: (conversationId: string) => ports().conversationHostProcess!(conversationId),

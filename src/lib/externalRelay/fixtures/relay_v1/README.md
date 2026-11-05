@@ -56,11 +56,14 @@ It contains the 14 I9/R7 operations and their complete schemas, totaling
 4,903 bytes. Production consumes the service's index and stores no operation
 list; the fixture has no role in production negotiation or execution.
 
-`owner-tools-off-v3-hashes.json` pins all 35 existing fixture and evidence
+`owner-tools-off-v3-hashes.json` pins 34 retained fixture and evidence
 JSON files, including K/P compact claims and completions. The earlier X1,
 X2 and X3 files retain their bytes. The owner-tier merge updates only the
 `card.json` pin to the reviewed owner-switch settings capture from #2677;
-the other 34 artifacts and all wire captures retain their original pins.
+the other 33 artifacts and all wire captures retain their original pins.
+The current `evidence/external-relay/chats.json` is a regenerated UI measurement
+record, updated for reply-chain conversations in #3017. Its obsolete byte pin
+was removed; the immutable wire captures remain checked byte for byte.
 `owner-tools-off-runner-hashes.json`
 was captured from the original Delegatus revision `39f654248666faa6e5deb01d59eeae305e64573f`
 through the existing runner test, under isolated state. It pins each role's
@@ -131,7 +134,7 @@ sides; this capture authorizes neither enablement nor deployment.
 | File | Bytes | SHA-256 |
 |---|---:|---|
 | `owner-tools-index.json` | 6730 | `13ffb1c99fde7ce1e74f3c7127f870b2a2c56dfc9e08a05984ae729dc926b93f` |
-| `owner-tools-off-v3-hashes.json` | 4760 | `bff586d8e1b96c2e3225d19b3227035c8da2c650d6c838dcc8ffa5814b4bde38` |
+| `owner-tools-off-v3-hashes.json` | 4652 | `7ee321fc50b6834a142eb580522800ad3a6a3a0182990ecb26261d7fd6475d1a` |
 | `owner-tools-off-runner-hashes.json` | 2879 | `709baf921762e4e9fdab4ab70eafd6141b0f7da7bac342d65ea7741374f9e9e2` |
 
 Original X4 capture before the R8 correction: 22,956 bytes, SHA-256

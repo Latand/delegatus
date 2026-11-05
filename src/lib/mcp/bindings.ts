@@ -7,7 +7,7 @@ import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { curationAnswer } from "@/lib/memory/curation/answer";
+import { curationAnswerCooperatively } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
 import { resolveIssueReportDigest } from "@/lib/issueReports/store";
 import { shortId, shortenHashesInText } from "@/lib/shortIds";
@@ -189,6 +189,7 @@ import { statePath } from "@/lib/configDir";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
+import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
@@ -679,11 +680,13 @@ async function dispatchViewerControl(
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
   const now = Date.now();
+  const fileBudget = pathname === "/api/telegram/bot/agent" && (body.op === "send_document" || body.op === "send_media")
+    ? cloneFileCallBudgetMs() : null;
   const budgetMs = context.deadlineAt === undefined
-    ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
+    ? fileBudget ?? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(1, context.deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
   const reconnectSend = pathname === "/api/tmux";
-  const expiresAt = now + Math.min(CONTROL_RECOVERY_BUDGET_MS, budgetMs);
+  const expiresAt = now + Math.min(fileBudget ?? CONTROL_RECOVERY_BUDGET_MS, budgetMs);
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
   requestHeaders.set("sec-fetch-site", "same-origin");
@@ -706,7 +709,7 @@ async function dispatchViewerControl(
   while (true) {
     assertWorkspaceMcpCall();
     context.assertCaller?.();
-    attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
+    attempt = deadlineSignal(Math.min(fileBudget ?? CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
       scheduler,
       signal: context.signal,
       reason: "Viewer control dispatch timed out",
@@ -4927,7 +4930,7 @@ async function projectRuntimeTarget(args: McpToolArgs, dependencies: ViewerMcpDo
 }
 
 function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): McpToolBinding {
-  const tick = orchestratorProjectBinding(dependencies, args => seatTickSettingsTool(args, dependencies), true);
+  const tick = orchestratorProjectBinding(dependencies, (args, context) => seatTickSettingsTool(args, dependencies, context), true);
   const targets = new WeakMap<McpToolArgs, string>();
   const runtime = async (args: McpToolArgs) => {
     let project = targets.get(args);
@@ -4941,7 +4944,7 @@ function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): Mcp
   return Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
     if (args.pipelineStageRuntime === undefined) return tick(args, context);
     const { project } = await runtime(args);
-    return seatTickSettingsTool({ ...args, project }, dependencies);
+    return seatTickSettingsTool({ ...args, project }, dependencies, context);
   }, {
     prepareAdmission: async (args: McpToolArgs) => { if (args.pipelineStageRuntime === undefined) await tick.prepareAdmission?.(args); },
     authorizeReceipt: async (args: McpToolArgs) => { if (args.pipelineStageRuntime !== undefined) await runtime(args); },
@@ -4988,7 +4991,8 @@ function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): Mcp
  * acknowledged with `{changed, revision, changedFields, monitorPromptLength}`
  * and nothing else. A verbose read carries the note once.
  */
-async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
+  throwIfCallEnded(context);
   const attribution = attributionOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const callerSeat = attribution.conversationId
@@ -5133,6 +5137,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const reportAsk = quieted && bridgeReportsEnabled(project) ? seatTickReportAsk(project, dependencies) : {};
 
   const verbose = args.verbose === true || args.full === true;
+  const curationRead = changed && !verbose ? null : await readSeatCuration(project, settings, readSettings, context);
+  if (curationRead) settings = curationRead.settings;
   const { monitorPrompt: storedPrompt, reason: storedReason, instructionLines: storedInstructions, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.curation;
@@ -5157,8 +5163,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     });
   }
 
-  const now = Date.now();
-  const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+  const { now, effective, curation } = curationRead!;
   /* #1845: the note is the one large field here, and a seat changing its
      cadence was reading its own note back three times on every call. It is
      carried only on an explicit full/verbose read, and there once, as
@@ -5171,7 +5176,6 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const compactSettings = storedReason === effective.reason ? settingsWithoutPrompt : { ...settingsWithoutPrompt, reason: storedReason };
   const fenceAnswer = seatTickFenceAnswer(project, effective.wakeIntervalMs, now);
   if (!verbose && fenceAnswer.fence) delete fenceAnswer.fenceDetail;
-  const curation = curationAnswer(project, effective, now);
   return redactPayload({
     project,
     changed,
@@ -5223,6 +5227,34 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...fenceAnswer,
     ...reportAsk,
   });
+}
+
+/** Keep one deadline across retries and refresh controls edited while history
+ * yields. A compact write acknowledgement never enters this read path. */
+async function readSeatCuration(project: string, initial: SeatTickSettings,
+  readSettings: (project: string) => SeatTickSettings, context: McpToolCallContext) {
+  throwIfCallEnded(context);
+  const timeout = new AbortController();
+  const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now()));
+  const timer = setTimeout(() => timeout.abort(budget < 5000
+    ? new DeadlineExceededError("MCP tool deadline exceeded", 0) : Error("curation panel read timed out")), budget);
+  const signal = context.signal ? AbortSignal.any([context.signal, timeout.signal]) : timeout.signal;
+  let settings = initial;
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      throwIfCallEnded(context);
+      signal.throwIfAborted();
+      const now = Date.now(), revision = recordRevision(settings);
+      const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+      const curation = await curationAnswerCooperatively(project, effective, now, signal);
+      throwIfCallEnded(context);
+      signal.throwIfAborted();
+      const fresh = readSettings(project);
+      if (recordRevision(fresh) === revision) return { settings, now, effective, curation };
+      settings = fresh;
+    }
+    throw Error("seat tick settings changed while being read");
+  } finally { clearTimeout(timer); }
 }
 
 /** Turbo for the seat: whether it is on, the credit approval and the switch progress. */

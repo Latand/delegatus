@@ -921,6 +921,7 @@ export async function bindStructuredDeliveryQueue(
      time off the delivery record, so the record answers for the key the
      operator holds. */
   const progress: DeliveryProgressSink = {
+    mark: (operationId, mark, at) => progressStore.mark(operationId, mark, at),
     note: (operationId, conversationId, note) => {
       if (!progressStore.get(operationId)) {
         const owner = registry.readOnlySnapshot().deliveryOperationOwners[operationId];
@@ -2947,15 +2948,21 @@ export async function terminateStructuredDeliveryHost(
 
 /** Live observations only; history with no observation time never invents one. */
 export function observeDeliveryEcho(
-  progress: { get(id: string): { conversationId: string } | null | undefined; timing(id: string, fields: { engineEchoAt: string }): unknown },
+  progress: Pick<DeliveryProgressSink, "mark"> & { get(id: string): { conversationId: string } | null | undefined; timing(id: string, fields: { engineEchoAt: string }): unknown },
   conversationId: string,
-  echo: { operationId: string; at: string | null; memberOperationIds?: string[] },
+  echo: { operationId: string; at: string | null; attachedAt?: string; memberOperationIds?: string[] },
   observedLive = true,
 ): void {
   if (!observedLive || !echo.at) return;
   for (const id of echo.memberOperationIds ?? [echo.operationId]) {
     try {
-      if (progress.get(id)?.conversationId === conversationId) progress.timing(id, { engineEchoAt: echo.at });
+      if (progress.get(id)?.conversationId === conversationId) {
+        try {
+          progress.mark?.(id, "echo-received", echo.at);
+          if (echo.attachedAt) progress.mark?.(id, "echo-attached", echo.attachedAt);
+        } catch { /* Preserve the existing arrival observation if diagnostics fail. */ }
+        progress.timing(id, { engineEchoAt: echo.at });
+      }
     } catch { /* Observations never delay journal delivery. */ }
   }
 }

@@ -16,6 +16,9 @@ import * as source from "../roleViewSource";
 import * as imports from "../importCuration";
 import { importCandidate, seedImport } from "../fixtures/import";
 import { saveTasks } from "@/lib/tasks/store";
+import { viewerMcpBindings } from "@/lib/mcp/bindings";
+import { readSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { curationAnswer } from "./answer";
 
 const PROJECT = "status-project", SCOPE = `role:${PROJECT}:builder`, ID = "r_status";
 const NOW = Date.parse("2026-10-12T12:00:00Z"), AT = new Date(NOW).toISOString();
@@ -57,6 +60,81 @@ function checkpoint() {
   try { expect(db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0); }
   finally { db.close(); }
 }
+
+function settingsTool() {
+  return viewerMcpBindings(undefined, undefined, {
+    registrySnapshot: () => ({ conversations: {} }),
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_status_seat", role: "orchestrator" }),
+    authorizedSeats: () => [{ conversationId: "conversation_status_seat", path: null, project: PROJECT }],
+    callerProject: () => PROJECT,
+    readTickSettings: readSeatTickSettings,
+    writeTickSettings: writeSeatTickSettings,
+  } as never).seat_tick_settings;
+}
+
+test("the MCP curation read lets a heartbeat run before returning the unchanged answer", async () => {
+  seed(4096);
+  let heartbeat = false;
+  const timer = setTimeout(() => { heartbeat = true; }, 0);
+  try {
+    const result = await settingsTool()({ verbose: true });
+    expect(heartbeat).toBe(true);
+    expect(result.curation).toEqual(curationAnswer(PROJECT, effectiveSeatTickSettings(readSeatTickSettings(PROJECT), NOW, 3_600_000), NOW));
+  } finally { clearTimeout(timer); }
+  checkpoint();
+});
+
+test("the MCP curation read observes cancellation during retained history", async () => {
+  seed(4096);
+  const controller = new AbortController(), reason = Error("caller cancelled curation read");
+  const timer = setTimeout(() => controller.abort(reason), 0);
+  try { await expect(settingsTool()({ verbose: true }, { signal: controller.signal })).rejects.toBe(reason); }
+  finally { clearTimeout(timer); }
+  checkpoint();
+});
+
+test("the MCP curation read refreshes settings changed while yielding", async () => {
+  seed(4096);
+  const original = cooperative.yieldToRuntime;
+  let changed = false;
+  const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+    await original();
+    if (changed) return;
+    changed = true;
+    writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), enabled: false, reason: "Paused during read" });
+  });
+  try {
+    const result = await settingsTool()({ verbose: true });
+    expect(changed).toBe(true);
+    expect(result).toMatchObject({ settings: { enabled: false }, effective: { enabled: false }, curation: { waitingOn: "wakes-off" } });
+  } finally { hook.mockRestore(); }
+  checkpoint();
+});
+
+test("the MCP curation read enforces the caller deadline across yields", async () => {
+  seed(4096);
+  const original = cooperative.yieldToRuntime;
+  const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+    await original();
+    setSystemTime(new Date(NOW + 101));
+  });
+  try { await expect(settingsTool()({ verbose: true }, { deadlineAt: NOW + 100 })).rejects.toThrow("deadline exceeded"); }
+  finally { hook.mockRestore(); }
+  checkpoint();
+});
+
+test("a compact MCP settings write acknowledges without scanning curation history", async () => {
+  seed(4096);
+  const original = cooperative.yieldToRuntime;
+  let yields = 0;
+  const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => { yields++; await original(); });
+  try {
+    const result = await settingsTool()({ enabled: false, reason: "Pause fixture" });
+    expect(result).toMatchObject({ changed: true, changedFields: ["enabled", "reason"] });
+    expect(result).not.toHaveProperty("curation");
+    expect(yields).toBe(0);
+  } finally { hook.mockRestore(); }
+});
 
 test("rule refresh neither clones unchanged histories nor reads retained pass authorities", () => {
   seed();

@@ -17,6 +17,7 @@ import { translate } from "@/lib/i18n";
 import { structuredContent } from "./structuredContent";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
+import { observeDeliveryEcho } from "./structuredDeliveryController";
 
 /*
  * Incident 2026-10-06: two operator messages waited 409 s and 515 s before
@@ -156,6 +157,96 @@ function queueFor(
   return new StructuredDeliveryQueue(port, (conversationId) => hosts[conversationId] ?? null,
     undefined, onWake, undefined, undefined, undefined, undefined, timing);
 }
+
+test("operation timing splits one real queue delivery without changing its phases", async () => {
+  const time = clock();
+  const progress = new DeliveryProgressStore(null, time.now);
+  const journal = fakeJournal();
+  journal.admit("timed-send", "timed-conversation");
+  progress.note("timed-send", "timed-conversation", { waitReason: "queued" });
+  const host = fakeHost(delivered);
+  host.engine.send = async (entry, _first, authorize, mark) => {
+    host.inputs.push(entry.id);
+    for (const name of ["codex-prepare", "codex-confirmed-read", "codex-confirmed", "codex-input-ready", "codex-rpc-start", "codex-rpc-end"] as const) {
+      time.advance(100);
+      mark?.(name);
+    }
+    authorize?.();
+    time.advance(100);
+    const at = new Date(time.now()).toISOString();
+    time.advance(100);
+    observeDeliveryEcho(progress, "timed-conversation", { operationId: entry.id, at, attachedAt: new Date(time.now()).toISOString() });
+    return delivered();
+  };
+  const queue = queueFor(journal.port({ progress }), { "timed-conversation": host.engine }, { now: time.now });
+  try {
+    await queue.drainFreshAdmission("timed-conversation");
+    const record = progress.get("timed-send")!;
+    expect(host.inputs).toEqual(["timed-send"]);
+    expect(record.terminal?.state).toBe("delivered");
+    expect(record.timingMarks?.map(m => m.mark)).toEqual([
+      "queue-kick", "host-send", "codex-prepare", "codex-confirmed-read", "codex-confirmed", "codex-input-ready",
+      "codex-rpc-start", "codex-rpc-end", "echo-received", "echo-attached",
+    ]);
+    const stamps = record.timingMarks!.map(m => Date.parse(m.at));
+    expect(stamps).toEqual([...stamps].sort((a, b) => a - b));
+    expect(stamps.slice(2).map((at, i) => at - stamps[i + 1]!)).toEqual(Array(8).fill(100));
+    expect(record.phaseHistory?.filter(p => p.phase === "engine-echo")).toHaveLength(1);
+  } finally { queue.retire(); progress.close(); }
+});
+
+test("a failed timing sink cannot refuse queue dispatch", async () => {
+  const journal = fakeJournal();
+  journal.admit("timing-refused", "conversation");
+  const progress = new DeliveryProgressStore(null);
+  progress.mark = () => { throw new Error("timing unavailable"); };
+  const host = fakeHost(delivered);
+  const queue = queueFor(journal.port({ progress }), { conversation: host.engine }, {});
+  try {
+    await queue.drain();
+    expect(host.inputs).toEqual(["timing-refused"]);
+    expect(progress.get("timing-refused")?.terminal?.state).toBe("delivered");
+  } finally { queue.retire(); progress.close(); }
+});
+
+test("batch timing stays with each original operation and ignores foreign or replayed echoes", async () => {
+  const time = clock();
+  const progress = new DeliveryProgressStore(null, time.now);
+  const journal = fakeJournal();
+  for (const id of ["batch-a", "batch-b"]) {
+    journal.admit(id, "batch-conversation");
+    progress.note(id, "batch-conversation", { waitReason: "queued" });
+  }
+  const host = fakeHost(delivered);
+  Object.assign(host.engine, { coalescesQueuedInput: true, sendWaitsForRunningTurn: true, supportsSteer: false, supportsQueuedSend: false });
+  const at = new Date(time.now()).toISOString();
+  host.engine.send = async (entry, _first, authorize, mark) => {
+    authorize?.();
+    host.inputs.push(entry.id);
+    expect(entry.parts?.map(p => p.operationId)).toEqual(["batch-a", "batch-b"]);
+    mark?.("codex-prepare");
+    const echo = { operationId: entry.id, memberOperationIds: ["batch-a", "batch-b"], at, attachedAt: at };
+    observeDeliveryEcho(progress, "foreign-conversation", echo);
+    observeDeliveryEcho(progress, "batch-conversation", echo, false);
+    expect(progress.get("batch-a")?.engineEchoAt).toBeUndefined();
+    observeDeliveryEcho(progress, "batch-conversation", echo);
+    return delivered();
+  };
+  const queue = queueFor(journal.port({ progress, coalescesConversation: () => true,
+    bindDeliveryBatch: async () => true }), { "batch-conversation": host.engine }, { now: time.now });
+  try {
+    await queue.drainFreshAdmission("batch-conversation");
+    expect(host.inputs).toHaveLength(1);
+    for (const id of ["batch-a", "batch-b"]) {
+      const record = progress.get(id)!;
+      expect(record.terminal?.state).toBe("delivered");
+      expect(record.engineEchoAt).toBe(at);
+      expect(record.timingMarks?.map(m => m.mark)).toEqual([
+        "queue-kick", "host-send", "codex-prepare", "echo-received", "echo-attached",
+      ]);
+    }
+  } finally { queue.retire(); progress.close(); }
+});
 
 test("every wait reason has a sentence in both interface languages", () => {
   for (const reason of DELIVERY_WAIT_REASONS) {

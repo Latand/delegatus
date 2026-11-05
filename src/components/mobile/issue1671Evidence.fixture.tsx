@@ -32,6 +32,7 @@ import { sampleCallHistory } from "@/components/voiceCompanion/transcriptSample.
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter";
+import { reconnectEvidence } from "@/components/voiceCompanion/reconnectEvidence.fixture";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -230,6 +231,11 @@ if (VOICE_SCENE === "drop") {
     },
     cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, timer: () => undefined, dispose: () => {} },
   }));
+}
+if (VOICE_SCENE === "reconnect") {
+  const fixture = reconnectEvidence(localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
+  Object.assign(window, { voiceReconnect: fixture.controls });
+  setVoiceCompanionAdapterForTests(() => fixture.adapter);
 }
 function voiceFeed(feed: string): string {
   if (!VOICE_LONG) return feed;

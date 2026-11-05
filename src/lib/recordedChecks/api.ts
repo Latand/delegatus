@@ -1,5 +1,5 @@
 import { recordedCheckInput } from "./input";
-import { openRecordedChecks, recordedExecutionState } from "./store";
+import { openRecordedChecks, recordedExecutionState, RecordedCheckCapacityError } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, consumerPermitted, acknowledgeRecordedCheck } from "./service";
 import { observeRecordedCheck } from "./observer";
 import { statePath } from "@/lib/configDir";
@@ -16,7 +16,16 @@ export async function recordedCheck(args: Record<string, unknown>, caller: strin
   let row;
   if (input.action === "handoff") {
     if (!input.ticket) throw new RecordedCheckRefusal("handoff requires the existing recorded ticket", { status: 400 });
-    row = await handoffRecordedCheck(caller, String(clientRequestId), input.ticket, { binding: callingAttempt, verify: verifyLiveCustody, observe: observeRecordedCheck });
+    try {
+      row = await handoffRecordedCheck(caller, String(clientRequestId), input.ticket, { binding: callingAttempt, verify: verifyLiveCustody, observe: observeRecordedCheck });
+    } catch (error) {
+      if (!(error instanceof RecordedCheckCapacityError)) throw error;
+      const binding = callingAttempt(caller);
+      const holders = error.holders.filter(holder => holder.project === binding.project);
+      return { status: "waiting", execution: "unknown", retryable: true, retryAfterMs: 250,
+        reason: "Native custody is still occupied. Retry this ticket with a fresh request identity within its original deadline; keep the stage running.",
+        holders: holders.slice(0, 16), holderCount: error.holders.length, truncated: holders.length > 16 };
+    }
   } else {
     const store = await openRecordedChecks();
     try { row = input.receiptId ? store.get(input.receiptId) : null; } finally { store.close(); }
