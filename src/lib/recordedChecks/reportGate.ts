@@ -34,8 +34,8 @@ function closedCustody(row: CheckRow): RecordedCheckExclusion["custody"] | null 
   return notStarted ? "not-started" : "cleanup-confirmed";
 }
 
-/** At most four outstanding receipts belong to one launch. Re-read at each
- * report/settlement boundary; saved exclusions never grant future authority. */
+/** Re-read every retained receipt at each report/settlement boundary. Released
+ * admission slots do not acknowledge results or grant report exclusions. */
 export const recordedReportReceipts = (launch: string) => readRecorded(store => store.forLaunch(launch).map(row => {
   const result = row.result;
   const custody = closedCustody(row);

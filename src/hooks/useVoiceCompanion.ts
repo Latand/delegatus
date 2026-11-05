@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
-import { STALE_BROWSER_MS, type CompanionCommand, type CompanionEvent, type Locale, type ResumableCall, type VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { STALE_BROWSER_MS, type CompanionCommand, type CompanionEvent, type ResumableCall, type VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "@/lib/voiceCompanion/reducer";
 
-type StartOptions = { locale: Locale; project: string; resume?: string };
+type StartOptions = Parameters<VoiceCompanionAdapter["start"]>[0];
 export interface VoiceCompanionHook {
   state: CompanionState;
   start(options: StartOptions): Promise<void>;
@@ -22,7 +22,7 @@ type Action = { type: "start"; adapter: VoiceCompanionAdapter; resume?: string }
 const initial: Snapshot = { adapter: null, sessionId: null, state: INITIAL_COMPANION_STATE, retired: new Set(), awaitingReady: false, offset: 0, resuming: null };
 /** Ends that cut a call off; a hang-up, a goodbye, the cap and the plan limit end it. */
 const DROPS = new Set(["transport", "error"]);
-const said = (state: CompanionState) => state.lines.some((line) => line.final && line.text.trim() !== "");
+const said = (state: CompanionState) => state.lines.some((line) => line.text.trim() !== "");
 const cut = (event: CompanionEvent) => event.type === "session.closed" ? DROPS.has(event.reason) : event.type === "error" && event.code === "CONNECTION_LOST";
 /** A session that drops after something was said here leaves its call to resume. One that resumed after a reload
  * holds no lines of its own: the Viewer, asked after every drop, offers it from the call's journal. */
@@ -42,8 +42,8 @@ function receive(previous: Snapshot, action: Action): Snapshot {
   if (action.type === "failed-start") {
     /* A reconnect that did not go through: the call is still offered unless the Viewer refused it. */
     if (!previous.resuming) return { ...previous, awaitingReady: false };
-    const resumable = action.code === "SESSION_UNAVAILABLE" ? null : previous.resuming;
-    return { ...previous, awaitingReady: false, resuming: null, state: { ...previous.state, resumable, reconnected: false, revision: previous.state.revision + 1 } };
+    const resumable = action.code === "SESSION_UNAVAILABLE" || action.code === "CONTENT_BLOCKED" ? null : previous.resuming;
+    return { ...previous, awaitingReady: false, resuming: null, state: { ...previous.state, resumable, reconnected: false, phase: "offline", error: action.code, revision: previous.state.revision + 1 } };
   }
   if (action.type === "resumable") {
     if (previous.awaitingReady || previous.state.phase !== "offline" || previous.state.resumable?.sessionId === action.call?.sessionId) return previous;
@@ -66,6 +66,7 @@ function receive(previous: Snapshot, action: Action): Snapshot {
   return { ...previous, sessionId: event.sessionId, awaitingReady: false, retired, offset: 0, resuming: null, state: reduceCompanion(INITIAL_COMPANION_STATE, event) };
 }
 const failureCode = (error: unknown) => (error instanceof Error ? error.message : null);
+const TERMINAL = new Set(["SESSION_UNAVAILABLE", "COMPANION_DISABLED", "CAP_REACHED", "CODEX_LIMIT_REACHED", "CODEX_AUTH_REQUIRED", "NO_CODEX_ACCOUNT", "CODEX_UNSUPPORTED", "NO_KEY", "KEY_FROM_ENV", "NO_PROJECT", "INVALID_REQUEST", "MICROPHONE_REFUSED", "AUDIO_REFUSED", "MINT_UNCERTAIN", "CONTENT_BLOCKED"]);
 
 /** The Viewer offers an open call only once its browser has been quiet for STALE_BROWSER_MS, so the question a page
  * asks on reload, or the moment its connection drops, is usually answered null: it asks again after that, a few times. */
@@ -116,17 +117,93 @@ export interface CompanionStore {
 
 /** The same session rules as the hook below, outside React: the floating companion reads this, so a
  * played-audio level sample moves the mouth without rendering the component sixty times a second. */
-export function createCompanionStore(adapter: VoiceCompanionAdapter, options: { schedule?: Schedule } = {}): CompanionStore {
+export function createCompanionStore(adapter: VoiceCompanionAdapter, options: { schedule?: Schedule; now?: () => number; random?: () => number; runnable?: () => boolean } = {}): CompanionStore {
   let snapshot = initial;
+  const schedule = options.schedule ?? timeout;
+  const now = options.now ?? (() => performance.now());
+  const runnable = options.runnable ?? (() => (typeof navigator === "undefined" || navigator.onLine !== false)
+    && !(typeof document !== "undefined" && document.hidden && typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches));
+  let settings: StartOptions | null = null;
+  let automatic = false;
+  let project: string | null = null;
+  let loop: { elapsed: number; last: number; runnable: boolean; next: number; tick: number; attempts: number; noticed: number; resume: string; pending: boolean } | null = null;
+  let cancel: (() => void) | null = null, attempt: AbortController | null = null;
+  let recent: number[] = [];
   const views = new Set<() => void>();
   const levels = new Set<(state: CompanionState) => void>();
   const apply = (action: Action) => {
     const before = snapshot.state;
     snapshot = receive(snapshot, action);
+    if (loop && action.type === "event" && action.event.type === "session.closed" && DROPS.has(action.event.reason))
+      snapshot = { ...snapshot, state: { ...snapshot.state, phase: "reconnecting", reconnected: false, error: null } };
     const state = snapshot.state;
     if (state === before) return;
     if (state.mouth !== before.mouth || state.playedMs !== before.playedMs) for (const listener of [...levels]) listener(state);
-    if (state.revision !== before.revision || state.generation !== before.generation) for (const listener of [...views]) listener();
+    if (state.revision !== before.revision || state.generation !== before.generation || action.type === "event" && action.event.type === "session.ready") for (const listener of [...views]) listener();
+  };
+  const change = (patch: Partial<CompanionState>) => {
+    snapshot = { ...snapshot, state: { ...snapshot.state, ...patch, revision: snapshot.state.revision + 1 } };
+    for (const view of [...views]) view();
+  };
+  const cancelLoop = () => { loop = null; cancel?.(); cancel = null; attempt?.abort(); attempt = null; };
+  const giveUp = (code: string | null) => {
+    automatic = false;
+    cancelLoop(); snapshot = { ...snapshot, awaitingReady: false, resuming: null };
+    adapter.reconnect?.("gave-up");
+    change({ phase: "offline", reconnected: false, error: code && TERMINAL.has(code) ? code : "RECONNECT_GAVE_UP",
+      resumable: code === "SESSION_UNAVAILABLE" || code === "CONTENT_BLOCKED" ? null : snapshot.state.resumable });
+  };
+  const begin = async (input: StartOptions) => {
+    apply({ type: "start", adapter, resume: input.resume });
+    try { await adapter.start(input); }
+    catch (error) {
+      const resumedId = (error as { resumeSessionId?: string })?.resumeSessionId;
+      if (resumedId) { snapshot = { ...snapshot, resuming: { sessionId: resumedId, project } }; if (loop) loop.resume = resumedId; }
+      if (loop) {
+        snapshot = { ...snapshot, awaitingReady: false };
+        if (resumedId) change({ resumable: { sessionId: resumedId, project } });
+      } else apply({ type: "failed-start", adapter, code: failureCode(error) });
+      throw error;
+    }
+  };
+  const wake = () => {
+    const current = loop; if (!current) return;
+    const at = now(); const delta = Math.max(0, at - current.last); current.last = at;
+    // Sample frequently: paused time never buys another minute of active attempts.
+    if (runnable() && current.runnable) current.elapsed += delta;
+    current.runnable = runnable();
+    if (current.elapsed >= 60_000) { giveUp(null); return; }
+    if (runnable() && current.elapsed >= current.tick) { adapter.reconnect?.("tick"); current.tick = current.elapsed + 5_000; }
+    if (runnable() && !current.pending && current.elapsed >= current.next) {
+      if (current.attempts >= 8 || !settings || !project) { giveUp(project ? null : "NO_PROJECT"); return; }
+      current.attempts++; current.pending = true;
+      const controller = attempt = new AbortController();
+      const expire = schedule(() => controller.abort(), Math.min(15_000, 60_000 - current.elapsed));
+      void begin({ ...settings, project, resume: current.resume, signal: controller.signal,
+        reconnect: { tier: 2, attempts: current.attempts, automatic: true, noticedToStartMs: Math.max(0, Math.round(at - current.noticed)) } }).then(() => {
+        if (loop !== current) return;
+        cancelLoop();
+      }, error => {
+        if (loop !== current) return;
+        current.pending = false;
+        const code = failureCode(error);
+        if (TERMINAL.has(code ?? "") || current.attempts >= 8) { giveUp(code); return; }
+        current.next = current.elapsed + ([1_000, 2_000, 4_000][current.attempts - 1] ?? 8_000) * (0.75 + (options.random?.() ?? Math.random()) * 0.5);
+        snapshot = { ...snapshot, awaitingReady: false };
+        change({ phase: "reconnecting", reconnected: false, error: null });
+      }).finally(expire);
+    }
+    if (loop === current) cancel = schedule(wake, current.pending || !runnable() ? 100 : Math.min(100, Math.max(1, current.next - current.elapsed)));
+  };
+  const reconnect = () => {
+    if (!automatic || loop || !settings || !snapshot.state.resumable || adapter.mode !== "official-realtime") return;
+    const at = now(); recent = recent.filter(time => at - time < 600_000);
+    if (recent.length >= 6) { giveUp(null); return; }
+    recent.push(at);
+    loop = { elapsed: 0, last: at, runnable: runnable(), next: Math.floor((options.random?.() ?? Math.random()) * 300), tick: 5_000, attempts: 0, noticed: at, resume: snapshot.state.resumable.sessionId, pending: false };
+    adapter.reconnect?.("trying");
+    change({ phase: "reconnecting", reconnected: false, error: null });
+    cancel = schedule(wake, Math.min(100, loop.next));
   };
   return {
     get: () => snapshot.state,
@@ -135,49 +212,53 @@ export function createCompanionStore(adapter: VoiceCompanionAdapter, options: { 
     onLevel: (listener) => { levels.add(listener); return () => { levels.delete(listener); }; },
     connect: () => {
       let active = true;
-      const probe = resumeProbe(adapter, () => active && idle(snapshot), (call) => { if (active) apply({ type: "resumable", adapter, call }); }, options.schedule ?? timeout);
+      const probe = resumeProbe(adapter, () => active && idle(snapshot), (call) => { if (active) apply({ type: "resumable", adapter, call }); }, schedule);
       const unsubscribe = adapter.subscribe((event) => {
         if (!active) return;
         apply({ type: "event", adapter, event });
-        if (cut(event)) probe.ask();
+        if (event.type === "session.closed" && event.cause === "audio-refused") { giveUp("AUDIO_REFUSED"); return; }
+        if (loop && event.type === "session.closed" && !DROPS.has(event.reason)) {
+          giveUp(event.reason === "content" ? "CONTENT_BLOCKED" : event.reason === "cap" ? "CAP_REACHED" : event.reason === "limit" ? "CODEX_LIMIT_REACHED" : "SESSION_UNAVAILABLE");
+          change({ resumable: null }); return;
+        }
+        if (cut(event)) { reconnect(); if (!loop) probe.ask(); }
       });
       /* A page that reloaded, or a browser that came back, finds the call it dropped. */
       probe.ask();
-      return () => { active = false; probe.stop(); unsubscribe(); void (adapter.dispose?.() ?? adapter.close()).catch(() => undefined); };
+      const availability = () => { if (loop) { if (!loop.runnable && runnable() && !loop.pending) loop.next = loop.elapsed; cancel?.(); cancel = null; wake(); } };
+      if (typeof window !== "undefined") { window.addEventListener("online", availability); window.addEventListener("offline", availability); document.addEventListener("visibilitychange", availability); }
+      return () => {
+        active = false; automatic = false; cancelLoop(); probe.stop(); unsubscribe();
+        if (typeof window !== "undefined") { window.removeEventListener("online", availability); window.removeEventListener("offline", availability); document.removeEventListener("visibilitychange", availability); }
+        void (adapter.dispose?.() ?? adapter.close()).catch(() => undefined);
+      };
     },
     start: async (options) => {
-      apply({ type: "start", adapter, resume: options.resume });
-      try { await adapter.start(options); }
-      catch (error) { apply({ type: "failed-start", adapter, code: failureCode(error) }); throw error; }
+      cancelLoop(); settings = options; project = options.project; automatic = true;
+      if (!options.resume) recent = [];
+      try { await begin(options); } catch (error) { automatic = false; throw error; }
     },
-    setProject: project => adapter.setProject?.(project) ?? Promise.resolve(),
+    setProject: value => { project = value; return adapter.setProject?.(value) ?? Promise.resolve(); },
     command: (value) => adapter.command(value),
-    stop: () => adapter.close(),
+    stop: async () => {
+      const pending = snapshot.awaitingReady;
+      const reconnecting = !pending && snapshot.state.phase === "reconnecting" && !!snapshot.state.resumable;
+      automatic = false; cancelLoop(); snapshot = { ...snapshot, awaitingReady: false, resuming: null };
+      change({ phase: "offline", reconnected: false, resumable: pending ? null : snapshot.state.resumable });
+      await adapter.close();
+      if (reconnecting && adapter.resumable) {
+        try { change({ resumable: await adapter.resumable() }); } catch { /* Keep the last known offer if reconciliation is unavailable. */ }
+      }
+    },
     refresh: () => adapter.refresh?.() ?? Promise.resolve(),
   };
 }
 
-/** The view supplies a stable adapter. Only an explicit start action opens
- * a session; closing the view releases the adapter's microphone and transport. */
+/** An explicit start opens a call; a drop continues it here. Closing the view releases its media and retries. */
 export function useVoiceCompanion(adapter: VoiceCompanionAdapter): VoiceCompanionHook {
-  const [snapshot, dispatch] = useReducer(receive, initial);
-  const latest = useRef(snapshot);
-  useEffect(() => { latest.current = snapshot; });
-  useEffect(() => {
-    let active = true;
-    const probe = resumeProbe(adapter, () => active && idle(latest.current), (call) => { if (active) dispatch({ type: "resumable", adapter, call }); }, timeout);
-    const unsubscribe = adapter.subscribe(event => { if (!active) return; dispatch({ type: "event", adapter, event }); if (cut(event)) probe.ask(); });
-    probe.ask();
-    return () => { active = false; probe.stop(); unsubscribe(); void (adapter.dispose?.() ?? adapter.close()); };
-  }, [adapter]);
-  const start = useCallback(async (options: StartOptions) => {
-    dispatch({ type: "start", adapter, resume: options.resume });
-    try { await adapter.start(options); }
-    catch (error) { dispatch({ type: "failed-start", adapter, code: failureCode(error) }); throw error; }
-  }, [adapter]);
-  const setProject = useCallback((project: string | null) => adapter.setProject?.(project) ?? Promise.resolve(), [adapter]);
-  const command = useCallback((value: CompanionCommand) => adapter.command(value), [adapter]);
-  const stop = useCallback(() => adapter.close(), [adapter]);
-  const refresh = useCallback(() => adapter.refresh?.() ?? Promise.resolve(), [adapter]);
-  return { state: snapshot.adapter === adapter ? snapshot.state : INITIAL_COMPANION_STATE, start, setProject, command, stop, refresh };
+  const store = useMemo(() => createCompanionStore(adapter), [adapter]);
+  useEffect(() => store.connect(), [store]);
+  const subscribe = useMemo(() => (listener: () => void) => { const view = store.subscribe(listener), level = store.onLevel(listener); return () => { view(); level(); }; }, [store]);
+  const state = useSyncExternalStore(subscribe, store.get, store.get);
+  return { state, start: store.start, setProject: store.setProject, command: store.command, stop: store.stop, refresh: store.refresh };
 }

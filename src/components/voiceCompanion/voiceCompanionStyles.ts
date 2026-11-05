@@ -52,6 +52,7 @@ export const VOICE_COMPANION_CSS = `
 .vc[data-phase="listening"] { --vc-ring: var(--color-accent); }
 .vc[data-phase="speaking"] { --vc-ring: var(--color-primary); }
 .vc[data-phase="thinking"] { --vc-ring: var(--color-muted); }
+.vc[data-phase="reconnecting"] { --vc-ring: var(--color-warning); }
 .vc[data-phase="idle"] { --vc-ring: var(--color-success); }
 .vc[data-starting] { --vc-ring: var(--color-muted); }
 
@@ -135,6 +136,7 @@ export const VOICE_COMPANION_CSS = `
 }
 @keyframes vc-pop { from { opacity: 0.2; transform: scale(0.9); } to { opacity: 1; transform: none; } }
 .vc[data-phase="offline"] .vc-shape { border-style: dashed; }
+.vc[data-phase="reconnecting"] .vc-shape { border-style: dashed; }
 /* The flag that news is waiting: inside the tile's own box, its pulse included, so like the hang-up it lies on
    nothing the tile does not (at -3 px it reached past the tile onto the corner of the banner beside it). */
 .vc-flag {
@@ -205,6 +207,9 @@ export const VOICE_COMPANION_CSS = `
   background: color-mix(in srgb, var(--color-sunken) 94%, transparent); color: var(--color-secondary); border-radius: 14px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
+/* Over the page's own text the glass would smear it behind the words: the bubble is then as flat as a notice. */
+.vc-lane[data-over-page] .vc-bubble[data-speaker="companion"], .vc-lane[data-over-page] .vc-bubble[data-speaker="companion"][data-newest]::after { background: var(--color-raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.vc-lane[data-over-page] .vc-bubble[data-speaker="operator"] { background: var(--color-sunken); backdrop-filter: none; -webkit-backdrop-filter: none; }
 
 /* Calls: what is being called, running, done or failed */
 .vc-call {
@@ -242,6 +247,23 @@ export const VOICE_COMPANION_CSS = `
 .vc-notice[data-tone="note"] .vc-notice-icon { color: var(--color-secondary); background: var(--color-sunken); }
 .vc-notice[data-code="CONNECTION_RESTORED"] .vc-notice-icon { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 14%, transparent); }
 .vc-notice .vc-act { height: 26px; margin-left: auto; }
+/* A call's line beside a tile with no lane: one row in the room reserved for it, the button kept beside the words
+   and its label alone, which the longest language needs to stay within two lines. */
+.vc-line { position: absolute; display: flex; align-items: center; pointer-events: none; }
+.vc-line .vc-notice { width: fit-content; max-width: 100%; flex-wrap: nowrap; padding: 5px 10px 5px 7px; pointer-events: auto; }
+.vc-line .vc-notice-text { flex: 0 1 auto; }
+.vc-line .vc-act { flex: none; }
+.vc-line .vc-act svg { display: none; }
+/* The narrower room: the icon gives way beside a Reconnect, whose label then takes two lines rather than cut a word. */
+.vc-line[data-narrow] .vc-notice:has(.vc-act) .vc-notice-icon { display: none; }
+.vc-line[data-narrow] .vc-notice { gap: 6px; padding-right: 8px; }
+.vc-line[data-narrow] .vc-notice:has(.vc-act) { padding-left: 8px; }
+.vc-line[data-narrow] .vc-notice-text { min-width: min-content; overflow-wrap: normal; }
+.vc-line[data-narrow] .vc-act { height: auto; min-height: 26px; padding: 3px 8px; line-height: 14px; text-align: center; white-space: normal; max-width: 84px; }
+
+/* Opened over the page on request, the companion stands on one surface of the page's own colour, which hides whole
+   every line it meets: none is cut through by a part, and none shows between them. */
+.vc-veil { position: absolute; border-radius: 12px; background: var(--color-canvas); pointer-events: auto; }
 
 /* The delegation: a call of its own, in the delegation's teal */
 .vc .vc-call.vc-deleg {
@@ -345,6 +367,7 @@ export const PHONE_VOICE_CSS = `
 .pvc .pvc-lane[data-side="right"] .vc-bubble { transform-origin: 0 50%; }
 @keyframes pvc-out { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
 .pvc .pvc-lane .vc-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.pvc .pvc-lane .vc-bubble[data-tone="notice"] .vc-text { white-space: pre-line; }
 /* Over a phone's page a bubble is opaque: the rows under glass read through it. */
 .pvc .vc-bubble[data-speaker="companion"], .pvc .vc-bubble[data-speaker="companion"][data-newest]::after { background: var(--color-raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .pvc .vc-lane[data-side="left"] .vc-bubble[data-newest]::after, .pvc .vc-lane[data-side="right"] .vc-bubble[data-newest]::after { bottom: calc(50% - 5px); }

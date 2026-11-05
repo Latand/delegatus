@@ -25,6 +25,8 @@ export interface CompanionCues {
   disconnect(): void;
   /** A voice timer came up during the call. */
   timer(): void;
+  tick?(): void;
+  giveUp?(): void;
   /** Closes the context. */
   dispose(): void;
 }
@@ -40,7 +42,7 @@ export function createBrowserCues(
       return context;
     } catch { return null; }
   };
-  const play = (hz: readonly number[]) => {
+  const play = (hz: readonly number[], peak = CUE_PEAK_GAIN) => {
     try {
       if (!enabled()) return;
       const audio = open();
@@ -56,7 +58,7 @@ export function createBrowserCues(
         oscillator.frequency.value = frequency;
         oscillator.connect(gain);
         gain.gain.setValueAtTime(FLOOR, at);
-        gain.gain.linearRampToValueAtTime(CUE_PEAK_GAIN, at + ATTACK_S);
+        gain.gain.linearRampToValueAtTime(peak, at + ATTACK_S);
         gain.gain.exponentialRampToValueAtTime(FLOOR, at + TONE_S);
         oscillator.start(at);
         oscillator.stop(at + TONE_S + 0.01);
@@ -68,6 +70,8 @@ export function createBrowserCues(
     connect() { play([CUE_TONES.low, CUE_TONES.high]); },
     disconnect() { play([CUE_TONES.high, CUE_TONES.low]); },
     timer() { play(TIMER_CUE_TONES); },
+    tick() { play([660], 0.012); },
+    giveUp() { play([990, 825, 660]); },
     dispose() {
       const audio = context;
       context = null;
