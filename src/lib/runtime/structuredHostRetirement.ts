@@ -671,7 +671,7 @@ export interface StructuredHostRetirementDependencies {
   processMemory?: (pids: Iterable<number>) => Map<number, ProcessMemory>;
   ppidMap?: () => Map<number, number>;
   owned?: (key: SessionKey) => boolean;
-  terminate?: (ref: StructuredHostKillRef) => Promise<StructuredHostTerminationOutcome>;
+  terminate?: (ref: StructuredHostKillRef, authorize?: () => { status: 403 | 409; error: string } | null) => Promise<StructuredHostTerminationOutcome>;
   record?: (report: StructuredHostRetirementReport) => void;
   now?: () => number;
   idleMs?: number;
@@ -1250,22 +1250,25 @@ export async function runStructuredHostRetirementSweep(
     const host = structuredDeliveryHostForConversation(conversationId);
     if (host) await flushStructuredHostPersistence(host);
   });
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
+  const authorizeRetirement = (ref: StructuredHostKillRef) => {
     const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
     const scope = recordedAgentScope(observed?.structuredHost);
-    return terminateStructuredHostTree(ref, {
-    ...(scope ? { authorize: () => {
-      if (publicationState() !== "ready") return { status: 409 as const, error: "scope retirement publication changed" };
+    return () => {
+      if (publicationState() !== "ready") return { status: 409 as const, error: "retirement publication changed" };
       const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
       const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
       if (!entry || !recordedScopeProcess(entry.structuredHost) || entry.claimEpoch !== observed?.claimEpoch || entry.claimOwner !== observed?.claimOwner
         || entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch
         || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
         || !structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers), { now: now(), idleMs }).retire) {
-        return { status: 409 as const, error: "scope retirement target changed" };
+        return { status: 409 as const, error: "retirement target changed" };
       }
       return null;
-    } } : {}),
+    };
+  };
+  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, authorize = authorizeRetirement(ref)) => {
+    return terminateStructuredHostTree(ref, {
+    authorize,
     stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
     graceMs,
     deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
@@ -1529,7 +1532,7 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref);
+      outcome = await terminate(ref, authorizeRetirement(ref));
     } catch (error) {
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId, error: String(error), remaining: [] });
       continue;

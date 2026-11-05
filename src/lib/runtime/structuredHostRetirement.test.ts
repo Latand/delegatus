@@ -873,6 +873,41 @@ test("a refused checkpoint flush keeps the host and records its reason", async (
   expect(probe.report.failed).toEqual([expect.objectContaining({ error: "checkpoint unavailable" })]);
 });
 
+test.each(["opened turn", "unflushed delta"])("review final ladder rechecks unscoped %s after runtime await", async change => {
+  const control = await import("./structuredHostControl");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const registry = agentRegistry();
+  const actual = control.terminateStructuredHostTree;
+  const store = retirementLedger();
+  store.append(SESSION, { kind: "session-status", status: "unhosted", seq: 13 });
+  let current = snapshot();
+  let alive = true;
+  const signals: string[] = [];
+  const write = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (_correlation, apply) => apply());
+  const capture = spyOn(registry, "recordStructuredTerminationSurvivors").mockReturnValue(true);
+  const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, options = {}) => actual(ref, { ...options,
+    scope: null, registryCustody: null, retireRegistryEntry: () => true,
+    processIdentity: () => alive ? HOST_IDENTITY : null,
+    bootEpoch: () => BOOT_EPOCH, pidAlive: () => alive,
+    ppidMap: () => new Map([[HOST_PID, 1]]), processGroupId: () => null,
+    protectedPids: () => new Set(),
+    terminateOwnedHost: async () => {
+      await Promise.resolve();
+      if (change === "opened turn") current = snapshot({ conversations: { [CONVERSATION]: conversation({ turn: { state: "busy" } }) } });
+      else store.append(SESSION, { kind: "delta", turnId: "new-turn", text: "genuinely unflushed output", seq: 14 });
+      return false;
+    },
+    signal: (_pid, value) => { signals.push(value); alive = false; },
+    sleep: async () => {}, graceMs: 0, deadlineMs: 100,
+  }));
+  try {
+    const probe = await sweep({ durableEventTail: undefined, snapshot: () => current, owned: () => false, terminate: undefined });
+    expect(signals).toEqual([]);
+    expect(probe.report.retired).toHaveLength(0);
+    expect(probe.report.failed).toHaveLength(1);
+  } finally { terminate.mockRestore(); capture.mockRestore(); write.mockRestore(); }
+});
+
 test("a real unflushed event arriving during the writer flush still blocks retirement", async () => {
   const store = retirementLedger();
   store.append(SESSION, { kind: "session-status", status: "unhosted", seq: 13 });
