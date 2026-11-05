@@ -334,3 +334,66 @@ for (const shape of ["foreign-branch", "detached"] as const) {
     }
   }, 30_000);
 }
+
+test("independent recovery probe: registration changes owner after final ref read", async () => {
+  const f = await realWorktreeLane("registration-race", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null },
+  ]);
+  try {
+    const lane = loadPipelines()[0]!;
+    const previous = lane.runs[0]!.attempts[0]!;
+    previous.state = "failed";
+    previous.completedAt = f.h.ports.now();
+    previous.error = "interrupted setup";
+    previous.launchId = previous.conversationId = previous.sessionId = previous.agentPath = previous.paneId = null;
+    delete previous.activation;
+    lane.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+    lane.state = "running";
+    savePipelines([lane]);
+    fs.appendFileSync(path.join(f.repo, ".gitignore"), "node_modules/\n");
+    fs.mkdirSync(path.join(f.repo, "node_modules"));
+    fs.rmSync(f.worktree, { recursive: true });
+    f.h.ports.worktreePresent = dir => fs.existsSync(dir);
+    const offline = path.join(f.root, "peer-offline");
+    let peerGitDir = "", peerIndex: Buffer | undefined, injected = false, reads = 0;
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => {
+      const args = input[1];
+      const isRefRead = args[0] === "rev-parse" && args[1] === "--verify" && args[2] === `refs/heads/${lane.branch}^{commit}`;
+      if (isRefRead) reads++;
+      const boundary = (isRefRead && reads === 2) || args[0] === "check-ignore";
+      if (!injected && boundary) {
+        injected = true;
+        await f.git(f.repo, "worktree", "add", "--force", "-b", "independent-peer", f.worktree, lane.branch);
+        fs.writeFileSync(path.join(f.worktree, "staged.txt"), "unique peer staged version\n");
+        await f.git(f.worktree, "add", "staged.txt");
+        fs.writeFileSync(path.join(f.worktree, "staged.txt"), "peer working version\n");
+        fs.writeFileSync(path.join(f.worktree, "sentinel.tmp"), "peer ignored version\n");
+        peerGitDir = await f.git(f.worktree, "rev-parse", "--absolute-git-dir");
+        peerIndex = fs.readFileSync(path.join(peerGitDir, "index"));
+        fs.renameSync(f.worktree, offline);
+      }
+      return await exec(...input);
+    };
+    const before = f.h.spawnInputs.length;
+    await tickPipelines([], f.h.ports);
+    const current = loadPipelines()[0]!;
+    const listing = await f.git(f.repo, "worktree", "list", "--porcelain");
+    const indexPreserved = !!peerIndex && fs.existsSync(path.join(peerGitDir, "index")) && peerIndex.equals(fs.readFileSync(path.join(peerGitDir, "index")));
+    const hasForeignRegistration = listing.includes("branch refs/heads/independent-peer");
+    expect(current.state).toBe("needs_decision");
+    expect(current.stateDetail).toContain("registration belongs to refs/heads/independent-peer");
+    expect(injected).toBe(true);
+    expect(indexPreserved).toBe(true);
+    expect(hasForeignRegistration).toBe(true);
+    expect(f.h.spawnInputs).toHaveLength(before);
+    expect(fs.existsSync(f.worktree)).toBe(false);
+    fs.renameSync(offline, f.worktree);
+    expect(await f.git(f.worktree, "show", ":staged.txt")).toBe("unique peer staged version");
+    expect(fs.readFileSync(path.join(f.worktree, "staged.txt"), "utf8")).toBe("peer working version\n");
+    expect(fs.readFileSync(path.join(f.worktree, "sentinel.tmp"), "utf8")).toBe("peer ignored version\n");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+}, 30_000);

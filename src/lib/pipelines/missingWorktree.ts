@@ -86,13 +86,6 @@ export async function restoreMissingLaneWorktree(
   }
   if (branch.code !== 0) throw new Error(`${prefix}; local branch ${lane.branch} cannot be read; restore the local branch in the repository, then retry the stage`);
   const head = branch.stdout.trim();
-  const listing = await git(["worktree", "list", "--porcelain", "-z"]);
-  if (listing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
-  const registration = inspectRegistrations(listing.stdout);
-  if (!missing()) {
-    if (await verifyAppeared(head, ref, repositoryCommonDir)) return;
-    throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
-  }
   const current = await git(["rev-parse", "--verify", `${ref}^{commit}`]);
   if (!missing()) {
     if (current.code === 0 && current.stdout.trim() === head
@@ -101,6 +94,15 @@ export async function restoreMissingLaneWorktree(
   }
   if (current.code !== 0 || current.stdout.trim() !== head)
     throw new Error(`${prefix}; local branch ${lane.branch} changed during recovery; check the branch and retry the stage`);
+  // Read registration ownership after every ref read. No asynchronous work
+  // may reuse this permission before add; a changed or unknown owner refuses.
+  const listing = await git(["worktree", "list", "--porcelain", "-z"]);
+  if (listing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
+  const registration = inspectRegistrations(listing.stdout);
+  if (!missing()) {
+    if (await verifyAppeared(head, ref, repositoryCommonDir)) return;
+    throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
+  }
   // One --force replaces only this missing path's stale registration. Git
   // retains other worktrees' indexes and refuses a lock (which needs two).
   // A directory appearing after our lstat is left to Git's nonempty-path guard.
