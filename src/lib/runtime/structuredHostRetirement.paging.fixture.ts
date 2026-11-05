@@ -126,9 +126,12 @@ if (scenario === "gone-cas-cleared" || scenario === "gone-cas-replaced" || scena
       first = false;
       const entry = registry.readOnlySnapshot().entries[`codex:${session(1)}`]!;
       if (scenario === "gone-cas-refused") return false;
+      if (scenario === "gone-cas-replaced") {
+        registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1,
+          structuredHost: { ...entry.structuredHost!, process: { ...entry.structuredHost!.process!, pid: 2_000_001_000 } } });
+        return retire(...args);
+      }
       retire(...args);
-      if (scenario === "gone-cas-replaced") registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1,
-        structuredHost: { ...entry.structuredHost!, process: { ...entry.structuredHost!.process!, pid: 2_000_001_000 } } });
       return false;
     }
     return retire(...args);
@@ -153,20 +156,32 @@ const dependencies: StructuredHostRetirementDependencies = {
       const entry = registry.readOnlySnapshot().entries[`codex:${session(1)}`]!;
       const retained = scenario === "late-descendant" ? [{ ...captureProcessIdentity(process.pid), bootEpoch: "fixture-boot" }] : [];
       if (scenario === "late-cleared") registry.terminateStructuredHost(entry.key, entry.structuredHost!.process!);
-      else if (!retained.length) registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1,
+      else if (!retained.length && scenario !== "late-returned-writer-failure") registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1,
         structuredHost: { ...entry.structuredHost!, process: { ...entry.structuredHost!.process!, pid: 2_000_001_000 } } });
-      disappeared.add(ref.pid);
+      if (scenario !== "late-returned-writer-failure") disappeared.add(ref.pid);
       if (scenario === "late-throw") throw new Error("fixture termination writer failed");
       return terminateStructuredHostTree(ref, {
         registryCustody: { process: entry.structuredHost!.process!, claimOwner: entry.claimOwner,
           claimEpoch: entry.claimEpoch, writerClaimEpoch: entry.structuredHost!.writerClaimEpoch },
         retainedSurvivors: retained,
-        processIdentity: pid => retained.find(identity => identity.pid === pid)?.startIdentity ?? null,
-        pidAlive: pid => retained.some(identity => identity.pid === pid),
+        processIdentity: pid => scenario === "late-returned-writer-failure" && pid === ref.pid && !disappeared.has(pid)
+          ? ref.startIdentity : retained.find(identity => identity.pid === pid)?.startIdentity ?? null,
+        pidAlive: pid => scenario === "late-returned-writer-failure" && pid === ref.pid && !disappeared.has(pid)
+          || retained.some(identity => identity.pid === pid),
+        ...(scenario === "late-returned-writer-failure" ? { retireRegistryEntry: async () => {
+          throw new Error("fixture registry write failed");
+        } } : {}),
         bootEpoch: () => "fixture-boot", protectedPids: () => new Set(),
+        scope: null,
         authorize: () => retained.length ? { status: 409, error: "retained descendant custody remains active" } : null,
         signal: () => { throw new Error("finished curator must not be signalled"); },
-        terminateOwnedHost: async () => { throw new Error("finished curator must not be released"); },
+        terminateOwnedHost: async () => {
+          if (scenario === "late-returned-writer-failure") {
+            disappeared.add(ref.pid);
+            return true;
+          }
+          throw new Error("finished curator must not be released");
+        },
       });
     }
     terminated.push(ref.sessionId!);
@@ -236,5 +251,7 @@ if (curator) {
 }
 console.log(JSON.stringify({ report, terminated, attempted, scopeReads, historyIntact, curation, signals,
   status: status.status,
-  remaining: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process).map(entry => sessionKeyId(entry.key)) }));
+  remaining: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process).map(entry => sessionKeyId(entry.key)),
+  remainingRows: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process)
+    .map(entry => ({ key: sessionKeyId(entry.key), claimEpoch: entry.claimEpoch, pid: entry.structuredHost!.process!.pid })) }));
 registry.close();

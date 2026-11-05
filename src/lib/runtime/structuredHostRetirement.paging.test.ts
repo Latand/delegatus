@@ -174,12 +174,29 @@ for (const scenario of ["late-curator-cleared", "late-curator-replaced"]) {
   });
 }
 
+test("the real registry CAS rejects a successor installed at the final retirement boundary", async () => {
+  const result = await sweep(root(), "gone-cas-replaced");
+  expect(result.report.failed).toEqual([]);
+  expect(result.report.refused).toContainEqual(expect.objectContaining({ changed: true,
+    reason: "already-exited host custody was cleared or replaced" }));
+  expect(result.remainingRows).toContainEqual({ key: `codex:${session(1)}`, claimEpoch: 2, pid: 2_000_001_000 });
+});
+
 test("an exited curator whose termination throws still signals the actual failure", async () => {
   const result = await sweep(root(), "late-curator-throw");
   expect(result.curation).toMatchObject({ state: "succeeded", failure: null });
   expect(result.report.failed).toMatchObject([{ error: "host already exited; cleanup failed: fixture termination writer failed" }]);
   expect(result.signals[0].label).toContain("host already exited; cleanup failed: fixture termination writer failed");
   expect(result.terminated).not.toContain(session(1));
+  expect(result.remaining).toHaveLength(4);
+});
+
+test("an exited curator preserves the returned termination registry-writer failure", async () => {
+  const result = await sweep(root(), "late-curator-returned-writer-failure");
+  expect(result.curation).toMatchObject({ state: "succeeded", failure: null });
+  expect(result.report.failed).toMatchObject([{ error: "host already exited; cleanup failed: termination evidence became unavailable: fixture registry write failed" }]);
+  expect(result.signals[0].label).toContain("termination evidence became unavailable: fixture registry");
+  expect(result.report.gone).toEqual([]);
   expect(result.remaining).toHaveLength(4);
 });
 
