@@ -412,6 +412,8 @@ function isAttempt(value: unknown, index: number): boolean {
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isStartupOwnerWait(attempt.startupOwnerWait) &&
+    isStartupOwnerWait(attempt.roleMemoryDispatchWait) &&
+    isRoleMemoryDelivery(attempt.roleMemoryDelivery) &&
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
@@ -431,6 +433,14 @@ function isRestoreContinuation(value: unknown): boolean {
     && (record.promptBoundary === null || Number.isSafeInteger(record.promptBoundary) && Number(record.promptBoundary) >= 0)
     && Number.isSafeInteger(record.count) && Number(record.count) >= 1 && Number(record.count) <= 3
     && typeof record.clientMessageId === "string" && record.clientMessageId.length > 0 && record.clientMessageId.length <= 300;
+}
+
+function isRoleMemoryDelivery(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const delivery = value as Record<string, unknown>;
+  return [delivery.launchId, delivery.conversationId, delivery.transcript].every(item => typeof item === "string" && item.length > 0)
+    && (delivery.retryClaimId === null || typeof delivery.retryClaimId === "string" && delivery.retryClaimId.length > 0);
 }
 
 function isStartupOwnerWait(value: unknown): boolean {
@@ -1609,6 +1619,8 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
             ...attempt,
             ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
+            ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
+            ...(attempt.roleMemoryDelivery ? { roleMemoryDelivery: { ...attempt.roleMemoryDelivery } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
