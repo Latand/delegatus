@@ -116,7 +116,7 @@ export function VoiceToolRows({ tools, onOpen }: { tools: VoiceTools; onOpen: (n
   const { t } = useLocale();
   const { view, servers, loading, loadError, signInRequired, read } = tools;
   const status = loading && !view ? t("voiceCompanion.tools.loading") : loadError ? t(signInRequired ? "voiceCompanion.tools.signIn" : "voiceCompanion.tools.error") : view && !servers.length ? t("voiceCompanion.tools.empty") : "";
-  return <div data-voice-tools="" role="group" aria-label={t("voiceCompanion.tools.title")}>
+  return <div data-voice-tools="" data-settings-landing="" tabIndex={-1} role="group" aria-label={t("voiceCompanion.tools.title")} className="outline-none">
     <SectionHead title={t("voiceCompanion.tools.title")} />
     {status ? <TextRow tone="muted" role="status" attrs={{ "data-voice-tools-status": "" }}>{status}</TextRow> : null}
     {loadError ? <BlockRow><button type="button" onClick={() => void read()} className={BUTTON}>{t("voiceCompanion.tools.retry")}</button></BlockRow> : null}

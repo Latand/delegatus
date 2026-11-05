@@ -373,6 +373,12 @@ export function DetailsRow({ lines, attrs, initiallyOpen = false }: { lines: rea
   );
 }
 
+/** A page whose record is no longer there: the section again. */
+export function Gone({ back }: { back: () => void }) {
+  useEffect(() => { back(); }, [back]);
+  return null;
+}
+
 /**
  * No line is cut by a scroll edge on the first screen or at the end of the
  * scroll: the scroller ends on the last whole row, and the end of the scroll

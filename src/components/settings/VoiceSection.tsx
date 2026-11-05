@@ -14,7 +14,7 @@ import { VoiceDevicesSetting } from "@/components/voiceCompanion/VoiceDevicesSet
 import { useVoiceTools, VoiceToolPage, VoiceToolRows } from "@/components/voiceCompanion/VoiceToolsSetting";
 
 import type { SettingsSub } from "./openSettings";
-import { BlockRow, BUTTON, ChoiceRow, DetailsRow, FIELD, FieldRow, LinkRow, Literal, RefusalLine, Rows, SectionHead, SwitchRow, TextRow } from "./settingsRows";
+import { BlockRow, BUTTON, ChoiceRow, DetailsRow, FIELD, FieldRow, Gone, LinkRow, Literal, RefusalLine, Rows, SectionHead, SwitchRow, TextRow } from "./settingsRows";
 
 /* A page's rows reach the foot of the sheet, so its actions can stand there. */
 const FILL = "flex flex-1 flex-col";
@@ -28,7 +28,7 @@ type Control = "enabled" | "backend" | "cap" | "callMemory" | "timerTelegram" | 
  * or spend. The key is entered in «Keys» (docs/design/keys-settings.md §4): its
  * row says where the key comes from and opens «Keys» on it.
  */
-export function VoiceSection({ sub, go }: { sub: SettingsSub | null; go: (sub: SettingsSub) => void }) {
+export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (sub: SettingsSub) => void; back: () => void }) {
   const { t, locale } = useLocale();
   const { settings, busy, error, update } = useVoiceCompanionSettings(true);
   const memory = useCallMemory();
@@ -45,7 +45,12 @@ export function VoiceSection({ sub, go }: { sub: SettingsSub | null; go: (sub: S
 
   if (sub?.id === "cap") return settings ? <CapPage settings={settings} change={change} refusal={refusal("cap")} /> : null;
   if (sub?.id === "calls") return <div data-voice-companion-settings="" className={FILL}><Rows><CallMemoryPage memory={memory} /></Rows></div>;
-  if (sub?.id === "tool") return <div data-voice-companion-settings="" className={FILL}><VoiceToolPage name={sub.arg ?? ""} tools={tools} /></div>;
+  if (sub?.id === "tool") {
+    const name = sub.arg ?? "";
+    /* A tool removed from under its own page, or a first read that failed: the section again, with its list or its retry. */
+    if (tools.view ? !Object.hasOwn(tools.view.servers, name) : !tools.loading) return <Gone back={back} />;
+    return <div data-voice-companion-settings="" className={FILL}><VoiceToolPage name={name} tools={tools} /></div>;
+  }
 
   const api = settings?.backend === "api";
   const cap = settings?.monthlyCapUsd ?? 0;

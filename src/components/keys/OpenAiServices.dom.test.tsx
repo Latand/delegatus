@@ -42,7 +42,7 @@ const transcribeBackend = await import("@/app/api/transcribe/backend/route");
 const { MicButtonView } = await import("@/components/MicButton");
 const { VoiceStep } = await import("@/components/onboarding/VoiceStep");
 const { VoiceSection } = await import("@/components/settings/VoiceSection");
-const VoiceCompanionSetting = () => <VoiceSection sub={null} go={() => {}} />;
+const VoiceCompanionSetting = () => <VoiceSection sub={null} go={() => {}} back={() => {}} />;
 const services = await import("@/app/api/openai-services/route");
 const keysList = await import("@/app/api/keys/route");
 const keyWrite = await import("@/app/api/keys/[id]/route");

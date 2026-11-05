@@ -11,7 +11,7 @@ import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { TelegramBotChatView, TelegramChatBot, TelegramPostingBot } from "@/lib/telegram/bot/contracts";
 
 import { openSettings, type SettingsSub } from "./openSettings";
-import { ActionsRow, BlockRow, BUTTON, ChoiceRow, ConfirmAction, DetailsRow, FIELD, FieldRow, FOCUS, LinkRow, Literal, Prose, RefusalLine, Rows, SectionHead, SwitchRow, TEXT_ACTION, TextRow, ValueRow, type RowDot } from "./settingsRows";
+import { ActionsRow, BlockRow, BUTTON, ChoiceRow, ConfirmAction, DetailsRow, FIELD, FieldRow, FOCUS, Gone, LinkRow, Literal, Prose, RefusalLine, Rows, SectionHead, SwitchRow, TEXT_ACTION, TextRow, ValueRow, type RowDot } from "./settingsRows";
 import { StatusDot, type DotTone } from "./StatusDot";
 
 const AUTOMATIC = "";
@@ -113,11 +113,6 @@ export function TelegramSectionView({ state, sub, go, back }: SectionProps & { s
   if (sub?.id === "add-chat") return <AddChatPage state={state} failure={failure} here={here} />;
   if (sub?.id === "folders") return <FoldersPage state={state} failure={failure} here={here} />;
   return <Overview state={state} failure={failure} go={go} />;
-}
-
-function Gone({ back }: { back: () => void }) {
-  useEffect(() => { back(); }, [back]);
-  return null;
 }
 
 function BotRows({ state, go }: { state: TelegramBotState; go: SectionProps["go"] }) {

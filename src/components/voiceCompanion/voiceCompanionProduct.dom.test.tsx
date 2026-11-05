@@ -221,7 +221,7 @@ test("on a view with no project, Talk says to open one and starts nothing", asyn
 /* The voice section with its pages, as the Settings window drives it. */
 function VoiceCompanionSetting() {
   const [sub, setSub] = useState<SettingsSub | null>(null);
-  return <VoiceSection sub={sub} go={setSub} />;
+  return <VoiceSection sub={sub} go={setSub} back={() => setSub(null)} />;
 }
 const openCap = async () => click(document.querySelector("[data-voice-companion-cap-row] [data-settings-row='link']"));
 const choose = async (backend: string) => {

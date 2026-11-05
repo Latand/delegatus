@@ -1593,6 +1593,11 @@ const OPEN_MENU = async (page: Page, phone: boolean) => {
   await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
 };
 const toolPage = (name: string) => async (page: Page) => pressRow(page, `data-voice-tool-server="${name}"`);
+const removeTool = (name: string) => async (page: Page) => {
+  await toolPage(name)(page);
+  await page.locator("[data-voice-tool-action='remove']").click();
+  await page.waitForFunction(() => document.activeElement?.matches("[data-voice-tools]"), undefined, { timeout: 10_000 });
+};
 
 const SETTINGS_FRAMES: SettingsFrame[] = [
   /* The window. */
@@ -1629,6 +1634,14 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']" },
   { surface: "telegram", name: "webhook-elsewhere", scene: "telegram-webhook", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-page] [role=status]" },
   { surface: "telegram", name: "sending-rejected", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"'), defining: "[data-telegram-sending-bot-page] [role=status]" },
+  /* A sender removed from its own page: the section again, and the keyboard on its first control. */
+  { surface: "telegram", name: "sender-removed", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => {
+    await pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"');
+    const actions = page.locator("[data-telegram-sending-bot-page] [data-settings-row='actions'] button");
+    await actions.first().click();
+    await actions.first().click();
+    await page.waitForFunction(() => document.activeElement?.closest("[data-settings-scroller], [data-mobile2-sheet-body]") && !document.querySelector("[data-settings-back]")?.textContent?.includes("Atlas Reports"), undefined, { timeout: 10_000 });
+  }, defining: "[data-telegram-bot-row]", absent: /atlas_reports_bot/ },
   { surface: "telegram", name: "nine-bots", scene: "telegram-nine", section: "telegram", defining: '[data-telegram-sending-bot="atlas_sender_8_bot"]' },
   { surface: "telegram", name: "add-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-add-bot"), defining: "[data-telegram-add-bot-page] input[type=password]" },
   { surface: "telegram", name: "chat-ok", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-posts-as]" },
@@ -1684,6 +1697,9 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "voice", name: "tool-rejected", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("drive"), defining: "[data-voice-tool-state='rejected']" },
   { surface: "voice", name: "tool-refused", scene: "voice-codex", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-ask]").click(); }, defining: "[data-voice-tools-refused]" },
   { surface: "voice", name: "tool-details", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), details: true, defining: "[data-settings-details]" },
+  /* Remove on a tool's page: the section again, the list without the tool or its «No tools» line, and the keyboard on it. */
+  { surface: "voice", name: "tool-removed", scene: "voice-codex", section: "voice", query: "dev=default", steps: removeTool("drive"), defining: "[data-voice-tools-list]", absent: /Reads shared files|Читає спільні файли/ },
+  { surface: "voice", name: "tool-removed-last", scene: "voice-tools-one", section: "voice", query: "dev=default", steps: removeTool("drive"), defining: "[data-voice-tools-status]" },
   { surface: "voice", name: "details-api", scene: "voice-file", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]" },
 ];
 

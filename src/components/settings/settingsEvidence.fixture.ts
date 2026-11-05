@@ -121,6 +121,7 @@ const TOOLS = () => ({
 });
 let tools = TOOLS() as { revision: number; servers: Record<string, Record<string, unknown>> };
 if (SETTINGS_SCENE === "voice-tools-empty") tools = { revision: 1, servers: {} };
+if (SETTINGS_SCENE === "voice-tools-one") tools = { ...tools, servers: { drive: tools.servers.drive! } };
 
 const KEYS = () => ({ staging: false, owner: true, keys: [
   { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "missing", masked: null },
@@ -182,6 +183,7 @@ export async function settingsEvidenceRoute(url: URL, method: string, init?: Req
     if (SETTINGS_SCENE === "voice-tools-error") return json({}, 500);
     if (SETTINGS_SCENE === "voice-tools-signin") return json({ code: "OPERATOR_REQUIRED" }, 401);
     if (write && REFUSE) return json({ code: "STALE_APPROVAL" }, 409);
+    if (body.action === "remove") tools = { ...tools, servers: Object.fromEntries(Object.entries(tools.servers).filter(([name]) => name !== body.name)) };
     return json(tools);
   }
   if (url.pathname === "/api/keys") return json(KEYS());

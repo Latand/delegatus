@@ -18,7 +18,7 @@ import { MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/component
 import { MemorySourceRow } from "@/components/memory/MemorySourceRow";
 import { MobileSheet } from "@/components/mobile/MobileSheet";
 import { useMobileNavStore } from "@/components/mobile/mobileNav";
-import { useModalLayer } from "@/components/modalLayer";
+import { FOCUSABLE_SELECTOR, useModalLayer } from "@/components/modalLayer";
 import { openOnboarding } from "@/components/onboarding/useOnboarding";
 import { WorkerLimitSettingsRow } from "@/components/orchestrator/WorkerLimitChip";
 import { PushBell } from "@/components/PushBell";
@@ -164,7 +164,7 @@ function SectionBody({ section, sub, go, back, phone, project, close, keysFocus 
     case "roles": return <RolesSection phone={phone} project={project} close={close} />;
     case "privacy": return <PrivacySection />;
     case "telegram": return <TelegramSection sub={sub} go={go} back={back} />;
-    case "voice": return <VoiceSection sub={sub} go={go} />;
+    case "voice": return <VoiceSection sub={sub} go={go} back={back} />;
     default: return null;
   }
 }
@@ -351,7 +351,11 @@ export function SettingsWindowHost({ project }: { project: string | null }) {
     if (!open || !focusNext.current) return;
     const selector = focusNext.current;
     focusNext.current = null;
-    document.querySelector<HTMLElement>(`[data-settings-window] ${selector}, [data-mobile2-sheet='settings'] ${selector}`)?.focus();
+    const surface = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']");
+    /* A record removed from under its page took the row that opened it, and the press took the focus with it: the keyboard stays in the section. */
+    const body = surface?.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]");
+    const target = surface?.querySelector<HTMLElement>(selector) ?? body?.querySelector<HTMLElement>("[data-settings-landing]") ?? [...(body?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])].find((element) => !element.hasAttribute("disabled"));
+    target?.focus();
   });
 
   const sections = settingsSectionsOf(HEADER_LAYOUTS[phone ? "phone" : "desktop"]);

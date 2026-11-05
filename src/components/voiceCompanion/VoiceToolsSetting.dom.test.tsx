@@ -20,6 +20,8 @@ const harness = installOnboardingDom();
 installActEnv();
 const { createRoot } = await import("react-dom/client");
 const { useVoiceTools, VoiceToolPage, VoiceToolRows } = await import("./VoiceToolsSetting");
+const { SettingsWindowHost } = await import("@/components/settings/SettingsWindow");
+const { openSettings } = await import("@/components/settings/openSettings");
 const { translate } = await import("@/lib/i18n/core");
 const { resetLocaleForTests, setLocale } = await import("@/lib/i18n");
 
@@ -373,4 +375,97 @@ test("unavailable stdio containment shows localized risk and only the explicit c
       resetLocaleForTests(); localStorage.removeItem("llv_lang");
     }
   }
+});
+
+/* A tool's page in the Settings window, opened from the section's row as a person opens it. */
+const SECTION_TITLE = translate("en", "voiceCompanion.settings.label");
+const title = () => document.querySelector("[data-settings-title]")?.textContent;
+const listed = () => [...document.querySelectorAll("[data-voice-tools-list] [data-voice-tool-server]")].map(row => row.getAttribute("data-voice-tool-server"));
+const closeWindow = async () => { await click(document.querySelector("[data-settings-close]")); };
+async function openWindow(sub?: { id: string; arg: string; title: string }) {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  await act(async () => root.render(<SettingsWindowHost project={null} />));
+  await act(async () => openSettings("voice", sub));
+}
+async function openToolPage(name: string) {
+  await openWindow();
+  await act(async () => settle());
+  await click(document.querySelector(`[data-voice-tools-list] [data-voice-tool-server='${name}'] [data-settings-row='link']`));
+  expect(title()).toBe(spotify().title);
+}
+
+test("Remove on a tool's page returns to the section with the rest of the list, and the keyboard lands on that list", async () => {
+  routes({ spotify: spotify({ state: "disabled", missingSecrets: [] }), calendar: spotify({ title: "Calendar", state: "enabled", missingSecrets: [] }) });
+  await openToolPage("spotify");
+  await click(button(document.body, "remove"));
+  expect(writes()).toEqual([{ action: "remove", name: "spotify", digest: digestOf(1) }]);
+  expect(title()).toBe(SECTION_TITLE);
+  expect(document.querySelector("[data-settings-back]")).toBeNull();
+  expect(listed()).toEqual(["calendar"]);
+  expect(document.activeElement).toBe(document.querySelector("[data-voice-tools]"));
+  await closeWindow();
+});
+
+test("removing the last tool lands on the section's «No tools» line", async () => {
+  routes({ spotify: spotify({ state: "disabled", missingSecrets: [] }) });
+  await openToolPage("spotify");
+  await click(button(document.body, "remove"));
+  expect(title()).toBe(SECTION_TITLE);
+  expect(document.querySelector("[data-voice-tools-status]")?.textContent).toBe(translate("en", "voiceCompanion.tools.empty"));
+  expect(document.activeElement).toBe(document.querySelector("[data-voice-tools]"));
+  await closeWindow();
+});
+
+test("a tool removed elsewhere while its page is open returns there too once a press learns of it", async () => {
+  const { record } = routes({ spotify: spotify({ state: "enabled", missingSecrets: [] }), calendar: spotify({ title: "Calendar", state: "enabled", missingSecrets: [] }) });
+  await openToolPage("spotify");
+  delete record.servers.spotify;
+  await click(document.querySelector("[data-voice-tool-ask]"));
+  expect(title()).toBe(SECTION_TITLE);
+  expect(listed()).toEqual(["calendar"]);
+  await closeWindow();
+});
+
+test("a removal the route refuses stays on the page with its reason", async () => {
+  const { refuse } = routes({ spotify: spotify({ state: "disabled", missingSecrets: [] }) });
+  refuse.remove = "BUSY";
+  await openToolPage("spotify");
+  await click(button(document.body, "remove"));
+  expect(title()).toBe("Spotify");
+  expect(document.querySelector("[data-voice-tools-refused]")?.getAttribute("data-voice-tools-refused")).toBe("BUSY");
+  expect(button(document.body, "remove")).not.toBeNull();
+  await closeWindow();
+});
+
+test("a tool's page opened directly waits on its first read, then draws the tool or the section", async () => {
+  let answer: (response: Response) => void = () => {};
+  harness.setRoute(url => url.startsWith("/api/voice-tools") ? new Promise<Response>(resolve => { answer = resolve; }) : undefined);
+  await openWindow({ id: "tool", arg: "spotify", title: "Spotify" });
+  expect(title()).toBe("Spotify");
+  expect(document.querySelector("[data-settings-scroller]")?.textContent).toBe("");
+  await act(async () => answer(jsonResponse({ version: 1, revision: 1, servers: { spotify: spotify() } })));
+  await act(async () => settle());
+  expect(title()).toBe("Spotify");
+  expect(document.querySelector("[data-settings-scroller] [data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
+  await closeWindow();
+  const current = mounted!; await act(async () => current.root.unmount()); current.host.remove(); mounted = null;
+
+  routes({ calendar: spotify({ title: "Calendar", state: "enabled", missingSecrets: [] }) });
+  await openWindow({ id: "tool", arg: "spotify", title: "Spotify" });
+  await act(async () => settle());
+  expect(title()).toBe(SECTION_TITLE);
+  expect(listed()).toEqual(["calendar"]);
+  await closeWindow();
+});
+
+test("a tool's page opened directly over a failed first read returns to the section's retry", async () => {
+  harness.setRoute(url => url.startsWith("/api/voice-tools") ? jsonResponse({ code: "REGISTRY_UNAVAILABLE" }, 409) : undefined);
+  await openWindow({ id: "tool", arg: "spotify", title: "Spotify" });
+  await act(async () => settle());
+  expect(title()).toBe(SECTION_TITLE);
+  expect(document.querySelector("[data-voice-tools-status]")?.textContent).toBe(translate("en", "voiceCompanion.tools.error"));
+  await closeWindow();
 });
