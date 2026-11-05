@@ -78,6 +78,38 @@ test("a loaded 727-root sweep defers its remaining page without errors or holds"
   } finally { f.store.close(); }
 });
 
+test.each(["budget-run", "budget-inventory"] as const)("%s deferral survives a helper restart with ledger accounting and fairness", async mode => {
+  const f = fixture();
+  const directories: string[] = [];
+  for (const name of ["first", "second"]) {
+    const directory = f.make(`restart-${mode}-${name}`);
+    directories.push(directory);
+    f.store.measure(directory, 4096); f.store.release(directory);
+  }
+  const repository = path.join(f.root, "budget-repository"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  f.store.close();
+  const run = async (at: number, budgetMode: string) => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), budgetMode], {
+      env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code).toBe(0); expect(stderr).toBe(""); return JSON.parse(stdout);
+  };
+  try {
+    const deferred = await run(NOW, mode);
+    expect(deferred).toMatchObject({ removed: 1, deferred: 1, errors: 0, held: 0 });
+    expect(deferred.removedBytes).toBeGreaterThan(0);
+    expect(deferred.deferredBytes).toBe(deferred.bytes);
+    expect(fs.existsSync(directories[0]!)).toBeFalse(); expect(fs.existsSync(directories[1]!)).toBeTrue();
+    const resumed = await run(NOW + 120_000, "--default-budget");
+    expect(resumed).toMatchObject({ removed: 1, errors: 0, bytes: 0 });
+    expect(resumed.removedBytes).toBeGreaterThan(0);
+    expect(fs.readdirSync(f.root).filter(name => name.startsWith("llv-stage-restart-"))).toHaveLength(0);
+  } finally {
+    const reopened = new AttemptTempStore(f.filename); reopened.close();
+  }
+});
+
 test("an incomplete real checkout inventory defers roots with their bytes instead of errors or live holds", async () => {
   const f = fixture();
   for (let n = 0; n < 18; n++) f.make(`inventory-${n}`);

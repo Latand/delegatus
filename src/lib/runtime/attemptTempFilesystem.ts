@@ -13,39 +13,51 @@ type RepositoryDirectoryVersion = { path: string; identity: string; mtimeMs: num
 type RepositoryLinkSnapshot = { lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] };
 
 async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
-  if (process.platform !== "win32") {
+  const deadline = performance.now() + (timeout ?? 15_000);
+  const rootStat = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (!rootStat) return { links: [], directories: [] };
+  const rootDevice = rootStat.dev;
+  const links: string[] = [], directories: RepositoryDirectoryVersion[] = []; let visited = 0;
+  const readEntries = async (current: string) => {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const entries = (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "(", "-type", "d", "-o", "-type", "l", ")", "-print0"], timeout)).stdout.split("\0").filter(Boolean);
-      const links: string[] = [], directories: RepositoryDirectoryVersion[] = [];
-      for (const entry of entries) {
-        const stat = fs.lstatSync(entry);
-        if (stat.isDirectory()) directories.push({ path: entry, identity: `${stat.dev}:${stat.ino}`, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs });
-        else if (stat.isSymbolicLink()) links.push(entry);
-      }
-      const rootStat = fs.lstatSync(directory);
-      directories.push({ path: directory, identity: `${rootStat.dev}:${rootStat.ino}`, mtimeMs: rootStat.mtimeMs, ctimeMs: rootStat.ctimeMs });
-      return { links, directories };
+      return await Promise.race([
+        fs.promises.readdir(current, { withFileTypes: true }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget")), remaining); }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+  };
+  const visit = async (current: string): Promise<void> => {
+    const before = fs.lstatSync(current);
+    if (before.dev !== rootDevice) return;
+    const entries = await readEntries(current);
+    const after = fs.lstatSync(current, { throwIfNoEntry: false });
+    // The entry list and its cache validator must describe the same directory
+    // version. A link created after readdir but before lstat would otherwise
+    // pair a negative list with the new directory timestamps.
+    if (!after?.isDirectory() || after.isSymbolicLink()
+      || `${before.dev}:${before.ino}` !== `${after.dev}:${after.ino}`
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
     }
-    catch (error) {
-      // A process snapshot may outlive its checkout. Only proven absence is
-      // clear; permission errors and partial inventories remain refusals.
-      if (!fs.lstatSync(directory, { throwIfNoEntry: false })) return { links: [], directories: [] };
-      throw new Error(attemptTempFailureDetail(error), { cause: error });
+    directories.push({ path: current, identity: `${after.dev}:${after.ino}`, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs });
+    for (const entry of entries) {
+      if (++visited > 200_000) throw new Error("partial inbound-link inventory");
+      const file = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) links.push(file);
+      else if (entry.isDirectory() && entry.name !== ".git") await visit(file);
     }
+  };
+  try { await visit(directory); }
+  catch (error) {
+    // A process snapshot may outlive its checkout. Only proven absence is
+    // clear; permission errors and partial inventories remain refusals.
+    if (!fs.lstatSync(directory, { throwIfNoEntry: false })) return { links: [], directories: [] };
+    if (error instanceof AttemptTempBudgetDeferred) throw error;
+    throw new Error(attemptTempFailureDetail(error), { cause: error });
   }
-  const pending = [directory], links: string[] = [], directories: RepositoryDirectoryVersion[] = []; let visited = 0;
-  while (pending.length) for (const entry of await fs.promises.readdir(pending.pop()!, { withFileTypes: true })) {
-    if (++visited > 200_000) throw new Error("partial inbound-link inventory");
-    const file = path.join(entry.parentPath, entry.name);
-    if (entry.isSymbolicLink()) links.push(file);
-    else if (entry.isDirectory()) {
-      const stat = fs.lstatSync(file);
-      directories.push({ path: file, identity: `${stat.dev}:${stat.ino}`, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs });
-      if (entry.name !== ".git") pending.push(file);
-    }
-  }
-  const rootStat = fs.lstatSync(directory);
-  directories.push({ path: directory, identity: `${rootStat.dev}:${rootStat.ino}`, mtimeMs: rootStat.mtimeMs, ctimeMs: rootStat.ctimeMs });
   return { links, directories };
 }
 

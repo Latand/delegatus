@@ -4,7 +4,7 @@ import path from "node:path";
 import net from "node:net";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 const exec = promisify(execFile);
@@ -87,6 +87,27 @@ test("one tick shares checkout walks and invalidates a negative result after a l
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });
 
+test("a link created between directory enumeration and metadata capture cannot become a cached negative", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-link-race"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "repository"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const link = path.join(cwd, "node_modules");
+  const readdir = fs.promises.readdir.bind(fs.promises);
+  let injected = false;
+  const observed = spyOn(fs.promises, "readdir").mockImplementation(async (...args: Parameters<typeof readdir>) => {
+    const entries = await readdir(...args);
+    if (!injected && args[0] === cwd) { injected = true; fs.symlinkSync(directory, link, "dir"); }
+    return entries;
+  });
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 7, namespace: null, stamped: false, paths: [cwd] }] };
+  try {
+    await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toThrow("changed during link inventory");
+    expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeFalse();
+    expect(fs.existsSync(directory)).toBeTrue();
+  } finally { observed.mockRestore(); }
+});
+
 test("a real sweep rechecks an external symlink alias before removing its target root", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-linked-root"); fs.mkdirSync(directory);
   const data = path.join(directory, "data"); fs.writeFileSync(data, "owned scratch");
@@ -119,13 +140,13 @@ test("a real sweep rechecks an external symlink alias before removing its target
   } finally { store.close(); }
 });
 
-test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed find names its real error and retries the recovered checkout in the same run", async () => {
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed checkout inventory names its real error and retries the recovered checkout in the same run", async () => {
   const parent = root();
   const repository = path.join(parent, "repository"), blocked = path.join(repository, "blocked");
   fs.mkdirSync(blocked, { recursive: true }); fs.chmodSync(blocked, 0);
   const inventory = new RepositoryLinkInventory();
   try {
-    await expect(inventory.targets(repository)).rejects.toThrow("Permission denied");
+    await expect(inventory.targets(repository)).rejects.toThrow("permission denied");
     fs.chmodSync(blocked, 0o700);
     expect(await inventory.targets(repository)).toEqual([]);
     expect(inventory.walks).toHaveLength(2);

@@ -12,6 +12,14 @@ import { attemptReferencesClear } from "./attemptTempFilesystem";
 
 const roots: string[] = [];
 afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+const modeledBytesPerHour = (removedBytes: number, elapsedMs: number) => removedBytes * 3600000 / (60000 + elapsedMs);
+
+test("hourly reclaim model includes sweep duration before the scheduler's minute wait", () => {
+  const bytesPerRun = 537_133_056;
+  expect(modeledBytesPerHour(bytesPerRun, 7_390) / 1e9).toBeCloseTo(28.70, 1);
+  expect(modeledBytesPerHour(bytesPerRun, 5_600) / 1e9).toBeCloseTo(29.48, 1);
+  expect(modeledBytesPerHour(bytesPerRun, 7_390)).toBeLessThan(bytesPerRun * 3600000 / 60000);
+});
 
 // These fixtures own no containers. Keep the real process and checkout guards,
 // with a fixed container observation independent of host container churn.
@@ -66,7 +74,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_BENCHMARK !== "1")("retention benchmark
       loadBefore: before, loadAfter: load(), elapsedMs, checked: report.checked, removed: report.removed,
       removedBytes: report.removedBytes, errors: report.errors,
       checkoutWalks: [...inventories].reduce((sum, inventory) => sum + inventory.walks.length, 0),
-      sustainedBytesPerHour: report.removedBytes * 3600000 / Math.max(60000, elapsedMs) }));
+      modeledBytesPerHour: modeledBytesPerHour(report.removedBytes, elapsedMs) }));
     expect(report).toMatchObject({ checked: 32, removed: 32, errors: 0 });
   } finally {
     for (const child of loads) child.kill();

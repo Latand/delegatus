@@ -1,5 +1,6 @@
 import { attemptReferencesClear } from "./attemptTempFilesystem";
 import fs from "node:fs";
+import path from "node:path";
 
 if (process.argv[2] === "--load") {
   process.stdout.write("ready\n");
@@ -22,10 +23,21 @@ if (process.argv[2] === "--hold") {
 
 const store = new AttemptTempStore(process.argv[2]!);
 try {
+  const budgetMode = process.argv[4] === "budget-run" || process.argv[4] === "budget-inventory";
+  let now = Number(process.argv[3]);
+  const retired = () => {
+    if (!budgetMode) return;
+    now += process.argv[4] === "budget-run" ? 40_001 : 30_001;
+  };
+  const repository = path.join(path.dirname(process.argv[2]!), "budget-repository");
   const report = await sweepAttemptTemps(store, {
-    now: () => Number(process.argv[3]), maxRoots: process.argv[4] === "pressure" ? 4 : process.argv.includes("--default-budget") ? undefined : 1,
-    capBytes: process.argv[4] === "pressure" ? 0 : undefined,
-    state: async owner => {
+    now: () => now, runBudgetMs: budgetMode && process.argv[4] === "budget-run" ? 40_000 : undefined,
+    maxRoots: process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
+    capBytes: process.argv[4] === "pressure" || budgetMode ? 0 : undefined,
+    state: async (owner, inventory) => {
+      if (process.argv[4] === "budget-inventory") {
+        await inventory.targets(repository);
+      }
       if (process.argv[4] === "pressure") {
         if (owner.launchId.startsWith("blocked-error")) throw new Error("fixture authority failure");
         return owner.launchId.startsWith("blocked") ? "live" : "closed";
@@ -37,6 +49,7 @@ try {
       return process.argv[4] === "live" ? "live" : process.argv[4] === "orphan" ? "orphan" : "settled";
     }, scan: () => ({ ownNamespace: null, processes: [] }),
     references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true),
+    onRetired: retired,
   });
   process.stdout.write(JSON.stringify(report));
 } finally { store.close(); }
