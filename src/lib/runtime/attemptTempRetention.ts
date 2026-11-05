@@ -213,6 +213,19 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (recordedRootHeld(owner.directory)) { outcome(owner.directory, "evidence", bytes, "recorded check evidence hold"); continue; }
       let currentDirectory = owner.directory;
       let namespaceOnly = false;
+      let dispatchAuthority: AttemptTempAuthority | undefined;
+      let dispatchState: AttemptTempState | undefined;
+      let dispatchEvidence: { current: () => boolean } | undefined;
+      const dispatchEligible = (directory: string) => {
+        const current = fs.lstatSync(directory, { throwIfNoEntry: false });
+        return !recordedRootHeld(owner.directory)
+          && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
+          && dispatchEvidence?.current() === true
+          && (dispatchAuthority?.isCurrent() ?? true)
+          && (dispatchAuthority?.state ?? dispatchState) === dispatchState
+          && (dispatchState !== undefined)
+          && inventory.unchangedAll();
+      };
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const observeReferences = async (directory: string) => {
         try {
@@ -294,6 +307,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           reason = "checkout changed during final authority read";
           return false;
         }
+        dispatchAuthority = typeof authorityObservation === "string" ? undefined : authorityObservation;
+        dispatchState = authority;
+        dispatchEvidence = evidence;
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }
@@ -302,7 +318,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const result = await sweepStaleTempDirs({
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
-        remove: directory => removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly),
+        dispatchGuard: dispatchEligible,
+        remove: directory => removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
+          () => dispatchEligible(directory)),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
         // inspection, including the reinspection after quarantine.

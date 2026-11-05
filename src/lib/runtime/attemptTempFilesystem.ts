@@ -429,16 +429,20 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
   await containerCommand(directory, "evidence", original);
 }
 
-export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false): Promise<void> {
+export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
+  dispatchGuard?: () => boolean): Promise<void> {
   if (requireNoEvidence) {
     await containerCommand(directory, "remove", original, guard, true);
+    if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before namespace removal");
     await fs.promises.rmdir(directory);
     return;
   }
+  if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
     await containerCommand(directory, "remove", original, guard, true);
+    if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before namespace removal");
     await fs.promises.rmdir(directory);
   }
 }

@@ -326,6 +326,8 @@ export type TempSweepOptions = {
   onlyDirectories?: readonly string[];
   /** Re-read durable attempt authority after asynchronous measurements. */
   eligible?: (directory: string) => Promise<boolean>;
+  /** Synchronous authority and identity fence immediately before quarantine/removal. */
+  dispatchGuard?: (directory: string) => boolean;
   /** Registered disposable roots have their own durable authority and streamed
    * preservation inspection. Legacy/unowned roots always require snapshots. */
   disposable?: boolean;
@@ -410,6 +412,7 @@ export async function removeTreeViaTrash(directory: string, options: {
   const trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-${randomUUID()}`);
   const original = fs.lstatSync(directory);
   if (!original.isDirectory() || original.isSymbolicLink()) return false;
+  if (options.validate && !options.validate(directory)) return false;
   const uid = original.uid;
   const identity = `${original.dev}:${original.ino}`;
   const snapshot = options.disposable ? null : snapshotTree(directory);
@@ -667,7 +670,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.eligible && !await options.eligible(row.trash)) continue;
         if (path.dirname(row.directory) !== root.via + root.path || !isOwnedTempName(path.basename(row.directory))) continue;
         if (await finishTreeTrash(journal, async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash), options.remove,
-          trash => !trashPolicyHolds(root, trash, path.resolve(row.directory)), options.disposable)) report.trashFinished!++;
+          trash => !trashPolicyHolds(root, trash, path.resolve(row.directory)) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable)) report.trashFinished!++;
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
@@ -807,7 +810,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
           journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
           held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash),
-          validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)),
+          validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)) && (!options.dispatchGuard || options.dispatchGuard(trash)),
         })) { await keep("inUse", bytes); continue; }
         report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
         report.removedBytes += bytes;

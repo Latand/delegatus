@@ -206,6 +206,54 @@ test.each([false, true])("producer record revision drift preserves native remova
   }
 });
 
+test.each([false, true])("post-eligibility producer and checkout changes preserve native removal and journal replay (journal replay=%s)", async replay => {
+  for (const change of ["revision", "checkout"] as const) {
+    const f = fixture(), directory = f.make(`dispatch-${change}-${replay}`);
+    const producer = path.join(f.root, "dispatch-producer"), retiredProducer = `${producer}-retired`;
+    fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    f.store.measure(directory, 4096); f.store.release(directory);
+    const trash = path.join(f.root, `.delegatus-trash-${path.basename(directory)}-replay`);
+    if (replay) {
+      const stat = fs.lstatSync(directory);
+      fs.renameSync(directory, trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({
+        directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true,
+      }));
+    }
+    let current = true, authorityReads = 0, injected = false;
+    let inventory: InstanceType<typeof filesystem.RepositoryLinkInventory>;
+    const sweep = () => sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, capBytes: 0,
+      state: async (_owner, observed) => { inventory = observed; return "closed"; },
+      authority: async () => {
+        const observedRead = ++authorityReads;
+        let checks = 0;
+        return { state: "closed" as const, revision: "revision-1", isCurrent: () => {
+          if (observedRead === (replay ? 2 : 3) && ++checks === 1) queueMicrotask(() => {
+            injected = true;
+            if (change === "revision") current = false;
+            else fs.renameSync(producer, retiredProducer);
+          });
+          return current;
+        } };
+      },
+      scan: () => ({ ownNamespace: null, processes: [] }),
+      references: async (original, currentPath) => {
+        await repositoryReferencesAttemptTemp(producer, original, currentPath, inventory);
+        return true;
+      },
+    });
+    try {
+      const result = await sweep();
+      expect(injected).toBeTrue();
+      expect(result.removed).toBe(0);
+      expect(fs.readFileSync(path.join(replay ? trash : directory, "data"), "utf8").length).toBe(4096);
+    } finally {
+      if (fs.existsSync(retiredProducer)) fs.renameSync(retiredProducer, producer);
+      f.store.close();
+    }
+  }
+});
+
 test.each([false, true])("final dispatch rechecks checkout discovery and external aliases (journal replay=%s)", async replay => {
   for (const change of ["control", "absent-no-marker", "restore-no-marker", "alias-retarget"] as const) {
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-consumer-dispatch-"));
