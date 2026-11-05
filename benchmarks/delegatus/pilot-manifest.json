@@ -1,0 +1,1952 @@
+{
+  "schemaVersion": 1,
+  "campaign": "delegatus-neutral-pilot-v1",
+  "createdDate": "2026-11-05",
+  "protocol": "docs/design/delegatus-benchmark.md",
+  "purpose": "measurement-and-feasibility-only",
+  "status": "design-no-model-cells-executed",
+  "launchAllowed": false,
+  "launchPolicy": "refuse-until-every-static-binding-and-G1-G7-is-sealed; derived-memory-artifacts-verified-before-dependent-cell",
+  "sources": {
+    "delegatus": {
+      "revision": "1fb5ca202ce8fa702f4e1b526114fe3e2f15af65"
+    },
+    "ponytail": {
+      "repository": "https://github.com/DietrichGebert/ponytail",
+      "revision": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846",
+      "report": "benchmarks/results/2026-10-07-agentic.md",
+      "historicalRunRevisionVerified": false
+    },
+    "template": {
+      "repository": "https://github.com/fastapi/full-stack-fastapi-template",
+      "revision": "cd83fc10ca20393e9ee50e3005e170c6929e047e",
+      "license": "MIT"
+    },
+    "existingReplay": {
+      "mergeRevision": "338d02269709588cc29aa9033e02649e664d32a5",
+      "source": "scripts/memory-replay.ts",
+      "use": "private-harness-regression-only",
+      "launchHistoricalReplay": false
+    }
+  },
+  "operatorChoices": {
+    "primary": "quality-at-equal-total-resource-budget",
+    "controls": [
+      "strong-single-agent",
+      "fixed-team"
+    ],
+    "memory": "reset-and-accumulate-then-new-held-out",
+    "status": "all-recommended-options-confirmed"
+  },
+  "exclusions": [
+    "known-document-link-incident",
+    "private-transcript-replay-as-performance",
+    "live-rules-and-private-account-instructions",
+    "paid-api-calls",
+    "nested-pipelines",
+    "direct-cli-agent-helpers",
+    "product-source-edits"
+  ],
+  "runtimePool": {
+    "observedRegistryRevision": "roles-1-17275f57",
+    "M": {
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "billing": "existing-subscription"
+    },
+    "H": {
+      "engine": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "billing": "existing-subscription"
+    },
+    "resolvedRuntimeVersions": null,
+    "productRegistrySnapshotDigest": null,
+    "fallback": "refuse-no-silent-runtime-or-account-mode-substitution"
+  },
+  "budgets": {
+    "B": {
+      "maxChargedUnits": 128000,
+      "maxAggregateActiveSeconds": 1800,
+      "maxQueueSeconds": 1800,
+      "unit": "engine-normalized-input-plus-output-once",
+      "allSolverRolesIncluded": true
+    },
+    "B-learn": {
+      "maxChargedUnits": 128000,
+      "maxAggregateActiveSeconds": 1800,
+      "maxQueueSeconds": 1800,
+      "solverUnits": 120000,
+      "curatorUnits": 8000,
+      "solverActiveSeconds": 1620,
+      "curatorActiveSeconds": 180,
+      "curatorReservationIsInsideTotal": true
+    },
+    "judge": {
+      "maxChargedUnits": 12000,
+      "maxActiveSeconds": 300
+    },
+    "memoryPack": {
+      "maxUtf8Bytes": 8192,
+      "retrieval": "whole-frozen-pack",
+      "scopes": "arm-and-sequence-only",
+      "sourceEvidence": "completed-learn-prefix-public-only"
+    },
+    "priceRates": null,
+    "listPriceEstimate": null,
+    "subscriptionIncrementalCash": null,
+    "paidApiAllowed": false,
+    "warmupSessions": 0,
+    "modelPreflightSessions": 0,
+    "enforcementStatus": "G5-unproven"
+  },
+  "workflows": {
+    "single": {
+      "graph": [
+        {
+          "id": "solve",
+          "kind": "run",
+          "role": "builder",
+          "next": null
+        }
+      ],
+      "sessionPolicy": "fresh-on-each-task-no-fork"
+    },
+    "team": {
+      "slotOrder": [
+        "planner",
+        "implementer",
+        "reviewer",
+        "fix",
+        "reviewer-fresh"
+      ],
+      "roles": [
+        "architect",
+        "builder",
+        "reviewer",
+        "builder-apply-fixes",
+        "reviewer"
+      ],
+      "maxFixes": 1,
+      "maxReviews": 2,
+      "reviewFailEdge": {
+        "to": "fix",
+        "maxRounds": 1,
+        "onExhausted": "park"
+      },
+      "fixNext": "reviewer",
+      "publicCheckAccess": true,
+      "hiddenCheckAccess": false,
+      "nativeSubagents": false,
+      "roundBehaviorRequiresOfflineVerification": true
+    },
+    "product-team": {
+      "sameBoundedGraphAs": "team",
+      "prompts": "sealed-product-defaults",
+      "runtime": "sealed-role-registry",
+      "memory": "sterile-benchmark-owned-profile-no-live-rules",
+      "compareOnlyAsBundle": true
+    }
+  },
+  "arms": {
+    "S": {
+      "workflow": "single",
+      "runtime": "M",
+      "maxSolverSessions": 1,
+      "automaticLiveMemory": false
+    },
+    "F": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false
+    },
+    "A": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "planner-selected-frozen-library",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false
+    },
+    "HF": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "H",
+        "M",
+        "H",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false
+    },
+    "HA": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "choose-M-or-H",
+        "M",
+        "choose-M-or-H",
+        "M"
+      ],
+      "specialization": "same-library-as-HF",
+      "routeDecisionBy": "counted-planner",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false
+    },
+    "MR": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "memoryPolicy": "reset-before-each-task",
+      "curation": "accounted-discarded"
+    },
+    "MA": {
+      "workflow": "team",
+      "runtimeBySlot": [
+        "M",
+        "M",
+        "M",
+        "M",
+        "M"
+      ],
+      "specialization": "fixed-generic",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": false,
+      "memoryPolicy": "accumulate-during-learn-freeze-after-L2",
+      "curation": "accounted-retained"
+    },
+    "P": {
+      "workflow": "product-team",
+      "runtimeBySlot": "sealed-product-role-registry",
+      "maxSolverSessions": 5,
+      "automaticLiveMemory": "benchmark-owned-only-if-G1-G6-pass",
+      "liveMemory": false
+    }
+  },
+  "phases": [
+    {
+      "id": "O",
+      "intendedCells": 12,
+      "contrast": [
+        "F-S",
+        "A-F"
+      ],
+      "taskRepeats": 2
+    },
+    {
+      "id": "R",
+      "intendedCells": 8,
+      "contrast": [
+        "HA-HF"
+      ],
+      "taskRepeats": 2
+    },
+    {
+      "id": "M",
+      "intendedCells": 16,
+      "contrast": [
+        "MA-MR"
+      ],
+      "independentSequences": 2,
+      "sequenceRepeats": 1,
+      "learnSteps": 2,
+      "frozenHeldOutSteps": 2
+    },
+    {
+      "id": "P",
+      "intendedCells": 2,
+      "contrast": [
+        "P-S-repeat-1"
+      ],
+      "taskRepeats": 1,
+      "reusedControlCells": 2
+    }
+  ],
+  "memorySequences": [
+    {
+      "id": "Q1",
+      "tasks": [
+        "Q1-L1",
+        "Q1-L2",
+        "Q1-H1",
+        "Q1-H2"
+      ],
+      "arms": [
+        "MR",
+        "MA"
+      ],
+      "freshSessionsEveryTask": true,
+      "repoResetEveryTask": true,
+      "freezeAfter": "Q1-MA-after-L2",
+      "evaluateSameFrozenSnapshotOn": [
+        "Q1-H1",
+        "Q1-H2"
+      ],
+      "feedbackDuringHeldOut": false,
+      "independentUnit": "sequence-family-cluster"
+    },
+    {
+      "id": "Q2",
+      "tasks": [
+        "Q2-L1",
+        "Q2-L2",
+        "Q2-H1",
+        "Q2-H2"
+      ],
+      "arms": [
+        "MR",
+        "MA"
+      ],
+      "freshSessionsEveryTask": true,
+      "repoResetEveryTask": true,
+      "freezeAfter": "Q2-MA-after-L2",
+      "evaluateSameFrozenSnapshotOn": [
+        "Q2-H1",
+        "Q2-H2"
+      ],
+      "feedbackDuringHeldOut": false,
+      "independentUnit": "sequence-family-cluster"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-export",
+      "upstream": "template",
+      "family": "owner-scoped-export",
+      "use": [
+        "O",
+        "R",
+        "P"
+      ],
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "T-archive",
+      "upstream": "template",
+      "family": "reversible-archive",
+      "use": [
+        "O",
+        "R",
+        "P"
+      ],
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q1-L1",
+      "upstream": "template",
+      "family": "Q1-derived-read",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q1-L2",
+      "upstream": "template",
+      "family": "Q1-structured-input",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": true,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q1-H1",
+      "upstream": "template",
+      "family": "Q1-aggregate-read",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "near-changed-constraint",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q1-H2",
+      "upstream": "template",
+      "family": "Q1-asset-authorization",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "far",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q2-L1",
+      "upstream": "template",
+      "family": "Q2-retry-service",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q2-L2",
+      "upstream": "template",
+      "family": "Q2-timestamp-contract",
+      "use": [
+        "M"
+      ],
+      "visibility": "learn-prefix",
+      "transfer": null,
+      "interference": true,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q2-H1",
+      "upstream": "template",
+      "family": "Q2-replay-operation",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "near-changed-constraint",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    },
+    {
+      "id": "Q2-H2",
+      "upstream": "template",
+      "family": "Q2-transactional-import",
+      "use": [
+        "M"
+      ],
+      "visibility": "held-out-until-task-start",
+      "transfer": "far",
+      "interference": false,
+      "packageDigest": null,
+      "baseTreeDigest": null,
+      "publicBriefDigest": null,
+      "oracleDigest": null,
+      "dependencyImageDigest": null,
+      "status": "to-materialize-and-independently-seal"
+    }
+  ],
+  "cells": [
+    {
+      "id": "O-T-export-S-r1",
+      "ordinal": 1,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "S",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-export-F-r1",
+      "ordinal": 2,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "F",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-export-A-r1",
+      "ordinal": 3,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "A",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-export-A-r2",
+      "ordinal": 4,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "A",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-export-F-r2",
+      "ordinal": 5,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "F",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-export-S-r2",
+      "ordinal": 6,
+      "phase": "O",
+      "task": "T-export",
+      "arm": "S",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-F-r1",
+      "ordinal": 7,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "F",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-A-r1",
+      "ordinal": 8,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "A",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-S-r1",
+      "ordinal": 9,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "S",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-S-r2",
+      "ordinal": 10,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "S",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-A-r2",
+      "ordinal": 11,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "A",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "O-T-archive-F-r2",
+      "ordinal": 12,
+      "phase": "O",
+      "task": "T-archive",
+      "arm": "F",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-export-HF-r1",
+      "ordinal": 13,
+      "phase": "R",
+      "task": "T-export",
+      "arm": "HF",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-export-HA-r1",
+      "ordinal": 14,
+      "phase": "R",
+      "task": "T-export",
+      "arm": "HA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-export-HA-r2",
+      "ordinal": 15,
+      "phase": "R",
+      "task": "T-export",
+      "arm": "HA",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-export-HF-r2",
+      "ordinal": 16,
+      "phase": "R",
+      "task": "T-export",
+      "arm": "HF",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-archive-HA-r1",
+      "ordinal": 17,
+      "phase": "R",
+      "task": "T-archive",
+      "arm": "HA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-archive-HF-r1",
+      "ordinal": 18,
+      "phase": "R",
+      "task": "T-archive",
+      "arm": "HF",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-archive-HF-r2",
+      "ordinal": 19,
+      "phase": "R",
+      "task": "T-archive",
+      "arm": "HF",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "R-T-archive-HA-r2",
+      "ordinal": 20,
+      "phase": "R",
+      "task": "T-archive",
+      "arm": "HA",
+      "repeat": 2,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true
+    },
+    {
+      "id": "M-Q1-L1-MR-r1",
+      "ordinal": 21,
+      "phase": "M",
+      "task": "Q1-L1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-L1-MA-r1",
+      "ordinal": 22,
+      "phase": "M",
+      "task": "Q1-L1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-L2-MA-r1",
+      "ordinal": 23,
+      "phase": "M",
+      "task": "Q1-L2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "Q1-MA-after-L1",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-L2-MR-r1",
+      "ordinal": 24,
+      "phase": "M",
+      "task": "Q1-L2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q1-H1-MR-r1",
+      "ordinal": 25,
+      "phase": "M",
+      "task": "Q1-H1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q1-H1-MA-r1",
+      "ordinal": 26,
+      "phase": "M",
+      "task": "Q1-H1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q1-MA-after-L2",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q1-H2-MA-r1",
+      "ordinal": 27,
+      "phase": "M",
+      "task": "Q1-H2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q1-MA-after-L2",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "M-Q1-H2-MR-r1",
+      "ordinal": 28,
+      "phase": "M",
+      "task": "Q1-H2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q1",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "M-Q2-L1-MA-r1",
+      "ordinal": 29,
+      "phase": "M",
+      "task": "Q2-L1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-L1-MR-r1",
+      "ordinal": 30,
+      "phase": "M",
+      "task": "Q2-L1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 1,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-L2-MR-r1",
+      "ordinal": 31,
+      "phase": "M",
+      "task": "Q2-L2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-L2-MA-r1",
+      "ordinal": 32,
+      "phase": "M",
+      "task": "Q2-L2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B-learn",
+      "memory": "Q2-MA-after-L1",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 2,
+      "kind": "learn"
+    },
+    {
+      "id": "M-Q2-H1-MA-r1",
+      "ordinal": 33,
+      "phase": "M",
+      "task": "Q2-H1",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q2-MA-after-L2",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q2-H1-MR-r1",
+      "ordinal": 34,
+      "phase": "M",
+      "task": "Q2-H1",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 3,
+      "kind": "near"
+    },
+    {
+      "id": "M-Q2-H2-MR-r1",
+      "ordinal": 35,
+      "phase": "M",
+      "task": "Q2-H2",
+      "arm": "MR",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "M-Q2-H2-MA-r1",
+      "ordinal": 36,
+      "phase": "M",
+      "task": "Q2-H2",
+      "arm": "MA",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "Q2-MA-after-L2",
+      "intended": true,
+      "sequence": "Q2",
+      "step": 4,
+      "kind": "far"
+    },
+    {
+      "id": "P-T-export-P-r1",
+      "ordinal": 37,
+      "phase": "P",
+      "task": "T-export",
+      "arm": "P",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "comparisonControl": "O-T-export-S-r1"
+    },
+    {
+      "id": "P-T-archive-P-r1",
+      "ordinal": 38,
+      "phase": "P",
+      "task": "T-archive",
+      "arm": "P",
+      "repeat": 1,
+      "budget": "B",
+      "memory": "empty",
+      "intended": true,
+      "comparisonControl": "O-T-archive-S-r1"
+    }
+  ],
+  "curationCells": [
+    {
+      "id": "C-Q1-MR-L1",
+      "afterCell": "M-Q1-L1-MR-r1",
+      "sequence": "Q1",
+      "arm": "MR",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MR-after-L1",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q1-MA-L1",
+      "afterCell": "M-Q1-L1-MA-r1",
+      "sequence": "Q1",
+      "arm": "MA",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MA-after-L1",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q1-MA-L2",
+      "afterCell": "M-Q1-L2-MA-r1",
+      "sequence": "Q1",
+      "arm": "MA",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MA-after-L2",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q1-MR-L2",
+      "afterCell": "M-Q1-L2-MR-r1",
+      "sequence": "Q1",
+      "arm": "MR",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q1-MR-after-L2",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MA-L1",
+      "afterCell": "M-Q2-L1-MA-r1",
+      "sequence": "Q2",
+      "arm": "MA",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MA-after-L1",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MR-L1",
+      "afterCell": "M-Q2-L1-MR-r1",
+      "sequence": "Q2",
+      "arm": "MR",
+      "step": 1,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MR-after-L1",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MR-L2",
+      "afterCell": "M-Q2-L2-MR-r1",
+      "sequence": "Q2",
+      "arm": "MR",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MR-after-L2",
+      "retainForSolver": false,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    },
+    {
+      "id": "C-Q2-MA-L2",
+      "afterCell": "M-Q2-L2-MA-r1",
+      "sequence": "Q2",
+      "arm": "MA",
+      "step": 2,
+      "runtime": "M",
+      "role": "curator",
+      "memoryOutput": "Q2-MA-after-L2",
+      "retainForSolver": true,
+      "maxChargedUnits": 8000,
+      "maxActiveSeconds": 180,
+      "chargeWithinCell": true,
+      "input": "completed-arm-prefix-public-evidence-only",
+      "hiddenFeedback": false
+    }
+  ],
+  "judgeConfiguration": {
+    "J1": {
+      "runtime": "M",
+      "role": "verifier"
+    },
+    "J2": {
+      "runtime": "H",
+      "role": "verifier"
+    },
+    "blindTo": [
+      "arm",
+      "model-routing",
+      "memory-condition",
+      "cost",
+      "prior-judgment"
+    ],
+    "calibrationGolds": 4,
+    "calibrationSessions": 8,
+    "scoreSessions": 76,
+    "calibrationFailure": "stop-no-judge-shopping",
+    "dispute": "preserve-both-and-report-bounds-use-lower-when-straddled-or-difference-at-least-two",
+    "missingJudgment": "unresolved-bounded-zero-to-one-conservative-headline-zero"
+  },
+  "judgingCells": [
+    {
+      "id": "CAL-complete-J1",
+      "kind": "calibration",
+      "gold": "complete",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-complete-J2",
+      "kind": "calibration",
+      "gold": "complete",
+      "judge": "J2"
+    },
+    {
+      "id": "CAL-stub-J1",
+      "kind": "calibration",
+      "gold": "stub",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-stub-J2",
+      "kind": "calibration",
+      "gold": "stub",
+      "judge": "J2"
+    },
+    {
+      "id": "CAL-cross-caller-omission-J1",
+      "kind": "calibration",
+      "gold": "cross-caller-omission",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-cross-caller-omission-J2",
+      "kind": "calibration",
+      "gold": "cross-caller-omission",
+      "judge": "J2"
+    },
+    {
+      "id": "CAL-unsafe-false-verification-J1",
+      "kind": "calibration",
+      "gold": "unsafe-false-verification",
+      "judge": "J1"
+    },
+    {
+      "id": "CAL-unsafe-false-verification-J2",
+      "kind": "calibration",
+      "gold": "unsafe-false-verification",
+      "judge": "J2"
+    },
+    {
+      "id": "J-O-T-export-S-r1-J1",
+      "kind": "score",
+      "cell": "O-T-export-S-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-S-r1-J2",
+      "kind": "score",
+      "cell": "O-T-export-S-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-F-r1-J1",
+      "kind": "score",
+      "cell": "O-T-export-F-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-F-r1-J2",
+      "kind": "score",
+      "cell": "O-T-export-F-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-A-r1-J1",
+      "kind": "score",
+      "cell": "O-T-export-A-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-A-r1-J2",
+      "kind": "score",
+      "cell": "O-T-export-A-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-A-r2-J1",
+      "kind": "score",
+      "cell": "O-T-export-A-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-A-r2-J2",
+      "kind": "score",
+      "cell": "O-T-export-A-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-F-r2-J1",
+      "kind": "score",
+      "cell": "O-T-export-F-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-F-r2-J2",
+      "kind": "score",
+      "cell": "O-T-export-F-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-S-r2-J1",
+      "kind": "score",
+      "cell": "O-T-export-S-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-export-S-r2-J2",
+      "kind": "score",
+      "cell": "O-T-export-S-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-F-r1-J1",
+      "kind": "score",
+      "cell": "O-T-archive-F-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-F-r1-J2",
+      "kind": "score",
+      "cell": "O-T-archive-F-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-A-r1-J1",
+      "kind": "score",
+      "cell": "O-T-archive-A-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-A-r1-J2",
+      "kind": "score",
+      "cell": "O-T-archive-A-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-S-r1-J1",
+      "kind": "score",
+      "cell": "O-T-archive-S-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-S-r1-J2",
+      "kind": "score",
+      "cell": "O-T-archive-S-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-S-r2-J1",
+      "kind": "score",
+      "cell": "O-T-archive-S-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-S-r2-J2",
+      "kind": "score",
+      "cell": "O-T-archive-S-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-A-r2-J1",
+      "kind": "score",
+      "cell": "O-T-archive-A-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-A-r2-J2",
+      "kind": "score",
+      "cell": "O-T-archive-A-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-F-r2-J1",
+      "kind": "score",
+      "cell": "O-T-archive-F-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-O-T-archive-F-r2-J2",
+      "kind": "score",
+      "cell": "O-T-archive-F-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HF-r1-J1",
+      "kind": "score",
+      "cell": "R-T-export-HF-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HF-r1-J2",
+      "kind": "score",
+      "cell": "R-T-export-HF-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HA-r1-J1",
+      "kind": "score",
+      "cell": "R-T-export-HA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HA-r1-J2",
+      "kind": "score",
+      "cell": "R-T-export-HA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HA-r2-J1",
+      "kind": "score",
+      "cell": "R-T-export-HA-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HA-r2-J2",
+      "kind": "score",
+      "cell": "R-T-export-HA-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HF-r2-J1",
+      "kind": "score",
+      "cell": "R-T-export-HF-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-export-HF-r2-J2",
+      "kind": "score",
+      "cell": "R-T-export-HF-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HA-r1-J1",
+      "kind": "score",
+      "cell": "R-T-archive-HA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HA-r1-J2",
+      "kind": "score",
+      "cell": "R-T-archive-HA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HF-r1-J1",
+      "kind": "score",
+      "cell": "R-T-archive-HF-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HF-r1-J2",
+      "kind": "score",
+      "cell": "R-T-archive-HF-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HF-r2-J1",
+      "kind": "score",
+      "cell": "R-T-archive-HF-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HF-r2-J2",
+      "kind": "score",
+      "cell": "R-T-archive-HF-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HA-r2-J1",
+      "kind": "score",
+      "cell": "R-T-archive-HA-r2",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-R-T-archive-HA-r2-J2",
+      "kind": "score",
+      "cell": "R-T-archive-HA-r2",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L1-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L1-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L1-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L1-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L2-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L2-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-L2-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-L2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-L2-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H1-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H1-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H1-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H1-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H2-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H2-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q1-H2-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q1-H2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q1-H2-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L1-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L1-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L1-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L1-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L2-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L2-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-L2-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-L2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-L2-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H1-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H1-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H1-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H1-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H1-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MR-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H2-MR-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MR-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H2-MR-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MA-r1-J1",
+      "kind": "score",
+      "cell": "M-Q2-H2-MA-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-M-Q2-H2-MA-r1-J2",
+      "kind": "score",
+      "cell": "M-Q2-H2-MA-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-export-P-r1-J1",
+      "kind": "score",
+      "cell": "P-T-export-P-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-export-P-r1-J2",
+      "kind": "score",
+      "cell": "P-T-export-P-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-archive-P-r1-J1",
+      "kind": "score",
+      "cell": "P-T-archive-P-r1",
+      "judge": "J1",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    },
+    {
+      "id": "J-P-T-archive-P-r1-J2",
+      "kind": "score",
+      "cell": "P-T-archive-P-r1",
+      "judge": "J2",
+      "after": "all-learning-snapshots-frozen",
+      "noArtifactPolicy": "deterministic-zero-no-model-call-retain-row"
+    }
+  ],
+  "scoring": {
+    "behaviorGroupWeights": {
+      "core": 0.35,
+      "edge": 0.25,
+      "securityPrivacy": 0.25,
+      "crossCallerRegression": 0.15
+    },
+    "residualJudgeWeights": {
+      "completeness": 0.5,
+      "evidenceAccuracy": 0.3,
+      "justifiedMaintainability": 0.2
+    },
+    "judgeScale": [
+      0,
+      3
+    ],
+    "qualityFormula": "100*(0.8*B+0.2*J); J=mean-normalized-judges-except-disputed-cases-use-lower; preserve-bounds",
+    "criticalOrIncompleteQuality": 0,
+    "qualityProxiesForbidden": [
+      "loc",
+      "gzip",
+      "prompt-length",
+      "test-count"
+    ],
+    "primaryDenominator": 38,
+    "statusDenominatorPolicy": "every-intended-row-including-timeouts-missing-undelivered-not-run",
+    "judgeAccounting": "separate",
+    "uncertainty": "raw-paired-task-and-sequence-differences-and-ranges-only",
+    "endpointDenominators": {
+      "O": {
+        "cellsPerArm": 4,
+        "independentTaskClusters": 2
+      },
+      "R": {
+        "cellsPerArm": 4,
+        "independentTaskClusters": 2
+      },
+      "M-held-out": {
+        "cellsPerArm": 4,
+        "independentSequenceClusters": 2,
+        "acquisitionCellsPerArmExcludedFromHeldOutContrast": 4
+      },
+      "P": {
+        "cellsPerArm": 2,
+        "reuseControlFrom": "O-S-r1",
+        "independentTaskClusters": 2
+      }
+    },
+    "noPooledCampaignWinRate": true
+  },
+  "launchGates": [
+    {
+      "id": "G1",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G2",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G3",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G4",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G5",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G6",
+      "status": "unproven",
+      "evidenceDigest": null
+    },
+    {
+      "id": "G7",
+      "status": "unproven",
+      "evidenceDigest": null
+    }
+  ],
+  "privateBindings": {
+    "currentSeatSrc": null,
+    "existingTaskIds": null,
+    "subscriptionProfileReferences": null,
+    "containmentEvidenceDigest": null,
+    "usageParserDigest": null,
+    "fixtureSealDigest": null,
+    "modelVersionManifestDigest": null,
+    "allowedReaderInventoryDigest": null,
+    "productPromptSnapshotDigest": null,
+    "publication": "never-commit-private-binding-values"
+  },
+  "mcp": {
+    "creationTool": "mcp__viewer__create_pipeline",
+    "publication": "internal",
+    "finishesTask": false,
+    "kind": "run",
+    "src": "bind-current-designated-seat",
+    "taskIds": "bind-full-existing-task-ids",
+    "runtime": "local-unless-separately-sealed",
+    "forbidWorkerLaunches": true,
+    "requireVisibleDurableLineage": true,
+    "unsupportedFieldsNeverAssumed": [
+      "env",
+      "cleanMemory",
+      "memorySnapshot",
+      "maxTokens"
+    ],
+    "idempotency": "stable-campaign-cell-stage-request-key-reconcile-before-retry"
+  },
+  "ordering": {
+    "phases": [
+      "O",
+      "R",
+      "M",
+      "P"
+    ],
+    "solverOrder": "ascending-cell-ordinal",
+    "curation": "immediately-after-its-learn-cell-before-next-solver-cell",
+    "calibration": "before-first-campaign-score-no-unlisted-model-call",
+    "scoring": "after-learning-snapshots-frozen",
+    "maxConcurrentSolverCells": 1,
+    "stop": "retain-all-remaining-rows-as-not_run_after_stop-no-replacement",
+    "sessionCeilingPolicy": "every-engine-start-including-restarts-counts; no-extra-model-generation-after-cap"
+  },
+  "plannedTotals": {
+    "solverTaskCells": 38,
+    "solverSessionsMax": 174,
+    "curatorSessionsMax": 8,
+    "judgeSessionsMax": 84,
+    "allSubscriptionSessionsMax": 266,
+    "solverAndCurationChargedUnitsMax": 4864000,
+    "judgeChargedUnitsMax": 1008000,
+    "allChargedUnitsMax": 5872000,
+    "memoryIndependentClusters": 2,
+    "controlledTaskClusters": 2
+  },
+  "performanceResults": null,
+  "futureConfirmatoryAnalysis": {
+    "qualityDeltaPoints": 5,
+    "powerTarget": 0.8,
+    "familywiseAlpha": 0.05,
+    "contrasts": [
+      "F-S",
+      "A-F",
+      "HA-HF",
+      "MA-MR"
+    ],
+    "multiplicity": "Holm",
+    "sampleSize": "paired-cluster-simulation-after-independent-calibration",
+    "taskClusterRecruitmentFloor": 30,
+    "sequenceClusterRecruitmentFloor": 20,
+    "floorsDoNotGuaranteePower": true,
+    "budgetMultipliers": [
+      0.5,
+      1,
+      2
+    ]
+  }
+}
