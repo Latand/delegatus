@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode, type RefObject } from "react";
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 
 import { MobileSheetSection } from "@/components/mobile/MobileSheet";
 import { SettingSwitch } from "@/components/ProjectSettingRow";
@@ -76,13 +76,14 @@ export function SwitchRow({ label, hint, enabled, blocked, disabled, onToggle, o
   const hintId = useId();
   return (
     <div {...attrs} data-settings-unit="">
-      <div className={`flex items-center gap-3 ${d.box}`} data-settings-row="switch">
+      {/* On a landscape phone the switch stands on the label's line, so a short screen can end under that line. */}
+      <div data-settings-unit="" className={`flex items-center gap-3 ${density === "sheet" && hint ? "landscape:items-start" : ""} ${d.box}`} data-settings-row="switch">
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className={`font-semibold text-primary ${d.label}`}>{label}</span>
+          <span data-settings-line="" className={`font-semibold text-primary ${d.label}`}>{label}</span>
           {hint ? <span id={hintId} className={`block font-normal leading-snug text-muted ${d.hint}`}>{hint}</span> : null}
         </span>
         {/* The sheet's switch centres a 36 px track in a 48 px target: the row gives it those 6 px back, so its track ends on the edge a select and a chevron end on. */}
-        <SettingSwitch enabled={enabled} blocked={blocked} disabled={disabled} size={density === "sheet" ? "sheet" : "row"} className={density === "sheet" ? "-mr-1.5" : ""} aria-label={label} aria-describedby={hint ? hintId : undefined} onPointerDown={onPressStart} onClick={onToggle} {...switchAttrs} />
+        <SettingSwitch enabled={enabled} blocked={blocked} disabled={disabled} size={density === "sheet" ? "sheet" : "row"} className={density === "sheet" ? `-mr-1.5 ${hint ? "landscape:-mt-2" : ""}` : ""} aria-label={label} aria-describedby={hint ? hintId : undefined} onPointerDown={onPressStart} onClick={onToggle} {...switchAttrs} />
       </div>
       {children}
     </div>
@@ -128,7 +129,7 @@ export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disa
   id?: string;
   /** A label drawn otherwise than plain, such as one a `<label>` ties to the select. */
   labelNode?: ReactNode;
-  /** Values as long as a device's name: in the window the select takes two thirds of the row, so the name reads whole. */
+  /** Values as long as a device's name: in the window and on a landscape phone the select takes two thirds of the row, so the name reads whole. */
   wide?: boolean;
   children?: ReactNode;
 }) {
@@ -136,11 +137,11 @@ export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disa
   const d = DENSITY[density];
   return (
     <div {...attrs} data-settings-unit="">
-      <div className={`flex flex-col justify-center gap-0.5 ${d.box} ${hint ? "" : "pb-2"}`} data-settings-row="choice">
-        <div className="flex items-center gap-3">
+      <div data-settings-unit="" className={`flex flex-col justify-center gap-0.5 ${d.box} ${hint ? "" : "pb-2"}`} data-settings-row="choice">
+        <div data-settings-line="" className="flex items-center gap-3">
           <span title={label} className={`min-w-0 flex-1 truncate font-semibold text-primary ${d.label}`}>{labelNode ?? label}</span>
           {density === "sheet"
-            ? <SheetChoice label={ariaLabel} value={value} options={options} width={d.pick} disabled={disabled} onChange={onChange} selectAttrs={selectAttrs} describedBy={describedBy} id={id} />
+            ? <SheetChoice label={ariaLabel} value={value} options={options} width={wide ? `${d.pick} landscape:w-2/3` : d.pick} disabled={disabled} onChange={onChange} selectAttrs={selectAttrs} describedBy={describedBy} id={id} />
             : (
               <Select roomy id={id} value={value} disabled={disabled} aria-label={ariaLabel} aria-describedby={describedBy} className={`shrink-0 ${wide ? "w-2/3" : d.pick}`} onChange={(event) => onChange(event.target.value)} {...selectAttrs}>
                 {options.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
@@ -181,7 +182,7 @@ export function LinkRow({ label, hint, value, dot, onOpen, attrs, buttonAttrs, s
   const unit = useRef<HTMLDivElement | null>(null);
   const body = (
     <>
-      <span className="flex w-full items-center gap-2">
+      <span data-settings-line="" className="flex w-full items-center gap-2">
         {dot ? <span aria-hidden className="block h-[7px] w-[7px] shrink-0" /> : null}
         <span data-settings-row-label="" className={`min-w-0 flex-1 truncate font-semibold text-primary ${d.label}`}>{label}</span>
         {value !== undefined && value !== null ? <span className={`shrink-0 font-medium text-muted ${d.hint}`} data-settings-row-value="">{value}</span> : null}
@@ -231,6 +232,21 @@ export function FieldRow({ label, hint, children, attrs }: { label: ReactNode; h
       </div>
       {hint ? <span className={`block font-normal leading-snug text-muted ${d.hint}`}>{hint}</span> : null}
     </div>
+  );
+}
+
+/**
+ * A field on a row's line. On the sheet it wears the face of the select it stands
+ * beside (`SheetChoice`): 32 px tall over a 44 px target, the row's type. A touch
+ * screen draws a field at 16 px so iOS does not zoom (globals.css), so the input
+ * is scaled to the row's size and keeps its 16 px for the browser.
+ */
+export function RowField({ desktopClass = "", ...input }: InputHTMLAttributes<HTMLInputElement> & Data & { desktopClass?: string }) {
+  if (useDensity() !== "sheet") return <input {...input} className={`${FIELD} ${desktopClass}`} />;
+  return (
+    <span data-settings-field-face="" className={`relative block h-8 w-full min-w-0 overflow-visible rounded-control border border-border bg-well has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-accent/40 ${input.disabled ? "opacity-55" : ""}`}>
+      <input {...input} className="absolute left-0 top-1/2 h-[50.3px] w-[114.286%] origin-left -translate-y-1/2 scale-[.875] bg-transparent pl-[9px] pr-2 text-body text-primary outline-none placeholder:text-muted disabled:cursor-not-allowed" />
+    </span>
   );
 }
 
@@ -402,11 +418,11 @@ export function Gone({ back }: { back: () => void }) {
 /* NodeFilter.SHOW_TEXT, which not every DOM a test runs in defines globally. */
 const SHOW_TEXT = 4;
 
-/** Lines of words in the scroller, measured from the top of its content. */
-function contentLines(scroller: HTMLElement): { top: number; bottom: number }[] {
+/** Lines of words under `root`, measured from the top of the scroller's content. */
+function contentLines(scroller: HTMLElement, root: HTMLElement = scroller): { top: number; bottom: number }[] {
   const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
   const lines: { top: number; bottom: number }[] = [];
-  const walker = document.createTreeWalker(scroller, SHOW_TEXT);
+  const walker = document.createTreeWalker(root, SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
     const range = document.createRange();
@@ -434,6 +450,13 @@ export function wholeRowsTop(scroller: HTMLElement, desired: number): number {
   for (const top of [...new Set(tops)].filter((top) => top <= want && top >= Math.max(0, want - height / 2)).sort((a, b) => b - a)) if (fits(top)) return top;
   return want;
 }
+
+/* What stays under the scroller's hairline, and the blank under it that a first screen does not keep. Below `SHORT`
+   (a landscape phone) a row may end the screen after its first line, with its muted line on the next. */
+const FOOT = 12;
+const SHORT_FOOT = 4;
+const BLANK_BAND = 48;
+const SHORT = 360;
 
 /** Whether the phone's voice head stands over the sheet: covered by this window, the room its stylesheet keeps is waste. */
 function headOverSheet(): boolean {
@@ -464,13 +487,31 @@ export function useWholeRows(content: RefObject<HTMLElement | null>, page?: stri
       const available = scroller.clientHeight;
       const height = scroller.scrollHeight;
       if (available && height > available + 0.5) {
+        /* The hairline stands above the window's own edge, where it can be seen; a band this wide takes a section heading alone rather than stay blank. */
+        const short = available < SHORT;
+        /* A sheet keeps a little of its own under the scroller: that counts toward both. */
+        const box = scroller.getBoundingClientRect();
+        const below = Math.max(0, (scroller.closest("[data-settings-window], [data-mobile2-sheet]")?.getBoundingClientRect().bottom ?? box.top + available) - box.top - available);
+        const room = available - Math.max(0, (short ? SHORT_FOOT : FOOT) - below);
         const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
         const units = [...scroller.querySelectorAll<HTMLElement>("[data-settings-unit]")].map((element) => {
           const box = element.getBoundingClientRect();
           return { top: box.top - origin, bottom: box.bottom - origin, section: element.hasAttribute("data-settings-section") };
         });
         let end = 0;
-        for (const unit of units) if (!unit.section && unit.bottom <= available + 0.5 && unit.bottom > end) end = unit.bottom;
+        for (const unit of units) if (!unit.section && unit.bottom <= room + 0.5 && unit.bottom > end) end = unit.bottom;
+        const blank = () => available + below - end >= BLANK_BAND;
+        if (blank()) for (const unit of units) if (unit.bottom <= room + 0.5 && unit.bottom > end) end = unit.bottom;
+        if (short && blank()) {
+          const all = contentLines(scroller);
+          const take = (bottom: number) => {
+            const under = bottom + 2;
+            if (under <= room + 0.5 && under > end && !all.some((other) => other.top < under - 0.5 && other.bottom > under + 0.5)) end = under;
+          };
+          /* A row's first line ends at its box, which holds its control; a text's lines at their words. */
+          for (const line of scroller.querySelectorAll<HTMLElement>("[data-settings-line]")) take(line.getBoundingClientRect().bottom - origin);
+          for (const text of scroller.querySelectorAll<HTMLElement>("[data-settings-row='text'], [data-settings-row='value']")) for (const line of contentLines(scroller, text)) take(line.bottom);
+        }
         if (end) {
           const edge = Math.ceil(end);
           scroller.style.maxHeight = `${edge}px`;

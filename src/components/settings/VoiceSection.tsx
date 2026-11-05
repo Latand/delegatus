@@ -8,13 +8,13 @@ import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
 import { useLocale } from "@/lib/i18n";
 import { companionErrorMessage, limitResetText } from "@/lib/voiceCompanion/errors";
 import { CallMemoryPage, CallMemoryStatus, useCallMemory } from "@/components/voiceCompanion/CallMemorySetting";
-import { callDuration, planName, planTone, planWindows, spendTone, voiceMoney, voiceMonth, windowName, windowTone } from "@/components/voiceCompanion/CompanionSpend";
+import { planName, planTone, planWindows, spendTone, spokenDuration, voiceMoney, voiceMonth, windowName, windowTone } from "@/components/voiceCompanion/CompanionSpend";
 import { COMPANION_SETTINGS_EVENT } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceDevicesSetting } from "@/components/voiceCompanion/VoiceDevicesSetting";
 import { useVoiceTools, VoiceToolPage, VoiceToolRows } from "@/components/voiceCompanion/VoiceToolsSetting";
 
 import type { SettingsSub } from "./openSettings";
-import { BlockRow, BUTTON, ChoiceRow, DetailsRow, FIELD, FieldRow, Gone, LinkRow, Literal, RefusalLine, Rows, SectionHead, SwitchRow, TextRow } from "./settingsRows";
+import { BlockRow, BUTTON, ChoiceRow, DetailsRow, FieldRow, Gone, LinkRow, Literal, PRIMARY, RefusalLine, RowField, Rows, SectionHead, SwitchRow, TextRow } from "./settingsRows";
 
 /* A page's rows reach the foot of the sheet, so its actions can stand there. */
 const FILL = "flex flex-1 flex-col";
@@ -87,7 +87,7 @@ export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (
                 <TextRow tone="warning">{t("settings.voice.held")}</TextRow>
                 <BlockRow>
                   <span className="flex flex-wrap items-center gap-2">
-                    <button type="button" data-voice-companion-held-key="" className={BUTTON} onClick={() => openKeys("openai")}>{t("openaiServices.addKey")}</button>
+                    <button type="button" data-voice-companion-held-key="" className={PRIMARY} onClick={() => openKeys("openai")}>{t("openaiServices.addKey")}</button>
                     <button type="button" data-voice-companion-stay="" className={BUTTON} onClick={() => void change({ backend: "codex" }, "backend")}>{t("settings.voice.stayOnCodex")}</button>
                   </span>
                 </BlockRow>
@@ -110,10 +110,11 @@ export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (
                   sub="cap:"
                   label={t("voiceCompanion.settings.cap")}
                   value={voiceMoney(cap)}
-                  hint={<span style={{ color: spendTone(settings.usageUsd, cap) ? `var(--color-${spendTone(settings.usageUsd, cap)})` : undefined }}>{t("voiceCompanion.settings.usage", { month: voiceMonth(locale, settings.month), spent: voiceMoney(settings.usageUsd), cap: voiceMoney(cap) })}</span>}
+                  hint={spent >= cap
+                    ? <span className="text-danger">{companionErrorMessage("CAP_REACHED", speech)}</span>
+                    : <span style={{ color: spendTone(settings.usageUsd, cap) ? `var(--color-${spendTone(settings.usageUsd, cap)})` : undefined }}>{t("settings.voice.usedThisMonth", { spent: voiceMoney(settings.usageUsd) })}</span>}
                   onOpen={() => go({ id: "cap", title: t("voiceCompanion.settings.cap") })}
                 />
-                {spent >= cap ? <TextRow tone="danger">{companionErrorMessage("CAP_REACHED", speech)}</TextRow> : null}
               </>
             ) : null}
             {settings.uncertainSession ? (
@@ -177,12 +178,12 @@ function CodexLines({ settings }: { settings: NonNullable<ReturnType<typeof useV
   const now = clock ? clock * 1000 : plan?.observedAt ?? 0;
   const date = call ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short" }).format(new Date(call.endedAt)) : "";
   const windows = plan ? planWindows(plan) : [];
-  /* The window that runs out first says when it comes back. */
+  /* The window that runs out first says when it comes back; the last one named needs no second naming. */
   const tightest = windows.reduce<(typeof windows)[number] | null>((most, window) => !most || window.usedPercent > most.usedPercent ? window : most, null);
   const [before, after = ""] = plan ? t("voiceCompanion.settings.planUsed", { plan: planName(plan), windows: "\u0001" }).split("\u0001") : [""];
   return (
     <div data-voice-companion-codex="" className="flex flex-col gap-0.5 px-5 pb-1.5 text-ui leading-snug text-muted tabular-nums settings-sheet:px-4">
-      <p data-voice-companion-last-call="" data-settings-unit="">{call ? t("voiceCompanion.settings.lastCodexCall", { duration: callDuration(call.seconds), date }) : t("voiceCompanion.settings.noCall")}</p>
+      <p data-voice-companion-last-call="" data-settings-unit="">{call ? t("voiceCompanion.settings.lastCodexCall", { duration: spokenDuration(call.seconds, t), date }) : t("voiceCompanion.settings.noCall")}</p>
       {/* The plan in one line: what each window has used, its figure emphasised, and when the fullest one resets. */}
       {plan ? (
         <p data-voice-companion-plan="" data-settings-unit="" data-tone={planTone(plan)} className="text-secondary">
@@ -196,7 +197,9 @@ function CodexLines({ settings }: { settings: NonNullable<ReturnType<typeof useV
             );
           })}
           {after}
-          {tightest && tightest.resetsAt !== null ? <span data-plan-reset="">{" · "}{t("voiceCompanion.settings.planReset", { window: windowName(tightest, t), reset: limitResetText(tightest.resetsAt, speech, now) })}</span> : null}
+          {tightest && tightest.resetsAt !== null ? <>{" · "}<span data-plan-reset="" className="whitespace-nowrap">{tightest === windows.at(-1)
+            ? t("voiceCompanion.settings.planReset", { reset: limitResetText(tightest.resetsAt, speech, now) })
+            : t("voiceCompanion.settings.planResetNamed", { window: windowName(tightest, t), reset: limitResetText(tightest.resetsAt, speech, now) })}</span></> : null}
         </p>
       ) : null}
     </div>
@@ -222,17 +225,19 @@ function CapPage({ settings, change, refusal }: {
     await change({ monthlyCapUsd: Math.round(value * 100) / 100 }, "cap");
   };
   const last = settings.lastSession;
-  const lastDuration = last ? `${Math.floor(last.seconds / 60)}:${String(Math.floor(last.seconds % 60)).padStart(2, "0")}` : "";
+  const lastDuration = last ? spokenDuration(last.seconds, t) : "";
   const lastDate = last ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short", timeZone: "UTC" }).format(new Date(last.endedAt)) : "";
-  const tone = spendTone(settings.usageUsd, settings.monthlyCapUsd);
+  const reached = settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd;
+  /* At the cap one red line says so; the figures stay plain. */
+  const tone = reached ? undefined : spendTone(settings.usageUsd, settings.monthlyCapUsd);
   return (
     <div data-voice-companion-settings="" className={FILL}>
       <Rows data-voice-companion-cap="">
         <FieldRow label={t("voiceCompanion.settings.cap")}>
           <span aria-hidden className="text-body text-muted">$</span>
-          <input type="text" inputMode="decimal" data-voice-companion-cap-input="" aria-label={t("voiceCompanion.settings.cap")} value={draft ?? String(settings.monthlyCapUsd)} aria-describedby={hint}
+          <RowField type="text" inputMode="decimal" data-voice-companion-cap-input="" aria-label={t("voiceCompanion.settings.cap")} value={draft ?? String(settings.monthlyCapUsd)} aria-describedby={hint}
             onChange={(event) => setDraft(event.target.value)} onBlur={() => void commit()} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void commit(); } }}
-            className={`${FIELD} tabular-nums`} />
+            desktopClass="tabular-nums" />
         </FieldRow>
         {refusal}
         <TextRow tone="muted" role="status" attrs={{ "data-voice-companion-usage": "", id: hint }}>
@@ -247,7 +252,7 @@ function CapPage({ settings, change, refusal }: {
           </TextRow>
         ) : null}
         {settings.incomplete ? <TextRow tone="muted">{companionErrorMessage("FINALIZATION_INCOMPLETE", speech)}</TextRow> : null}
-        {settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd ? <TextRow tone="danger">{companionErrorMessage("CAP_REACHED", speech)}</TextRow> : null}
+        {reached ? <TextRow tone="danger">{companionErrorMessage("CAP_REACHED", speech)}</TextRow> : null}
       </Rows>
     </div>
   );

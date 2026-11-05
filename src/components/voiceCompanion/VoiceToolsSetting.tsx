@@ -107,6 +107,12 @@ export function useVoiceTools() {
 }
 export type VoiceTools = ReturnType<typeof useVoiceTools>;
 
+/** The state in words: a pending tool whose dry run passed and that lacks no secret is ready, which the operator should tell from one still waiting. */
+export function toolStateWord(server: Server): { key: MessageKey; ready: boolean } {
+  const ready = server.state === "pending" && server.lastDryRun?.code === "OK" && server.catalog !== null && server.missingSecrets.length === 0;
+  return { key: ready ? "voiceCompanion.tools.state.ready" : `voiceCompanion.tools.state.${server.state}` as MessageKey, ready };
+}
+
 const STATE_TONE: Record<Server["state"], DotTone> = { enabled: "ok", pending: "warn", changed: "warn", disabled: "off", rejected: "off" };
 /* A long tool list gets a filter. */
 const FILTER_ABOVE = 6;
@@ -119,7 +125,7 @@ export function VoiceToolRows({ tools, onOpen }: { tools: VoiceTools; onOpen: (n
     const run = server.lastDryRun;
     if (!run) return t("voiceCompanion.tools.dryRun.none");
     const time = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(run.at));
-    return run.code === "OK" && server.catalog ? t("voiceCompanion.tools.dryRun.ok", { time, count: server.catalog.tools.length }) : t("settings.voice.toolNoteFailed", { time });
+    return t(run.code === "OK" && server.catalog ? "settings.voice.toolNotePassed" : "settings.voice.toolNoteFailed", { time });
   };
   const { view, servers, loading, loadError, signInRequired, read } = tools;
   const status = loading && !view ? t("voiceCompanion.tools.loading") : loadError ? t(signInRequired ? "voiceCompanion.tools.signIn" : "voiceCompanion.tools.error") : view && !servers.length ? t("voiceCompanion.tools.empty") : "";
@@ -134,7 +140,7 @@ export function VoiceToolRows({ tools, onOpen }: { tools: VoiceTools; onOpen: (n
         sub={`tool:${name}`}
         label={server.title}
         dot={{ tone: STATE_TONE[server.state], note: note(server) }}
-        value={<span data-voice-tool-state={server.state}>{t(`voiceCompanion.tools.state.${server.state}` as MessageKey)}</span>}
+        value={<span data-voice-tool-state={server.state} data-voice-tool-ready={toolStateWord(server).ready ? "" : undefined}>{t(toolStateWord(server).key)}</span>}
         hint={server.capability}
         onOpen={() => onOpen(name, server.title)}
       />)}
@@ -190,7 +196,7 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
   return <div data-voice-tool-server={name} data-state={state} className="flex flex-1 flex-col break-words pb-4 pt-2 font-normal settings-sheet:pt-1">
     <TextRow>{server.capability}</TextRow>
     <TextRow tone="muted">
-      <span data-voice-tool-state={state}>{t(`voiceCompanion.tools.state.${state}` as MessageKey)}</span>
+      <span data-voice-tool-state={state} data-voice-tool-ready={toolStateWord(server).ready ? "" : undefined}>{t(toolStateWord(server).key)}</span>
       {" · "}
       {t(server.proposedBy.kind === "operator" ? "voiceCompanion.tools.proposedYou" : "voiceCompanion.tools.proposedAgent", { date: when(server.proposedBy.at) })}
     </TextRow>
@@ -226,22 +232,22 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
         {server.secretRefs.map(ref => {
           const missing = server.missingSecrets.includes(ref);
           return <div key={ref} className="min-w-0" data-voice-tool-reference={ref} data-missing={missing ? "" : undefined}>
-            <span className="flex flex-wrap items-baseline gap-x-1.5 text-ui"><Literal text={ref} /><span className={missing ? "font-semibold text-warning" : "text-muted"}>{t(missing ? "voiceCompanion.tools.secretNeeded" : "voiceCompanion.tools.secretSaved")}</span></span>
-            <input type="password" aria-label={ref} autoComplete="off" spellCheck={false} minLength={8} maxLength={8192} data-1p-ignore="" data-lpignore="true" disabled={busy}
+            <span data-settings-unit="" className="flex flex-wrap items-baseline gap-x-1.5 text-ui"><Literal text={ref} /><span className={missing ? "font-semibold text-warning" : "text-muted"}>{t(missing ? "voiceCompanion.tools.secretNeeded" : "voiceCompanion.tools.secretSaved")}</span></span>
+            <input type="password" data-settings-unit="" aria-label={ref} autoComplete="off" spellCheck={false} minLength={8} maxLength={8192} data-1p-ignore="" data-lpignore="true" disabled={busy}
               placeholder={missing ? "" : t("voiceCompanion.tools.secretReplace")} data-reference={ref}
               onChange={event => { const filled = event.target.value.length > 0; setTyped(current => { const next = new Set(current); if (filled) next.add(ref); else next.delete(ref); return next; }); }} className={`${FIELD} mt-1 font-mono`} />
-            <label className="mt-1.5 block text-ui text-muted">{t("voiceCompanion.tools.destinations")}
+            <label data-settings-unit="" className="mt-1.5 block text-ui text-muted">{t("voiceCompanion.tools.destinations")}
               <input type="text" data-destinations={ref} defaultValue={server.secretDestinations?.[ref]?.join(", ") ?? ""} maxLength={4096} disabled={busy} required={typed.has(ref)}
                 placeholder={t("settings.voice.destinationsPlaceholder")} className={`${FIELD} mt-1 font-mono`}
                 onChange={() => setTyped(current => new Set([...current, ref]))} />
             </label>
-            <p data-voice-tool-destinations="" className="mt-1 text-ui leading-snug text-muted">{t("voiceCompanion.tools.destinationsSaved", { hosts: "\u0000" }).split("\u0000")[0]}{server.secretDestinations?.[ref]?.length ? server.secretDestinations[ref].map((host, at) => <span key={host}>{at ? ", " : ""}<Literal text={host} /></span>) : t("voiceCompanion.tools.none")}</p>
+            <p data-voice-tool-destinations="" data-settings-unit="" className="mt-1 text-ui leading-snug text-muted">{t("voiceCompanion.tools.destinationsSaved", { hosts: "\u0000" }).split("\u0000")[0]}{server.secretDestinations?.[ref]?.length ? server.secretDestinations[ref].map((host, at) => <span key={host}>{at ? ", " : ""}<Literal text={host} /></span>) : t("voiceCompanion.tools.none")}</p>
           </div>;
         })}
       </div>
       <div className="mt-2 flex flex-col items-start gap-1.5">
-        <button type="submit" disabled={busy || !typed.size} className={BUTTON}>{t("voiceCompanion.tools.secretsSave")}</button>
-        <p className="text-ui leading-snug text-muted">{t("voiceCompanion.tools.secretsNote")}</p>
+        <button type="submit" data-settings-unit="" disabled={busy || !typed.size} className={BUTTON}>{t("voiceCompanion.tools.secretsSave")}</button>
+        <p data-settings-unit="" className="text-ui leading-snug text-muted">{t("voiceCompanion.tools.secretsNote")}</p>
       </div>
     </form></BlockRow>
     {reason("secrets")}
@@ -260,12 +266,12 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
       {shownTools.length === 0 ? <TextRow tone="muted" attrs={{ "data-voice-tool-filter-none": "" }}>{t("settings.voice.toolFilterNone")}</TextRow> : null}
       {shownTools.map(tool => {
         const choice = server.tools[tool.name] ?? { enabled: false, acts: tool.annotations?.readOnlyHint !== true };
-        return <div key={tool.name} data-voice-tool={tool.name} data-settings-unit="" className={`flex items-center gap-3 ${density === "sheet" ? "min-h-11 px-4 py-1.5" : "min-h-10 px-5 py-1.5"}`}>
+        return <div key={tool.name} data-voice-tool={tool.name} data-settings-unit="" className={`flex items-center gap-3 ${density === "sheet" ? `min-h-11 px-4 py-1.5 ${tool.description ? "landscape:items-start" : ""}` : "min-h-10 px-5 py-1.5"}`}>
           <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-ui leading-snug">
-            <span><Literal text={tool.name} /><span className="text-muted"> · {t(choice.acts ? "voiceCompanion.tools.acts" : "voiceCompanion.tools.reads")}</span></span>
+            <span data-settings-line=""><Literal text={tool.name} /><span className="text-muted"> · {t(choice.acts ? "voiceCompanion.tools.acts" : "voiceCompanion.tools.reads")}</span></span>
             {tool.description ? <span className="block text-secondary">{tool.description}</span> : null}
           </span>
-          <SettingSwitch enabled={choice.enabled} disabled={busy} size={density === "sheet" ? "sheet" : "row"} className={density === "sheet" ? "-mr-1.5" : ""} aria-label={tool.name}
+          <SettingSwitch enabled={choice.enabled} disabled={busy} size={density === "sheet" ? "sheet" : "row"} className={density === "sheet" ? `-mr-1.5 ${tool.description ? "landscape:-mt-2" : ""}` : ""} aria-label={tool.name}
             onClick={() => {
               const tools = { ...server.tools, [tool.name]: { ...choice, enabled: !choice.enabled } };
               void write("tools", { action: "configure", name, digest, tools }, current => ({ ...current, tools }));

@@ -25823,7 +25823,7 @@ describe("floating voice companion", () => {
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
         translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
-      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
       failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts", "NOTES_FORMAT=markdown"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
@@ -25837,7 +25837,7 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
-      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
       "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
@@ -27859,8 +27859,8 @@ describe("floating voice companion", () => {
       const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: lang === "uk" ? "long" : "short" }).format(new Date(seconds * 1000));
       /* One line: what each window used, and when the fuller one, the week, resets. */
       return lang === "uk"
-        ? [`План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · тиждень: оновлення ${date(loaded + 4 * 86_400)}`]
-        : [`Pro plan, whole account: 5\u00a0h 23%, week 77% used · week resets ${date(loaded + 4 * 86_400)}`];
+        ? [`План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · оновлення ${date(loaded + 4 * 86_400)}`]
+        : [`Pro plan, whole account: 5\u00a0h 23%, week 77% used · resets ${date(loaded + 4 * 86_400)}`];
     }, lang);
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
@@ -27898,7 +27898,7 @@ describe("floating voice companion", () => {
           /* The cap and the month's usage, on the cap's page. */
           const monthWord = lang === "uk" ? "жовтень" : "October";
           const usageWords = (cap: string) => translate(lang, "voiceCompanion.settings.usage", { month: monthWord, spent: "$3.40", cap });
-          expect(await section.locator("[data-voice-companion-cap-row]").innerText(), `${label}: the month's usage on its row`).toContain(usageWords("$20.00"));
+          expect(await section.locator("[data-voice-companion-cap-row]").innerText(), `${label}: the month's usage on its row`).toContain(translate(lang, "settings.voice.usedThisMonth", { spent: "$3.40" }));
           await section.locator("[data-voice-companion-cap-row] [data-settings-row='link']").click();
           const cap = page.locator("[data-voice-companion-cap-input]");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
@@ -27909,7 +27909,7 @@ describe("floating voice companion", () => {
           await page.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
           expect(await page.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(usageWords("$35.00"));
           const lastCall = await page.locator("[data-voice-companion-last-call]").innerText();
-          expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
+          expect(lastCall, `${label}: the last call is in settings`).toContain(`$0.40 · ${translate(lang, "voiceCompanion.usage.minutes", { n: 7 })} ${translate(lang, "voiceCompanion.usage.seconds", { n: 51 })}`.replaceAll(" ", "\u00a0").replace("$0.40\u00a0·\u00a0", "$0.40 · "));
           expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
           await page.locator("[data-settings-back]").click();
@@ -27936,7 +27936,7 @@ describe("floating voice companion", () => {
           expect((await writes(page)).settings.at(-1), `${label}: the choice was written`).toEqual({ backend: "codex" });
           expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row]").count(), `${label}: no key and no cap on Codex`).toBe(0);
           const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
-          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
+          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7\u00a0хв\u00a051\u00a0с · 10 жовтня." : "Last call: 7\u00a0min\u00a051\u00a0s · Oct 10.");
           const codexPlan = await section.locator("[data-voice-companion-plan]").evaluate((block) => {
             const lines = [block as HTMLElement];
             /* Every number joined to its unit stays on one line box, and each window reads as one line. */

@@ -122,9 +122,10 @@ phone, reaching into the row's padding). A mouse opens it on hover, focus or cli
 
 - Portal to `document.body` at `Z.popover`, which outranks `Z.modal` and `Z.sheet`. Take placement and `useDismiss`
   from `team/WorkspaceSwitch.tsx`, with a passive role and no focus move.
-- Text is at most two short lines at 240 px. Never a pill. It opens under the row with its left edge at the dot,
-  flips above near the foot, and stays inside the viewport. Dot and label stay visible; the popover may cover the rows
-  under it, on an opaque surface.
+- Text is at most two short lines. Never a pill. It covers no words of another row, and of its own row a line whole or
+  not at all, so no fragment of a word stands beside it. It opens between the label and the state word at 240 px at
+  most, else over the row's muted line at the row's width, else under or above the row, and stays inside the viewport.
+  Dot and label stay visible, on an opaque surface.
 - A row with a chevron is a `<button>`, so the dot goes beside it. **No nested interactive:** render the row as a
   `<div>` holding the dot button and the row button as siblings.
 - Escape closes the popover alone; the next Escape closes the window. A tap on it does not close the sheet.

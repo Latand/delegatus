@@ -106,7 +106,8 @@ export function VoiceDevicesSetting() {
           ...(hidden ? [] : entries.map(entry => ({ value: entry.id, label: nameOf(entry, entries) }))),
         ]}
       >
-        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className={`${sheet ? "px-4" : "px-5"} pb-1.5 text-ui leading-snug text-muted`} data-voice-device-hint={kind}>{lines.filter(entry => sheet || !entry.phoneOnly).map(entry => <p key={entry.key}>{entry.text}</p>)}</div> : null}
+        {/* A landscape phone's wide select shows the chosen name whole too, so its line goes there as well. */}
+        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className={`${sheet ? "px-4" : "px-5"} ${lines.every(entry => entry.phoneOnly) ? "landscape:hidden" : ""} pb-1.5 text-ui leading-snug text-muted`} data-voice-device-hint={kind}>{lines.filter(entry => sheet || !entry.phoneOnly).map(entry => <p key={entry.key} className={entry.phoneOnly ? "landscape:hidden" : undefined}>{entry.text}</p>)}</div> : null}
       </ChoiceRow>
     );
   };

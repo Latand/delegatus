@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { TelegramBotState } from "@/hooks/useTelegramBot";
+import { translate } from "@/lib/i18n";
 import { DISCONNECTED_BOT_STATUS, type TelegramBotChatView, type TelegramBotStatusPayload } from "@/lib/telegram/bot/contracts";
 import { installActEnv } from "@/test-helpers/actEnv";
 
@@ -431,4 +432,24 @@ test("a test post's success goes away on the next press, so a later refusal read
   await settle(false);
   expect(sent()).toBeNull();
   expect(container.querySelector("[data-telegram-failure='action_failed']")).not.toBeNull();
+});
+
+test("the bot page carries one time at rest, and the bot's popover adds the check to the row's word", async () => {
+  const { section } = await mount(undefined, { lastUpdateAt: "2026-11-05T08:29:00.000Z", lastCheckedAt: "2026-11-05T08:30:00.000Z" });
+  const row = section.querySelector<HTMLElement>("[data-telegram-bot-row]")!;
+  const note = row.querySelector("[data-settings-dot]")!.getAttribute("aria-label")!;
+  expect(note).toContain(translate("en", "settings.telegram.note.pollingChecked", { time: "\u0000" }).split("\u0000")[0]!);
+  expect(note.toLowerCase()).not.toContain(translate("en", "settings.telegram.word.polling").toLowerCase());
+  await act(async () => row.querySelector<HTMLButtonElement>("[data-settings-row='link']")!.click());
+  const page = section.querySelector<HTMLElement>("[data-telegram-bot-page]")!;
+  expect(page.textContent!.match(/\d\d:\d\d/g)?.length).toBe(1);
+});
+
+test("the chat page says what it knows above the alias, so no line under the field reads as its hint", async () => {
+  const { section } = await mount(undefined, { chats: [chat({ alias: "team-reports", postAllowed: true, readdToApply: true, lastPostAt: "2026-11-05T08:00:00.000Z", lastPostBy: { unidentified: true },
+    lastDelivery: { at: "2026-11-05T08:00:00.000Z", state: "refused", refusals: [] } })] });
+  await openChat(section, "-1000000000101");
+  const alias = section.querySelector("[data-telegram-chat-alias]")!.closest("[data-settings-row='field']")!;
+  expect(alias.nextElementSibling?.getAttribute("data-settings-row")).not.toBe("text");
+  expect(section.querySelector("[data-telegram-chat-page]")!.textContent).toContain(translate("en", "telegram.bot.readd"));
 });

@@ -1,8 +1,8 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
-  "states": 91,
-  "frames": 1028,
-  "readings": 728,
+  "states": 93,
+  "frames": 1056,
+  "readings": 744,
   "failures": [],
   "shallowestFootUnderDetails": 20
 }

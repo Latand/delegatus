@@ -290,11 +290,11 @@ test("on Codex V3 the key and the cap are gone and nothing on the page mentions 
   /* Every word on the page, the select's other option and the open «Details» included. */
   expect(section().textContent).not.toMatch(/\bkeys?\b|\bcap\b|spend|\$/iu);
   const codex = section().querySelector<HTMLElement>("[data-voice-companion-codex]")!;
-  expect(codex.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("Last call: 7:51 · Oct 10.");
+  expect(codex.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("Last call: 7\u00a0min\u00a051\u00a0s · Oct 10.");
   /* The plan reads as one line: what each window used, its figure emphasised, and when the fuller window resets; no
      reading time. Times are the board's 24-hour form and a window's number never parts from its unit. */
   const planBlock = codex.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
-  expect(planBlock.textContent).toMatch(/^Pro plan, whole account: 5\u00a0h 23%, week 77% used · week resets [A-Z][a-z]{2} \d{1,2}$/u);
+  expect(planBlock.textContent).toMatch(/^Pro plan, whole account: 5\u00a0h 23%, week 77% used · resets [A-Z][a-z]{2} \d{1,2}$/u);
   expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
   expect(planBlock.textContent).not.toMatch(/AM|PM/u);
   await choose("api");
@@ -1370,7 +1370,7 @@ test("phone settings retain the month and last call in both languages, including
       await openCap();
       expect(document.querySelector("[data-voice-companion-usage]")?.textContent).toContain(locale === "en" ? "October" : "жовтень");
       const last = document.querySelector<HTMLElement>("[data-voice-companion-last-call]")!;
-      expect(last.textContent).toContain("$0.40 · 7:51");
+      expect(last.textContent).toContain(locale === "en" ? "$0.40 · 7\u00a0min\u00a051\u00a0s" : "$0.40 · 7\u00a0хв\u00a051\u00a0с");
       expect(last.textContent).toContain(locale === "en" ? "Last call: estimated" : "Остання розмова: орієнтовно");
       expect(last.querySelector<HTMLElement>("[title]")!.title).toContain("OpenAI");
       await unmountNow();
@@ -1389,7 +1389,7 @@ test("on Codex, before any call the settings say so, and a plan at its limit is 
   const limited = await mount(<VoiceCompanionSetting />);
   const window = limited.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
   expect(window.dataset.tone).toBe("danger");
-  expect(window.textContent).toMatch(/^Plus plan, whole account: 5\u00a0h 100% used · 5\u00a0h resets \d\d:\d\d$/u);
+  expect(window.textContent).toMatch(/^Plus plan, whole account: 5\u00a0h 100% used · resets \d\d:\d\d$/u);
   expect(window.querySelector<HTMLElement>("[data-plan-figure]")!.dataset.tone).toBe("danger");
 });
 
@@ -1406,11 +1406,11 @@ test("phone settings on Codex keep the last Codex call and its plan window in bo
       expect(document.querySelector("[data-voice-companion-setting]")).toBeTruthy();
       expect(document.querySelector("[data-companion-spend-meter]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-key], [data-voice-companion-cap-row]")).toBeNull();
-      expect(document.querySelector("[data-voice-companion-last-call]")?.textContent).toBe(locale === "en" ? "Last call: 7:51 · Oct 10." : "Остання розмова: 7:51 · 10 жовтня.");
+      expect(document.querySelector("[data-voice-companion-last-call]")?.textContent).toBe(locale === "en" ? "Last call: 7\u00a0min\u00a051\u00a0s · Oct 10." : "Остання розмова: 7\u00a0хв\u00a051\u00a0с · 10 жовтня.");
       const line = document.querySelector<HTMLElement>("[data-voice-companion-plan]")!.textContent;
       /* One line in each language; the weekly reset is a date, and in Ukrainian its month is written in full. */
-      expect(line).toMatch(locale === "en" ? /^Pro plan, whole account: 5\u00a0h 23%, week 77% used · week resets [A-Z][a-z]{2} \d{1,2}$/u
-        : /^План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · тиждень: оновлення \d{1,2} [а-яіїєґ]+$/u);
+      expect(line).toMatch(locale === "en" ? /^Pro plan, whole account: 5\u00a0h 23%, week 77% used · resets [A-Z][a-z]{2} \d{1,2}$/u
+        : /^План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · оновлення \d{1,2} [а-яіїєґ]+$/u);
       await unmountNow();
     }
   } finally { await act(async () => setLocale("en")); }
@@ -1767,4 +1767,34 @@ test("phone: a tap on the head, a drag, Hide and Show start no call; only Talk d
   await phoneRow("talk");
   expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("NO_PROJECT", "en"));
   expect(sessionCalls()).toEqual([]);
+});
+
+test("the plan names the window that resets only when it is not the one just read, and its reset words stay together", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  routes(settingsOf({ enabled: true, backend: "codex", lastCodexSession: { seconds: 300, endedAt: Date.UTC(2026, 9, 10, 9), plan: { type: "pro", primary: { usedPercent: 90, resetsAt: now + 3_600, windowMinutes: 300 }, secondary: { usedPercent: 40, resetsAt: now + 86_400 * 3, windowMinutes: 10_080 }, limitReached: false, observedAt: now * 1000 } } }));
+  const host = await mount(<VoiceCompanionSetting />);
+  expect(host.querySelector("[data-plan-reset]")?.textContent).toMatch(/^5\u00a0h resets \d\d:\d\d$/u);
+  expect(host.querySelector("[data-plan-reset]")?.className).toContain("whitespace-nowrap");
+  /* A whole number of minutes has no seconds to say. */
+  expect(host.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("Last call: 5\u00a0min · Oct 10.");
+});
+
+test("the cap reads once on its row, with this month's use in the line under it", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file", backend: "api", monthlyCapUsd: 20, usageUsd: 6.4 }));
+  const host = await mount(<VoiceCompanionSetting />);
+  const row = () => host.querySelector<HTMLElement>("[data-voice-companion-cap-row]")!;
+  expect(row().textContent!.match(/\$20\.00/g)).toEqual(["$20.00"]);
+  expect(row().textContent).toContain(translate("en", "settings.voice.usedThisMonth", { spent: "$6.40" }));
+});
+
+test("at the cap one red line says so, on the row and on its page", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file", backend: "api", monthlyCapUsd: 20, usageUsd: 20 }));
+  const reached = await mount(<VoiceCompanionSetting />);
+  const cap = reached.querySelector<HTMLElement>("[data-voice-companion-cap-row]")!;
+  expect(cap.textContent!.match(/\$20\.00/g)).toEqual(["$20.00"]);
+  expect(cap.querySelectorAll(".text-danger").length).toBe(1);
+  await openCap();
+  const page = reached.querySelector<HTMLElement>("[data-voice-companion-cap]")!;
+  expect(page.querySelectorAll(".text-danger").length).toBe(1);
+  expect(page.querySelector("[data-voice-companion-usage] [style*='danger']")).toBeNull();
 });

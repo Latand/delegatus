@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import { ActionsRow, BUTTON, DANGER_TEXT, TEXT_ACTION, TextRow, ValueRow } from "@/components/settings/settingsRows";
-import { callDuration } from "./CompanionSpend";
+import { spokenDuration } from "./CompanionSpend";
 import type { CallMemoryRow } from "@/lib/voiceCompanion/callMemoryTypes";
 
 /** The remembered calls: read while the section is shown, one write at a time, and a forgotten call waits for the server. */
@@ -49,7 +49,7 @@ export function CallMemoryPage({ memory }: { memory: CallMemory }) {
     <ul data-call-memory-list="" aria-label={t("voiceCompanion.memory.title")} className="m-0 list-none p-0">
       {calls.map(({ sessionId, summary }, at) => <li key={sessionId} data-call-memory-row="" className={at ? "border-t border-border" : ""}>
         <ValueRow
-          value={<span className="tabular-nums">{new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(summary.endedAt ?? summary.startedAt)} · {callDuration(Math.max(0, ((summary.endedAt ?? summary.startedAt) - summary.startedAt) / 1000))} · {summary.projects.join(", ")}</span>}
+          value={<span className="tabular-nums">{new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(summary.endedAt ?? summary.startedAt)} · {spokenDuration(((summary.endedAt ?? summary.startedAt) - summary.startedAt) / 1000, t)} · {summary.projects.join(", ")}</span>}
           action={<button type="button" disabled={writing} onClick={() => void request({ sessionId })} className={TEXT_ACTION}>{t("voiceCompanion.memory.forget")}</button>}
         >
           {summary.pending ? <span className="text-ui leading-snug text-muted">{t("voiceCompanion.memory.pending")}</span> : summary.code && ["account", "timeout", "invalid", "failed"].includes(summary.code) ? <span className="text-ui leading-snug text-muted">{t(`voiceCompanion.memory.failed.${summary.code}`)}</span> : null}

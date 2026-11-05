@@ -495,3 +495,19 @@ test("a tool's page opened directly over a failed first read returns to the sect
   expect(document.querySelector("[data-voice-tools-status]")?.textContent).toBe(translate("en", "voiceCompanion.tools.error"));
   await closeWindow();
 });
+
+test("a pending tool whose dry run passed reads in its own words, and one that still lacks a secret keeps waiting", async () => {
+  const catalog = { digest: digestOf(9), fetchedAt: AT, tools: [{ name: "search" }] } as unknown as Server["catalog"];
+  const lastDryRun = { code: "OK", at: AT, digest: digestOf(8) } as unknown as Server["lastDryRun"];
+  routes({
+    waiting: spotify({ title: "Waiting", missingSecrets: [], secretRefs: [] }),
+    ready: spotify({ title: "Ready", catalog, lastDryRun, missingSecrets: [], secretRefs: [] }),
+    secret: spotify({ title: "Secret", catalog, lastDryRun }),
+  });
+  const host = await mount();
+  const word = (name: string) => host.querySelector(`[data-voice-tool-server='${name}'] [data-voice-tool-state]`)?.textContent;
+  expect(word("waiting")).toBe(translate("en", "voiceCompanion.tools.state.pending"));
+  expect(word("secret")).toBe(translate("en", "voiceCompanion.tools.state.pending"));
+  expect(word("ready")).toBe(translate("en", "voiceCompanion.tools.state.ready"));
+  expect(word("ready")).not.toBe(word("waiting"));
+});

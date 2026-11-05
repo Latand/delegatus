@@ -1544,7 +1544,7 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             if (scene === "multi-kicked") {
               const states = await panel.locator("[data-telegram-bot-posting-state]").allTextContents();
               const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
-              const mayPost = lang === "uk" ? "Агентам можна писати" : "Agents may post";
+              const mayPost = translate(lang, "settings.telegram.bot.canPost");
               if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) throw new Error(`${key}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
             }
             if (scene === "multi-refused" && !await panel.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
@@ -1624,8 +1624,10 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
   { surface: "window", name: "keys-on-key", scene: "voice-file", steps: async (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } }))), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
   /* A feature the OpenAI key serves, opened from its row under «Keys»: its choices are rows of the page, with no box around them. */
-  { surface: "window", name: "keys-feature", scene: "voice-file", steps: openFeature("dictation"), defining: "[data-openai-feature-page='dictation'] [role=radiogroup]" },
+  { surface: "window", name: "keys-feature", scene: "voice-file", steps: openFeature("dictation"), defining: "[data-openai-feature-page='dictation'] [role=radiogroup]", absent: /Now [A-Z]|Зараз / },
   { surface: "window", name: "keys-feature-no-key", scene: "voice-missing", steps: openFeature("read"), defining: "[data-openai-feature-page='read'] [data-openai-add-key]" },
+  /* An option without its key lands on that key, whichever key it is. */
+  { surface: "window", name: "keys-feature-add-soniox", scene: "voice-missing", steps: async (page) => { await openFeature("read")(page); await page.locator("[data-openai-add-key='soniox']").click(); }, defining: "[data-header-menu-page='keys'] [data-keys-row='soniox']" },
   { surface: "window", name: "keys-feature-chosen", scene: "voice-file", steps: async (page) => { await openFeature("memory")(page); await page.locator("[data-openai-option='openai'] input").check(); }, defining: "[data-openai-option='openai'][data-selected]" },
   { surface: "window", name: "notice-opens-privacy", scene: "privacy-notice", steps: async (page) => { await page.locator("[data-telemetry-notice] button").first().click(); }, defining: "[data-telemetry-settings]" },
   /* First run: the setup guide fills the screen, and the install notice's button still opens a window a person can reach. */
@@ -1656,8 +1658,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "telegram", name: "popover-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, "data-telegram-bot-row"), defining: "[data-settings-dot-popover]" },
   { surface: "telegram", name: "popover-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-settings-dot-popover]" },
   { surface: "telegram", name: "popover-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-settings-dot-popover]" },
-  { surface: "telegram", name: "bot-page", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='saved']", absent: /Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки/ },
-  { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']", absent: /Atlas team|Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки/ },
+  { surface: "telegram", name: "bot-page", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='saved']", absent: /Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки|Last checked|Перевірено/ },
+  { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']", absent: /Atlas team|Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки|Last checked|Перевірено/ },
   { surface: "telegram", name: "webhook-elsewhere", scene: "telegram-webhook", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-page] [role=status]" },
   { surface: "telegram", name: "sending-rejected", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"'), defining: "[data-telegram-sending-bot-page] [role=status]" },
   /* A sender removed from its own page: the section again, and the keyboard on its first control. */
@@ -1718,6 +1720,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "voice", name: "tools-load-error", scene: "voice-tools-error", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
   { surface: "voice", name: "tools-sign-in", scene: "voice-tools-signin", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
   { surface: "voice", name: "tools-list", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-add]").scrollIntoViewIfNeeded(), defining: "[data-voice-tool-add]" },
+  /* A tool whose dry run passed is told in words from one still waiting. */
+  { surface: "voice", name: "tools-ready-word", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-ready]").first().scrollIntoViewIfNeeded(), defining: "[data-voice-tool-ready]" },
   { surface: "voice", name: "popover-tool", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => openDot(page, 'data-voice-tool-server="calendar"'), defining: "[data-settings-dot-popover]" },
   { surface: "voice", name: "tool-pending-secret", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-needs"), defining: "[data-voice-tool-reference]" },
   { surface: "voice", name: "tool-containment", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), defining: "[data-voice-tool-uncontained]" },
@@ -1817,6 +1821,29 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
       if (needs > room) failures.push(`select cuts its value: ${text.slice(0, 48)} needs ${Math.ceil(needs)} px, has ${Math.floor(room)}`);
     }
   }
+  /* A landscape phone's wide select reads the device whole. */
+  if (phone && vw > vh) for (const face of scroller.querySelectorAll<HTMLElement>("[data-voice-device] [data-settings-choice-face]")) if (face.scrollWidth > face.clientWidth) failures.push(`device select cuts: ${face.textContent}`);
+  /* A chat page's field and select wear one height, and what stands under a field is the field's own. */
+  const field = scroller.querySelector<HTMLElement>("[data-settings-field-face]");
+  const choice = scroller.querySelector<HTMLElement>("[data-settings-row='choice'] [data-settings-choice-face]")?.parentElement;
+  if (field && choice && Math.abs(field.getBoundingClientRect().height - choice.getBoundingClientRect().height) > 2) failures.push(`field ${field.getBoundingClientRect().height} px beside a select ${choice.getBoundingClientRect().height} px`);
+  if (scroller.querySelector("[data-telegram-chat-page] [data-settings-row='field'] + [data-settings-row='text']")) failures.push("a line stands under the alias as its hint");
+  /* The reset's words stay with its date. */
+  for (const reset of scroller.querySelectorAll<HTMLElement>("[data-plan-reset]")) if (new Set([...reset.getClientRects()].map((rect) => Math.round(rect.top))).size > 1) failures.push(`plan reset splits: ${reset.textContent}`);
+  if (scroller.querySelector("[data-voice-companion-settings]") && /·\s\d+:\d{2}/.test(scroller.innerText)) failures.push("a duration reads as a clock time");
+  /* The cap once on its row, and one red line at the cap. */
+  const capRow = scroller.querySelector<HTMLElement>("[data-voice-companion-cap-row]");
+  if (capRow && (capRow.innerText.match(/\$20\.00/g) ?? []).length > 1) failures.push("the cap reads twice on its row");
+  const capPage = scroller.querySelector<HTMLElement>("[data-voice-companion-cap]");
+  if (capPage && capPage.querySelectorAll(".text-danger, [style*='danger']").length > 1) failures.push("two red lines on the cap page");
+  /* One main action in the held state. */
+  const heldKey = scroller.querySelector<HTMLElement>("[data-voice-companion-held-key]");
+  const stay = scroller.querySelector<HTMLElement>("[data-voice-companion-stay]");
+  if (heldKey && stay && getComputedStyle(heldKey).backgroundColor === getComputedStyle(stay).backgroundColor) failures.push("the held state's two actions look alike");
+  /* Neighbouring tool states differ in words. */
+  const ready = scroller.querySelector("[data-voice-tool-ready]")?.textContent;
+  const waiting = scroller.querySelector("[data-voice-tool-state='pending']:not([data-voice-tool-ready])")?.textContent;
+  if (ready && ready === waiting) failures.push("a passed tool and a waiting one read alike");
   /* A literal breaks only between its parts. */
   for (const part of scroller.querySelectorAll<HTMLElement>("[data-settings-literal] > span.whitespace-nowrap")) {
     const tops = new Set([...part.getClientRects()].map((rect) => Math.round(rect.top)));
@@ -1840,6 +1867,13 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   scroller.scrollTop = 0;
   for (const text of cutByEdge()) failures.push(`first screen cuts: ${text}`);
   const scrolls = scroller.scrollHeight > scroller.clientHeight + 1;
+  /* While more follows, the hairline stands above the window's own edge; a landscape phone keeps no wide blank band under it. */
+  if (scrolls) {
+    const band = Math.min(surface.getBoundingClientRect().bottom, vh) - scroller.getBoundingClientRect().bottom;
+    if (band < (phone && vw > vh ? 3.5 : 8)) failures.push(`hairline ${band.toFixed(1)} px above the window's edge`);
+    /* A feature's choices under «Keys» are hosted whole, a radio centred on each: they keep their rows. */
+    if (phone && vw > vh && band >= 48 && !scroller.querySelector("[data-openai-feature-page]")) failures.push(`blank band of ${Math.round(band)} px under the first screen`);
+  }
   scroller.scrollTop = scroller.scrollHeight;
   for (const text of cutByEdge()) failures.push(`end of scroll cuts: ${text}`);
   /* The foot under the last text at the end of a surface. */
@@ -1878,7 +1912,8 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
       /* Three pixels in from each corner, inside the button's rounding. */
       for (const [x, y] of [[box.left + 3, box.top + 3], [box.right - 3, box.top + 3], [box.left + 3, box.bottom - 3], [box.right - 3, box.bottom - 3]]) {
         const hit = document.elementFromPoint(x, y);
-        if (!dot.contains(hit)) failures.push(`dot's target covered at ${Math.round(x)},${Math.round(y)} by ${hit?.tagName} ${hit?.getAttribute("class")?.slice(0, 60)}`);
+        /* An open popover may lie over a target's corners: the glyph stays pressable, and a press outside it closes it. */
+        if (!dot.contains(hit) && !hit?.closest("[data-settings-dot-popover]")) failures.push(`dot's target covered at ${Math.round(x)},${Math.round(y)} by ${hit?.tagName} ${hit?.getAttribute("class")?.slice(0, 60)}`);
       }
     }
   }
@@ -1888,15 +1923,35 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   if (popover) {
     const box = popover.getBoundingClientRect();
     if (!inView(box)) failures.push("popover leaves the window");
-    if (box.width > 241) failures.push(`popover is ${Math.round(box.width)} px wide`);
+    const own = document.querySelector<HTMLElement>("[data-settings-dot][aria-expanded=true]")?.closest<HTMLElement>("[data-settings-unit]");
+    const ownBox = own?.getBoundingClientRect();
+    /* Wider than its 240 px only to lie over its own row's muted line. */
+    if (box.width > 241 && !(ownBox && box.left >= ownBox.left && box.right <= ownBox.right)) failures.push(`popover is ${Math.round(box.width)} px wide`);
     const lines = new Set<number>();
     for (const node of popover.childNodes) { const range = document.createRange(); range.selectNodeContents(node); for (const rect of range.getClientRects()) lines.add(Math.round(rect.top)); }
     if (lines.size > 2) failures.push(`popover takes ${lines.size} lines`);
     const background = getComputedStyle(popover).backgroundColor;
     if (/rgba\(.*, 0\)|transparent/.test(background)) failures.push("popover is not opaque");
-    /* It covers no words of another row: only its own row's, which it explains. */
-    const own = document.querySelector<HTMLElement>("[data-settings-dot][aria-expanded=true]")?.closest<HTMLElement>("[data-settings-unit]");
+    /* It covers no words of another row, and of its own row a line whole or not at all. */
     const under: string[] = [];
+    const cutWords: string[] = [];
+    if (own) {
+      const ownWords = document.createTreeWalker(own, NodeFilter.SHOW_TEXT);
+      for (let node = ownWords.nextNode(); node; node = ownWords.nextNode()) {
+        if (!(node.textContent ?? "").trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          const touches = rect.width > 0 && rect.left < box.right - 0.5 && rect.right > box.left + 0.5 && rect.top < box.bottom - 0.5 && rect.bottom > box.top + 0.5;
+          const whole = rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5;
+          if (touches && !whole) cutWords.push((node.textContent ?? "").trim().slice(0, 40));
+        }
+      }
+    }
+    if (cutWords.length) failures.push(`popover leaves a fragment of its own row: ${[...new Set(cutWords)].join(" | ")}`);
+    /* It says what the row does not. */
+    const word = own?.querySelector("[data-settings-row-value]")?.textContent?.trim().toLowerCase();
+    if (word && (popover.textContent ?? "").toLowerCase().includes(word)) failures.push(`popover repeats its row's word: ${word}`);
     const words = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
     for (let node = words.nextNode(); node; node = words.nextNode()) {
       if (!(node.textContent ?? "").trim() || own?.contains(node) || node.parentElement?.closest("option, select")) continue;

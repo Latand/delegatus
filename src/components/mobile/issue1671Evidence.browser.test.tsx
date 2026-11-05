@@ -13088,7 +13088,9 @@ describe("openai key services", () => {
     type Defining = { selector: string; words: string }[];
     type Seeded = { name: string; scene: Parameters<typeof seed>[0]; page: Feature | null; defining: (lang: "en" | "uk") => Defining; check?: (page: Page) => Promise<string | null> };
     const say = (lang: "en" | "uk", key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params).replace(/\s+/g, " ");
-    const PREVIOUS: Record<Feature, string> = { asks: "OpenRouter", memory: "OpenRouter", rules: "OpenRouter", dictation: "Soniox", read: "ElevenLabs", voice: "Codex V3" };
+    const PREVIOUS: Record<Feature, string> = { asks: "OpenRouter", memory: "OpenRouter", rules: "OpenAI", dictation: "Soniox", read: "ElevenLabs", voice: "Codex V3" };
+    /* The selected choice says what serves a feature: Voice calls its API choice by what it does. */
+    const servedBy = (lang: "en" | "uk", feature: Feature, name: string) => feature === "voice" && name === "OpenAI" ? say(lang, "voiceCompanion.settings.backend.api") : name;
     const nowRow = (feature: Feature, words: string) => ({ selector: `[data-openai-service="${feature}"] [data-openai-service-now]`, words });
     const optionReason = `[data-openai-option-reason]`;
     const SEEDED: Seeded[] = [
@@ -13098,11 +13100,11 @@ describe("openai key services", () => {
       { name: "keys-all", scene: { key: true, chosen: FEATURES }, page: null, defining: () => FEATURES.map((feature) => nowRow(feature, "OpenAI")) },
       ...FEATURES.flatMap((feature): Seeded[] => [
         { name: `${feature}-none`, scene: { key: false }, page: feature, defining: (lang) => [{ selector: `[data-openai-option="${OPENAI_ID(feature)}"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-add-key]`, words: say(lang, "openaiServices.addKey") }] },
-        { name: `${feature}-chosen`, scene: { key: true, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenAI" }) }],
+        { name: `${feature}-chosen`, scene: { key: true, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: servedBy(lang, feature, "OpenAI") }],
           check: async (page) => await page.locator(`[data-openai-option="${OPENAI_ID(feature)}"] input`).first().isChecked() ? null : "OpenAI is not checked" },
-        { name: `${feature}-removed`, scene: { key: false, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: PREVIOUS[feature] }) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-option-reason="held"]`, words: say(lang, "openaiServices.held") }] },
+        { name: `${feature}-removed`, scene: { key: false, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: servedBy(lang, feature, PREVIOUS[feature]) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-option-reason="held"]`, words: say(lang, "openaiServices.held") }] },
       ]),
-      { name: "read-legacy", scene: { key: false, legacyRead: true }, page: "read", defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenAI" }) }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+      { name: "read-legacy", scene: { key: false, legacyRead: true }, page: "read", defining: (lang) => [{ selector: "[data-openai-feature-now]", words: "OpenAI" }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
         check: async (page) => { const radio = page.locator('[data-openai-option="openai"] input').first(); return await radio.isChecked() && await radio.isDisabled() ? null : "legacy OpenAI is not checked and disabled"; } },
       { name: "dictation-locked", scene: { key: true, locked: true }, page: "dictation", defining: (lang) => [{ selector: "[data-openai-feature-locked]", words: say(lang, "onboarding.voice.locked") }],
         check: async (page) => (await page.locator("[data-openai-option] input").evaluateAll((inputs) => inputs.every((input) => (input as HTMLInputElement).disabled))) ? null : "a radio is enabled under the lock" },
@@ -13392,8 +13394,8 @@ describe("openai key services", () => {
             await openKeys();
             await openFeature("dictation");
             await tap(`${surface} [data-openai-option="openai"] label`);
-            /* Optimistic: «Now OpenAI» at once, then the policy agrees. */
-            expect((await page.locator(`${surface} [data-openai-feature-now]`).innerText()).replace(/\s+/g, " ")).toBe(say(lang, "openaiServices.now", { name: "OpenAI" }));
+            /* Optimistic: OpenAI is selected at once, then the policy agrees. */
+            expect((await page.locator(`${surface} [data-openai-feature-now]`).innerText()).replace(/\s+/g, " ")).toBe("OpenAI");
             await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
             await until(() => resolveService("dictation").effective, "openai", "the policy after the pick");
             await tap(`${surface} [data-settings-back]`);
@@ -13415,7 +13417,7 @@ describe("openai key services", () => {
             await page.locator(`${surface} [data-openai-option-reason="held"]`).waitFor({ state: "detached" });
             await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
             await until(() => resolveService("asks").requested, "openrouter", "the policy after letting «Asks you» go");
-            await frame("asks-kept", [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenRouter" }) }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+            await frame("asks-kept", [{ selector: "[data-openai-feature-now]", words: "OpenRouter" }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
               await page.locator(`${surface} [data-openai-option="openrouter"] input`).first().isChecked() ? null : "OpenRouter is not checked");
             await tap(`${surface} [data-settings-back]`);
             await page.locator(`${surface} [data-openai-service="asks"]:not([data-held])`).waitFor();
