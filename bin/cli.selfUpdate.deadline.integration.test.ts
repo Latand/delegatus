@@ -8,7 +8,7 @@ import { checkoutDeployments } from "../src/lib/selfUpdate/deployments";
 import { activeDrain } from "../src/lib/selfUpdate/drain";
 import { isAlive, readStartIdentity } from "../src/lib/selfUpdate/pid";
 import { harness, runSeatTickCheck, PROJECT, CONVERSATION, NOW } from "../src/lib/monitor/seatTickController.fixture";
-import { availablePort, children, install, readRecord, registerSelfUpdateCleanup, release, served, socketAnswers, start, until } from "./__fixtures__/cli-self-update";
+import { availablePort, children, install, readRecord, registerSelfUpdateCleanup, release, pointerFile, served, socketAnswers, start, until } from "./__fixtures__/cli-self-update";
 
 registerSelfUpdateCleanup();
 
@@ -284,6 +284,8 @@ test.each(["current", "legacy", "guard unavailable"])("a stalled rollback retain
       const end = source.indexOf("  try {\n    const value = JSON.parse", arm);
       source = source.slice(0, arm) + "  const arm = () => {};\n" + source.slice(end);
       source = source.replace("        previousDeadlineCapable: 1,\n", "");
+      const acknowledgement = source.indexOf("  // This acknowledgement follows timer installation.");
+      if (acknowledgement >= 0) source = source.slice(0, acknowledgement) + source.slice(source.indexOf("  return controller;", acknowledgement));
     }
     writeFileSync(relaunchModule, source);
   }
@@ -338,5 +340,118 @@ export async function ensureWebPortFree() {
   expect(checkoutDeployments(directory)[0]).toMatchObject({ phase: "failed", terminal: true });
   expect(checkoutDeployments(directory)[0]!.error).toContain("rollback exceeded");
   expect(checkoutDeployments(directory)[0]!.error).toContain("switch exceeded");
+  expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
+}, 15_000);
+
+// Keep the real CLI's --version preflight and its exec transition. Only the
+// startup import is faulted, before the successor creates its controller.
+function stallStartupImport(entry: string, marker: string) {
+  const source = readFileSync(entry, "utf8");
+  const seam = 'const tailscale = await import("./tailscale.mjs");';
+  expect(source).toContain(seam);
+  writeFileSync(entry, source.replace(seam, `if (!process.argv.includes("--version")) await import("./stalled-startup.mjs");\n  ${seam}`));
+  writeFileSync(path.join(path.dirname(entry), "stalled-startup.mjs"), `
+    import { writeFileSync } from "node:fs";
+    writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ pid: process.pid }));
+    process.on("SIGTERM", () => {});
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  `);
+}
+
+for (const forwarded of [false, true]) {
+  test.each(["switch import", "rollback import", "healthy"])(`exec retains its deadline, forwarding owner=${forwarded}, transition=%s`, async transition => {
+    const fixture = install();
+    const parentSettled = path.join(fixture.root, "parent-startup-settled");
+    if (forwarded) {
+      const initial = release(fixture, "initial-forwarded-release");
+      const pointer = pointerFile(fixture); mkdirSync(path.dirname(pointer), { recursive: true });
+      writeFileSync(pointer, JSON.stringify({ ...initial, checkoutHead: fixture.first }));
+      const budgets = path.join(fixture.checkout, "bin/launcher-deadline.mjs");
+      writeFileSync(budgets, readFileSync(budgets, "utf8").replace(/TERMINAL_BOOTSTRAP_TIMEOUT_MS = [^;]+;/, "TERMINAL_BOOTSTRAP_TIMEOUT_MS = 1000;"));
+      const entry = path.join(fixture.checkout, "bin/cli.mjs");
+      writeFileSync(entry, readFileSync(entry, "utf8").replace(
+        "if (childIsHealthy) { startupSettled = true; return; }",
+        `if (childIsHealthy) { startupSettled = true; writeFileSync(${JSON.stringify(parentSettled)}, "settled"); return; }`));
+    }
+    const running = await start(fixture), before = readRecord(fixture.state);
+    if (forwarded) await until(() => existsSync(parentSettled), 4000);
+    expect(isAlive(running.child.pid!)).toBe(true);
+    const candidate = release(fixture, "exec-deadline-candidate");
+    const marker = path.join(fixture.root, "successor-import-entered");
+    if (transition === "switch import") stallStartupImport(path.join(candidate.dir, "bin/cli.mjs"), marker);
+    if (transition === "rollback import") {
+      const prior = forwarded ? JSON.parse(readFileSync(before.releasePointer, "utf8")).dir : fixture.checkout;
+      stallStartupImport(path.join(prior, "bin/cli.mjs"), marker);
+      const adoption = path.join(candidate.dir, "bin/launcher-adoption.mjs");
+      writeFileSync(adoption, readFileSync(adoption, "utf8").replace("export async function ensureWebPortFree(", "async function originalEnsureWebPortFree(")
+        + '\nexport async function ensureWebPortFree() { throw new Error("Candidate startup fault"); }\n');
+      const budgets = path.join(candidate.dir, "bin/launcher-deadline.mjs");
+      writeFileSync(budgets, readFileSync(budgets, "utf8").replace("ROLLBACK_TIMEOUT_MS = 10 * 60_000", "ROLLBACK_TIMEOUT_MS = 1500"));
+    }
+    const directory = path.dirname(before.requestFile), apply = new ApplyController(directory);
+    writeFileSync(path.join(directory, "deployments.json"), JSON.stringify([{
+      deploymentId: "exec-deadline-deploy", idempotencyKey: "exec-deadline-key", phase: "building", terminal: false, error: null, revisionNumber: 1,
+    }]));
+    apply.begin(before as never, candidate.sha, "operator", "exec-deadline-deploy");
+    apply.patch({ requestId: "exec-deadline-request", state: "ready", switchDeadlineAt: Date.now() + 2000 });
+    writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+    apply.send(before as never);
+    if (transition === "healthy") {
+      const receiptFile = `${before.requestFile}.result.json`;
+      await until(() => existsSync(receiptFile) && JSON.parse(readFileSync(receiptFile, "utf8")).state === "done", 5000);
+      const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+      // Cross the original persisted switch deadline, then ask the actual
+      // serving generation to answer. No clock reset or second start is used.
+      await new Promise(resolve => setTimeout(resolve, Math.max(1, receipt.switchDeadlineAt - Date.now() + 100)));
+      expect(isAlive(running.child.pid!)).toBe(true);
+      expect(await served(running.port)).toBe(candidate.dir);
+      expect(await socketAnswers(before.socket)).toBe(true);
+      expect(new ApplyController(directory).observe(readRecord(fixture.state) as never, true)).toBe("done");
+      return;
+    }
+    await until(() => existsSync(marker), 5000);
+    expect(JSON.parse(readFileSync(marker, "utf8")).pid).toBe(before.launcher.pid);
+    await until(() => new ApplyController(directory).current?.state === "failed", 5000);
+    await until(() => !isAlive(before.launcher.pid) && !isAlive(running.child.pid!), 2000);
+    const failed = new ApplyController(directory).current!;
+    expect(failed.detail).toContain(transition === "switch import" ? "switch exceeded" : "rollback exceeded");
+    expect(checkoutDeployments(directory)[0]).toMatchObject({ terminal: true, phase: "failed", error: failed.detail });
+    expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
+    expect(isAlive(before.web.pid!)).toBe(false);
+    expect(isAlive(before.runtimeHost.pid!)).toBe(false);
+    const restored = existsSync(before.releasePointer) ? JSON.parse(readFileSync(before.releasePointer, "utf8")).dir : fixture.checkout;
+    expect(restored).not.toBe(candidate.dir);
+  }, 20_000);
+}
+
+test("an exec guard whose import stays alive without readiness is refused and reaped", async () => {
+  const fixture = install(), running = await start(fixture), before = readRecord(fixture.state);
+  const candidate = release(fixture, "guard-import-stall");
+  const entered = path.join(fixture.root, "candidate-entered");
+  stallStartupImport(path.join(candidate.dir, "bin/cli.mjs"), entered);
+  const guards = path.join(fixture.root, "guard-pids");
+  writeFileSync(path.join(fixture.checkout, "bin/launcher-rollback-guard.mjs"), `
+    import { appendFileSync } from "node:fs";
+    appendFileSync(${JSON.stringify(guards)}, process.pid + "\\n");
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  `);
+  const directory = path.dirname(before.requestFile), apply = new ApplyController(directory);
+  writeFileSync(path.join(directory, "deployments.json"), JSON.stringify([{
+    deploymentId: "guard-readiness-deploy", idempotencyKey: "guard-readiness-key", phase: "building", terminal: false, error: null, revisionNumber: 1,
+  }]));
+  apply.begin(before as never, candidate.sha, "operator", "guard-readiness-deploy");
+  apply.patch({ state: "ready", switchDeadlineAt: Date.now() + 15_000 });
+  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  apply.send(before as never);
+  await until(() => new ApplyController(directory).current?.state === "failed", 7000);
+  await until(() => !isAlive(before.launcher.pid), 2000);
+  expect(running.child.exitCode).toBe(75);
+  expect(existsSync(entered)).toBe(false);
+  expect(checkoutDeployments(directory)[0]!.error).toContain("guard did not become ready");
+  const guardPids = readFileSync(guards, "utf8").trim().split("\n").map(Number);
+  expect(guardPids).toHaveLength(2);
+  await until(() => guardPids.every(pid => !isAlive(pid)), 1000);
   expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
 }, 15_000);

@@ -46,12 +46,13 @@ function atomic(file, value) {
   renameSync(temporary, file);
 }
 
-async function guardLegacyRollback(paths, trial, installRoot, owner = { pid: process.pid, identity: readStartIdentity(process.pid) }, recordOwner = undefined) {
+async function guardLauncherTransition(paths, trial, installRoot, owner = { pid: process.pid, identity: readStartIdentity(process.pid) }, recordOwner = undefined, handoff = undefined) {
   if (recordOwner === undefined) {
     try { recordOwner = JSON.parse(readFileSync(paths.record, "utf8")).launcher; } catch { /* startup may have no record yet */ }
   }
   const plan = { paths, requestId: trial.requestId, target: trial.target, installRoot,
-    pid: owner.pid, identity: owner.identity, recordOwner, deadline: trial.rollbackDeadlineAt };
+    pid: owner.pid, identity: owner.identity, recordOwner, handoff, state: trial.state,
+    deadline: trial.state === "rolled-back" ? trial.rollbackDeadlineAt : trial.switchDeadlineAt };
   const child = spawn(process.execPath, [...process.execArgv, join(dirname(fileURLToPath(import.meta.url)), "launcher-rollback-guard.mjs"),
     Buffer.from(JSON.stringify(plan)).toString("base64")], { detached: true, stdio: ["ignore", "pipe", "inherit"] });
   await new Promise((resolve, reject) => {
@@ -62,12 +63,13 @@ async function guardLegacyRollback(paths, trial, installRoot, owner = { pid: pro
       child.off("error", failed); child.off("exit", exited); child.stdout?.destroy();
       if (error) { child.kill("SIGKILL"); reject(error); } else { child.unref(); resolve(); }
     };
-    const failed = () => finish(new Error("The rollback deadline guard could not start"));
-    const exited = () => finish(new Error("The rollback deadline guard exited before readiness"));
-    const timer = setTimeout(() => finish(new Error("The rollback deadline guard did not become ready")), 2000);
+    const failed = () => finish(new Error("The launcher deadline guard could not start"));
+    const exited = () => finish(new Error("The launcher deadline guard exited before readiness"));
+    const timer = setTimeout(() => finish(new Error("The launcher deadline guard did not become ready")), 2000);
     child.once("error", failed); child.once("exit", exited);
     child.stdout?.once("data", data => String(data).trim() === "ready" ? finish() : failed());
   });
+  return child;
 }
 
 /* delegatus-terminal-bootstrap-v1: the shown command runs outside either
@@ -162,7 +164,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
     const trial = read(trialFile);
     const previousOwner = read(recordFile)?.launcher;
     try {
-      await guardLegacyRollback(terminalPaths, trial, plan.root,
+      await guardLauncherTransition(terminalPaths, trial, plan.root,
         { pid: priorChild.pid, identity: priorIdentity }, previousOwner);
     } catch (error) {
       await refuseLauncher(`The prior launcher rollback guard could not start: ${error.message}`,
@@ -438,8 +440,14 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     if (pointer === null) rmSync(paths.releasePointer, { force: true });
     else atomic(paths.releasePointer, pointer);
   };
-  const exec = (nextEntry, requestId) => {
+  const exec = async (nextEntry, requestId) => {
     if (stopping) return;
+    const transition = trial;
+    const handoff = randomUUID();
+    const guard = await guardLauncherTransition(paths, transition, installRoot, undefined, undefined, handoff);
+    // Guard readiness yielded. A signal, expiry or recovery may have replaced
+    // this transition while the independent deadline handler was loading.
+    if (stopping || trial !== transition) { guard.kill("SIGKILL"); return; }
     const safeArgs = args.filter(arg => arg !== "--new-token" && arg !== "--new-operator-token");
     if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
     process.chdir(dirname(dirname(nextEntry)));
@@ -450,7 +458,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     delete inherited.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
     process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
       ...inherited, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
-      LLV_LAUNCHER_TRIAL: requestId,
+      LLV_LAUNCHER_TRIAL: requestId, LLV_LAUNCHER_DEADLINE_HANDOFF: handoff,
     });
     throw new Error("launcher exec returned without replacing the process");
   };
@@ -708,7 +716,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       // The PID and its start identity survive exec. Retain that custody
       // record while children are down so another startup cannot take it.
       if (stopping || failing) return;
-      exec(nextEntry, trial.requestId);
+      await exec(nextEntry, trial.requestId);
     },
     async succeeded() {
       if (stopping) return;
@@ -766,13 +774,8 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         atomic(trialFile, `${JSON.stringify(trial)}\n`);
         arm();
         if ((directTrial || process.env.LLV_LAUNCHER_TRIAL === trial.requestId) && canExec) {
-          if (trial.previousDeadlineCapable !== 1) {
-            try { await guardLegacyRollback(paths, trial, installRoot); }
-            catch (error) { refuse(`${detail}: ${error.message}`); }
-            if (stopping) return false;
-          }
-          try { exec(trial.previousEntry, trial.requestId); }
-          catch { /* The manager/bootstrap must restart after a failed exec. */ }
+          try { await exec(trial.previousEntry, trial.requestId); }
+          catch (error) { refuse(`${detail}: ${error.message}`); }
         }
         // A service-manager restart was requested outside this unit. Its next
         // start follows the restored pointer, keeping rollback outside Viewer.
@@ -783,5 +786,13 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     },
   };
   arm();
+  // This acknowledgement follows timer installation. The preceding image's
+  // guard remains responsible for every import and preparation before here.
+  const handoff = process.env.LLV_LAUNCHER_DEADLINE_HANDOFF;
+  delete process.env.LLV_LAUNCHER_DEADLINE_HANDOFF;
+  if (trial && handoff) {
+    trial = { ...trial, deadlineHandler: { id: handoff, at: Date.now() } };
+    atomic(trialFile, `${JSON.stringify(trial)}\n`);
+  }
   return controller;
 }

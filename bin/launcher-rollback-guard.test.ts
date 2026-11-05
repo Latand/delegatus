@@ -18,7 +18,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-test.each(["expiry", "stale identity", "new owner", "healthy"])("the rollback guard respects recorded custody: %s", async scenario => {
+test.each(["expiry", "stale identity", "new owner", "healthy", "handoff", "wrong handoff", "late handoff"])("the rollback guard respects recorded custody: %s", async scenario => {
   const root = mkdtempSync(path.join(tmpdir(), "rollback-guard-")); roots.push(root);
   const owner = spawn(process.execPath, ["--bun", "-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); children.push(owner);
   const ownerExit = new Promise(resolve => owner.once("exit", resolve));
@@ -34,7 +34,8 @@ test.each(["expiry", "stale identity", "new owner", "healthy"])("the rollback gu
   writeFileSync(path.join(root, "apply.json"), JSON.stringify(apply));
   writeFileSync(path.join(root, "deployments.json"), JSON.stringify([{ deploymentId: "guard-deploy", idempotencyKey: "guard-request", phase: "host-handoff", terminal: false, revisionNumber: 1, error: null }]));
   writeFileSync(paths.trial, JSON.stringify({ requestId, target, state: "rolled-back", rollbackPointer: null,
-    previousEntry: path.join(root, "bin/cli.mjs"), rollbackDeadlineAt: 0 }));
+    previousEntry: path.join(root, "bin/cli.mjs"), rollbackDeadlineAt: 0,
+    deadlineHandler: { id: scenario === "wrong handoff" ? "another-image" : "successor-image", at: scenario === "late handoff" ? 1 : -1 } }));
   mkdirSync(path.join(root, "bin"));
   const processEntry = scenario === "healthy" ? { state: "healthy", pid: peer.pid, startIdentity: peerIdentity } : { state: "starting", pid: null, startIdentity: null };
   const priorOwner = { pid: owner.pid, startIdentity: ownerIdentity };
@@ -44,14 +45,14 @@ test.each(["expiry", "stale identity", "new owner", "healthy"])("the rollback gu
   // A foreign hold is never this guard's to release, including on refusal.
   writeFileSync(path.join(root, "auto-drain.json"), JSON.stringify({ id: "foreign-hold" }));
   const plan = { paths, requestId, target, pid: owner.pid, identity: scenario === "stale identity" ? `${ownerIdentity}-stale` : ownerIdentity,
-    recordOwner: priorOwner, installRoot: root, deadline: scenario === "healthy" ? Date.parse(at) + 1 : 0 };
+    recordOwner: priorOwner, installRoot: root, handoff: scenario.includes("handoff") ? "successor-image" : undefined, deadline: scenario === "healthy" ? Date.parse(at) + 1 : 0 };
   const guard = spawn(process.execPath, ["--bun", path.resolve("bin/launcher-rollback-guard.mjs"), Buffer.from(JSON.stringify(plan)).toString("base64")],
     { stdio: ["ignore", "ignore", "pipe"] }); children.push(guard);
   let output = ""; guard.stderr!.on("data", chunk => { output += String(chunk); });
   const exit = await Promise.race([new Promise(resolve => guard.once("exit", resolve)), Bun.sleep(3000).then(() => "unresolved")]);
   expect(exit).toBe(0);
   expect(peer.exitCode).toBeNull(); expect(peer.signalCode).toBeNull();
-  if (scenario === "expiry") {
+  if (["expiry", "wrong handoff", "late handoff"].includes(scenario)) {
     expect(output).toContain("launcher startup refused");
     const cold = new ApplyController(root);
     expect(cold.current).toMatchObject({ state: "failed", detail: "The launcher rollback exceeded its 10 minute deadline" });

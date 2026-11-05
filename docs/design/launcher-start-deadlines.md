@@ -18,13 +18,20 @@ stop bound and records a terminal refusal. A current launcher exits 75. Refusal 
 matching request's drain and automatic admission. A later start may retry;
 the refused deployment retains its error.
 
-An older rollback entry has no deadline handler. Before executing such an
-entry, the candidate starts a guard and requires its readiness within two
-seconds. The guard keeps the absolute rollback expiry across that exec. It
-accepts timely health only from the recorded launcher and live serving child
-identities. At expiry it records the refusal, ends that exact launcher and
-stops its recorded serving children through the existing identity checks. A
-replacement owner makes the guard withdraw. Native agent hosts are excluded.
+Before every exec, including rollback into a current entry, the launcher
+starts an independent guard and requires readiness within two seconds. This
+guard retains the absolute switch or rollback expiry while the next CLI loads
+its modules. The successor acknowledges that transition's unique handoff only
+after installing its controller timer. A guard accepts that acknowledgement
+only if it predates its pinned expiry. An older entry without this protocol
+stays guarded through timely health or refusal.
+
+At expiry the guard records a terminal refusal and ends the recorded launcher.
+For a switch it first restores the candidate's pointer, so a manager's next
+start can retry the prior release. It stops recorded serving children through
+the existing identity checks. Timely health requires the recorded launcher and
+live serving child identities; a replacement owner makes the guard withdraw.
+Native agent hosts are excluded.
 
 The Viewer reconciles the trial/result into the original deployment ledger.
 A matching receipt's `completedAt` distinguishes a timely switch observed late
@@ -49,9 +56,9 @@ to run again. There is no claim of out-of-process seat notification.
 | Process / operation | Bound | At expiry |
 |---|---|---|
 | Launcher ordinary startup | 10 minutes from controller creation | Stop owned children, log refusal, exit 75 |
-| Launcher switch, including optional startup preparation and all readiness work | 10 minutes from persisted switch start | Persist overrun; try rollback |
+| Launcher switch, including exec, initial imports, optional startup preparation and all readiness work | 10 minutes from persisted switch start | Persist overrun; try rollback |
 | Launcher rollback startup | 10 minutes from first rollback | Terminal refusal; current entry exits 75, legacy guard ends its recorded owner |
-| Legacy rollback guard readiness | 2 seconds | Refuse rollback if no ready guard exists |
+| Exec deadline guard readiness | 2 seconds | Refuse transition if no ready guard exists |
 | Temporary web-port and address-bind probes | 2 seconds each, including close completion | Abort the owned listener; reject the probe |
 | Adoption of a recorded listener or orphan host | 10 seconds after TERM, 5 seconds after KILL | Refuse takeover if the same identity survives |
 | Port retry after adoption | 5-second retry window; each probe bounded at 2 seconds | Return refusal |
@@ -67,9 +74,9 @@ to run again. There is no claim of out-of-process seat notification.
 | External service recovery verification | Existing 60-second loop with bounded host and HTTP probes | Report refusal |
 
 The outer startup expiry also bounds awaited preparation and recovery work
-whose individual completion is lost. These timers require a running launcher
-event loop. No synchronous filesystem or kernel operation can acquire an
-independent JavaScript timer guarantee.
+whose individual completion is lost. After handoff these timers require a
+running launcher event loop. During exec and initial imports the independent guard owns the deadline. No synchronous
+filesystem or kernel operation has an independent JavaScript timer guarantee.
 
 ## Incident evidence and scope
 
@@ -112,7 +119,11 @@ temporary roots. The focused regressions are:
   stuck replacement, cold restart without resetting expiry, lost child exit,
   lost retirement, and rollback expiry across another launcher process.
   A prior image with no timer still refuses under its independent guard;
-  a missing guard refuses before executing that image.
+  a missing guard refuses before executing that image. Real CLI import stalls
+  on the switch and on rollback refuse for direct launchers and forwarding
+  owners whose original startup timer has already settled. Healthy successors
+  remain serving after the original switch expiry. A live guard stuck before
+  readiness refuses the transition and is reaped.
   An answering fixture Viewer precedes production seat-tick evaluation;
   its delivery adapter records one delivered deploy-settled wake.
 - `src/lib/selfUpdate/apply.test.ts`: cold reconciliation, legacy intents,
@@ -120,8 +131,9 @@ temporary roots. The focused regressions are:
 - `bin/launcher-relaunch.test.ts`: a terminal preflight that ignores TERM is
   killed at its bound and returns to a verified prior release.
 - `bin/launcher-rollback-guard.test.ts`: expiry, timely health, stale parent
-  identity and a replacement owner; a protected peer and foreign admission
-  hold survive every case.
+  identity, a replacement owner and timely, wrong or late timer
+  acknowledgements; a protected peer and foreign admission hold survive every
+  case.
 
 The integration fixture scales only deadline constants or persists a short
 absolute expiry. It retains the production transition and cleanup code.
