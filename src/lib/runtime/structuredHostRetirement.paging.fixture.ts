@@ -82,6 +82,7 @@ let publication: "ready" | "unbound" = "ready";
 let revived = false;
 let bootChanged = false;
 let identityUnknown = false;
+let curatorPidReused = false;
 const scopeReads: string[] = [];
 if (["gone-cleared", "gone-replaced", "gone-survivor", "gone-revived", "gone-unbound", "gone-failure", "gone-scope-changed", "gone-scope-boot-changed", "gone-claim", "gone-owner", "gone-writer", "gone-start", "gone-boot", "gone-unknown-after-admission"].includes(scenario)) {
   const admit = registry.deliveryWriteOrBusy.bind(registry);
@@ -143,7 +144,8 @@ const dependencies: StructuredHostRetirementDependencies = {
   orchestratorSeatConversations: () => determined(new Set(paging || liveLag ? [] : ["conversation_fixture_3"])),
   revokedSeatConversations: () => determined(new Set()),
   transcriptStat: () => determined({ mtimeMs: NOW - 24 * 3_600_000 }),
-  processIdentity: pid => unknown || identityUnknown ? undetermined("identity read unavailable") : determined(reused ? captureProcessIdentity(pid).startIdentity! : `fixture:${pid - 2_000_000_000}`),
+  processIdentity: pid => unknown || identityUnknown ? undetermined("identity read unavailable") : determined(
+    curatorPidReused && pid === 2_000_000_001 ? "replacement-process" : reused ? captureProcessIdentity(pid).startIdentity! : `fixture:${pid - 2_000_000_000}`),
   bootEpoch: () => determined(bootChanged ? "changed-boot" : scoped || reused ? currentBoot : "fixture-boot"),
   processMemory: pids => new Map([...pids].map(pid => [pid, { rssBytes: 100, swapBytes: 20 }])),
   ppidMap: () => new Map(), owned: () => true, now: () => NOW,
@@ -153,10 +155,11 @@ const dependencies: StructuredHostRetirementDependencies = {
       return { ok: false, status: 409, error: "fixture termination refused", remaining: [ref.pid], survivors: [] };
     }
     if (scenario.startsWith("late-") && ref.sessionId === session(1)) {
+      if (scenario === "late-pid-reuse") curatorPidReused = true;
       const entry = registry.readOnlySnapshot().entries[`codex:${session(1)}`]!;
       const retained = scenario === "late-descendant" ? [{ ...captureProcessIdentity(process.pid), bootEpoch: "fixture-boot" }] : [];
       if (scenario === "late-cleared") registry.terminateStructuredHost(entry.key, entry.structuredHost!.process!);
-      else if (!retained.length && scenario !== "late-returned-writer-failure") registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1,
+      else if (!retained.length && scenario !== "late-returned-writer-failure" && scenario !== "late-pid-reuse") registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1,
         structuredHost: { ...entry.structuredHost!, process: { ...entry.structuredHost!.process!, pid: 2_000_001_000 } } });
       if (scenario !== "late-returned-writer-failure") disappeared.add(ref.pid);
       if (scenario === "late-throw") throw new Error("fixture termination writer failed");
@@ -164,9 +167,12 @@ const dependencies: StructuredHostRetirementDependencies = {
         registryCustody: { process: entry.structuredHost!.process!, claimOwner: entry.claimOwner,
           claimEpoch: entry.claimEpoch, writerClaimEpoch: entry.structuredHost!.writerClaimEpoch },
         retainedSurvivors: retained,
-        processIdentity: pid => scenario === "late-returned-writer-failure" && pid === ref.pid && !disappeared.has(pid)
+        processIdentity: pid => scenario === "late-pid-reuse" && pid === ref.pid
+          ? "replacement-process"
+          : scenario === "late-returned-writer-failure" && pid === ref.pid && !disappeared.has(pid)
           ? ref.startIdentity : retained.find(identity => identity.pid === pid)?.startIdentity ?? null,
-        pidAlive: pid => scenario === "late-returned-writer-failure" && pid === ref.pid && !disappeared.has(pid)
+        pidAlive: pid => scenario === "late-pid-reuse" && pid === ref.pid
+          || scenario === "late-returned-writer-failure" && pid === ref.pid && !disappeared.has(pid)
           || retained.some(identity => identity.pid === pid),
         ...(scenario === "late-returned-writer-failure" ? { retireRegistryEntry: async () => {
           throw new Error("fixture registry write failed");

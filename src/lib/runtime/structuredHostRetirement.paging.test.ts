@@ -191,6 +191,19 @@ test("an exited curator whose termination throws still signals the actual failur
   expect(result.remaining).toHaveLength(4);
 });
 
+test("a settled curator whose PID is reused while entering termination reconciles without a false failure", async () => {
+  const result = await sweep(root(), "late-curator-pid-reuse");
+  expect(result.curation).toMatchObject({ state: "succeeded", failure: null, finalText: "Curation completed" });
+  expect(result.report.failed).toEqual([]);
+  expect(result.report.gone).toContainEqual(expect.objectContaining({ key: `codex:${session(1)}` }));
+  expect(result.report.refused.filter((row: { key: string }) => row.key === `codex:${session(1)}`)).toEqual([]);
+  expect(result.signals).toEqual([]);
+  expect(result.attempted).toContain(session(1));
+  expect(result.terminated).not.toContain(session(1));
+  expect(result.remaining).toHaveLength(3);
+  expect(result.historyIntact).toBe(true);
+});
+
 test("an exited curator preserves the returned termination registry-writer failure", async () => {
   const result = await sweep(root(), "late-curator-returned-writer-failure");
   expect(result.curation).toMatchObject({ state: "succeeded", failure: null });

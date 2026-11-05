@@ -1572,9 +1572,11 @@ export async function runStructuredHostRetirementSweep(
       // Reconcile only a tree with no unresolved members; the gone path must
       // still prove scope collection and current registry custody itself.
       const exited = processStatus(hostProcess) === "dead";
+      const staleIdentityRefusal = outcome.status === 409 && outcome.stale === true;
       const registryCasRefusal = outcome.status === 409
         && outcome.error === "structured host changed before registry retirement";
-      if (registryCasRefusal && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
+      if ((staleIdentityRefusal || registryCasRefusal)
+        && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
         await reconcileGoneAndReport(fresh, subject.conversationId);
         continue;
       }
