@@ -113,7 +113,7 @@ const DESK = {
   nudge: "mt-px",
   number: "w-[32px]",
   meter: "w-12",
-  column: (wide: boolean) => (wide ? "w-[92px]" : "w-[52px]"),
+  column: (wide: boolean): string => (wide ? "w-[92px]" : "w-[52px]"),
   edge: "-mr-1.5",
   below: "pb-[5px]",
   head: "gap-1 pl-[4px] pr-2",
