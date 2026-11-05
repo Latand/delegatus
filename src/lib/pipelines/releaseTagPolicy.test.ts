@@ -5,7 +5,7 @@ import path from "node:path";
 import { realExec } from "@/lib/workflows/provision";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
-import { releaseStages } from "@/lib/release/stages";
+import { releasePublishStages, releaseStages } from "@/lib/release/stages";
 import { assignPipelineDelivery, buildPipeline, savePipelines } from "./store";
 import { pipelineRoleLookup } from "./roles";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
@@ -85,7 +85,7 @@ process.exit(await child.exited);
 });
 
 let next = 0;
-async function fixture() {
+async function fixture(standalone = false) {
   const nativeGit = await nativeGitBinary();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "release-tag-"));
   const id = `release-tag-${++next}`;
@@ -114,7 +114,9 @@ async function fixture() {
   await git("remote", "add", "origin", remote);
   await git("push", "origin", "HEAD:refs/heads/main");
   const { normalizeStages } = await import("./engine");
-  const normalized = normalizeStages(releaseStages({ cut: ancestor, lastTag: "v1.2.2", changes: [], askBeforePublish: true }), pipelineRoleLookup);
+  const normalized = normalizeStages(standalone
+    ? releasePublishStages({ commit: head, pr: 7, cut: ancestor, lastTag: "v1.2.2", changes: [], askBeforePublish: true })
+    : [...releaseStages({ cut: ancestor, lastTag: "v1.2.2", changes: [], askBeforePublish: true }), releasePublishStages({ commit: head, pr: 7, cut: ancestor, lastTag: "v1.2.2", changes: [], askBeforePublish: true }).at(-1)!], pipelineRoleLookup);
   expect(normalized.error).toBeUndefined();
   const stages = normalized.stages!;
   const pipeline = buildPipeline({ id, task: "Release", project: "fixture", repoDir: path.join(root, "repo"),
@@ -206,18 +208,18 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
   } finally { await f.close(); }
 });
 
-test.each(["approved stage", "approved stage with expired outer deadline", "merged tree", "unmerged tree", "wrong commit", "replaced wrong commit"])("the real repository pre-push checks an annotated tag's commit: %s", async scenario => {
+test.each(["approved stage", "approved stage with expired outer deadline", "merged tree", "bootstrapped merged tree", "unmerged tree", "wrong commit", "replaced wrong commit"])("the real repository pre-push checks an annotated tag's commit: %s", async scenario => {
   const f = await fixture();
-  const approvedStage = scenario === "approved stage" || scenario === "approved stage with expired outer deadline" || scenario === "merged tree";
+  const approvedStage = scenario === "approved stage" || scenario === "approved stage with expired outer deadline" || scenario === "merged tree" || scenario === "bootstrapped merged tree";
   const outerDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
   try {
     if (scenario === "approved stage with expired outer deadline") process.env.LLV_GATE_PUSH_DEADLINE = "1";
     let target = f.head;
-    if (scenario === "merged tree" || scenario === "unmerged tree") {
+    if (scenario === "merged tree" || scenario === "bootstrapped merged tree" || scenario === "unmerged tree") {
       target = await f.git("commit-tree", await f.git("rev-parse", `${f.head}^{tree}`), "-p", f.ancestor, "-m", "squash release");
       expect((await f.run(f.lane, ["push", "origin", `${f.head}:refs/heads/release`], f.source)).code).toBe(0);
       f.pipeline.delivery!.target.branch = "refs/heads/release";
-      if (scenario === "merged tree") expect((await f.run(f.lane, ["push", "--force", "origin", `${target}:refs/heads/main`], f.source)).code).toBe(0);
+      if (scenario === "merged tree" || scenario === "bootstrapped merged tree") expect((await f.run(f.lane, ["push", "--force", "origin", `${target}:refs/heads/main`], f.source)).code).toBe(0);
     }
     // Use the running checkout's real gate, dependencies and hook. The support
     // links are ignored fixture tools, so the push has no source diff to check.
@@ -238,6 +240,25 @@ test.each(["approved stage", "approved stage with expired outer deadline", "merg
       } else if (["src", "bin", "node_modules", ".github"].includes(name)) {
         await fs.symlink(path.join(source, name), path.join(f.lane, name), process.platform === "win32" ? "junction" : "dir");
       } else await fs.copyFile(path.join(source, name), path.join(f.lane, name));
+    }
+    let mainTip = scenario === "merged tree" || scenario === "bootstrapped merged tree" ? target : f.head;
+    if (scenario === "bootstrapped merged tree") {
+      // Model an old cut retaining incompatible tools, with compatible tools
+      // available on current main. Bootstrap must replace both actual copies.
+      const env = { ...f.source, GIT_INDEX_FILE: path.join(f.root, "tool-index") };
+      const objectGit = async (...args: string[]) => { const result = await f.run(f.lane, args, env); expect(result.code, result.stderr).toBe(0); return result.stdout.trim(); };
+      await objectGit("read-tree", target);
+      const tools = ["scripts/release-verify.ts", "scripts/local-gate.ts"];
+      for (const file of tools) {
+        const blob = await objectGit("hash-object", "-w", path.join(f.lane, file));
+        await objectGit("update-index", "--add", "--cacheinfo", "100644", blob, file);
+      }
+      mainTip = await objectGit("commit-tree", await objectGit("write-tree"), "-p", target, "-m", "compatible release tools");
+      expect((await f.run(f.lane, ["push", "origin", `${mainTip}:refs/heads/main`], f.source)).code).toBe(0);
+      for (const file of tools) await fs.writeFile(path.join(f.lane, file), 'throw new Error("legacy release tooling");\n');
+      const { bootstrapReleaseTools } = await import("../../../scripts/bootstrap-release-tools");
+      bootstrapReleaseTools(f.lane);
+      for (const file of tools) expect(await fs.readFile(path.join(f.lane, file), "utf8")).toBe(await fs.readFile(path.join(source, file), "utf8"));
     }
     await fs.copyFile(path.join(source, ".githooks/pre-push"), path.join(f.lane, ".git/hooks/pre-push"));
     await fs.chmod(path.join(f.lane, ".git/hooks/pre-push"), 0o700);
@@ -270,7 +291,7 @@ test.each(["approved stage", "approved stage with expired outer deadline", "merg
       expect(pushed.stderr).toContain("pushed head differs from checkout");
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
     }
-    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(scenario === "merged tree" ? target : f.head);
+    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(mainTip);
   } finally {
     if (outerDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
     else process.env.LLV_GATE_PUSH_DEADLINE = outerDeadline;
@@ -852,5 +873,16 @@ test.each(["reviewed", "squash", "unmerged", "different tree"])("sanctioned rele
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
     }
     expect(await f.git("rev-parse", "HEAD")).toBe(f.head);
+  } finally { await f.close(); }
+});
+
+
+test("the separate publish lane uses the real review policy and native tag guard", async () => {
+  const f = await fixture(true);
+  try {
+    await f.bind(); await f.tag();
+    const pushed = await f.push("origin", "refs/tags/v1.2.3");
+    expect(pushed.code, pushed.stderr).toBe(0);
+    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{commit}"])).stdout.trim()).toBe(f.head);
   } finally { await f.close(); }
 });

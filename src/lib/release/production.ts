@@ -222,6 +222,7 @@ export function releaseControllerForSources(sources: SeatTickSources) {
     pipeline: id => {
       const lane = [...sources.pipelines(), ...sources.archivedPipelines()].find(p => p.id === id);
       return lane ? { state: lane.state, merged: lane.merge?.state === "merged",
+        mergeCommit: lane.merge?.mergeCommit, pr: lane.merge?.prNumber,
         declined: !!lane.decisionAnswers?.some(a => a.stageId === "publish" && /не випускати|decline|do not release/i.test(a.answer)) } : null;
     },
   };

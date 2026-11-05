@@ -103,14 +103,18 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
     await git("merge-base", "--is-ancestor", cut, "HEAD");
     const head = await git("rev-parse", "HEAD");
     let tagCommit = head;
+    let releaseBase = cut;
     if (pullRequest !== undefined) {
       if (!/^[1-9]\d*$/.test(pullRequest)) throw new Error("release PR must be a pull request number");
       const pr = JSON.parse(await ports.command("gh", ["pr", "view", pullRequest, "--json", "state,headRefOid,baseRefName,mergeCommit"]));
       if (pr.state !== "MERGED" || pr.baseRefName !== "main" || !/^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid ?? "")) {
         return { errors: ["release PR is unmerged; merge the reviewed release PR into main before tagging, then rerun preflight"] };
       }
-      if (pr.headRefOid !== head) return { errors: ["release PR head moved; review the new head before merging or tagging"] };
+      if (pr.headRefOid !== head && pr.mergeCommit.oid !== head) return { errors: ["release PR head moved; review the new head before merging or tagging"] };
       tagCommit = pr.mergeCommit.oid;
+      // The queue may have integrated newer main changes. Inspect only the
+      // release delta against main, while ancestry and tree checks bind HEAD.
+      releaseBase = `${tagCommit}^`;
     }
     try {
       await git("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main");
@@ -143,7 +147,7 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       : localTag === "matching" && remoteObject === localObject && remoteCommit === tagCommit ? "matching" : "conflict";
     const errors = releasePreflight({ tag, version: pkg.version, localTag, remoteTag,
       npmVersion: !!await ports.registry(`${registryURL}/${version}`),
-      files: (await git("diff", "--name-only", cut, "HEAD")).split("\n").filter(Boolean),
+      files: (await git("diff", "--name-only", releaseBase, "HEAD")).split("\n").filter(Boolean),
       clean: !(await git("status", "--porcelain")), provenance: ports.provenance() });
     if (await git("rev-parse", "HEAD") !== head) return { errors: ["release checkout head moved during preflight; review the new head before tagging"] };
     const nextStep: PreflightAction | undefined = errors.length ? undefined : remoteTag === "matching" ? "verify-remote"
