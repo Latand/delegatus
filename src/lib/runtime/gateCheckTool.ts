@@ -22,9 +22,20 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string
     let root = launchRoot;
     if (root === undefined) {
       try {
-        const saved = readEnvelope(filename) as { identity?: unknown; root?: unknown } | null;
-        if (!saved || saved.identity !== identity || typeof saved.root !== "string" || !path.isAbsolute(saved.root)) return null;
-        return verifiedCodexSocketOwner(owner) ? saved.root : null;
+        const saved = readEnvelope(filename) as { identity?: unknown; root?: unknown; physicalRoot?: unknown; rootDirectoryIdentity?: unknown } | null;
+        if (!saved || saved.identity !== identity || typeof saved.root !== "string" || !path.isAbsolute(saved.root)
+          || typeof saved.physicalRoot !== "string" || !path.isAbsolute(saved.physicalRoot)
+          || typeof saved.rootDirectoryIdentity !== "string") return null;
+        const liveRoot = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
+        // On platforms that expose a live process environment, it is the
+        // authority for the launch root. The record only carries that binding
+        // across Viewer restarts; its process identity alone is insufficient.
+        if (liveRoot !== undefined && path.resolve(liveRoot) !== path.resolve(saved.root)) return null;
+        const realRoot = fs.realpathSync(saved.root);
+        const stat = fs.statSync(realRoot);
+        if (realRoot !== saved.physicalRoot || `${stat.dev}:${stat.ino}` !== saved.rootDirectoryIdentity
+          || !stat.isDirectory() || !verifiedCodexSocketOwner(owner)) return null;
+        return saved.root;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
       }
@@ -32,7 +43,10 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string
       root = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
     }
     if (!root || !path.isAbsolute(root) || !verifiedCodexSocketOwner(owner)) return null;
-    writeEnvelope(filename, { identity, root });
+    const physicalRoot = fs.realpathSync(root);
+    const stat = fs.statSync(physicalRoot);
+    if (!stat.isDirectory()) return null;
+    writeEnvelope(filename, { identity, root, physicalRoot, rootDirectoryIdentity: `${stat.dev}:${stat.ino}` });
     return verifiedCodexSocketOwner(owner) ? root : null;
   } catch { return null; }
 }
