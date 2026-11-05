@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { NextRequest } from "next/server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -32,6 +34,7 @@ const policy = viewerMcpToolPolicy(domain as never, false);
 
 async function sdk(service: ReturnType<typeof createMcpToolService>) {
   setMcpHttpDependenciesForTests({ service: async () => service, conversationForCapability: () => seat });
+  let afterCallbackBlockMs = 0;
   const listener = http.createServer(async (request, response) => {
     if (request.method !== "POST") { response.writeHead(405); response.end(); return; }
     const chunks: Buffer[] = [];
@@ -41,6 +44,13 @@ async function sdk(service: ReturnType<typeof createMcpToolService>) {
     const answer = await POST(new NextRequest(`http://127.0.0.1:${(listener.address() as { port: number }).port}/api/mcp`, {
       method: "POST", headers: request.headers as HeadersInit, body: Buffer.concat(chunks).toString(), signal: abort.signal,
     }));
+    const body = JSON.parse(Buffer.concat(chunks).toString()) as { method?: string; params?: { name?: string } };
+    if (body.method === "tools/call" && body.params?.name === "dismiss_attention" && afterCallbackBlockMs > 0) {
+      const blockMs = afterCallbackBlockMs;
+      afterCallbackBlockMs = 0;
+      // Model a serving-loop stall after the real MCP callback has produced its result.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, blockMs);
+    }
     response.writeHead(answer.status, Object.fromEntries(answer.headers));
     response.end(await answer.text());
   });
@@ -49,12 +59,40 @@ async function sdk(service: ReturnType<typeof createMcpToolService>) {
   await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(listener.address() as { port: number }).port}/api/mcp`), {
     requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } },
   }));
-  return { client, close: async () => {
+  const url = `http://127.0.0.1:${(listener.address() as { port: number }).port}/api/mcp`;
+  return { client, url, setAfterCallbackBlock: (milliseconds: number) => { afterCallbackBlockMs = milliseconds; }, close: async () => {
     await client.close(); listener.closeAllConnections();
     await new Promise<void>(resolve => listener.close(() => resolve()));
     setMcpHttpDependenciesForTests(null);
   } };
 }
+const externalSdkCall = async (url: string, name: string, args: Record<string, unknown>, budgetMs: number) => {
+  const script = `
+    import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+    import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+    const [url, name, argsJson, budgetText] = process.argv.slice(1);
+    const budgetMs = Number(budgetText);
+    const client = new Client({ name: "external-deadline-observer", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } },
+    }));
+    const startedAt = Date.now();
+    const deadlineAt = startedAt + budgetMs;
+    let timer;
+    const timeout = new Promise(resolve => { timer = setTimeout(() => resolve({ kind: "timeout", elapsedMs: Date.now() - startedAt }), budgetMs + 100); });
+    const call = client.callTool({ name, arguments: JSON.parse(argsJson), _meta: { "delegatus/deadlineAt": deadlineAt } })
+      .then(result => ({ kind: "result", elapsedMs: Date.now() - startedAt, result }));
+    const observed = await Promise.race([call, timeout]);
+    clearTimeout(timer);
+    process.stdout.write(JSON.stringify(observed));
+    if (observed.kind === "timeout") process.exit(0);
+    await client.close();
+  `;
+  const result = await promisify(execFile)(process.execPath, ["--eval", script, url, name, JSON.stringify(args), String(budgetMs)], {
+    cwd: process.cwd(), env: { ...process.env }, timeout: 10_000,
+  });
+  return JSON.parse(result.stdout) as { kind: "timeout" | "result"; elapsedMs: number; result?: Awaited<ReturnType<Client["callTool"]>> };
+};
 function payload(answer: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   const content = answer.content;
   if (!Array.isArray(content) || content[0]?.type !== "text") throw Error("missing MCP text result");
@@ -78,9 +116,20 @@ test("SDK attention read returns named omissions before its control wait expires
   const store = new SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "attention-http.sqlite"));
   const session = await sdk(createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), store, policy));
   try {
-    const reading = session.client.callTool({ name: "dismiss_attention", arguments: { project, kinds: ["memory"], clientRequestId: "attention-http-read" }, _meta: { "delegatus/deadlineAt": Date.now() + 2000 } });
-    expect(payload(await reading)).toMatchObject({ ok: true, partial: true, countIsLowerBound: true, omissions: expect.arrayContaining(["board", "liveness"]) });
+    const observed = await externalSdkCall(session.url, "dismiss_attention", {
+      project, kinds: ["memory"], clientRequestId: "attention-http-read",
+    }, 2_000);
+    expect(observed.kind).toBe("result");
+    expect(observed.elapsedMs).toBeLessThan(2_000);
+    expect(payload(observed.result!)).toMatchObject({ ok: true, partial: true, countIsLowerBound: true, omissions: expect.arrayContaining(["board", "liveness"]) });
     expect(readSignal?.aborted).toBe(true);
+    expect(laterReads).toBe(0);
+    session.setAfterCallbackBlock(1_200);
+    const blocked = await externalSdkCall(session.url, "dismiss_attention", {
+      project, kinds: ["memory"], clientRequestId: "attention-http-blocked-loop",
+    }, 500);
+    expect(blocked.kind).toBe("timeout");
+    expect(blocked.elapsedMs).toBeLessThan(900);
     expect(laterReads).toBe(0);
   } finally { await session.close(); control.stop(true); store.close(); if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous; }
 });
@@ -97,6 +146,7 @@ test("SDK deploy replay durably refuses absent admission and fences the original
   const release = Promise.withResolvers<void>(), lateAnswer = Promise.withResolvers<unknown>();
   let submissions = 0, reconciliations = 0;
   const control = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: async request => {
+    if (request.method === "GET") return Response.json({ capability: "viewer-deployments", version: 1, admissionFence: true });
     const text = await request.text(), body = JSON.parse(text);
     if (body.reconcileOnly) reconciliations++;
     else { submissions++; await release.promise; }

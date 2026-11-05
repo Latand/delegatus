@@ -17,6 +17,10 @@ const REPLAY_CHILD_TIMEOUT_MS = 15_000;
 const SHA = "a".repeat(40);
 const SEAT = "conversation_deploy_seat";
 const PROJECT = "deploy-project";
+function capabilityResponse(request: Request): Response | null {
+  if (request.method !== "GET") return null;
+  return Response.json({ capability: "viewer-deployments", version: 1, admissionFence: true });
+}
 const domain = {
   callerAttribution: () => ({ kind: "manager", conversationId: SEAT, role: null }),
   callerProject: () => PROJECT,
@@ -37,6 +41,8 @@ test("admission survives a control timeout with its id in the first reply and re
   let first = true;
   let deploymentId = "";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const capability = capabilityResponse(request);
+    if (capability) return capability;
     const receipt = await coordinator.requestViewerDeployment(await request.json());
     deploymentId = receipt.deploymentId;
     await recordSeatDeploymentAdmission("lost-admission-reply", receipt);
@@ -106,6 +112,8 @@ test("a reconnect refusal after admission returns the recovered id on the first 
   const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 20, startIdentity: "20:1" });
   let attempts = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const capability = capabilityResponse(request);
+    if (capability) return capability;
     attempts++;
     if (attempts === 1) {
       const body = await request.json() as { revision: string; idempotencyKey: string };
@@ -150,6 +158,8 @@ test("a truncated accepted body returns the recovered id and retains its receipt
   const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 25, startIdentity: "25:1" });
   let requests = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const capability = capabilityResponse(request);
+    if (capability) return capability;
     requests++;
     if (requests === 1) {
       const body = await request.json() as { revision: string; idempotencyKey: string };
@@ -205,6 +215,8 @@ test("a pending deploy replay never turns a reconnect refusal into a failed rece
   const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 27, startIdentity: "27:1" });
   let requests = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const capability = capabilityResponse(request);
+    if (capability) return capability;
     requests++;
     const body = await request.json();
     if (body.reconcileOnly === true && admissionVisible) return Response.json(await coordinator.requestViewerDeployment(body));
@@ -243,7 +255,7 @@ test("a pending deploy replay never turns a reconnect refusal into a failed rece
     const recovered = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithDelayedLookup as never), store)
       .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
     expect(recovered).toMatchObject({ ok: true, state: "accepted", wakeOnSettle: true });
-    expect(requests).toBe(4);
+    expect(requests).toBe(3);
     expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
   } finally {
     store.close();
@@ -257,18 +269,17 @@ test("a pending deploy replay never turns a reconnect refusal into a failed rece
   }
 });
 
-test("an older Viewer refuses the reconciliation address without receiving another admission", async () => {
+test("an older Viewer without the admission fence refuses before deployment POST", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-older-viewer-"));
-  let admissions = 0, reconciliations = 0, allowAdmission = false;
+  let admissions = 0, reconciliations = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (request.method === "GET") return Response.json({ capability: "viewer-deployments", version: 1 });
     if (new URL(request.url).pathname === "/api/runtime/deployments/reconcile") {
       reconciliations++;
       return Response.json({ error: "unknown route" }, { status: 404 });
     }
     admissions++;
-    return allowAdmission
-      ? Response.json({ state: "accepted", deploymentId: "older-viewer-control", revision: SHA, replayed: false })
-      : Response.json({ error: "original admission response unavailable" }, { status: 503 });
+    return Response.json({ error: "unexpected admission" }, { status: 503 });
   } });
   const previous = process.env.LLV_VIEWER_CONTROL_URL;
   process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
@@ -276,15 +287,9 @@ test("an older Viewer refuses the reconciliation address without receiving anoth
   const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), store);
   const args = { revision: SHA, clientRequestId: "older-viewer-unknown" };
   try {
-    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ code: "outcome_unknown" });
-    const originalPosts = admissions;
-    expect(originalPosts).toBeGreaterThan(0);
-    allowAdmission = true;
-    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ code: "outcome_unknown" });
-    expect({ admissions, reconciliations }).toEqual({ admissions: originalPosts, reconciliations: 1 });
-    expect(await service.callTool("deploy_exact_sha", { revision: SHA, clientRequestId: "older-viewer-positive" }))
-      .toMatchObject({ ok: true, deploymentId: "older-viewer-control" });
-    expect(admissions).toBe(originalPosts + 1);
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ code: "deploy_admission_fence_unsupported",
+      details: { outcome: "not-executed", evidence: "not-admitted" } });
+    expect({ admissions, reconciliations }).toEqual({ admissions: 0, reconciliations: 0 });
   } finally {
     server.stop(true); store.close(); fs.rmSync(root, { recursive: true, force: true });
     if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
@@ -316,9 +321,9 @@ test("legacy stored reconnect failures resolve through the same admission key", 
     const service = createMcpToolService(bindings, store);
     expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, deploymentId: "legacy-admitted", wakeOnSettle: true });
     expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, replayed: true, deploymentId: "legacy-admitted" });
-    expect(keys).toEqual([{ key: args.clientRequestId, reconcileOnly: true }]);
+    expect(keys).toEqual([]);
     expect(await service.callTool("deploy_exact_sha", { ...args, revision: "b".repeat(40) })).toMatchObject({ code: "idempotency_conflict" });
-    expect(keys).toHaveLength(1);
+    expect(keys).toHaveLength(0);
   } finally {
     store.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -368,7 +373,8 @@ test.each(["accepted", "unknown"])("authority is checked before replay of an %s 
 });
 
 test.each([403, 503])("a definite HTTP refusal and an uncertain server failure keep distinct outcomes (%i)", async status => {
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ error: "admission unavailable" }, { status }) });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+    capabilityResponse(request) ?? Response.json({ error: "admission unavailable" }, { status }) });
   const previous = process.env.LLV_VIEWER_CONTROL_URL;
   process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-refusal-"));

@@ -160,3 +160,69 @@ test("an attribution failure during uncertain replay stays pending until admissi
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("an uncertain deploy replay recovers a durable admission through the bounded read-only lookup", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "uncertain-deploy-read-recovery-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 5_000 });
+  const adapter = new FakeDeploymentAdapter();
+  const build = Promise.withResolvers<void>();
+  adapter.buildGate = build.promise;
+  const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 32, startIdentity: "32:1" });
+  const key = "older-receiver-admitted-key";
+  const args = { revision: SHA, clientRequestId: key };
+  let admissions = 0, reconciliations = 0, lookups = 0;
+  const dependencies = {
+    ...domain,
+    findDeploymentByIdempotencyKey: async (requestKey: string) => {
+      lookups++;
+      return coordinator.findViewerDeploymentByIdempotencyKey(requestKey);
+    },
+  };
+  const bindings = viewerMcpBindings(undefined, { post: async (url, body) => {
+    if (body.reconcileOnly === true) {
+      reconciliations++;
+      throw new Error("older receiver has no reconciliation route");
+    }
+    admissions++;
+    await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
+    throw new Error("admission response was lost");
+  } }, dependencies as never);
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const service = createMcpToolService(bindings, store);
+  try {
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: false, code: "outcome_unknown" });
+    const startedAt = performance.now();
+    const recovered = await service.callTool("deploy_exact_sha", args);
+    const elapsedMs = performance.now() - startedAt;
+    const admitted = journal.viewerDeploymentByIdempotencyKey(key);
+    expect(recovered).toMatchObject({ ok: true, state: "accepted", deploymentId: admitted?.deploymentId });
+    expect(elapsedMs).toBeLessThan(1_500);
+    expect({ admissions, reconciliations, lookups }).toEqual({ admissions: 1, reconciliations: 0, lookups: 1 });
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    build.resolve();
+    const active = journal.activeViewerDeployment();
+    if (active) await coordinator.waitForDeployment(active.deploymentId);
+    store.close();
+    journal.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a fresh deploy refuses an older receiver before sending admission", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unsupported-deploy-receiver-"));
+  let admissions = 0;
+  const bindings = viewerMcpBindings(undefined, {
+    get: async () => ({ capability: "viewer-deployments", version: 1 }),
+    post: async () => { admissions++; return { state: "accepted", deploymentId: "unexpected", revision: SHA }; },
+  }, domain as never);
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  try {
+    const answer = await createMcpToolService(bindings, store).callTool("deploy_exact_sha", {
+      revision: SHA, clientRequestId: "unsupported-receiver-key",
+    });
+    expect(answer).toMatchObject({ ok: false, code: "deploy_admission_fence_unsupported",
+      details: { outcome: "not-executed", evidence: "not-admitted" } });
+    expect(admissions).toBe(0);
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

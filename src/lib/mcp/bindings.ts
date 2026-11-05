@@ -378,6 +378,7 @@ const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
 // operation the MCP call's remaining budget, including the settlement reserve.
 const PROTOTYPE_CONTROL_BUDGET_MS = 30_000;
 const CONTROL_DEADLINE_RESERVE_MS = 250;
+const DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS = 1_500;
 const CONTROL_RETRY_BASE_MS = 100;
 const CONTROL_RETRY_MAX_MS = 1_000;
 const TRANSIENT_CONTROL_STATUSES = new Set([502, 504]);
@@ -3880,8 +3881,36 @@ async function deployExactSha(
     throw error;
   }
   assertSeat();
+  let recoveredReceipt: Record<string, unknown> | null = null;
+  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)
+    && dependencies.findDeploymentByIdempotencyKey) {
+    const remainingMs = callContext.deadlineAt === undefined
+      ? DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS
+      : Math.min(DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS, callContext.deadlineAt - Date.now() - CONTROL_DEADLINE_RESERVE_MS);
+    if (remainingMs > 0) {
+      const lookupDeadlineAt = Date.now() + remainingMs;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const timeout = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), remainingMs); });
+        const lookup = Promise.resolve().then(() => dependencies.findDeploymentByIdempotencyKey!(idempotencyKey));
+        const found = await Promise.race([lookup, timeout]);
+        if (Date.now() < lookupDeadlineAt && found && found.idempotencyKey === idempotencyKey
+          && typeof found.deploymentId === "string" && found.deploymentId
+          && typeof found.revision === "string" && found.revision.toLowerCase().startsWith(revision.toLowerCase())
+          && typeof found.requestedRevision === "string" && found.requestedRevision.toLowerCase() === revision.toLowerCase()) {
+          recoveredReceipt = { state: "accepted", deploymentId: found.deploymentId,
+            revision: found.revision, replayed: true };
+        }
+      } catch {
+        // The read-only receipt source can be unavailable; reconciliation below
+        // remains the durable admission fence for a receiver that supports it.
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+  }
   let reconciledReceipt: Record<string, unknown> | null = null;
-  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)) {
+  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey) && !recoveredReceipt) {
     try {
       // The backend settles under its admission lock, bypassing target resolution.
       // No read of an eventually visible ledger can prove non-admission.
@@ -3906,8 +3935,30 @@ async function deployExactSha(
     return { state: "accepted", deploymentId: priorAdmission.deploymentId,
       revision: priorAdmission.revision, replayed: true };
   };
-  let receipt = admittedReceipt() ?? reconciledReceipt;
+  let receipt = admittedReceipt() ?? recoveredReceipt ?? reconciledReceipt;
   if (!receipt) try {
+    const refuseUnfencedAdmission = async (message: string, code: string): Promise<never> => {
+      let cleanupFailure = "";
+      try { await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId); }
+      catch (error) { cleanupFailure = `; pending attribution cleanup failed: ${error instanceof Error ? error.message : String(error)}`; }
+      throw new McpToolRefusal(`${message}${cleanupFailure}`, {
+        code, outcome: "not-executed", evidence: "not-admitted", retryable: false,
+      });
+    };
+    if (control.get) {
+      let capabilities: Record<string, unknown>;
+      try {
+        capabilities = await control.get("/api/runtime/deployments/capabilities/v1", callContext);
+      } catch (error) {
+        await refuseUnfencedAdmission(`durable deployment admission fencing could not be verified; no deployment request was sent (${error instanceof Error ? error.message : String(error)})`,
+          "deploy_admission_fence_unavailable");
+      }
+      if (capabilities.capability !== "viewer-deployments" || capabilities.version !== 1
+        || capabilities.admissionFence !== true) {
+        await refuseUnfencedAdmission("the Viewer does not advertise durable deployment admission fencing; no deployment request was sent",
+          "deploy_admission_fence_unsupported");
+      }
+    }
     assertSeat();
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
