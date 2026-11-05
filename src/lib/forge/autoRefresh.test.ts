@@ -1294,8 +1294,239 @@ test("durable integration keeps the mechanical updater before requesting agent w
   expect(h.pipeline("queued-0").cursor?.stageId).toBe("integration-review");
   expect(h.pipeline("queued-0").runs.find(run => run.stageId === "integration-resolve")?.attempts).toEqual([]);
   expect(h.merge("queued-0")?.integration).toMatchObject({ integratedHead: pushes[0]!.commit, reviewedHead: null });
+});
+
+function unknownQueue(count = 1, options: { resume?: UpdateSnapshot; current?: boolean; slots?: number } = {}) {
+  const queue = behindQueue(count, { strict: false, resume: options.resume, refreshConcurrency: options.slots,
+    pr: { mergeStateStatus: "UNKNOWN", mergeable: "UNKNOWN" } });
+  const run = queue.h.ports.run;
+  queue.h.ports.run = async args => args[1]?.includes("/compare/") && args.at(-1) === ".merge_base_commit.sha"
+    ? options.current || queue.h.ports.loadPipelines().some(lane => lane.merge?.updates.some(update => update.commit && args[1]!.endsWith(update.commit)))
+      ? MAIN_1 : "0".repeat(40) : run(args);
+  queue.git.landed = pr => { pr.mergeable = "MERGEABLE"; pr.checks = [green("ci")]; };
+  return queue;
+}
+
+test.each(["UNKNOWN", null])("unknown queue: %s refreshes a diverged reviewed head at the bound and merges its checked update", async mergeable => {
+  const { h, pushes, plans } = unknownQueue();
+  h.prs.get(11)!.mergeable = mergeable;
+  await h.sweep();
+  h.advance(MERGE_SETTLE_MS - MERGE_POLL_MS);
+  await h.sweep();
+  h.advance(MERGE_POLL_MS - 1);
+  await h.sweep();
+  expect(pushes).toEqual([]);
+  h.advance(1);
+  await h.sweep();
+  expect(plans).toHaveLength(1);
+  expect(plans[0]).toMatchObject({ head: HEAD_A, base: MAIN_1, at: iso(T0 + MERGE_SETTLE_MS) });
+  expect(pushes).toHaveLength(1);
+  expect(h.merges()).toEqual([]);
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", headSeenAt: null });
+  await h.run(MERGE_SETTLE_MS + 2 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "merged", mergedHead: pushes[0]!.commit });
+  expect(h.merges()[0]!.at(-1)).toBe(pushes[0]!.commit);
+});
+
+test.each(["pending", "missing"])("unknown queue: %s old-head checks do not delay a proven base refresh", async checks => {
+  const { h, pushes } = unknownQueue();
+  h.prs.get(11)!.checks = checks === "pending" ? [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }] : [];
+  await h.sweep();
+  h.advance(MERGE_SETTLE_MS);
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+  expect(h.merge("queued-0")!.state).toBe("updating");
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: the persisted bound survives a process restart", async () => {
+  const name = "unknown queue: the persisted bound survives a process restart";
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  const saved = fixture ? JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot : undefined;
+  const { h, pushes } = unknownQueue(1, { resume: saved });
+  if (!saved) {
+    await h.sweep();
+    h.advance(MERGE_SETTLE_MS - MERGE_POLL_MS);
+    await h.sweep();
+    h.advance(MERGE_POLL_MS - 1);
+    await restartBehindQueue(name, h);
+    return;
+  }
+  expect(h.merge("queued-0")!.headSeenAt).toBe(iso(T0));
+  await h.sweep();
+  expect(pushes).toEqual([]);
+  h.advance(1);
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+});
+
+for (const slots of [1, 2]) test(`unknown queue: a current-base UNKNOWN releases readiness for clean peers with ${slots} slots`, async () => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  const saved = fixture ? JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot : undefined;
+  const { h, pushes } = unknownQueue(3, { current: true, slots, resume: saved });
+  for (const number of [12, 13]) Object.assign(h.prs.get(number)!, { mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  if (!saved) {
+    await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
+    await restartBehindQueue(`unknown queue: a current-base UNKNOWN releases readiness for clean peers with ${slots} slots`, h);
+    return;
+  }
+  await h.sweep();
+  h.advance(MERGE_SETTLE_MS);
+  await h.run(MERGE_SETTLE_MS + 6 * MERGE_POLL_MS, () => h.merges().length === 2);
+  expect(h.merges().map(args => args[2])).toEqual(["12", "13"]);
+  expect(h.merge("queued-0")!.state).toBe("checking");
+  expect(pushes).toEqual([]);
+});
+
+test("unknown queue: retiring an update clears a deferred reason without starting its clock", async () => {
+  const { h } = unknownQueue(3, { current: true, slots: 2 });
+  await h.sweep();
+  const owner = h.merge("queued-1")!;
+  owner.state = "merged";
+  h.prs.get(12)!.state = "MERGED";
+  const waiter = h.merge("queued-2")!;
+  Object.assign(waiter, { state: "checking", reason: "waiting for the update of PR #12 (pipeline queued-1)",
+    headSeenAt: null, nextReadAt: iso(T0 + MERGE_POLL_MS) });
+  await h.sweep();
+  expect(h.merge("queued-2")).toMatchObject({ state: "checking", reason: null, headSeenAt: null, nextReadAt: iso(T0 + MERGE_POLL_MS) });
+});
+
+test("unknown queue: a settled UNKNOWN update releases the next base update past the bound", async () => {
+  const { h, git, pushes } = unknownQueue(2);
+  git.landed = pr => { pr.mergeable = "UNKNOWN"; pr.mergeStateStatus = "UNKNOWN"; pr.checks = [green("ci")]; };
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS, () => pushes.length === 1);
+  expect(pushes).toHaveLength(1);
+  Object.assign(h.prs.get(12)!, { mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  await h.run(2 * MERGE_SETTLE_MS + 6 * MERGE_POLL_MS, () => pushes.length === 2);
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0", "refs/heads/topic-1"]);
+  expect(h.merge("queued-0")!.state).toBe("checking");
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: settled green checks never time out solely on UNKNOWN", async () => {
+  const { h, pushes } = unknownQueue(1, { current: true });
+  await h.sweep();
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "checking", headSeenAt: iso(T0), blockedAt: null });
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "checking", headSeenAt: iso(T0), blockedAt: null });
+  expect(pushes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+});
+
+test.each(["refused", "malformed"])("unknown queue: %s ancestry cannot authorize a refresh", async failure => {
+  const { h, pushes } = unknownQueue();
+  const run = h.ports.run;
+  h.ports.run = async args => {
+    if (args[1]?.includes("/compare/")) {
+      if (failure === "refused") throw new Error("connection reset by peer");
+      return "";
+    }
+    return run(args);
+  };
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+  expect(h.merge("queued-0")!.readFailures).toBeGreaterThan(0);
+  expect(pushes).toEqual([]);
   expect(h.creates).toEqual([]);
   expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: a diverged head uses a reviewed refresh when mechanical updates are unavailable", async () => {
+  const { h } = unknownQueue();
+  Object.assign(h.ports, { updateBase: undefined });
+  await h.run(MERGE_SETTLE_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-0")!.state).toBe("refreshing");
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: unfinished required checks keep their own timeout", async () => {
+  const { h } = unknownQueue(1, { current: true });
+  h.prs.get(11)!.checks = [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }];
+  await h.sweep();
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout });
+  expect(h.merges()).toEqual([]);
+});
+
+test.each(["base read", "comparison", "plan", "reservation"])("unknown queue: a retry racing the %s prevents the old update", async phase => {
+  const { h, git, pushes } = unknownQueue();
+  await h.sweep();
+  const retry = () => { h.merge("queued-0")!.attempts++; };
+  if (phase === "plan") git.planned = retry;
+  else if (phase === "reservation") {
+    const mutate = h.ports.mutate;
+    h.ports.mutate = async (id, change) => {
+      const result = await mutate(id, change);
+      if (h.merge(id)?.updates.length) retry();
+      return result;
+    };
+  } else {
+    const run = h.ports.run;
+    h.ports.run = async args => {
+      const result = await run(args);
+      if (phase === "base read" ? args.at(-1) === ".commit.sha" : args[1]?.includes("/compare/")) retry();
+      return result;
+    };
+  }
+  h.advance(MERGE_SETTLE_MS);
+  await h.sweep();
+  expect(pushes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: a requested change arriving during planning stops the refreshed merge", async () => {
+  const { h, git, pushes } = unknownQueue();
+  git.planned = () => { h.prs.get(11)!.reviewDecision = "CHANGES_REQUESTED"; };
+  await h.run(2 * MERGE_SETTLE_MS);
+  expect(pushes).toHaveLength(1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.changesRequested });
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: a merged update owner clears unvisited followers' stale reasons immediately", async () => {
+  const { h } = unknownQueue(3, { current: true, slots: 2 });
+  Object.assign(h.prs.get(12)!, { mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  Object.assign(h.prs.get(13)!, { mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  const run = h.ports.run;
+  let fail = true;
+  h.ports.run = async args => {
+    if (fail && args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+      fail = false;
+      throw new Error("connection reset by peer");
+    }
+    return run(args);
+  };
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merge("queued-2")!.reason).toContain("waiting for the update of PR #12");
+  const headSeenAt = h.merge("queued-2")!.headSeenAt;
+  await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-1")!.state === "merged");
+  expect(h.merge("queued-1")!.state).toBe("merged");
+  expect(h.merge("queued-2")!.reason ?? "").not.toContain("PR #12");
+  expect(h.merge("queued-2")!.headSeenAt).toBe(headSeenAt);
+});
+
+test.each(["conflict", "red", "requested change", "moved head"])("unknown queue: %s still prevents merging", async stop => {
+  const { h, git, pushes } = unknownQueue();
+  await h.sweep();
+  const pr = h.prs.get(11)!;
+  if (stop === "conflict") git.conflict = true;
+  if (stop === "red") { pr.checks = [red("ci")]; git.landed = updated => { updated.checks = [red("ci")]; }; }
+  if (stop === "requested change") pr.reviewDecision = "CHANGES_REQUESTED";
+  if (stop === "moved head") pr.head = "d".repeat(40);
+  await h.run(MERGE_SETTLE_MS + 5 * MERGE_POLL_MS);
+  expect(h.merges()).toEqual([]);
+  if (stop !== "red") expect(pushes).toEqual([]);
+  if (stop === "conflict") expect(h.creates).toHaveLength(1);
+  if (stop === "requested change") expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.changesRequested });
+  if (stop === "moved head") expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  if (stop === "red") {
+    // Even a permitted refresh must stop on a red required check on its new head.
+    expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason("ci") });
+  }
 });
 
 // Keep this causal probe identical on the pinned base and the fixed runner.
@@ -3229,4 +3460,21 @@ test("durable integration a matching persisted scope cannot land after its works
   await h.run(6 * MERGE_POLL_MS);
   expect(h.writes).toHaveLength(0);
   expect(h.merge("finished")!.reason).toContain("workspace access denied");
+});
+
+
+test("durable integration recovers a newly outdated UNKNOWN head after its old checks time out", async () => {
+  const { h } = unknownQueue(1, { current: true });
+  h.enableIntegration();
+  Object.assign(h.ports, { updateBase: undefined });
+  h.prs.get(11)!.checks = [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }];
+  await h.sweep();
+  expect(h.pipeline("queued-0").state).toBe("completed");
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  h.setBase(MAIN_2);
+  await h.sweep();
+  expect(h.creates).toEqual([]);
+  expect(h.merges()).toEqual([]);
+  expect(h.pipeline("queued-0").cursor?.stageId).toBe("integration-resolve");
+  expect(h.merge("queued-0")?.integration).toMatchObject({ desiredBase: MAIN_2, reviewedHead: null });
 });

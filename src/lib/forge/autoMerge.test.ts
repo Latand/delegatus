@@ -147,11 +147,11 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (options.rulesRefusal) throw fail("branch rules unavailable");
       return options.rulesRead ?? "[]";
     }
-    // Production integration verifies the actual base and ancestry separately
-    // from branch-protection contexts, including immediately before landing.
+    // The default head contains MAIN_1 even when GitHub has not computed
+    // mergeability. Integration ancestry and protection have separate replies.
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)
       && args[args.indexOf("--jq") + 1] === ".commit.sha") return MAIN_1;
-    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/${MAIN_1}...`)
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/`)
       && args[args.indexOf("--jq") + 1] === ".merge_base_commit.sha") return MAIN_1;
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return options.classicRead ?? JSON.stringify(options.required ?? []);
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";

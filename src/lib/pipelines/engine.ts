@@ -7696,6 +7696,15 @@ async function holdForBackgroundTasks(
   }
   const live = liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(now));
   if (live.length === 0) {
+    if (durable.backgroundReportedAt && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt) {
+      const detail = "waiting: background work has ended; waiting for the agent's next turn and stage_report";
+      if (attempt.backgroundWait || pipeline.stateDetail !== detail) {
+        delete attempt.backgroundWait;
+        pipeline.stateDetail = detail;
+        await persist();
+      }
+      return "waiting";
+    }
     if (attempt.backgroundWait) {
       delete attempt.backgroundWait;
       if (pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) pipeline.stateDetail = null;
@@ -7704,10 +7713,11 @@ async function holdForBackgroundTasks(
     return "none";
   }
   const prior = attempt.backgroundWait;
-  const step = stepBackgroundWait(prior, live, durable.lastRecordAt ?? null, now, "the stage settles on the turn after it reports");
+  const step = stepBackgroundWait(prior, live, durable.lastRecordAt ?? null, now,
+    "waiting for its completion notification; the stage settles on the turn after it reports");
   attempt.backgroundWait = step.wait;
   if (step.expired) {
-    await park(pipeline, step.reason, attempt);
+    await park(pipeline, step.reason + BACKGROUND_REPORT_AFTER_PARK, attempt);
     await persist();
     return "parked";
   }
@@ -10644,7 +10654,10 @@ async function tickRunStage(
      asks or spends a recovery check until then. A host that is gone took the
      work with it, which the recovery below already handles, and so did a
      restart that cut the turn. */
-  if (!hostUnavailablePastGrace && !restartCut && durable?.turn !== "busy"
+  const backgroundTurnOwed = durable?.backgroundReportedAt
+    && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt
+    && structuredActive !== true && paneActive !== true;
+  if (!hostUnavailablePastGrace && !restartCut && (durable?.turn !== "busy" || backgroundTurnOwed)
     && await holdForBackgroundTasks(pipeline, attempt, durable, ports, persist) !== "none") return;
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attemptEvidenceFloor(attempt));
   if (durable && durableTerminal) {
@@ -18510,6 +18523,30 @@ export async function setPipelineDismissal(
     by kind in {@link resolveStageCompletionTarget}. */
 const REPORTABLE_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running"]);
 
+const BACKGROUND_REPORT_AFTER_PARK = "; waiting for the agent's stage_report after the background work ends; the same live generation can still report and resume this attempt";
+
+/** Only the wait bound parked this current attempt. Reconstruct the reason
+ * from the persisted wait, including parks written before late reports were
+ * supported. A changed cursor, verdict, generation or park keeps it closed. */
+function backgroundBoundReportable({ pipeline, stageId, attempt }: StageCompletionTarget, ports: PipelinePorts): boolean {
+  const wait = attempt.backgroundWait;
+  if (!wait || pipeline.state !== "needs_decision" || attempt.state !== "needs_decision"
+    || attempt.completedAt || attempt.verdict || attempt.historical || openRuntimeSwitch(attempt)
+    || pipeline.remoteAction?.state === "pending"
+    || pipelineSurvivorRefusal(pipeline) || pipeline.cursor?.stageId !== stageId
+    || currentAttempt(pipeline, stageId) !== attempt || !attempt.conversationId || !attempt.agentPath) return false;
+  const step = stepBackgroundWait(wait, wait.tasks.map(task => ({ ...task, startedAt: 0, expiresAt: null })),
+    wait.silentSince, wait.until, "");
+  if (!step.expired || ![step.reason, step.reason + BACKGROUND_REPORT_AFTER_PARK].includes(attempt.error ?? "")
+    || pipeline.stateDetail !== attempt.error) return false;
+  const generation = ports.conversationGeneration?.(attempt.conversationId);
+  if (!generation || generation.engine !== attempt.effectiveRole.engine
+    || generation.sessionId !== attempt.sessionId || generation.agentPath !== attempt.agentPath) return false;
+  const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+  return !receipt || receipt.currentGeneration !== false && receipt.conversationId === attempt.conversationId
+    && receipt.sessionId === attempt.sessionId;
+}
+
 export type StageCompletionRequest = StageCompletionInput & { stageId?: unknown };
 
 export type StageCompletionSlot = { pipelineId: string; stageId: string; attempt: number; state: PipelineStageAttempt["state"] };
@@ -18576,7 +18613,7 @@ async function resolveStageCompletionTarget(
   requestedStageId: string | null,
   ports: PipelinePorts,
   recoveryEvidence?: StageCompletionRecoveryEvidence | null,
-): Promise<{ target: StageCompletionTarget; recoveryPath?: string } | { refusal: StageCompletionResult }> {
+): Promise<{ target: StageCompletionTarget; recoveryPath?: string; backgroundRecovery?: boolean } | { refusal: StageCompletionResult }> {
   const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
     .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
     .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
@@ -18667,9 +18704,10 @@ async function resolveStageCompletionTarget(
       if (pathname) recoverable.set(target, pathname);
     }
   }
+  const backgroundParks = new Set(runStages.filter(target => backgroundBoundReportable(target, ports)));
   const live = runStages.filter((target) => !unverifiedHandoffSuccessors.has(target)
     && (REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || pendingSummaryRewrite(target.pipeline, target.attempt) || recoverable.has(target)
-      || forkSuccessors.has(target) || handoffSuccessors.has(target)));
+      || forkSuccessors.has(target) || handoffSuccessors.has(target) || backgroundParks.has(target)));
   if (live.length === 0) {
     const settled = runStages.at(-1)!;
     return { refusal: {
@@ -18687,7 +18725,7 @@ async function resolveStageCompletionTarget(
       slots: slots(live),
     } };
   }
-  return { target: live[0]!, recoveryPath: recoverable.get(live[0]!) };
+  return { target: live[0]!, recoveryPath: recoverable.get(live[0]!), backgroundRecovery: backgroundParks.has(live[0]!) };
 }
 
 type StageCompletionRecoveryEvidence = {
@@ -18819,7 +18857,9 @@ export async function reportStageCompletion(
       error: "recorded check custody changed while reporting; checkpoint needs_decision", status: 409, code: "STAGE_REPORT_BACKGROUND_WORK",
     };
     if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n
-      || stageCompletionRuntimeFence(attempt) !== previewRuntimeFence) {
+      || stageCompletionRuntimeFence(attempt) !== previewRuntimeFence
+      || resolved.backgroundRecovery !== previewed.backgroundRecovery
+      || resolved.backgroundRecovery && !backgroundBoundReportable(resolved.target, ports)) {
       return {
         error: `the attempt changed while its provenance was read; it is now ${pipeline.id} stage ${stageId} attempt ${attempt.n}. Report it again`,
         status: 409,
@@ -18828,6 +18868,10 @@ export async function reportStageCompletion(
       };
     }
     if (resolved.recoveryPath) reopenDeliveredAttempt(pipeline, attempt, resolved.recoveryPath);
+    if (resolved.backgroundRecovery) {
+      reopenDeliveredAttempt(pipeline, attempt, attempt.agentPath!);
+      delete attempt.backgroundWait;
+    }
     const rewriteOwner = pendingSummaryRewrite(pipeline, attempt);
     if (rewriteOwner && (normalized.verdict.status !== "pass" || normalized.verdict.findings?.length || !normalized.summary))
       return { error: "a summary rewrite requires pass, no findings and a non-empty summary; the accepted verdict is unchanged", status: 409, code: "STAGE_REPORT_SUMMARY_ONLY" };
