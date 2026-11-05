@@ -11,10 +11,28 @@ export const gateCheckTool = {
   inputSchema: { type: "object", properties: { log: { type: "string" }, reason: { type: "string" } }, required: ["log", "reason"], additionalProperties: false },
 } as const;
 
+export type GateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
+
+/** Capture once at launch/adoption; callbacks must retain this physical binding. */
+export function bindGateCheckRoot(root: string): GateCheckRoot | null {
+  try {
+    if (!path.isAbsolute(root)) return null;
+    const physicalRoot = fs.realpathSync(root);
+    const stat = fs.statSync(physicalRoot);
+    return stat.isDirectory() ? Object.freeze({ root, physicalRoot, rootDirectoryIdentity: `${stat.dev}:${stat.ino}` }) : null;
+  } catch { return null; }
+}
+
+function validateGateCheckRoot(binding: GateCheckRoot): void {
+  const current = bindGateCheckRoot(binding.root);
+  if (!current || current.physicalRoot !== binding.physicalRoot || current.rootDirectoryIdentity !== binding.rootDirectoryIdentity)
+    throw new Error(`stage temporary root identity changed (root=${JSON.stringify(binding.root)})`);
+}
+
 /** The listener keeps its launch environment when a different Viewer connects.
- * Store only the wait root beside that verified listener, never the environment.
- * Older Linux listeners can supply their original TMPDIR once, through /proc. */
-export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string): string | null {
+ * The stage can edit the saved record, so recovery also needs the verified
+ * listener's original TMPDIR. Refuse recovery when that evidence is unavailable. */
+export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string): GateCheckRoot | null {
   if (!verifiedCodexSocketOwner(owner)) return null;
   const filename = path.join(path.dirname(codexSocketPath(owner.endpoint)!), "gate-root.json");
   const identity = JSON.stringify([owner.process.pid, owner.process.startIdentity, owner.process.bootEpoch]);
@@ -26,42 +44,38 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string
         if (!saved || saved.identity !== identity || typeof saved.root !== "string" || !path.isAbsolute(saved.root)
           || typeof saved.physicalRoot !== "string" || !path.isAbsolute(saved.physicalRoot)
           || typeof saved.rootDirectoryIdentity !== "string") return null;
-        const liveRoot = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
-        // On platforms that expose a live process environment, it is the
-        // authority for the launch root. The record only carries that binding
-        // across Viewer restarts; its process identity alone is insufficient.
-        if (liveRoot !== undefined && path.resolve(liveRoot) !== path.resolve(saved.root)) return null;
-        const realRoot = fs.realpathSync(saved.root);
-        const stat = fs.statSync(realRoot);
-        if (realRoot !== saved.physicalRoot || `${stat.dev}:${stat.ino}` !== saved.rootDirectoryIdentity
-          || !stat.isDirectory() || !verifiedCodexSocketOwner(owner)) return null;
-        return saved.root;
+        const liveRoot = procBackend.readEnvVar(owner.process.pid, "TMPDIR");
+        if (!liveRoot || path.resolve(liveRoot) !== path.resolve(saved.root)) return null;
+        const binding = bindGateCheckRoot(saved.root);
+        if (!binding || binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== saved.rootDirectoryIdentity
+          || !verifiedCodexSocketOwner(owner)) return null;
+        return binding;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
       }
       // The current Viewer's environment says nothing about the retained CLI.
       root = procBackend.readEnvVar(owner.process.pid, "TMPDIR") ?? undefined;
     }
-    if (!root || !path.isAbsolute(root) || !verifiedCodexSocketOwner(owner)) return null;
-    const physicalRoot = fs.realpathSync(root);
-    const stat = fs.statSync(physicalRoot);
-    if (!stat.isDirectory()) return null;
-    writeEnvelope(filename, { identity, root, physicalRoot, rootDirectoryIdentity: `${stat.dev}:${stat.ino}` });
-    return verifiedCodexSocketOwner(owner) ? root : null;
+    if (!root || !verifiedCodexSocketOwner(owner)) return null;
+    const binding = bindGateCheckRoot(root);
+    if (!binding) return null;
+    writeEnvelope(filename, { identity, ...binding });
+    return verifiedCodexSocketOwner(owner) ? binding : null;
   } catch { return null; }
 }
 
 /** A read-only tool bound to the native stage's own temporary root. */
-export async function runGateCheckTool(args: unknown, root: string | null, signal: AbortSignal) {
+export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | null, signal: AbortSignal) {
   try {
     const input = args as { log?: unknown; reason?: unknown } | null;
     if (!input || typeof input.log !== "string" || !path.isAbsolute(input.log)
       || typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 500)
       throw new Error("log and a bounded check reason are required");
-    if (!root) throw new Error(`stage temporary root is unavailable (root=null, log=${JSON.stringify(input.log)})`);
-    let ownerRoot: string, parent: string;
+    if (!binding) throw new Error(`stage temporary root is unavailable: launch TMPDIR or directory identity could not be verified (root=null, log=${JSON.stringify(input.log)})`);
+    const { root, physicalRoot: ownerRoot } = binding;
+    validateGateCheckRoot(binding);
+    let parent: string;
     try {
-      ownerRoot = fs.realpathSync(root);
       parent = fs.realpathSync(path.dirname(input.log));
     } catch (error) {
       throw new Error(`gate paths cannot be resolved (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}): ${error instanceof Error ? error.message : String(error)}`);
@@ -70,7 +84,9 @@ export async function runGateCheckTool(args: unknown, root: string | null, signa
     const relative = path.relative(ownerRoot, log);
     if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
       throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
+    validateGateCheckRoot(binding);
     const result = await waitForGateCompletion(log, signal);
+    validateGateCheckRoot(binding);
     return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify({ reason: input.reason, ...result,
       terminal: result.state.startsWith("finished"),
       ...(!result.state.startsWith("finished") ? { instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),

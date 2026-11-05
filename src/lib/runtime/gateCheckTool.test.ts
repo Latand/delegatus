@@ -2,7 +2,8 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runGateCheckTool } from "./gateCheckTool";
+import { bindGateCheckRoot, runGateCheckTool } from "./gateCheckTool";
+import * as gateWait from "./gateWait";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 
@@ -15,8 +16,9 @@ function fixture() {
   const recorder = cpuOwnerIdentity(process.pid);
   fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(recorder));
   fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(dir), deadlineUptimeMs: custodyClock() + 60_000 }));
-  const call = (signal = new AbortController().signal) => runGateCheckTool({ log, reason: "fixture check" }, root, signal);
-  return { root, log, dir, call };
+  const binding = bindGateCheckRoot(root);
+  const call = (signal = new AbortController().signal) => runGateCheckTool({ log, reason: "fixture check" }, binding, signal);
+  return { root, binding, log, dir, call };
 }
 function finish(dir: string, exit: number) {
   fs.writeFileSync(path.join(dir, "exit.tmp"), `${exit}\n`);
@@ -89,16 +91,16 @@ test.each(["owner.json", "completion.json"])("proof %s replaced during the wait 
 test("foreign and indirect logs refuse before reading a result", async () => {
   const f = fixture(), other = fixture(); finish(other.dir, 0);
   const args = { log: other.log, reason: "foreign check" };
-  expect((await runGateCheckTool(args, f.root, new AbortController().signal)).success).toBe(false);
+  expect((await runGateCheckTool(args, f.binding, new AbortController().signal)).success).toBe(false);
   fs.symlinkSync(other.root, path.join(f.root, "indirect"), "dir");
-  expect((await runGateCheckTool({ ...args, log: path.join(f.root, "indirect/check.log") }, f.root, new AbortController().signal)).success).toBe(false);
-  expect((await runGateCheckTool({ log: f.log }, f.root, new AbortController().signal)).success).toBe(false);
+  expect((await runGateCheckTool({ ...args, log: path.join(f.root, "indirect/check.log") }, f.binding, new AbortController().signal)).success).toBe(false);
+  expect((await runGateCheckTool({ log: f.log }, f.binding, new AbortController().signal)).success).toBe(false);
 });
 
 test("a temporary-root alias retains its physical ownership", async () => {
   const f = fixture(), alias = fixture(); finish(f.dir, 0);
   const link = path.join(alias.root, "temporary-root"); fs.symlinkSync(f.root, link, "dir");
-  expect((await runGateCheckTool({ log: path.join(link, "check.log"), reason: "aliased root" }, link, new AbortController().signal)).success).toBe(true);
+  expect((await runGateCheckTool({ log: path.join(link, "check.log"), reason: "aliased root" }, bindGateCheckRoot(link), new AbortController().signal)).success).toBe(true);
 });
 
 for (const shape of ["internal-link", "physical-root", "normalized-child"] as const) test(`owned log waits through ${shape}`, async () => {
@@ -113,7 +115,7 @@ for (const shape of ["internal-link", "physical-root", "normalized-child"] as co
     fs.mkdirSync(path.join(f.root, "child"));
     log = `${f.root}/child/../check.log`;
   }
-  const result = await runGateCheckTool({ log, reason: "owned check" }, root, new AbortController().signal);
+  const result = await runGateCheckTool({ log, reason: "owned check" }, bindGateCheckRoot(root), new AbortController().signal);
   expect(result.success).toBe(true);
   expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 0 });
 });
@@ -130,12 +132,12 @@ for (const shape of ["absolute", "parent", "symlink", "prefix"] as const) test(`
     const sibling = `${f.root}-sibling`; fs.renameSync(other.root, sibling); roots.push(sibling);
     log = path.join(sibling, "check.log");
   }
-  const result = await runGateCheckTool({ log, reason: "foreign check" }, root, new AbortController().signal);
+  const result = await runGateCheckTool({ log, reason: "foreign check" }, bindGateCheckRoot(root), new AbortController().signal);
   expect(result.success).toBe(false);
   expect(result.contentItems[0].text).toContain(`root=${JSON.stringify(root)}`);
   expect(result.contentItems[0].text).toContain(`log=${JSON.stringify(log)}`);
   const owned = shape === "prefix" ? log : other.log;
-  expect((await runGateCheckTool({ log: owned, reason: "owner control" }, path.dirname(owned), new AbortController().signal)).success).toBe(true);
+  expect((await runGateCheckTool({ log: owned, reason: "owner control" }, bindGateCheckRoot(path.dirname(owned)), new AbortController().signal)).success).toBe(true);
 });
 
 test("unknown stage root never adopts a caller-supplied log", async () => {
@@ -150,8 +152,49 @@ test.each(["root", "parent"])("a missing %s diagnoses both paths without waiting
   const f = fixture();
   const root = missing === "root" ? path.join(f.root, "absent") : f.root;
   const log = missing === "parent" ? path.join(f.root, "absent/check.log") : f.log;
-  const result = await runGateCheckTool({ log, reason: "missing path" }, root, new AbortController().signal);
+  const result = await runGateCheckTool({ log, reason: "missing path" }, bindGateCheckRoot(root), new AbortController().signal);
   expect(result.success).toBe(false);
-  expect(result.contentItems[0].text).toContain(`root=${JSON.stringify(root)}`);
+  expect(result.contentItems[0].text).toContain(`root=${missing === "root" ? "null" : JSON.stringify(root)}`);
   expect(result.contentItems[0].text).toContain(`log=${JSON.stringify(log)}`);
+});
+
+for (const shape of ["symlink", "directory", "alias", "moved-root-link"] as const) test(`a bound root replaced by ${shape} refuses before reading a recording`, async () => {
+  const f = fixture(), foreign = fixture(); finish(f.dir, 0); finish(foreign.dir, 0);
+  let root = f.root;
+  if (shape === "alias") {
+    root = path.join(foreign.root, "stage-alias");
+    fs.symlinkSync(f.root, root, "dir");
+  }
+  const binding = bindGateCheckRoot(root);
+  const args = { log: path.join(root, "check.log"), reason: "bound check" };
+  const wait = spyOn(gateWait, "waitForGateCompletion");
+  try {
+    expect((await runGateCheckTool(args, binding, new AbortController().signal)).success).toBe(true);
+    expect(wait).toHaveBeenCalledTimes(1);
+    wait.mockClear();
+    if (shape === "alias") fs.unlinkSync(root);
+    else { fs.renameSync(root, `${root}.retained`); roots.push(`${root}.retained`); }
+    if (shape === "directory") fs.renameSync(foreign.root, root);
+    else fs.symlinkSync(shape === "moved-root-link" ? `${root}.retained` : foreign.root, root, "dir");
+    const answer = await runGateCheckTool(args, binding, new AbortController().signal);
+    expect(answer.success).toBe(false);
+    expect(answer.contentItems[0].text).toContain("root identity changed");
+    expect(wait).not.toHaveBeenCalled();
+  } finally { wait.mockRestore(); }
+});
+
+test("a root replaced after the asynchronous wait refuses the result", async () => {
+  const f = fixture(); finish(f.dir, 0);
+  const original = gateWait.waitForGateCompletion;
+  const wait = spyOn(gateWait, "waitForGateCompletion").mockImplementation(async (...args) => {
+    const result = await original(...args);
+    fs.renameSync(f.root, `${f.root}.retained`); roots.push(`${f.root}.retained`);
+    fs.mkdirSync(f.root);
+    return result;
+  });
+  try {
+    const answer = await f.call();
+    expect(answer.success).toBe(false);
+    expect(answer.contentItems[0].text).toContain("root identity changed");
+  } finally { wait.mockRestore(); }
 });

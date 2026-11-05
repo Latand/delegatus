@@ -18,7 +18,7 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
-import { gateCheckTool, runGateCheckTool, socketGateCheckRoot } from "./gateCheckTool";
+import { bindGateCheckRoot, gateCheckTool, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1285,7 +1285,7 @@ function threadStatus(value: unknown): ThreadStatus | null {
 /** One app-server connection with durable callbacks and event replay. */
 export class CodexAppServerHost implements EngineHost, TierCapableHost {
   readonly identity: CodexThreadIdentity;
-  private gateCheckRoot: string | null = null;
+  private gateCheckRoot: GateCheckRoot | null = null;
   private readonly gateCheckAbort = new AbortController();
   private readonly gateCheckRequests = new Map<string | number, { turnId: unknown; abort: AbortController }>();
 
@@ -1613,7 +1613,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     provisional.gateCheckRoot = child instanceof CodexSocketTransport
       ? socketGateCheckRoot({ endpoint: child.endpoint, process: { pid: child.pid,
         startIdentity: child.startIdentity, bootEpoch: child.bootEpoch } }, options.socketOwner ? undefined : childEnv.TMPDIR ?? os.tmpdir())
-      : childEnv.TMPDIR ?? os.tmpdir();
+      : bindGateCheckRoot(childEnv.TMPDIR ?? os.tmpdir());
     provisional.nativeQueueRequiresCanonicalValidation = threadId !== null;
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;

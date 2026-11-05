@@ -2,13 +2,14 @@ import "@/lib/testing/fixtureLifetime";
 import fs from "node:fs";
 import http from "node:http";
 import { WebSocketServer } from "ws";
+import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { beginCodexFeatureFixture } from "@/lib/agent/codexSpawnPolicyTestFixtures";
 import { CodexAppServerHost } from "../codexAppServerHost";
 import { FileRuntimeEventStore } from "../eventStore";
 
 const [mode, descriptor] = process.argv.slice(2);
-const config = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+let config = JSON.parse(fs.readFileSync(descriptor, "utf8"));
 const threadId = "gate-reconnect-thread", turnId = "gate-reconnect-turn";
 if (mode === "engine") {
   const server = http.createServer();
@@ -32,7 +33,14 @@ if (mode === "engine") {
         case "config/read": reply({ config: { mcp_servers: {} } }); break;
         case "thread/resume":
           reply({ thread: { id: threadId, path: null, turns: [{ id: turnId, status: "inProgress", items: [] }], status: { type: "active", activeFlags: [] } } });
-          send({ id: "gate-wait", method: "item/tool/call", params: { threadId, turnId, callId: "gate-call", tool: "wait_for_check", arguments: { log: config.log, reason: "restart check" } } });
+          config = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+          const callback = () => send({ id: "gate-wait", method: "item/tool/call", params: { threadId, turnId, callId: "gate-call", tool: "wait_for_check", arguments: { log: config.log, reason: "restart check" } } });
+          if (config.ready) {
+            const watcher = fs.watch(config.directory, () => {
+              if (fs.existsSync(config.release)) { watcher.close(); callback(); }
+            });
+            fs.writeFileSync(config.ready, "bound");
+          } else callback();
           break;
         default: send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } });
       }
@@ -44,6 +52,10 @@ if (mode === "engine") {
   });
 } else {
   beginCodexFeatureFixture();
+  if (config.unavailableLaunchEnvironment) {
+    const readEnv = procBackend.readEnvVar;
+    procBackend.readEnvVar = (pid, name) => name === "TMPDIR" ? null : readEnv(pid, name);
+  }
   const result = new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => { watcher.close(); reject(new Error("gate callback did not finish")); }, 10_000);
     const read = () => {

@@ -61,8 +61,48 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
       expect(engine.child.exitCode).toBeNull();
     }
 
+    // The engine holds the callback until the new host has bound its root.
+    const ready = path.join(directory, "callback-ready"), release = path.join(directory, "callback-release");
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, ready, release }));
+    const readyWait = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { watcher.close(); reject(new Error("host did not bind its callback root")); }, 15_000);
+      const watcher = fs.watch(directory, () => {
+        if (fs.existsSync(ready)) { clearTimeout(timer); watcher.close(); resolve(); }
+      });
+    });
+    fs.unlinkSync(result);
+    const held = launch("host", replacementRoot);
+    await readyWait;
+    const retained = `${originalRoot}.held`;
+    fs.renameSync(originalRoot, retained);
+    fs.symlinkSync(replacementRoot, originalRoot, "dir");
+    // A valid foreign recording proves containment, rather than ticket errors, refuses it.
+    const foreignLog = path.join(replacementRoot, "check.log"), foreignDir = `${foreignLog}.gate`;
+    fs.mkdirSync(foreignDir); fs.writeFileSync(foreignLog, "foreign recording must stay unread\n");
+    fs.writeFileSync(path.join(foreignDir, "owner.json"), JSON.stringify(recorder));
+    fs.writeFileSync(path.join(foreignDir, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(foreignDir), deadlineUptimeMs: custodyClock() + 60_000 }));
+    fs.writeFileSync(path.join(foreignDir, "exit"), "0\n");
+    fs.writeFileSync(release, "ready");
+    const heldAnswer = JSON.parse(await held.line);
+    expect(await held.closed, held.errors()).toBe(0);
+    expect(heldAnswer.success).toBe(false);
+    expect(heldAnswer.contentItems[0].text).not.toContain("foreign recording");
+    fs.unlinkSync(originalRoot); fs.renameSync(retained, originalRoot);
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
+
     const rootBinding = path.join(directory, "gate-root.json");
     const savedBinding = fs.readFileSync(rootBinding, "utf8");
+    fs.writeFileSync(rootBinding, JSON.stringify({ ...JSON.parse(savedBinding), root: replacementRoot,
+      physicalRoot: fs.realpathSync(replacementRoot), rootDirectoryIdentity: physical(replacementRoot) }));
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, log: foreignLog, unavailableLaunchEnvironment: true }));
+    fs.unlinkSync(result);
+    const unverifiable = launch("host", replacementRoot);
+    const unverifiableAnswer = JSON.parse(await unverifiable.line);
+    expect(await unverifiable.closed, unverifiable.errors()).toBe(0);
+    expect(unverifiableAnswer.success).toBe(false);
+    expect(unverifiableAnswer.contentItems[0].text).toContain("launch TMPDIR or directory identity could not be verified");
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
+
     fs.writeFileSync(rootBinding, JSON.stringify({ ...JSON.parse(savedBinding), root: replacementRoot }));
     fs.unlinkSync(result);
     const substituted = launch("host", replacementRoot);
@@ -90,7 +130,7 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
   }
 }, 60_000);
 
-for (const fault of ["none", "identity", "root", "root-symlink", "malformed", "symlink", "hardlink", "relative", "unknown", "owner-changed"] as const)
+for (const fault of ["none", "saved-no-env", "coordinated-root-no-env", "identity", "root", "root-symlink", "malformed", "symlink", "hardlink", "relative", "unknown", "owner-changed"] as const)
 test.skipIf(process.platform === "win32")(`callback root binding survives a new reader and refuses ${fault} proof`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gb-")); fs.chmodSync(root, 0o700);
   const launchRoot = path.join(root, "stage-root"), foreignRoot = path.join(root, "foreign-root");
@@ -100,13 +140,17 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
   const owner = { endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid) };
-  const readEnv = spyOn(procBackend, "readEnvVar").mockReturnValue(fault === "unknown" ? null : launchRoot);
+  const readEnv = spyOn(procBackend, "readEnvVar").mockReturnValue(["unknown", "saved-no-env", "coordinated-root-no-env"].includes(fault) ? null : launchRoot);
   let restoreProof = () => {};
   try {
-    expect(gateTool.socketGateCheckRoot(owner, launchRoot)).toBe(launchRoot);
+    expect(gateTool.socketGateCheckRoot(owner, launchRoot)).toEqual(gateTool.bindGateCheckRoot(launchRoot));
     expect(fs.statSync(filename).mode & 0o077).toBe(0);
     if (fault === "identity") { const saved = JSON.parse(fs.readFileSync(filename, "utf8")); fs.writeFileSync(filename, JSON.stringify({ ...saved, identity: "stale" })); }
     if (fault === "root") { const saved = JSON.parse(fs.readFileSync(filename, "utf8")); fs.writeFileSync(filename, JSON.stringify({ ...saved, root: foreignRoot })); }
+    if (fault === "coordinated-root-no-env") {
+      const saved = JSON.parse(fs.readFileSync(filename, "utf8"));
+      fs.writeFileSync(filename, JSON.stringify({ ...saved, root: foreignRoot, physicalRoot: fs.realpathSync(foreignRoot), rootDirectoryIdentity: physical(foreignRoot) }));
+    }
     if (fault === "root-symlink") {
       fs.renameSync(launchRoot, `${launchRoot}.retained`);
       fs.symlinkSync(foreignRoot, launchRoot, "dir");
@@ -125,7 +169,7 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
       });
       restoreProof = () => readProof.mockRestore();
     }
-    expect(gateTool.socketGateCheckRoot(fault === "owner-changed" ? owner : structuredClone(owner))).toBe(fault === "none" ? launchRoot : null);
+    expect(gateTool.socketGateCheckRoot(fault === "owner-changed" ? owner : structuredClone(owner))).toEqual(fault === "none" ? gateTool.bindGateCheckRoot(launchRoot) : null);
     expect(readEnv.mock.calls).toHaveLength(["identity", "malformed", "symlink", "hardlink", "relative"].includes(fault) ? 0 : 1);
   } finally {
     restoreProof(); readEnv.mockRestore();
