@@ -3,7 +3,7 @@ import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import type { CreatePipelineRequest } from "@/lib/pipelines/types";
 import type { ReleaseInput } from "./policy";
 import { releaseGapStart, releaseState } from "./policy";
-import { releaseStages } from "./stages";
+import { releasePublishStages, releaseStages } from "./stages";
 import { mutateReleaseProject, readReleaseProject, type ReleaseRun, type ReleaseProject } from "./store";
 import type { ReleaseSetting } from "./settings";
 
@@ -16,7 +16,7 @@ export interface ReleasePorts {
   task: (project: string, run: ReleaseRun, adopted?: string) => string;
   create: (request: CreatePipelineRequest, key: string) => Promise<string>;
   lookup?: (key: string) => string | null;
-  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean } | null;
+  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean; mergeCommit?: string | null; pr?: number | null } | null;
 }
 export interface ReleaseController {
   reconcile: (project: string) => Promise<string | null>;
@@ -51,13 +51,13 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
   row = readReleaseProject(project);
   run = row.live;
   if (!run || run.key !== claim.key || run.cut !== claim.cut || run.pipelineId || !run.request) return null;
-  const safety = await releaseState({ ...observed.policy, requested: true, frozenCut: run.cut, hold: row.hold?.reason ?? null });
+  const safety = await releaseState({ ...observed.policy, requested: run.phase === "publish" ? run.trigger === "requested" : true, publishing: run.phase === "publish", frozenCut: run.cut, hold: row.hold?.reason ?? null });
   if (safety.state !== "due") return `release: ${safety.reason}`;
   // An operator action can arrive during the ancestry reads inside the policy.
   row = readReleaseProject(project);
   run = row.live;
   if (!run || run.key !== claim.key || run.cut !== claim.cut || run.pipelineId || !run.request) return null;
-  if (run.taskId && ports.taskDone(project, run.taskId)) {
+  if (run.phase !== "publish" && run.taskId && ports.taskDone(project, run.taskId)) {
     return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
   }
   if (row.hold) return "release: hold";
@@ -71,7 +71,7 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
     }
     const taskId = ports.task(project, run, adopted);
     row = mutateReleaseProject(project, current => current.live?.key === run!.key
-      ? { ...current, live: { ...current.live, taskId, request: { ...current.live.request!, taskIds: [taskId], finishesTask: true } } } : current);
+      ? { ...current, live: { ...current.live, taskId, request: { ...current.live.request!, taskIds: [taskId], finishesTask: current.live.phase === "publish" } } } : current);
     run = row.live;
   }
   if (!run?.request) return null;
@@ -139,13 +139,25 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
   }
 
   const lane = run.pipelineId ? ports.pipeline(run.pipelineId) : null;
-  const outcome = lane?.state === "completed" && lane.merged ? "published"
+  if (lane?.state === "completed" && lane.merged && run.phase !== "publish") {
+    if (!lane.mergeCommit || !/^[a-f0-9]{40}$/.test(lane.mergeCommit) || !lane.pr || !run.request) return "release: merge receipt incomplete";
+    const setting = ports.settings(project);
+    const request: CreatePipelineRequest = { ...run.request, task: `${run.request.task}: публікація`, baseRef: lane.mergeCommit, finishesTask: true,
+      stages: releasePublishStages({ cut: run.cut, lastTag: run.lastTag, changes: [], commit: lane.mergeCommit, pr: lane.pr,
+        askBeforePublish: setting?.askBeforePublish ?? true,
+        approval: setting && !setting.askBeforePublish ? JSON.stringify(setting.publishApproval ?? { at: setting.updatedAt, by: setting.setBy, why: setting.why }) : undefined }) };
+    const claim = run;
+    mutateReleaseProject(project, current => current.live?.key === claim.key && current.live.pipelineId === claim.pipelineId && current.live.phase !== "publish"
+      ? { ...current, live: { ...current.live, key: `${claim.key}:publish`, phase: "publish", releasePipelineId: claim.pipelineId!, pipelineId: null, request } } : current);
+    return admit(project, ports);
+  }
+  const outcome = lane?.state === "completed" && run.phase === "publish" ? "published"
     : lane?.state === "closed" ? lane.declined ? "declined" : "failed" : null;
   if (outcome) return settle(project, ports, run, outcome) ? `release: ${outcome}` : null;
   // Once a creation receipt binds the run, only the pipeline lifecycle can settle it.
   // A done task or a manually pushed tag may predate the pipeline's verification/merge.
   if (run.pipelineId) return lane ? null : "release: pipeline unreadable";
-  if (run.taskId && ports.taskDone(project, run.taskId)) {
+  if (run.phase !== "publish" && run.taskId && ports.taskDone(project, run.taskId)) {
     return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
   }
   const tag = await ports.supersedingTag(project, run);
@@ -154,7 +166,7 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
   if (!current || current.key !== run.key || current.cut !== run.cut
     || current.taskId !== run.taskId || current.pipelineId !== run.pipelineId) return null;
   if (tag) return settle(project, ports, run, "superseded", `published-tag: ${tag}`) ? "release: superseded" : null;
-  if (run.taskId && ports.taskDone(project, run.taskId)) {
+  if (run.phase !== "publish" && run.taskId && ports.taskDone(project, run.taskId)) {
     return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
   }
   return admit(project, ports);
