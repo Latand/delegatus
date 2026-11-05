@@ -172,7 +172,7 @@ function SectionBody({ section, sub, go, back, phone, project, close, keysFocus 
 /** Fits the section's rows to whole lines inside its scroller; a new page starts at its top. */
 function Fitted({ page, children }: { page: string; children: ReactNode }) {
   const content = useRef<HTMLDivElement | null>(null);
-  useWholeRows(content);
+  useWholeRows(content, page);
   useEffect(() => {
     const scroller = content.current?.closest("[data-settings-scroller], [data-mobile2-sheet-body]");
     if (scroller) scroller.scrollTop = 0;
@@ -354,8 +354,14 @@ export function SettingsWindowHost({ project }: { project: string | null }) {
     const surface = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']");
     /* A record removed from under its page took the row that opened it, and the press took the focus with it: the keyboard stays in the section. */
     const body = surface?.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]");
-    const target = surface?.querySelector<HTMLElement>(selector) ?? body?.querySelector<HTMLElement>("[data-settings-landing]") ?? [...(body?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])].find((element) => !element.hasAttribute("disabled"));
-    target?.focus();
+    const opener = surface?.querySelector<HTMLElement>(selector);
+    const landing = body?.querySelector<HTMLElement>("[data-settings-landing]");
+    if (opener) opener.focus();
+    else if (landing && body) {
+      landing.focus({ preventScroll: true });
+      /* From its top the rows fall whole, as they do at the end of the scroll. */
+      body.scrollTop += landing.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    } else [...(body?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])].find((element) => !element.hasAttribute("disabled"))?.focus();
   });
 
   const sections = settingsSectionsOf(HEADER_LAYOUTS[phone ? "phone" : "desktop"]);

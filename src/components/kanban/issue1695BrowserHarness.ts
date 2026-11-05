@@ -1575,6 +1575,8 @@ interface SettingsFrame {
   details?: boolean;
   /** Text that must be absent from the surface, Details opened. */
   absent?: RegExp;
+  /** The window scrolled itself to this state: where it stopped falls between lines too. */
+  landed?: boolean;
   desktopOnly?: boolean;
   phoneOnly?: boolean;
 }
@@ -1698,8 +1700,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "voice", name: "tool-refused", scene: "voice-codex", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-ask]").click(); }, defining: "[data-voice-tools-refused]" },
   { surface: "voice", name: "tool-details", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), details: true, defining: "[data-settings-details]" },
   /* Remove on a tool's page: the section again, the list without the tool or its «No tools» line, and the keyboard on it. */
-  { surface: "voice", name: "tool-removed", scene: "voice-codex", section: "voice", query: "dev=default", steps: removeTool("drive"), defining: "[data-voice-tools-list]", absent: /Reads shared files|Читає спільні файли/ },
-  { surface: "voice", name: "tool-removed-last", scene: "voice-tools-one", section: "voice", query: "dev=default", steps: removeTool("drive"), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tool-removed", scene: "voice-codex", section: "voice", query: "dev=default", steps: removeTool("drive"), landed: true, defining: "[data-voice-tools-list]", absent: /Reads shared files|Читає спільні файли/ },
+  { surface: "voice", name: "tool-removed-last", scene: "voice-tools-one", section: "voice", query: "dev=default", steps: removeTool("drive"), landed: true, defining: "[data-voice-tools-status]" },
   { surface: "voice", name: "details-api", scene: "voice-file", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]" },
 ];
 
@@ -1709,8 +1711,8 @@ const SETTINGS_COMBOS = [
 const SETTINGS_DEVICES = { desktop: { width: 1440, height: 900 }, mid: { width: 900, height: 800 }, short: { width: 1000, height: 700 }, phone: { width: 390, height: 844 } } as const;
 
 /** Measures the open surface: the brief's §5 numbers, the rules of a settings surface, and what a person would see cut. */
-function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null }) {
-  const { phone, defining, absent } = args;
+function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null; landed: boolean }) {
+  const { phone, defining, absent, landed } = args;
   const failures: string[] = [];
   const surface = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']");
   if (!surface) return { failures: ["no settings surface"], end: null, scrolls: false };
@@ -1771,6 +1773,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
     return [...new Set(cut)];
   };
   const held = scroller.scrollTop;
+  if (landed) for (const text of cutByEdge()) failures.push(`where it landed cuts: ${text}`);
   scroller.scrollTop = 0;
   for (const text of cutByEdge()) failures.push(`first screen cuts: ${text}`);
   const scrolls = scroller.scrollHeight > scroller.clientHeight + 1;
@@ -1884,7 +1887,7 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
         if (frame.details) await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
         /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it. */
         if (frame.defining && !frame.details) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
-        const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null });
+        const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null, landed: frame.landed === true });
         reading.failures.push(...read.failures);
         reading.end = read.end;
         reading.scrolls = read.scrolls;

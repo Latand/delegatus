@@ -383,9 +383,10 @@ export function Gone({ back }: { back: () => void }) {
  * No line is cut by a scroll edge on the first screen or at the end of the
  * scroll: the scroller ends on the last whole row, and the end of the scroll
  * starts on a row's top. A hairline under the scroller says more rows follow.
- * `content` is any element inside the scroller.
+ * `content` is any element inside the scroller; a new `page` fits before the
+ * browser paints it, so what lands on a row reads the scroll it will keep.
  */
-export function useWholeRows(content: RefObject<HTMLElement | null>): void {
+export function useWholeRows(content: RefObject<HTMLElement | null>, page?: string): void {
   useLayoutEffect(() => {
     const inner = content.current;
     const scroller = inner?.closest<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]");
@@ -435,5 +436,5 @@ export function useWholeRows(content: RefObject<HTMLElement | null>): void {
       scroller.style.paddingBottom = "";
       scroller.style.boxShadow = "";
     };
-  }, [content]);
+  }, [content, page]);
 }
