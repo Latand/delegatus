@@ -1745,7 +1745,21 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   /* The defining element is on the first screen or scrolled whole. */
   if (defining) {
     const element = document.querySelector<HTMLElement>(defining);
-    const box = element?.getBoundingClientRect();
+    /* Read from its text where it has any: a padding above the first line is no cut line. */
+    const textBox = (target: HTMLElement): DOMRect => {
+      const rects: DOMRect[] = [];
+      const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+      for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+        if (!(node.textContent ?? "").trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
+      }
+      if (!rects.length) return target.getBoundingClientRect();
+      const left = Math.min(...rects.map((rect) => rect.left)), top = Math.min(...rects.map((rect) => rect.top));
+      return new DOMRect(left, top, Math.max(...rects.map((rect) => rect.right)) - left, Math.max(...rects.map((rect) => rect.bottom)) - top);
+    };
+    const box = element ? textBox(element) : undefined;
     const scrollerBox = scroller.getBoundingClientRect();
     /* One about as tall as the scroller (a short landscape sheet) cannot stand whole, since the end of the scroll starts on a row's
        top and keeps up to 64 px under the last row: its start or its end is on the screen, or it fills it. */
