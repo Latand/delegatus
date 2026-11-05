@@ -24,13 +24,17 @@ export interface SendFailureNotice {
   fallbackConversationId?: string | null;
 }
 const COLLECTION = "send_failure_notices";
+const HARVEST_COLLECTION = "send_failure_notice_harvest_cursors";
 const key = (row: SendFailureNotice) => row.operationId;
 const controllerActive = (row: SendFailureNotice) => row.state === "pending" || row.state === "failed";
 const seed = { collection: COLLECTION, schemaVersion: 1, migrationId: "send-failure-notices-v1", key, controllerActive,
   loadRecords: (): SendFailureNotice[] => [] };
-let cached: { file: string; store: SqliteStateCollection<SendFailureNotice> } | null = null;
+interface HarvestCursor { key: string; field: "senderConversationId" | "fallbackConversationId" | "dispatch"; recipient: string; after: string }
+const cursorKey = (row: HarvestCursor) => `${row.field}:${row.recipient}`;
+const cursorSeed = { collection: HARVEST_COLLECTION, schemaVersion: 1, migrationId: "send-failure-notice-harvest-v1",
+  key: cursorKey, controllerActive: (_row: HarvestCursor) => false, loadRecords: (): HarvestCursor[] => [] };
+let cached: { file: string; cursorFile: string; store: SqliteStateCollection<SendFailureNotice>; cursors: SqliteStateCollection<HarvestCursor> } | null = null;
 let pruneAfter = "";
-let dispatchAfter = "";
 
 export function decodeSendFailureNotice(value: unknown): SendFailureNotice | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -52,16 +56,28 @@ export function decodeSendFailureNotice(value: unknown): SendFailureNotice | nul
 
 function collection(create: boolean): SqliteStateCollection<SendFailureNotice> | null {
   const file = statePath("state.sqlite");
-  if (cached?.file === file) return cached.store;
-  if (!create && !stateCollectionsInitialized(file, [seed])) return null;
-  if (create) initializeStateCollections(file, [seed]);
+  const cursorFile = statePath("send-failure-notice-harvest.sqlite");
+  if (cached?.file === file && cached.cursorFile === cursorFile) return cached.store;
+  if (!create && (!stateCollectionsInitialized(file, [seed]) || !stateCollectionsInitialized(cursorFile, [cursorSeed]))) return null;
+  if (create) { initializeStateCollections(file, [seed]); initializeStateCollections(cursorFile, [cursorSeed]); }
   const store = new SqliteStateCollection<SendFailureNotice>(file, {
     collection: COLLECTION, schemaVersion: 1, busyMessage: "send failure notices busy", key,
     decode: decodeSendFailureNotice, clone: structuredClone, strictDecode: true, controllerActive,
   });
   // One state root per serving process. Test roots evict the previous wrapper.
-  cached?.store.close();
-  cached = { file, store }; pruneAfter = ""; dispatchAfter = "";
+  cached?.store.close(); cached?.cursors.close();
+  const cursors = new SqliteStateCollection<HarvestCursor>(cursorFile, {
+    collection: HARVEST_COLLECTION, schemaVersion: 1, busyMessage: "send failure notice cursors busy", key: cursorKey,
+    decode: value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const row = value as Partial<HarvestCursor>;
+      return typeof row.recipient === "string"
+        && (row.field === "dispatch" ? row.recipient === "all" : row.recipient.startsWith("conversation_")
+          && (row.field === "senderConversationId" || row.field === "fallbackConversationId"))
+        && typeof row.after === "string" ? row as HarvestCursor : null;
+    }, clone: structuredClone, strictDecode: true,
+  });
+  cached = { file, cursorFile, store, cursors }; pruneAfter = "";
   return store;
 }
 
@@ -112,8 +128,12 @@ export function sendFailureSignals(sender: string | null | undefined): Array<{ i
   if (!store) return [];
   const byId = new Map<string, SendFailureNotice>();
   for (const field of ["senderConversationId", "fallbackConversationId"] as const) {
-    const keys = store.jsonTextKeysByRecipient(field, sender, "", 32);
+    const id = `${field}:${sender}`;
+    const after = cached!.cursors.get(id)?.after ?? "";
+    const keys = store.jsonTextKeysByRecipient(field, sender, after, 32);
     for (const key of keys) { const row = store.get(key); if (row) byId.set(key, row); }
+    if (keys.length === 32) cached!.cursors.boundedPatch(2, tx => tx.put({ key: id, field, recipient: sender, after: keys.at(-1)! }));
+    else if (after) cached!.cursors.boundedPatch(2, tx => tx.delete(id));
   }
   return [...byId.values()].map(row => ({ id: `send-failed:${row.operationId}`, label: `Message ${row.operationId} to ${row.targetConversationId} failed: ${row.reason}`, actionable: true }));
 }
@@ -165,9 +185,16 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     return answer.value;
   };
   const dispatchStore = collection(false);
+  const dispatchCursorId = "dispatch:all";
+  const dispatchAfter = cached?.cursors.get(dispatchCursorId)?.after ?? "";
   const page = dispatchStore?.keyRange(dispatchAfter, "\uffff", 32) ?? [];
   const pending = page.filter(row => row.state === "pending" || row.state === "failed");
-  dispatchAfter = page.length === 64 ? page.at(-1)!.operationId : "";
+  const priorDispatchCursor = cached?.cursors.get(dispatchCursorId)?.after;
+  if (dispatchStore && cached && page.length === 32) {
+    cached.cursors.boundedPatch(2, tx => tx.put({ key: dispatchCursorId, field: "dispatch", recipient: "all", after: page.at(-1)!.operationId }));
+  } else if (dispatchStore && cached && priorDispatchCursor) {
+    cached.cursors.boundedPatch(2, tx => tx.delete(dispatchCursorId));
+  }
   if (pending.some(row => row.state === "pending")) {
     await step(() => ports.registry.prepareRecoveryIndexes(AbortSignal.timeout(ports.readMs ?? 10_000)));
   }
@@ -210,9 +237,21 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     }
     if (original.kind !== "absent") return;
     update(row, { recipientConversationId: recipient.conversationId });
-    const result = await step(() => ports.deliver({ pid: null, path: recipient.path, conversationId: recipient.conversationId,
-      clientMessageId: row.clientMessageId, text: row.text, images: [], policy: "steer-or-queue", origin: { kind: "agent", role: "delivery" } }));
-    ports.assertActive();
+    let result: { ok: boolean; status?: number; error?: string };
+    try {
+      result = await step(() => ports.deliver({ pid: null, path: recipient.path, conversationId: recipient.conversationId,
+        clientMessageId: row.clientMessageId, text: row.text, images: [], policy: "steer-or-queue", origin: { kind: "agent", role: "delivery" } }));
+      ports.assertActive();
+    } catch (error) {
+      ports.assertActive();
+      const attempts = (row.attempts ?? 0) + 1;
+      const detail = error instanceof Error ? error.message : String(error);
+      const terminal = attempts >= 3;
+      const seat = terminal ? fallback(row.senderConversationId, row.targetConversationId) : { kind: "skip" as const };
+      update(row, { attempts, reason: `Failure notice delivery outcome uncertain: ${detail.slice(0, 300)}; original failure: ${row.reason}`.slice(0, 500),
+        ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null } : {}) });
+      return;
+    }
     if (!result.ok) {
       const attempts = (row.attempts ?? 0) + 1;
       const permanent = result.status !== undefined && result.status >= 400 && result.status < 500;

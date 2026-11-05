@@ -3284,8 +3284,9 @@ for (const sqlite of [false, true]) for (const lostReply of [false, true]) test(
         if (lostReply) throw new Error("notice effect completed but its acknowledgement was lost");
         return { ok: true };
       } };
-    if (lostReply) await expect(sweepSendFailureNotices(ports)).rejects.toThrow("acknowledgement was lost");
-    else await sweepSendFailureNotices(ports);
+    await sweepSendFailureNotices(ports);
+    if (lostReply) expect(readSendFailureNotice(operationId)).toMatchObject({ state: "pending", attempts: 1,
+      reason: expect.stringContaining("acknowledgement was lost") });
     // Restart the reader, so the second sweep cannot rely on a resident counter.
     const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
     const child = Bun.spawn([process.execPath, "--eval", `const m=await import(${JSON.stringify(modulePath)}); console.log(JSON.stringify(m.pendingSendFailureNotices()));`],
@@ -3293,7 +3294,7 @@ for (const sqlite of [false, true]) for (const lostReply of [false, true]) test(
     const reopened = JSON.parse(await new Response(child.stdout).text()) as Array<{ operationId: string }>;
     expect(await child.exited).toBe(0);
     expect(reopened.some(row => row.operationId === operationId)).toBe(true);
-    await sweepSendFailureNotices(ports); await sweepSendFailureNotices(ports);
+    for (let pass = 0; pass < 10 && readSendFailureNotice(operationId)?.state !== "sent"; pass++) await sweepSendFailureNotices(ports);
     expect(readSendFailureNotice(operationId)?.state).toBe("sent");
     expect(decodeSendFailureNotice(readSendFailureNotice(operationId))).toEqual(readSendFailureNotice(operationId));
     expect(calls).toBe(1); expect(target.received).toHaveLength(1);
@@ -3410,6 +3411,80 @@ test("transient negative notice acknowledgements stop after three attempts and l
   } finally { active.close(); }
 });
 
+test("notice dispatch and seat harvesting advance through 33 retained alarms across a process restart", async () => {
+  const active = fixture("failure-notice-pages", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "failure-notice-page-sender");
+    const seat = secondConversation(active, "failure-notice-page-seat");
+    const { recordSendFailureNotice, readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const operations: string[] = [];
+    for (let index = 0; index < 33; index++) {
+      const key = `notice-page-${String(index).padStart(2, "0")}`;
+      const { operationId } = acceptSend(active, { clientMessageId: key,
+        origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+      operations.push(operationId);
+      await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+      recordSendFailureNotice(active.registry, operationId, "failed", SEND_LOST_REASON);
+    }
+    const ports = { registry: active.registry, assertActive: () => {},
+      receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }),
+      recipient: () => ({ kind: "skip" as const, reason: "sender-unavailable" }),
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async () => { throw new Error("missing sender must not dispatch"); },
+    };
+    for (let pass = 0; pass < 10 && !operations.every(id => readSendFailureNotice(id)?.state === "failed"); pass++) {
+      await sweepSendFailureNotices(ports);
+    }
+    expect(operations.every(id => readSendFailureNotice(id)?.state === "failed")).toBe(true);
+
+    const first = sendFailureSignals(seat.conversationId);
+    expect(first).toHaveLength(32);
+    const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
+    const child = Bun.spawn([process.execPath, "--eval",
+      `const m=await import(${JSON.stringify(modulePath)}); console.log(JSON.stringify(m.sendFailureSignals(${JSON.stringify(seat.conversationId)})));`],
+    { env: process.env, stdout: "pipe", stderr: "pipe" });
+    const [childStdout, childStderr, childExit] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(childExit, childStderr).toBe(0);
+    const afterRestart = JSON.parse(childStdout) as Array<{ id: string }>;
+    expect(afterRestart).toHaveLength(1);
+    expect(new Set([...first.map(signal => signal.id), ...afterRestart.map(signal => signal.id)])).toEqual(
+      new Set(operations.map(id => `send-failed:${id}`)));
+  } finally { active.registry.close(); active.close(); }
+});
+
+test.each(["throw", "timeout"] as const)("a notice transport %s persists bounded attempts and raises a seat alarm", async failure => {
+  const active = fixture(`failure-notice-${failure}`);
+  try {
+    const sender = secondConversation(active, `failure-notice-${failure}-sender`);
+    const seat = secondConversation(active, `failure-notice-${failure}-seat`);
+    const { recordSendFailureNotice, readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: `failure-notice-${failure}-original`,
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    recordSendFailureNotice(active.registry, operationId, "failed", SEND_LOST_REASON);
+    let calls = 0;
+    const ports = { registry: active.registry, assertActive: () => {}, readMs: 1,
+      receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }),
+      recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async () => {
+        calls++;
+        if (failure === "throw") throw new Error("connection refused before admission");
+        return new Promise<{ ok: boolean }>(() => {});
+      },
+    };
+    for (let pass = 0; pass < 10 && readSendFailureNotice(operationId)?.state !== "failed"; pass++) {
+      await sweepSendFailureNotices(ports);
+    }
+    expect(calls).toBe(3);
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 3,
+      fallbackConversationId: seat.conversationId, reason: expect.stringContaining(failure === "throw" ? "connection refused" : "no answer within 1 ms") });
+    expect(sendFailureSignals(seat.conversationId)).toEqual([expect.objectContaining({ id: `send-failed:${operationId}` })]);
+  } finally { active.close(); }
+});
+
 test("a retired notice controller cannot deliver after an awaited receipt", async () => {
   const active = fixture("retired-failure-notice");
   try {
@@ -3448,11 +3523,11 @@ test("a late canonical echo retires a failed sender notice without resending eit
       receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
       recipient: () => ({ kind: "skip" as const, reason: "launcher-gone" }),
       deliver: async () => { writes++; return { ok: true }; } };
-    await sweepSendFailureNotices(ports);
+    for (let pass = 0; pass < 10 && readSendFailureNotice(operationId)?.state !== "failed"; pass++) await sweepSendFailureNotices(ports);
     expect(readSendFailureNotice(operationId)?.state).toBe("failed");
     ledger.confirmDelivered(active.generationId, operationId, "canonical-late-echo", "operation-bound");
     active.registry.recordDeliveryOutcomeForOperation(active.conversationId, operationId, "delivered", null, "delivered");
-    await sweepSendFailureNotices(ports);
+    for (let pass = 0; pass < 10 && readSendFailureNotice(operationId)?.state !== "cancelled"; pass++) await sweepSendFailureNotices(ports);
     const row = readSendFailureNotice(operationId)!;
     expect(row.state).toBe("cancelled"); expect(decodeSendFailureNotice(row)).toEqual(row);
     expect(sendFailureSignals(sender.conversationId).some(signal => signal.id === `send-failed:${operationId}`)).toBe(false);
