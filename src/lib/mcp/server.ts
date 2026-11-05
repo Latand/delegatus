@@ -3671,6 +3671,9 @@ export function createMcpToolService(
           const retiredRefusal = error instanceof McpToolRefusal
             && (error.details.code === "FLOW_RETIRED" || error.details.code === "STAGE_KIND_RETIRED")
             ? { code: error.details.code, retryable: false } : null;
+          const terminalStageReport = typedTool === "stage_report" && error instanceof McpToolRefusal
+            && ["STAGE_REPORT_SETTLED", "STAGE_REPORT_NOT_AN_ATTEMPT", "STAGE_REPORT_NOT_HELD",
+              "STAGE_REPORT_SUPERSEDED", "STAGE_REPORT_NOT_A_RUN_STAGE"].includes(String(error.details.code));
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
@@ -3687,7 +3690,7 @@ export function createMcpToolService(
             requestId,
             taskCode ?? retiredRefusal?.code ?? botRefusal?.code ?? namedRefusal?.code ?? "tool_failed",
             error instanceof Error ? error.message : String(error),
-            retiredRefusal ? false : botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
+            retiredRefusal || terminalStageReport ? false : botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );

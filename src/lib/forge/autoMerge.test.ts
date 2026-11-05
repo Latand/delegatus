@@ -147,6 +147,10 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (options.rulesRefusal) throw fail("branch rules unavailable");
       return options.rulesRead ?? "[]";
     }
+    // The default fixture is current with main, including when GitHub has
+    // not computed mergeability yet. Protection discovery has its own reply.
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`) && args.at(-1) === ".commit.sha") return MAIN_1;
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/`) && args.at(-1) === ".merge_base_commit.sha") return MAIN_1;
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return options.classicRead ?? JSON.stringify(options.required ?? []);
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });

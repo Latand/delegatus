@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 
+import { cpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { laneRouteKey } from "@/lib/attention/routeTypes";
 import type { FilesWorkLinks, ResolvedWorkLinks, WorkLink } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -197,7 +198,7 @@ test("the column-balance reader finds every stage pill through its current name 
 });
 
 test.each(["card", "task"] as const)("CPU waiting preserves %s work links and stage controls", density => {
-  const pipeline = searchPipeline({ stateDetail: "Waiting for the CPU queue · 2nd · up to 7 min" });
+  const pipeline = searchPipeline({ stateDetail: cpuQueueDetail(2, 7 * 60_000) });
   for (const lang of ["en", "uk"] as const) {
     setLocale(lang);
     const opened: string[] = [];
