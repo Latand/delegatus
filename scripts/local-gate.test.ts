@@ -66,13 +66,11 @@ test.each([false, true])("build consumers execute in the prepared tree (grouped=
   expect(readFileSync(path.join(dir, "artifact"), "utf8")).toBe("another build");
   expect(readFileSync(path.join(tree, "artifact"), "utf8")).toBe("this build");
 }, 20_000);
-test("commit plan checks staged whitespace/privacy/lint and leaves types and tests to push", () => {
+test("commit plan checks staged whitespace/lint and leaves types and tests to push", () => {
   const steps = plan("pre-commit", ["src/example.ts"], context());
-  expect(steps.map(step => step.name)).toEqual(["staged whitespace", "privacy", "eslint"]);
-  expect(steps[1]!.command).toContain("--require-known-values");
-  expect(steps[1]!.command.slice(-2)).toEqual(["--paths", "src/example.ts"]);
-  expect(steps[2]!.command).toEqual(["bun", "scripts/eslint-changes.ts", "--base", "base", "./src/example.ts"]);
-  expect(steps[2]!.capped).toBeFalse();
+  expect(steps.map(step => step.name)).toEqual(["staged whitespace", "eslint"]);
+  expect(steps[1]!.command).toEqual(["bun", "scripts/eslint-changes.ts", "--base", "base", "./src/example.ts"]);
+  expect(steps[1]!.capped).toBeFalse();
 });
 test("push checks commits, types and all sibling test variants, excluding browsers and deleted files", () => {
   const steps = plan("pre-push", ["src/example.ts", "src/deleted.test.ts"], context());
@@ -763,11 +761,13 @@ test("dependency candidate installs the frozen graph before later verification",
   expect(steps[1]?.name).toBe("frozen install");
   expect(steps[1]?.command).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts"]);
 });
-test("media skipping is explicit and still checks commits when the whole diff is media", () => {
+test("media deferral preserves the commit selection when the whole diff is media", () => {
   const steps = plan("pre-push", ["image.png"], context({ skippedMedia: ["image.png"] }));
   const privacy = steps.find(step => step.name === "privacy")!.command;
   expect(privacy).not.toContain("image.png"); expect(privacy).toContain("--check-commits");
-  expect(privacy.slice(-2)).toEqual(["--paths", "package.json"]);
+  expect(privacy).toContain("--added-lines");
+  expect(privacy).toContain("--defer-unavailable-media");
+  expect(privacy).not.toContain("--paths");
 });
 test("state isolation replaces inherited roots and removes the live owner claim", () => {
   const sandbox = mkdtempSync(path.join(tmpdir(), "gate-env-")); roots.push(sandbox);
