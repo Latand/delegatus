@@ -1,3 +1,4 @@
+import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
@@ -1591,7 +1592,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
           .filter((attempt) => Boolean(attempt.verdict || attempt.completedAt))
           .map((attempt) => `${run.stageId}:${attempt.n}`))
       : []);
-  return {
+  const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
@@ -1679,6 +1680,8 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
         : [],
     })),
   };
+  settleClosedPipelineAttempts(revived);
+  return revived;
 }
 
 /** Detach every nested field before a mutable reader or session sees a shared

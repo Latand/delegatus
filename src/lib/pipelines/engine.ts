@@ -1,3 +1,4 @@
+import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
@@ -18164,12 +18165,12 @@ export async function patchPipeline(
       };
       if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by close");
       retainCloseHosts(pipeline);
-      if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) await newAttempt(pipeline, stage);
       delete pipeline.activationCloseRequested;
       pipeline.state = "closed";
       pipeline.cursor = null;
       pipeline.pausedState = null;
       pipeline.closedAt ??= ports.now();
+      settleClosedPipelineAttempts(pipeline);
       pipeline.hiddenAt = null;
       pipeline.stateDetail = "closed; teardown pending";
       await persist();
