@@ -67,12 +67,27 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
 
 /** Each link's lexical and physical targets, including dangling links. */
 async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
+  const deadline = performance.now() + (timeout ?? 15_000);
   const inventory = await repositoryLinks(repository, timeout), lexicalTargets: string[] = [];
   for (const link of inventory.links) {
     let target: string;
     try { target = path.resolve(path.dirname(link), fs.readlinkSync(link)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
     lexicalTargets.push(target);
+  }
+  // A nested directory can change after its own readdir/lstat pair while the
+  // remainder of this checkout is still being traversed. Revalidate the full
+  // inventory at the authority boundary so that such a late link cannot turn
+  // an earlier negative into deletion permission.
+  for (const directory of inventory.directories) {
+    if (performance.now() >= deadline)
+      throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+    const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
+    if (!current?.isDirectory() || current.isSymbolicLink()
+      || `${current.dev}:${current.ino}` !== directory.identity
+      || current.mtimeMs !== directory.mtimeMs || current.ctimeMs !== directory.ctimeMs) {
+      throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
+    }
   }
   return { lexicalTargets, directories: inventory.directories };
 }

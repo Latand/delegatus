@@ -111,6 +111,49 @@ test("a link created between directory enumeration and metadata capture cannot b
   } finally { observed.mockRestore(); }
 });
 
+test("a nested link added during a later directory read defers the real sweep", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-race-target"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"), earlier = path.join(repository, "a"), later = path.join(repository, "b");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(earlier); fs.mkdirSync(later);
+  const link = path.join(earlier, "dependency");
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  let injected = false;
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    const entries = await readdir(target, options);
+    if (!injected && target === later) { injected = true; fs.symlinkSync(directory, link, "dir"); }
+    return entries;
+  });
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  const scan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [repository] }] };
+  const inventory = new RepositoryLinkInventory();
+  let now = 2;
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+    state: async () => "closed",
+    references: (original, current, currentScan) => attemptReferencesClear(original, current, currentScan, async () => true, inventory),
+    scan: () => scan });
+  try {
+    const raced = await sweep();
+    expect(injected).toBeTrue();
+    expect(raced).toMatchObject({ removed: 0, deferred: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    observed.mockRestore();
+    now += 60_001;
+    const retry = await sweep();
+    expect(retry).toMatchObject({ removed: 0, held: 1, errors: 0 });
+    expect(fs.readlinkSync(link)).toBe(directory);
+
+    fs.unlinkSync(link); store.defer(directory, 0);
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { observed.mockRestore(); store.close(); }
+});
+
 test("a real sweep rechecks an external symlink alias before removing its target root", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-linked-root"); fs.mkdirSync(directory);
   const data = path.join(directory, "data"); fs.writeFileSync(data, "owned scratch");
