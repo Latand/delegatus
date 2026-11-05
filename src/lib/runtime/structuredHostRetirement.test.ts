@@ -289,7 +289,7 @@ test("a settled, quiet, unclaimed host is retired and the audit says why", async
 test("unknown process liveness refuses and cannot reconcile a gone row", async () => {
   let reconciled = false;
   const probe = await sweep({ pidAlive: () => undetermined("kernel unavailable"),
-    reconcileGone: async () => { reconciled = true; return true; } });
+    reconcileGone: async () => { reconciled = true; return { status: "gone" }; } });
   expect(probe.terminated).toEqual([]);
   expect(reconciled).toBe(false);
   expect(probe.report.refused).toMatchObject([{ clause: "process-identity", undetermined: true, reason: "kernel unavailable" }]);
@@ -305,7 +305,7 @@ test.each(["process", "exitProcess"] as const)("a gone scoped root retained in %
   let reconciled = false;
   const probe = await sweep({ snapshot: () => file, pidAlive: () => determined(false),
     processIdentity: () => undetermined("root exited"),
-    reconcileGone: async () => { reconciled = true; return true; } });
+    reconcileGone: async () => { reconciled = true; return { status: "gone" }; } });
   expect(probe.report.failed).toEqual([]);
   expect(probe.report.refused).toEqual([]);
   expect(probe.report.gone).toHaveLength(1);
@@ -365,7 +365,7 @@ for (const alive of [true, false]) test(`a cursor write failure alarms before ${
   let acted = false;
   await expect(sweep({ writeCursor: () => { throw new Error("cursor disk unavailable"); },
     pidAlive: () => determined(alive),
-    reconcileGone: async () => { acted = true; return true; },
+    reconcileGone: async () => { acted = true; return { status: "gone" }; },
     terminate: async () => { acted = true; throw new Error("unreachable"); } })).rejects.toThrow("cursor disk unavailable");
   expect(acted).toBe(false);
 });
@@ -872,7 +872,7 @@ test("a host whose record stored no kernel identity blocks retirement", async ()
 });
 
 test("a pid that no longer carries the recorded identity reconciles without termination", async () => {
-  const probe = await sweep({ processIdentity: () => determined(`${HOST_PID}:999999`), reconcileGone: async () => true });
+  const probe = await sweep({ processIdentity: () => determined(`${HOST_PID}:999999`), reconcileGone: async () => ({ status: "gone" }) });
   expect(probe.report.gone).toHaveLength(1);
   expect(probe.report.retired).toEqual([]);
   expect(probe.terminated).toEqual([]);
@@ -1029,7 +1029,7 @@ test("a replacement host on the same session key is never reached", async () => 
       },
     }),
     processIdentity: observedIdentity,
-    reconcileGone: async () => true,
+    reconcileGone: async () => ({ status: "gone" }),
     processMemory: (pids) => procBackend.processMemory(pids),
     ppidMap: () => procBackend.ppidMap(),
     owned: () => false,
