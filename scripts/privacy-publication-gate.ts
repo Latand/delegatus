@@ -1257,14 +1257,14 @@ function commitInputGit(repository: string, args: string[], env: Record<string, 
   return result.stdout;
 }
 
-/** New-side hunk text, including three context lines, without removed text or diff syntax. */
+/** New-side text from changed hunks, including three context lines, without removed text or diff syntax. */
 function addedHunks(patch: string): Array<{ line: number; text: string }> {
   const hunks: Array<{ line: number; text: string }> = [];
-  let current: { line: number; lines: string[]; added: boolean } | undefined;
+  let current: { line: number; lines: string[]; changed: boolean } | undefined;
   let oldRemaining = 0, newRemaining = 0;
   const finish = () => {
     if (oldRemaining !== 0 || newRemaining !== 0) throw new Error("incomplete commit hunk");
-    if (current?.added) hunks.push({ line: current.line, text: current.lines.join("\n") });
+    if (current?.changed) hunks.push({ line: current.line, text: current.lines.join("\n") });
     current = undefined;
   };
   for (const line of patch.split("\n")) {
@@ -1272,14 +1272,15 @@ function addedHunks(patch: string): Array<{ line: number; text: string }> {
     if (header) {
       finish();
       oldRemaining = Number(header[1] ?? 1); newRemaining = Number(header[3] ?? 1);
-      current = { line: Number(header[2]), lines: [], added: false };
+      current = { line: Number(header[2]), lines: [], changed: false };
     } else if (current && (oldRemaining > 0 || newRemaining > 0)) {
       if (line.startsWith("\\ No newline at end of file")) continue;
       if (line[0] === " " || line[0] === "+") {
         current.lines.push(line.slice(1)); newRemaining -= 1;
-        if (line[0] === "+") current.added = true;
+        if (line[0] === "+") current.changed = true;
       }
       if (line[0] === " " || line[0] === "-") oldRemaining -= 1;
+      if (line[0] === "-") current.changed = true;
       if (![" ", "+", "-"].includes(line[0]) || oldRemaining < 0 || newRemaining < 0) {
         throw new Error("invalid commit hunk");
       }
@@ -1309,16 +1310,21 @@ function* commitInputs(repository: string, base: string): Generator<CommitInput>
       .split("\0").filter(line => line.startsWith("-\t-\t")).map(line => line.slice(4)));
     if (raw.pop() !== "") throw new Error("unframed commit paths");
     for (let index = 0; index < raw.length; index += 2) {
-      const metadata = /^:\d{6} (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) [AMDT]$/.exec(raw[index]);
+      const metadata = /^:(\d{6}) (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) [AMDT]$/.exec(raw[index]);
       const path = raw[index + 1];
       if (!metadata || !path) throw new Error("invalid commit path");
-      const [, mode, oldBlob, blob] = metadata;
+      const [, oldMode, mode, oldBlob, blob] = metadata;
       if (mode === "000000") continue;
       const input = { commit, path, blob };
       if (mode !== "100644" && mode !== "100755") { yield { ...input, kind: "unsafe" }; continue; }
-      if (oldBlob === blob) continue;
+      const oldWasRegular = oldMode === "100644" || oldMode === "100755";
+      const changedFromNonRegular = oldMode !== "000000" && !oldWasRegular;
+      if (oldBlob === blob && oldWasRegular) continue;
       const size = Number(commitInputGit(repository, ["cat-file", "-s", blob]).toString().trim());
       if (!Number.isSafeInteger(size) || size < 0 || size > maxPublicationBytes) throw new Error("commit blob too large");
+      // A symlink blob stores its target as bytes. Materializing those same
+      // bytes as a regular file publishes content the old-side diff omits.
+      if (changedFromNonRegular) { yield { ...input, kind: "blob" }; continue; }
       let binary = binaryBlobs.has(blob) || binaryPaths.has(path) || extensionMediaKind(path) !== undefined;
       if (!binary) {
         const bytes = commitInputGit(repository, ["cat-file", "blob", blob]);

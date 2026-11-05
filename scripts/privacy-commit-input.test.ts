@@ -94,6 +94,31 @@ test("context joins an addition to the existing beginning of a split value", asy
   refuses(await f.scan(), "known_value");
 });
 
+test("deletion-only hunks scan surviving new-side context but omit removed text", async () => {
+  const joined = fixture();
+  joined.write("content.txt", "synthetic catalog\nunrelated separator\nphrase\n"); joined.commit(); joined.rebase();
+  joined.write("content.txt", "synthetic catalog\nphrase\n"); joined.commit();
+  refuses(await joined.scan(), "known_value");
+
+  const removed = fixture();
+  removed.write("content.txt", `${catalogValue}\nsafe line\n`); removed.commit(); removed.rebase();
+  removed.write("content.txt", "safe line\n"); removed.commit();
+  passes(await removed.scan());
+});
+
+test("symlink-to-regular transition scans identical blob bytes; executable-bit change stays skipped", async () => {
+  const f = fixture();
+  rmSync(join(f.repo, "content.txt"));
+  symlinkSync(home, join(f.repo, "content.txt")); f.commit(); f.rebase();
+  rmSync(join(f.repo, "content.txt")); writeFileSync(join(f.repo, "content.txt"), home); f.commit();
+  refuses(await f.scan(), "home_path");
+
+  const executable = fixture();
+  executable.write("content.txt", "safe executable content\n"); executable.commit(); executable.rebase();
+  chmodSync(join(executable.repo, "content.txt"), 0o755); executable.commit();
+  passes(await executable.scan());
+});
+
 test("working tree, index and untracked content do not enter the pushed commit selection", async () => {
   const f = fixture();
   f.write("content.txt", "safe committed addition\n"); f.commit();

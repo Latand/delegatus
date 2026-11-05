@@ -18,11 +18,14 @@ since the audit. The narrower selection had not shipped.
 
 `--added-lines` reads every commit in the resolved publication range. Each
 commit is compared with its first parent, including merge resolutions. Text
-inspection receives the new side of each hunk with three context lines. Removed
-lines, diff headers and working-tree state are excluded. Newly added files
-contribute every line. Git paths are literal and NUL-framed, so pathspec syntax,
-newlines and leading dashes cannot change selection. Unreadable input refuses
-inspection with redacted diagnostics.
+inspection receives the new side of each changed hunk with three context lines,
+including surviving context around a deletion-only hunk. Removed lines, diff
+headers and working-tree state are excluded. Newly added files contribute every
+line. A transition from a non-regular Git object to a regular file scans its
+complete content even when the blob id is unchanged; regular-file executable
+bit changes still need no content scan. Git paths are literal and NUL-framed,
+so pathspec syntax, newlines and leading dashes cannot change selection.
+Unreadable input refuses inspection with redacted diagnostics.
 
 A value outside these hunks can pass locally when the branch did not touch it.
 A value in the three context lines still refuses. A value split between an
