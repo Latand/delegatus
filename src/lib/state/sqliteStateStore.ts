@@ -1821,6 +1821,19 @@ export class SqliteStateCollection<T> {
     });
   }
 
+  /** Indexed keyset page over rows retained by the controller. */
+  keyRangeForController(after: string, through: string, limit: number): T[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
+    return this.readDb.query<Pick<CollectionRow, "row_key" | "value_json">, [string, string, string, number]>(`
+      SELECT row_key, value_json FROM state_rows
+      WHERE collection = ? AND controller_active = 1 AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
+    `).all(this.options.collection, after, through, limit).flatMap((row) => {
+      const decoded = this.decodeRow(row.value_json);
+      if (decoded === null && !this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
+      return decoded === null ? [] : [this.options.clone(decoded)];
+    });
+  }
+
   /** Indexed raw-key page for collections whose read contract skips rejected
       rows. The cursor advances over every key, while decoding stays bounded. */
   keyRangeEntries(after: string, through: string, limit: number): Array<{ key: string; value: T | null }> {

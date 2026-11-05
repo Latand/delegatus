@@ -3485,6 +3485,96 @@ test.each(["throw", "timeout"] as const)("a notice transport %s persists bounded
   } finally { active.close(); }
 });
 
+test("terminal notice history does not consume the bounded dispatch page", async () => {
+  const active = fixture("failure-notice-terminal-history", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "failure-notice-history-sender");
+    const { cancelSendFailureNotice, pendingSendFailureNotices, readSendFailureNotice, recordSendFailureNotice, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    for (let index = 0; index < 64; index++) {
+      const { operationId } = acceptSend(active, { clientMessageId: `terminal-notice-${String(index).padStart(2, "0")}`,
+        origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+      recordSendFailureNotice(active.registry, operationId, "failed", SEND_LOST_REASON);
+      cancelSendFailureNotice(operationId);
+    }
+    const { operationId } = acceptSend(active, { clientMessageId: "pending-after-terminal-history",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    recordSendFailureNotice(active.registry, operationId, "failed", SEND_LOST_REASON);
+    expect(pendingSendFailureNotices().map(row => row.operationId)).toEqual([operationId]);
+    let deliveries = 0;
+    let receipts = 0;
+    let sweeps = 0;
+    const ports = { registry: active.registry, assertActive: () => {},
+      receipt: (id: string) => { receipts++; return resolveSendReceipt(id, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }); },
+      recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+      deliver: async () => { deliveries++; return { ok: true }; },
+    };
+    while (sweeps < 3 && deliveries === 0) { sweeps++; await sweepSendFailureNotices(ports); }
+    expect({ deliveries, receipts, sweeps, notice: readSendFailureNotice(operationId) }).toMatchObject({ deliveries: 1, receipts: 1 });
+    expect(sweeps).toBeLessThanOrEqual(2);
+  } finally { active.close(); }
+});
+
+for (const receiptPoint of ["original", "notice"] as const) for (const failure of ["throw", "timeout"] as const) {
+  test(`a ${receiptPoint} notice receipt ${failure} is bounded, persisted, and escalated`, async () => {
+    const active = fixture(`failure-notice-receipt-${receiptPoint}-${failure}`);
+    try {
+      const sender = secondConversation(active, `failure-notice-receipt-${receiptPoint}-${failure}-sender`);
+      const seat = secondConversation(active, `failure-notice-receipt-${receiptPoint}-${failure}-seat`);
+      const { recordSendFailureNotice, readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+      const { operationId } = acceptSend(active, { clientMessageId: `receipt-failure-${receiptPoint}-${failure}`,
+        origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+      await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+      recordSendFailureNotice(active.registry, operationId, "failed", SEND_LOST_REASON);
+      let noticeOperationId: string | null = null;
+      let failures = 0;
+      let deliveries = 0;
+      const ports = { registry: active.registry, assertActive: () => {}, readMs: 1,
+        receipt: async (id: string) => {
+          const isTarget = receiptPoint === "original" ? id === operationId : noticeOperationId !== null && id === noticeOperationId;
+          if (isTarget && failures < 3) {
+            failures++;
+            if (failure === "throw") throw new Error(`receipt ${receiptPoint} unavailable`);
+            return new Promise<never>(() => {});
+          }
+          return resolveSendReceipt(id, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+        },
+        recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+        fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+        deliver: async (request: { text: string; clientMessageId: string; origin: import("./messageOrigin").MessageOrigin }) => {
+          deliveries++;
+          const accepted = acceptSend(sender, { text: request.text, clientMessageId: request.clientMessageId, origin: request.origin });
+          noticeOperationId = accepted.operationId;
+          return { ok: true };
+        },
+      };
+      let restartChecked = false;
+      for (let pass = 0; pass < 8 && failures < 3; pass++) {
+        await sweepSendFailureNotices(ports);
+        if (failures > 0 && !restartChecked) {
+          const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
+          const child = Bun.spawn([process.execPath, "--eval",
+            `const m=await import(${JSON.stringify(modulePath)}); console.log(JSON.stringify(m.readSendFailureNotice(${JSON.stringify(operationId)})));`],
+          { env: process.env, stdout: "pipe", stderr: "pipe" });
+          const [childStdout, childStderr, childExit] = await Promise.all([
+            new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+          ]);
+          expect(childExit, childStderr).toBe(0);
+          expect(JSON.parse(childStdout)).toMatchObject({ state: "pending", attempts: 1 });
+          restartChecked = true;
+        }
+      }
+      expect(restartChecked).toBe(true);
+      expect(failures).toBe(3);
+      expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 3,
+        fallbackConversationId: seat.conversationId,
+        reason: expect.stringContaining(failure === "throw" ? `receipt ${receiptPoint} unavailable` : "no answer within 1 ms") });
+      expect(deliveries).toBe(receiptPoint === "notice" ? 1 : 0);
+      expect(sendFailureSignals(seat.conversationId)).toEqual([expect.objectContaining({ id: `send-failed:${operationId}` })]);
+    } finally { active.close(); }
+  });
+}
+
 test("a retired notice controller cannot deliver after an awaited receipt", async () => {
   const active = fixture("retired-failure-notice");
   try {
@@ -3493,13 +3583,17 @@ test("a retired notice controller cannot deliver after an awaited receipt", asyn
     const { operationId } = acceptSend(active, { clientMessageId: "retired-notice-original",
       origin: { kind: "agent", conversationId: sender.conversationId } });
     const failed = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
-    let alive = true, writes = 0;
-    await expect(sweepSendFailureNotices({ registry: active.registry,
-      assertActive: () => { if (!alive) throw new Error("notice controller retired"); },
-      receipt: async () => { alive = false; return failed; },
-      recipient: () => ({ kind: "deliver", conversationId: sender.conversationId, path: sender.transcriptPath }),
-      deliver: async () => { writes++; return { ok: true }; },
-    })).rejects.toThrow("notice controller retired");
+    let alive = true, writes = 0, receipts = 0;
+    const sweepUntilReceipt = async () => {
+      for (let pass = 0; pass < 3; pass++) await sweepSendFailureNotices({ registry: active.registry,
+        assertActive: () => { if (!alive) throw new Error("notice controller retired"); },
+        receipt: async () => { receipts++; alive = false; return failed; },
+        recipient: () => ({ kind: "deliver", conversationId: sender.conversationId, path: sender.transcriptPath }),
+        deliver: async () => { writes++; return { ok: true }; },
+      });
+    };
+    await expect(sweepUntilReceipt()).rejects.toThrow("notice controller retired");
+    expect(receipts).toBe(1);
     expect(writes).toBe(0); expect(readSendFailureNotice(operationId)?.state).toBe("pending");
   } finally { active.close(); }
 });

@@ -187,7 +187,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   const dispatchStore = collection(false);
   const dispatchCursorId = "dispatch:all";
   const dispatchAfter = cached?.cursors.get(dispatchCursorId)?.after ?? "";
-  const page = dispatchStore?.keyRange(dispatchAfter, "\uffff", 32) ?? [];
+  const page = dispatchStore?.keyRangeForController(dispatchAfter, "\uffff", 32) ?? [];
   const pending = page.filter(row => row.state === "pending" || row.state === "failed");
   const priorDispatchCursor = cached?.cursors.get(dispatchCursorId)?.after;
   if (dispatchStore && cached && page.length === 32) {
@@ -198,6 +198,16 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   if (pending.some(row => row.state === "pending")) {
     await step(() => ports.registry.prepareRecoveryIndexes(AbortSignal.timeout(ports.readMs ?? 10_000)));
   }
+  const receiptFailure = (row: SendFailureNotice, error: unknown) => {
+    ports.assertActive();
+    const attempts = (row.attempts ?? 0) + 1;
+    const detail = error instanceof Error ? error.message : String(error);
+    const terminal = attempts >= 3;
+    const seat = terminal ? fallback(row.senderConversationId, row.targetConversationId) : { kind: "skip" as const };
+    update(row, { attempts,
+      reason: `Failure notice receipt unavailable: ${detail.slice(0, 300)}; original failure: ${row.reason}`.slice(0, 500),
+      ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null } : {}) });
+  };
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
     ports.assertActive();
     update(row, { attemptedAt: new Date().toISOString() });
@@ -206,7 +216,9 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const projected = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
     if (projected?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     if (row.state === "failed") return;
-    const receipt = await step(() => ports.receipt(row.operationId));
+    let receipt: SendReceipt | null;
+    try { receipt = await step(() => ports.receipt(row.operationId)); }
+    catch (error) { ports.assertActive(); receiptFailure(row, error); return; }
     ports.assertActive();
     if (receipt?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     if (!receipt || receipt.state !== "failed") return;
@@ -227,7 +239,9 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const original = lookupOriginalSend(ports.registry.deliverySnapshotForMessageKey(recipient.conversationId, row.clientMessageId),
       { conversationId: recipient.conversationId, clientMessageId: row.clientMessageId });
     if (original.kind === "found") {
-      const answer = await step(() => ports.receipt(original.operationId));
+      let answer: SendReceipt | null;
+      try { answer = await step(() => ports.receipt(original.operationId)); }
+      catch (error) { ports.assertActive(); receiptFailure(row, error); return; }
       ports.assertActive();
       if (answer?.state !== "in-flight" && answer) {
         const seat = answer.state === "delivered" ? { kind: "skip" as const } : fallback(row.senderConversationId, row.targetConversationId);
