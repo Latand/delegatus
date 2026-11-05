@@ -309,3 +309,19 @@ test("orchestrator reads expose bounded continuation and every mutating tool has
   expect(ACTION_LINES.curate_rules({action:"read"}, () => "")).toBeNull();
   expect(ACTION_LINES.pipeline_action({action:"preview-legacy-review"}, () => "")).toBeNull();
 });
+
+test("workspace, recorded-check, voice-tool and cloud actions distinguish changes from reads", async () => {
+  const { ACTION_LINES } = await import("./seatTranscript");
+  const title = () => "";
+  for (const [name, input, line] of [
+    ["grant_agent_browser_access", {}, "Granted browser checks access to the project's workspace"],
+    ["recorded_check", { action: "handoff" }, "Handed off a recorded check"],
+    ["recorded_check", { action: "acknowledge" }, "Acknowledged recorded check evidence"],
+    ["voice_tools", { action: "propose" }, "Proposed a voice tool server"],
+    ["codex_cloud_environment", { action: "set" }, "Changed the project's Codex cloud environment"],
+    ["github_app_connect", {}, "Asked to connect a GitHub repository"],
+  ] as const) expect(ACTION_LINES[name](input, title)).toBe(line);
+  for (const [name, action] of [["recorded_check", "read"], ["voice_tools", "list"], ["voice_tools", "status"], ["codex_cloud_environment", "read"]]) {
+    expect(ACTION_LINES[name]({ action }, title)).toBeNull();
+  }
+});
