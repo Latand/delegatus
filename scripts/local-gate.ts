@@ -62,17 +62,11 @@ export function viewerBuildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
 /** Pure planning: discovery and process execution happen outside this function. */
 export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
   const files = changedFiles.filter(file => env.existing.has(file));
-  const skipped = new Set(env.skippedMedia);
-  const privacyFiles = files.filter(file => !skipped.has(file));
   const steps: Step[] = [];
   if (mode === "pre-commit") steps.push({ name: "staged whitespace", command: ["git", "diff", "--cached", "--check"] });
-  if (mode === "pre-push" || privacyFiles.length) {
-    const command = ["bun", "scripts/privacy-publication-gate.ts", "--base", env.base, "--require-known-values"];
-    if (mode === "pre-push") command.push("--check-commits");
-    // With all media deferred, still inspect commit identities/messages. The
-    // manifest is a safe non-empty selection for the gate's explicit-path API.
-    if (mode === "pre-commit" || skipped.size) command.push("--paths", ...(privacyFiles.length ? privacyFiles : ["package.json"]));
-    steps.push({ name: "privacy", command });
+  if (mode === "pre-push") {
+    steps.push({ name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", env.base,
+      "--require-known-values", "--check-commits", "--added-lines", "--defer-unavailable-media"] });
   }
   // A push that changes nothing (a read-only stage, a branch that only trails
   // main) has nothing a test could judge: whatever fails is already on main.

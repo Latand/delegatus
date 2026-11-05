@@ -326,10 +326,15 @@ Enable once in each clone (linked worktrees inherit the setting):
 git config core.hooksPath .githooks
 ```
 
-Pre-commit checks staged whitespace, privacy using the committed known-value
-fingerprints, and eslint on staged source files. These checks read working-tree
-content, including unstaged edits in a partially staged file. Pre-push checks
-publication including commit messages and identities, incremental TypeScript,
+Pre-commit checks staged whitespace and eslint on staged source files. ESLint
+reads working-tree content, including unstaged edits in a partially staged file.
+Pre-push privacy reads each commit in the publication range: added lines with
+three context lines, and each new binary blob, including content removed before
+HEAD. It retains the committed known-value fingerprints, supplied learned-rule
+texts, commit messages and identities. Working-tree, staged and untracked edits
+are outside that privacy selection. `bun run privacy:check` uses the same
+selection; commit the intended changes before running it. The required hosted
+privacy check retains whole-file coverage. Pre-push also checks incremental TypeScript,
 changed-file lint, and touched test files. ESLint in both hooks and the merger
 compares each changed file with its version at the merge base with `origin/main`.
 Only additional errors block: counts are matched per file, rule and message,
