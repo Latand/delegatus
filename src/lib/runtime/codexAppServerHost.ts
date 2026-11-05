@@ -18,7 +18,7 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
-import { bindGateCheckRoot, gateCheckTool, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
+import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1593,7 +1593,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       options.releaseCleanup?.();
       throw error;
     }
-    const childEnv = telegram.env;
+    const childEnv = { ...telegram.env };
+    const gateCheckLaunchRoot = childEnv.TMPDIR ?? os.tmpdir();
+    const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot);
+    if (gateCheckLaunchBinding) childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
+    else delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
     let child: CodexTransport;
     try {
       const spawnOptions = { cwd: options.cwd, env: childEnv, detached: true };
@@ -1612,8 +1616,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
     provisional.gateCheckRoot = child instanceof CodexSocketTransport
       ? socketGateCheckRoot({ endpoint: child.endpoint, process: { pid: child.pid,
-        startIdentity: child.startIdentity, bootEpoch: child.bootEpoch } }, options.socketOwner ? undefined : childEnv.TMPDIR ?? os.tmpdir())
-      : bindGateCheckRoot(childEnv.TMPDIR ?? os.tmpdir());
+        startIdentity: child.startIdentity, bootEpoch: child.bootEpoch } }, options.socketOwner ? undefined : gateCheckLaunchRoot)
+      : gateCheckLaunchBinding;
     provisional.nativeQueueRequiresCanonicalValidation = threadId !== null;
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;

@@ -12,6 +12,7 @@ export const gateCheckTool = {
 } as const;
 
 export type GateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
+export const GATE_CHECK_ROOT_IDENTITY_ENV = "LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY";
 
 /** Capture once at launch/adoption; callbacks must retain this physical binding. */
 export function bindGateCheckRoot(root: string): GateCheckRoot | null {
@@ -45,9 +46,11 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchRoot?: string
           || typeof saved.physicalRoot !== "string" || !path.isAbsolute(saved.physicalRoot)
           || typeof saved.rootDirectoryIdentity !== "string") return null;
         const liveRoot = procBackend.readEnvVar(owner.process.pid, "TMPDIR");
-        if (!liveRoot || path.resolve(liveRoot) !== path.resolve(saved.root)) return null;
+        const launchDirectoryIdentity = procBackend.readEnvVar(owner.process.pid, GATE_CHECK_ROOT_IDENTITY_ENV);
+        if (!liveRoot || path.resolve(liveRoot) !== path.resolve(saved.root)
+          || !launchDirectoryIdentity || launchDirectoryIdentity !== saved.rootDirectoryIdentity) return null;
         const binding = bindGateCheckRoot(saved.root);
-        if (!binding || binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== saved.rootDirectoryIdentity
+        if (!binding || binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== launchDirectoryIdentity
           || !verifiedCodexSocketOwner(owner)) return null;
         return binding;
       } catch (error) {

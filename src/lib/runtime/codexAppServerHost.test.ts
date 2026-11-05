@@ -32,7 +32,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
-import { gateCheckTool } from "./gateCheckTool";
+import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -2216,6 +2216,7 @@ describe("CodexAppServerHost", () => {
        resolve those, never the operator's, and `gh` is pinned to the
        operator's configuration because it used to read XDG_CONFIG_HOME. */
     const sandboxConfig = path.join(os.tmpdir(), "llv-spawn-sandbox", "codex-home", "config");
+    const temporaryRootStat = fs.statSync(fs.realpathSync(os.tmpdir()));
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
       PATH: process.env.PATH,
@@ -2228,6 +2229,7 @@ describe("CodexAppServerHost", () => {
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(host.identity).toEqual({ threadId: "thread-149", path: "/sessions/thread-149.jsonl" });
