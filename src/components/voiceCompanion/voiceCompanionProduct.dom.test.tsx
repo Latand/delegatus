@@ -664,6 +664,12 @@ const unmountNow = async () => {
   host.remove();
 };
 const pause = (ms = 60) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+const rendered = (selector: string) => new Promise<HTMLElement>((resolve, reject) => {
+  const observer = new MutationObserver(() => read());
+  const timer = setTimeout(() => { observer.disconnect(); reject(new Error(`Missing rendered state: ${selector}`)); }, 5_000);
+  const read = () => { const node = document.querySelector<HTMLElement>(selector); if (node) { observer.disconnect(); clearTimeout(timer); resolve(node); } };
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true }); read();
+});
 
 test("project switches and null context preserve the same live call, transcript and microphone until true unmount", async () => {
   const live = await liveHarness();
@@ -1098,7 +1104,7 @@ test("after a reload the character opens the newest retained call, and one picke
   } finally { await unmountNow(); await live.release(); }
 }, 20_000);
 
-test("a dropped call keeps its conversation on screen, offers the same call in one tap, and the reconnect continues it with its context", async () => {
+test("a dropped call reconnects without a tap and keeps its conversation and context on screen", async () => {
   const live = await liveHarness();
   try {
     await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
@@ -1109,26 +1115,17 @@ test("a dropped call keeps its conversation on screen, offers the same call in o
     await pause(700);
     /* The provider's session ends mid-call. */
     live.provider.disconnect(first);
-    await pause(700);
-    const lost = document.querySelector<HTMLElement>('[data-companion-notice][data-code="CONNECTION_LOST"]');
-    expect(lost?.textContent).toContain(companionErrorMessage("CONNECTION_LOST", "en"));
+    await rendered('[data-companion-notice][data-code="CONNECTION_RESTORED"]');
     expect(document.querySelector('[data-companion-notice][data-code="PROVIDER_ERROR"]')).toBeNull();
     /* What was said stays: in the lane's record and in the call's whole record. */
     expect(document.querySelector("[data-companion-transcript]")?.textContent).toContain("Check the search lane.");
     await click(document.querySelector("[data-voice-companion] [data-grip]"));
     await pause();
     expect(document.querySelector("[data-companion-transcript-view]")?.textContent).toContain("Check the search lane.");
-    /* The panel says the connection dropped, where a hung-up call says it ended. */
-    expect(document.querySelector(".vc-tr-sub")?.textContent).toContain("connection dropped");
-    expect(document.querySelector(".vc-tr-sub")?.textContent).not.toContain("ended");
+    expect(document.querySelector("[data-transcript-resumed]")?.textContent).toBe(translate("en", "voiceCompanion.reconnected"));
     await click(document.querySelector("[data-voice-companion] [data-grip]"));
-    /* Reconnect is the one filled action while the call is offered; Talk, which starts a new call, steps back. */
-    expect(document.querySelector("[data-companion-resume]")?.hasAttribute("data-primary")).toBe(true);
-    expect(document.querySelector("[data-companion-talk]")?.hasAttribute("data-quiet")).toBe(true);
-
-    /* One tap continues the same call. */
-    await click(document.querySelector("[data-companion-resume]"));
-    await pause(300);
+    expect(document.querySelector("[data-companion-resume]")).toBeNull();
+    expect(document.querySelector("[data-companion-end]")).not.toBeNull();
     const starts = sessionCalls().map((call) => call.body as { action?: string; resume?: string } | null).filter((body) => body?.action === "start");
     expect(starts.at(-1)?.resume).toBe(Object.values(live.storage.read().sessions).find((row) => row.providerId === first)?.id);
     expect(live.provider.sessions).toHaveLength(2);
@@ -1487,7 +1484,7 @@ test("phone: Hide during a call ends it: the microphone is muted and stopped, th
   } finally { release(); await unmountNow(); await held.release(); }
 });
 
-test("phone: a lost network keeps the call's history, the menu offers Reconnect, and after a reload the dropped call is still offered, readable and resumed", async () => {
+test("phone: a lost network reconnects automatically; a reload after a later drop offers the same history and manual continuation", async () => {
   const live = await liveHarness();
   try {
     await mount(<VoiceCompanionHost project="project-a" mobile />);
@@ -1498,16 +1495,19 @@ test("phone: a lost network keeps the call's history, the menu offers Reconnect,
     await pause(700);
     /* The browser's network goes: the peer connection fails, and the Viewer is told the call dropped. */
     live.dropMedia();
-    await pause(700);
+    await rendered('[data-phone-voice-bubble][data-code="CONNECTION_RESTORED"]');
     const closes = sessionCalls().map((call) => call.body as { action?: string; reason?: string } | null).filter((body) => body?.action === "close");
     expect(closes.at(-1)?.reason).toBe("transport");
-    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("CONNECTION_LOST", "en"));
+    await rendered('[data-phone-voice][data-phase="idle"]');
+    expect(live.provider.sessions).toHaveLength(2);
+    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("CONNECTION_RESTORED", "en"));
     await click(document.querySelector("[data-phone-voice-head]"));
-    expect(document.querySelector("[data-phone-voice-resume]")).toBeTruthy();
+    expect(document.querySelector("[data-phone-voice-resume]")).toBeNull();
     await click(document.querySelector("[data-phone-voice-transcript]"));
     await pause();
     expect(document.querySelector("[data-companion-transcript-view]")?.textContent).toContain("Check the search lane.");
-    await unmountNow();
+    live.dropMedia(); await unmountNow();
+    await pause(100);
 
     /* A reload: a new head, a new adapter, nothing in memory. The Viewer still offers the call and its record. */
     await mount(<VoiceCompanionHost project="project-a" mobile />);
@@ -1521,10 +1521,35 @@ test("phone: a lost network keeps the call's history, the menu offers Reconnect,
     await click(document.querySelector("[data-phone-voice-head]"));
     await click(document.querySelector("[data-phone-voice-resume]"));
     await pause(300);
-    expect(live.provider.sessions).toHaveLength(2);
-    expect(live.provider.sessions[1].memory).toContain("operator: Check the search lane.");
+    expect(live.provider.sessions).toHaveLength(3);
+    expect(live.provider.sessions[2].memory).toContain("operator: Check the search lane.");
     expect(phoneHead()?.dataset.phase).not.toBe("offline");
     expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("CONNECTION_RESTORED", "en"));
+  } finally { await unmountNow(); await live.release(); }
+});
+
+test("phone: End while a reconnect attempt is unanswered takes the reconnecting line away at once, and a late answer brings nothing back", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause(200);
+    live.say(live.provider.sessions[0].id, [["operator", "Check the search lane."], ["voice", "The search lane passed its verifier."]]);
+    await pause(700);
+    let answer = () => {};
+    live.holding.start = new Promise<void>((resolve) => { answer = resolve; });
+    live.dropMedia();
+    await rendered('[data-phone-voice-bubble][data-code="RECONNECTING"]');
+    await pause(400);
+    expect(live.starts()).toBe(2);
+    await phoneRow("end");
+    expect(phoneHead()?.dataset.phase).toBe("offline");
+    expect(document.querySelector("[data-phone-voice-bubble]")).toBeNull();
+    answer(); live.holding.start = null;
+    await pause(200);
+    expect(phoneHead()?.dataset.phase).toBe("offline");
+    expect(document.querySelector("[data-phone-voice-bubble]")).toBeNull();
+    expect(live.starts()).toBe(2);
   } finally { await unmountNow(); await live.release(); }
 });
 
