@@ -25,6 +25,7 @@ export const engineFiles = [
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
   "src/lib/runtime/nativeQueueHost.integration.test.ts",
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+  "src/lib/runtime/deliveryLongTurn.native.test.ts",
 ];
 /* Engine files that install globals: one process each, like the other
    injection files. */
@@ -48,6 +49,7 @@ export const files = [
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
   "src/lib/runtime/nativeQueueHost.integration.test.ts",
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+  "src/lib/runtime/deliveryLongTurn.native.test.ts",
   "src/lib/runtime/codexTurnProfile.test.ts",
   "src/lib/runtime/codexAppServerHost.test.ts",
   "src/lib/runtime/claudeStreamBrokerHost.test.ts",

@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
-import { gateCheckTool, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
+import { bindGateCheckRoot, gateCheckTool, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
@@ -30,6 +30,7 @@ for (const delayedStartup of [false, true]) for (const exit of [0, 37]) test.ski
   Object.assign(env, { LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_LOCK_DIR: root });
   const first = deferred<ServerResponse>(), second = deferred<{ body: string; response: ServerResponse }>(), third = deferred<string>(), waiting = deferred<void>(), finished = deferred<void>();
   const abort = new AbortController();
+  const rootBinding = bindGateCheckRoot(root);
   const toolCalls: string[] = [];
   let requests = 0;
   const backend = createServer((request, response) => {
@@ -95,7 +96,7 @@ process.exit(await child.exited);
     if (message.method === "item/tool/call") {
       toolCalls.push(message.params.tool);
       waiting.resolve();
-      void runGateCheckTool(message.params.arguments, root, abort.signal).then(result => {
+      void runGateCheckTool(message.params.arguments, rootBinding, abort.signal).then(result => {
         child.stdin.write(JSON.stringify({id: message.id, result}) + "\n");
       });
     } else if (typeof message.id === "number") pending.get(message.id)?.(message);
