@@ -1,0 +1,8 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "states": 91,
+  "frames": 838,
+  "readings": 546,
+  "failures": [],
+  "shallowestFootUnderDetails": 22
+}
