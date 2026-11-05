@@ -1372,10 +1372,16 @@ export class TelegramBotService {
       outgoing-message journal. Every image is loaded before transport starts. */
   sendMedia(input: TelegramFileSendInput): Promise<TelegramBotSendAnswer> { return this.sendMediaChecked(input); }
   private async sendMediaChecked(input: TelegramFileSendInput, approval?: FileSendApproval): Promise<TelegramBotSendAnswer> {
-    const store = this.connectedStore();
+    const connected = this.storedBotId() !== null;
+    const store = connected ? this.connectedStore() : this.store();
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    if (!connected) {
+      const route = chat.type !== "private" ? await this.deps.clones?.route(chat.chatId) : null;
+      if (!route || !this.deps.clones?.valid(route, chat.chatId))
+        throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
+    }
     if (typeof input.clientRequestId !== "string" || !input.clientRequestId.trim()) throw new TelegramBotError("bad_request", "clientRequestId is required");
     const callerKey = input.conversationId ?? "unidentified";
     const clientRequestId = input.clientRequestId.trim();
@@ -1476,10 +1482,16 @@ export class TelegramBotService {
       nothing posted, so a corrected retry under the same key may send. */
   sendDocument(input: TelegramFileSendInput): Promise<TelegramBotSendAnswer> { return this.sendDocumentChecked(input); }
   private async sendDocumentChecked(input: TelegramFileSendInput, approval?: FileSendApproval): Promise<TelegramBotSendAnswer> {
-    const store = this.connectedStore();
+    const connected = this.storedBotId() !== null;
+    const store = connected ? this.connectedStore() : this.store();
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    if (!connected) {
+      const route = chat.type !== "private" ? await this.deps.clones?.route(chat.chatId) : null;
+      if (!route || !this.deps.clones?.valid(route, chat.chatId))
+        throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
+    }
     if (typeof input.clientRequestId !== "string" || !input.clientRequestId.trim()) throw new TelegramBotError("bad_request", "clientRequestId is required");
     /* Documents have no legacy receipts, so they claim only in their own
        namespace, beside the `text:` and `media:` ones. */
