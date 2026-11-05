@@ -1003,3 +1003,22 @@ test("conversation delivery history keeps separate sent message outcomes", () =>
     expect(records.find(record => record.operationId === "message-two")?.phaseHistory?.at(-1)?.phase).toBe("failed");
   } finally { store.close(); }
 });
+
+
+test("a renewed turn deadline survives a process restart and a stale admission cannot shorten it", async () => {
+  const now = Date.parse("2026-11-01T12:00:00Z");
+  const filename = path.join(root, "turn-boundary.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("boundary-message", "conversation_boundary", { waitReason: "awaiting-turn" });
+  store.deadline("boundary-message", new Date(now + 100 * 60_000).toISOString(), "turn-boundary");
+  store.deadline("boundary-message", new Date(now + 10 * 60_000).toISOString(), "settlement-window");
+  expect(store.get("boundary-message")?.deadlinePolicy).toBe("turn-boundary");
+  expect(store.flush()).toBe(true); store.close();
+  const modulePath = new URL("./deliveryProgress.ts", import.meta.url).pathname;
+  const child = Bun.spawn([process.execPath, "--eval", `const m=await import(${JSON.stringify(modulePath)}); const s=new m.DeliveryProgressStore(${JSON.stringify(filename)}); console.log(JSON.stringify(s.get("boundary-message"))); s.close();`],
+    { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const record = JSON.parse(await new Response(child.stdout).text()) as DeliveryProgressRecord;
+  expect(await child.exited).toBe(0);
+  expect(record.deadlinePolicy).toBe("turn-boundary");
+  expect(Date.parse(record.deadlineAt!)).toBe(now + 100 * 60_000);
+});
