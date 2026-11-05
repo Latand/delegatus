@@ -26552,6 +26552,35 @@ describe("floating voice companion", () => {
     return probe as unknown as { frames: number; entries: number; entriesAwayFromCharacter: number; entryAwayMaxPx: number; towardCharacterFrames: number; towardCharacterMaxPx: number; awayMaxStepPx: number; rises: number; riseMaxFrameShare: number; riseMaxFrameShareStepPx: number; riseMaxFrameSharePathPx: number; riseLongestPathPx: number; risesCutByLeaving: number; lateFramesInRises: number; overlapFrames: number; overlapMaxPx: number; overlapWorstPair: string; bubblesRead: number; orphanLastLines: string[]; carriedFrames: number; carriedMaxPx: number; relocations: number };
   });
 
+  browserTest("review confirmation transitions preserve outward motion", async () => {
+    fs.mkdirSync(HANDOFF, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const rows: Array<{ script: string; width: number; lang: string; scheme: string; motion: Awaited<ReturnType<typeof stopMotionProbe>> }> = [];
+    try {
+      for (const script of ["withdraw", "voiceConfirm"] as const) for (const [width, lang, scheme] of [[1440, "en", "light"], [1220, "uk", "dark"]] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=${script}`, { viewport: { width, height: 800 }, lang, scheme, motion: "no-preference", video: path.join(HANDOFF, "videos") });
+        try {
+          await startMotionProbe(page);
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForSelector("[data-companion-send]", { timeout: 30_000 });
+          const asking = await readCompanion(page);
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
+          await page.waitForTimeout(700);
+          const motion = await stopMotionProbe(page);
+          const final = await readCompanion(page);
+          await page.screenshot({ path: path.join(HANDOFF, `motion-${script}-${width}-${lang}-${scheme}.png`) });
+          rows.push({ script, width, lang, scheme, motion });
+          expect(pageErrors, `${script} ${width} ${lang} ${scheme}`).toEqual([]);
+          expect(asking.floaters, `${script} ${width}: confirmation is shown`).toBeGreaterThan(0);
+          expect(final.floaters, `${script} ${width}: result remains visible`).toBeGreaterThan(0);
+        } finally { await context.close(); }
+      }
+    } finally { await close(); server.stop(); }
+    fs.writeFileSync(path.join(HANDOFF, "motion.json"), JSON.stringify(rows, null, 2) + "\n");
+    expect(rows.map(row => ({ script: row.script, width: row.width, toward: row.motion.towardCharacterFrames, px: row.motion.towardCharacterMaxPx }))).toEqual(rows.map(row => ({ script: row.script, width: row.width, toward: 0, px: 0 })));
+  }, 600_000);
+
   browserTest("by default the character and its lane cover no control and no page text, in one place on three loads and the same at 1.4 s and 6 s: open and collapsed, with the conversation as it starts, with the delegated row and its answer, and filled to its whole height, 1440 and 1000, en and uk, both themes", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);

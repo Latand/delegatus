@@ -629,7 +629,15 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     for (const delegation of delegations) {
       /* Delivered work stays in view after the conversation ends; a confirmation nobody answered does not. */
       const shown = tappedStage(delegation, decidedFor)!;
-      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(shown.stage)) deleg.push({ kind: "delegation", key: `delegation:${shown.callId}`, delegation: shown, settled: DELEGATION_SETTLED.has(shown.stage) });
+      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(shown.stage)) deleg.push({
+        kind: "delegation",
+        /* Confirmation and its result are separate moments in the lane. The
+           result enters beside the character while the confirmed card leaves
+           as the older prefix, so a shorter result never pulls the lane back. */
+        key: shown.stage === "awaiting-confirmation" ? `delegation:${shown.callId}:confirmation` : `delegation:${shown.callId}`,
+        delegation: shown,
+        settled: DELEGATION_SETTLED.has(shown.stage),
+      });
     }
     // A poll can batch standalone reports and replies to several requests in
     // one render. Their event sequence decides arrival, across every card kind.
@@ -842,18 +850,11 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const nodes = [...stack.querySelectorAll<HTMLElement>(":scope > [data-floater]")];
     const arrived = (node: HTMLElement) => (node.dataset.arrival ? Number(node.dataset.arrival) : null);
     const before = positions.current;
-    const currentContents = new Map(floaters.map(floater => [floater.key, floater]));
-    /* Speech keeps its height. A request whose stage changed releases the
-       room its confirmation controls occupied, so its result can still fit. */
+    /* Once a floater has occupied room in the chronology, it keeps that height
+       for its lifetime. A delegation's result uses the space its controls did. */
     for (const node of nodes) {
       const key = node.dataset.floater!;
       const was = before.get(key);
-      const previous = contents.current.get(key);
-      const current = currentContents.get(key);
-      if (previous?.kind === "delegation" && current?.kind === "delegation" && previous.delegation.stage !== current.delegation.stage) {
-        node.style.minHeight = "";
-        continue;
-      }
       if (was && node.offsetHeight < was.height) node.style.minHeight = `${was.height}px`;
     }
     /* Fit: the stack keeps to the lane, less the room a leaving element drifts into and the room kept at
