@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { ApplyController } from "./apply";
 import { activeDrain } from "./drain";
 import type { LauncherRecord } from "./launcher";
+import { writeLauncherRefusal } from "../../../bin/launcher-deadline.mjs";
 const root = mkdtempSync(join(tmpdir(), "install-apply-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const record = (dir: string) => ({ launcher: { pid: 5, startIdentity: "7", relaunch: 1, state: "healthy" },
@@ -54,6 +55,31 @@ test("a timely launcher receipt remains successful when the Viewer reconciles af
   const cold = new ApplyController(dir);
   expect(cold.observe({ ...r, launcher: { ...r.launcher, requestId: c.current!.requestId } }, true, deadline + 600_000)).toBe("done");
   expect(cold.current?.switchOverrun).toBeUndefined();
+});
+
+test("a cold refused recovery releases its interrupted hold after the timely target serves", () => {
+  const dir = mkdtempSync(join(root, "refused-recovery-")), r = record(dir), c = new ApplyController(dir);
+  r.web.revision = r.runtimeHost.revision = "bbbbbbb";
+  writeFileSync(r.releasePointer, JSON.stringify({ sha: "b".repeat(40) }));
+  c.begin(r, "a".repeat(40), "operator"); c.patch({ requestId: "timely-recovery" }); c.send(r);
+  c.patch({ switchCompletedAt: new Date(Date.parse(c.current!.switchedAt!) + 1).toISOString() });
+  const drain = join(dir, "auto-drain.json"), held = readFileSync(drain, "utf8");
+  writeLauncherRefusal({ request: r.requestFile, trial: r.requestFile.replace("request-", "trial-") }, {
+    requestId: c.current!.requestId, target: c.current!.target, rollbackPointer: c.current!.rollbackPointer,
+    previousEntry: join(dir, "bin/cli.mjs"), state: "starting",
+  }, "The launcher startup exceeded its 10 minute deadline");
+  // The apply write precedes admission release. Restore that exact owned hold
+  // to exercise a cold reader at the interrupted cleanup checkpoint.
+  writeFileSync(drain, held);
+  const cold = new ApplyController(dir), bytes = readFileSync(join(dir, "apply.json"), "utf8");
+  const serving = { ...r, web: { ...r.web, revision: "aaaaaaa" }, runtimeHost: { ...r.runtimeHost, revision: "aaaaaaa" } };
+  cold.observe(serving, true);
+  expect(activeDrain(drain)).toBeNull();
+  expect(readFileSync(join(dir, "apply.json"), "utf8")).toBe(bytes);
+  expect(cold.current).toMatchObject({ state: "failed", detail: "The launcher startup exceeded its 10 minute deadline" });
+  writeFileSync(drain, JSON.stringify({ ...JSON.parse(held), id: "new-owner" }));
+  cold.observe(serving, true);
+  expect(activeDrain(drain)?.id).toBe("new-owner");
 });
 test("one apply survives the Viewer and settles both processes", () => {
   const dir = mkdtempSync(join(root, "success-")); const r = record(dir);

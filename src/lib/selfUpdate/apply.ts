@@ -144,7 +144,7 @@ export class ApplyController {
         && record.runtimeHost.state === "healthy" && record.web.revision === intent.target.slice(0, 7)
         && record.runtimeHost.revision === intent.target.slice(0, 7)
         && (!record.launcher.revision || record.launcher.revision === intent.target);
-      if (intent.state === "done" ? targetServing : coherentRollback() || !!intent.switchOverrun && targetServing) this.releaseAdmission(record, intent);
+      if (intent.state === "done" ? targetServing : coherentRollback() || !!(intent.switchOverrun || intent.switchCompletedAt) && targetServing) this.releaseAdmission(record, intent);
       return null;
     }
     // A first upgrade may return to a launcher predating the trial protocol.
