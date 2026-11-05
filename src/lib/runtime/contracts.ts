@@ -999,7 +999,15 @@ export interface ViewerDeploymentStatus {
   revisionNumber: number;
 }
 
+/** A durable admission refusal: the key is fenced before this is reported. */
+export class DeploymentAdmissionClosedError extends Error {
+  readonly code = "deploy_not_admitted";
+  constructor() { super("Deployment was not admitted; this request key is permanently closed."); }
+}
+
 export interface ViewerDeploymentRequest {
+  /** Settle the original key without ever starting a deployment. */
+  reconcileOnly?: boolean;
   revision?: string;
   /** A branch of the canonical repository (`refs/heads/<branch>`), resolved to
       its exact commit by the host adapter (#1033). Takes precedence over
@@ -1101,7 +1109,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

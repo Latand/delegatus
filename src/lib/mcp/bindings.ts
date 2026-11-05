@@ -1,3 +1,4 @@
+import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { assertWorkspaceMcpCall, workspaceGuardedBindings } from "./workspaceFence";
@@ -181,7 +182,7 @@ import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
-import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, forgetSeatDeploymentRequest, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
@@ -464,6 +465,7 @@ async function requestViewerControl(
     });
     try {
       const headers = controlRequestHeaders(init.headers, token);
+      if (pathname === "/api/attention/needs-you") headers.set("x-llv-read-deadline", String(Math.min(expiresAt - 300, now + 3500)));
       if (init.method === "POST") {
         headers.set("origin", baseUrl);
         headers.set("sec-fetch-site", "same-origin");
@@ -577,6 +579,10 @@ async function postViewerControl(
   /* Every control mutation carries its endpoint's idempotency identity
      (clientAttemptId, clientMessageId or clientRequestId). Repeating the same
      request after a lost transport answer therefore asks for its receipt. */
+  const deployment = pathname === "/api/runtime/deployments" || pathname === "/api/runtime/deployments/reconcile";
+  if (deployment && body.reconcileOnly === true) {
+    context = { ...context, deadlineAt: Math.min(context.deadlineAt ?? Infinity, Date.now() + 5000) };
+  }
   let answer: Awaited<ReturnType<typeof requestViewerControl>>;
   try {
     answer = await requestViewerControl(pathname, {
@@ -610,7 +616,12 @@ async function postViewerControl(
     // so the tool caller can read its revision and choose a new request.
     return { conflict: true, binding: result.binding };
   }
-  if (pathname === "/api/runtime/deployments" && uncertainPriorPost && !response.ok) {
+  if (deployment && result.code === "deploy_not_admitted" && response.status === 409) {
+    throw new McpToolRefusal("Deployment was not admitted; this request key is permanently closed.", {
+      code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false,
+    });
+  }
+  if (deployment && uncertainPriorPost && !response.ok) {
     throw new McpDeploymentPendingError(`${controlFailureMessage(response.status, result.error)} after an earlier deploy request may have reached admission`);
   }
   if (pathname === "/api/prototype-reviews" && response.ok
@@ -3869,24 +3880,17 @@ async function deployExactSha(
     throw error;
   }
   assertSeat();
-  if (callContext.priorAttemptUncertain) {
+  let reconciledReceipt: Record<string, unknown> | null = null;
+  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)) {
     try {
-      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-        dependencies.recordSeatDeployment);
-      const recovered = seatDeploymentForRequestKey(idempotencyKey);
-      if (recovered) {
-        if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
-          || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
-          throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
-            code: "deploy_request_key_conflict", retryable: false,
-          });
-        }
-      } else {
-        throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
-      }
+      // The backend settles under its admission lock, bypassing target resolution.
+      // No read of an eventually visible ledger can prove non-admission.
+      assertSeat();
+      reconciledReceipt = await control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true });
+      assertSeat();
     } catch (error) {
-      if (error instanceof McpToolRefusal || error instanceof McpDeploymentPendingError) throw error;
-      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because its receipt store is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof McpToolRefusal) throw error;
+      throw new McpDeploymentPendingError(`deployment reconciliation is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const admittedReceipt = (): Record<string, unknown> | null => {
@@ -3902,7 +3906,7 @@ async function deployExactSha(
     return { state: "accepted", deploymentId: priorAdmission.deploymentId,
       revision: priorAdmission.revision, replayed: true };
   };
-  let receipt = admittedReceipt();
+  let receipt = admittedReceipt() ?? reconciledReceipt;
   if (!receipt) try {
     assertSeat();
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
@@ -3910,12 +3914,6 @@ async function deployExactSha(
     if (error instanceof McpToolRefusal) {
       await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       throw error;
-    }
-    try {
-      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-        dependencies.recordSeatDeployment);
-    } catch (recoveryError) {
-      throw new McpDeploymentPendingError(`deployment admission may have completed, and its receipt could not be reconciled: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`);
     }
     receipt = admittedReceipt();
     if (!receipt) throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
@@ -5215,7 +5213,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
-    ...(verbose || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
+    ...("status" in curation ? { partial: true, omissions: ["curation"] } : {}),
+    ...(verbose || "status" in curation || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
@@ -5235,7 +5234,8 @@ async function readSeatCuration(project: string, initial: SeatTickSettings,
   readSettings: (project: string) => SeatTickSettings, context: McpToolCallContext) {
   throwIfCallEnded(context);
   const timeout = new AbortController();
-  const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now()));
+  const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now() - 500));
+  const panelDeadlineAt = Date.now() + budget;
   const timer = setTimeout(() => timeout.abort(budget < 5000
     ? new DeadlineExceededError("MCP tool deadline exceeded", 0) : Error("curation panel read timed out")), budget);
   const signal = context.signal ? AbortSignal.any([context.signal, timeout.signal]) : timeout.signal;
@@ -5244,16 +5244,26 @@ async function readSeatCuration(project: string, initial: SeatTickSettings,
     for (let attempt = 0; attempt < 3; attempt++) {
       throwIfCallEnded(context);
       signal.throwIfAborted();
+      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
       const now = Date.now(), revision = recordRevision(settings);
       const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
       const curation = await curationAnswerCooperatively(project, effective, now, signal);
       throwIfCallEnded(context);
       signal.throwIfAborted();
+      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
       const fresh = readSettings(project);
       if (recordRevision(fresh) === revision) return { settings, now, effective, curation };
       settings = fresh;
     }
     throw Error("seat tick settings changed while being read");
+  } catch (error) {
+    throwIfCallEnded(context);
+    const now = Date.now();
+    const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+    return { settings, now, effective, curation: {
+      status: "unavailable" as const, lastRun: null, live: null,
+      runsError: redactMonitorText(error instanceof Error ? error.message : "curation panel unavailable").slice(0, 300),
+    } };
   } finally { clearTimeout(timer); }
 }
 

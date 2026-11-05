@@ -50,6 +50,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
     },
   };
   const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
+    if (body.reconcileOnly === true) return coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string; reconcileOnly: boolean });
     posts++;
     await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
     throw new Error("same-SHA join response was lost after runtime admission");
@@ -129,6 +130,7 @@ test("an attribution failure during uncertain replay stays pending until admissi
     },
   };
   const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
+    if (body.reconcileOnly === true) return coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string; reconcileOnly: boolean });
     posts++;
     await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
     throw new Error("response lost after durable admission");

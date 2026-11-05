@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { AttentionRequestError, readBoundedJson } from "@/lib/attention/validation";
 import type { AttentionCallerAuthority } from "@/lib/attention/callerAuthority";
-import { NEEDS_YOU_ROW_KINDS, type NeedsYouAnswer, type NeedsYouReadOptions } from "@/lib/attention/needsYouRead";
+import { NEEDS_YOU_READ_BUDGET_MS, NEEDS_YOU_ROW_KINDS, type NeedsYouAnswer, type NeedsYouReadOptions } from "@/lib/attention/needsYouRead";
 import { DismissalError } from "@/lib/attention/dismissals";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { permitNeedsYouRead } from "@/lib/mcp/toolAllowlist";
@@ -30,7 +30,9 @@ export function needsYouHandler(ports: NeedsYouRoutePorts) {
       if (!verdict.allowed) return Response.json({ code: "NEEDS_YOU_READ_NOT_PERMITTED", error: verdict.error }, { status: 403, headers });
       if (fields.kinds !== undefined && (!Array.isArray(fields.kinds) || fields.kinds.length > NEEDS_YOU_ROW_KINDS.length || fields.kinds.some(k => !NEEDS_YOU_ROW_KINDS.includes(k)))) throw new DismissalError("INVALID_KINDS", "unknown needs-you row kind");
       if (fields.full !== undefined && typeof fields.full !== "boolean" || fields.cursor !== undefined && (typeof fields.cursor !== "string" || fields.cursor.length > 4096)) throw new DismissalError("INVALID_REQUEST", "invalid full or cursor");
-      const answer = await ports.read(project, { kinds: fields.kinds as NeedsYouReadOptions["kinds"], full: fields.full as boolean | undefined, cursor: fields.cursor as string | undefined });
+      const suppliedDeadline = Number(request.headers.get("x-llv-read-deadline"));
+      const deadlineAt = Math.min(Date.now() + NEEDS_YOU_READ_BUDGET_MS, Number.isFinite(suppliedDeadline) && suppliedDeadline > 0 ? suppliedDeadline : Infinity);
+      const answer = await ports.read(project, { signal: request.signal, deadlineAt, kinds: fields.kinds as NeedsYouReadOptions["kinds"], full: fields.full as boolean | undefined, cursor: fields.cursor as string | undefined });
       return Response.json(answer, { headers });
     } catch (error) {
       if (error instanceof DismissalError || error instanceof AttentionRequestError) return Response.json({ code: error.code, error: error.message }, { status: error.status, headers });
