@@ -671,7 +671,11 @@ export interface StructuredHostRetirementDependencies {
   processMemory?: (pids: Iterable<number>) => Map<number, ProcessMemory>;
   ppidMap?: () => Map<number, number>;
   owned?: (key: SessionKey) => boolean;
-  terminate?: (ref: StructuredHostKillRef, authorize?: () => { status: 403 | 409; error: string } | null) => Promise<StructuredHostTerminationOutcome>;
+  terminate?: (
+    ref: StructuredHostKillRef,
+    authorize?: () => { status: 403 | 409; error: string } | null,
+    observed?: RegistryFile["entries"][string],
+  ) => Promise<StructuredHostTerminationOutcome>;
   record?: (report: StructuredHostRetirementReport) => void;
   now?: () => number;
   idleMs?: number;
@@ -1250,8 +1254,7 @@ export async function runStructuredHostRetirementSweep(
     const host = structuredDeliveryHostForConversation(conversationId);
     if (host) await flushStructuredHostPersistence(host);
   });
-  const authorizeRetirement = (ref: StructuredHostKillRef) => {
-    const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
+  const authorizeRetirement = (ref: StructuredHostKillRef, observed: RegistryFile["entries"][string] | undefined) => {
     const scope = recordedAgentScope(observed?.structuredHost);
     return () => {
       if (publicationState() !== "ready") return { status: 409 as const, error: "retirement publication changed" };
@@ -1266,7 +1269,7 @@ export async function runStructuredHostRetirementSweep(
       return null;
     };
   };
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, authorize = authorizeRetirement(ref)) => {
+  const terminate = dependencies.terminate ?? ((ref, authorize, observed) => {
     return terminateStructuredHostTree(ref, {
     authorize,
     stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
@@ -1532,7 +1535,7 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref, authorizeRetirement(ref));
+      outcome = await terminate(ref, authorizeRetirement(ref, fresh), fresh);
     } catch (error) {
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId, error: String(error), remaining: [] });
       continue;
