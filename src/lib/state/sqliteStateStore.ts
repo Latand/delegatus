@@ -573,51 +573,64 @@ function backfillPipelineRequestReceipts(db: Database): void {
   const checkBudget = () => {
     if (performance.now() >= deadline) throw new Error("pipeline receipt backfill exceeded its startup budget");
   };
-  const insert = db.query("INSERT OR IGNORE INTO pipeline_request_receipts(collection,row_key,request_key) VALUES (?,?,?)");
-  const existing = db.query<{ request_key: string }, [string, string]>(
-    "SELECT request_key FROM pipeline_request_receipts WHERE collection=? AND row_key=?");
-  const conflicts = db.query("SELECT 1 FROM pipeline_request_receipts INDEXED BY pipeline_request_receipt_key WHERE collection=? AND request_key=? AND row_key<>? LIMIT 1");
-  const read = db.query<{ value_json: string }, [string, string]>(
-    "SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
-  for (const collection of ["pipelines", "pipelines_archive"]) {
-    let after = "";
-    for (;;) {
-      checkBudget();
-      const rows = db.query<{ row_key: string }, [string, string]>(
-        "SELECT row_key FROM state_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT 16",
-      ).all(collection, after);
-      for (const { row_key: key } of rows) {
+  // Bun 1.3.3 closes only cached query statements. Keep these startup-only
+  // statements out of that bounded cache and finalize them on every exit.
+  const statements: Array<{ finalize(): void }> = [];
+  const prepare = <Row = unknown, Bindings extends SQLQueryBindings[] = SQLQueryBindings[]>(sql: string) => {
+    const statement = db.prepare<Row, Bindings>(sql);
+    statements.push(statement);
+    return statement;
+  };
+  try {
+    const insert = prepare("INSERT OR IGNORE INTO pipeline_request_receipts(collection,row_key,request_key) VALUES (?,?,?)");
+    const existing = prepare<{ request_key: string }, [string, string]>(
+      "SELECT request_key FROM pipeline_request_receipts WHERE collection=? AND row_key=?");
+    const conflicts = prepare("SELECT 1 FROM pipeline_request_receipts INDEXED BY pipeline_request_receipt_key WHERE collection=? AND request_key=? AND row_key<>? LIMIT 1");
+    const read = prepare<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+    const page = prepare<{ row_key: string }, [string, string]>(
+      "SELECT row_key FROM state_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT 16");
+    for (const collection of ["pipelines", "pipelines_archive"]) {
+      let after = "";
+      for (;;) {
         checkBudget();
-        const value = parseSqliteJson(read.get(collection, key)!.value_json, db) as Record<string, unknown> | null;
-        checkBudget();
-        const keys = new Set<string>();
-        const add = (receipt: unknown) => {
+        const rows = page.all(collection, after);
+        for (const { row_key: key } of rows) {
           checkBudget();
-          if (receipt && typeof receipt === "object" && typeof (receipt as { key?: unknown }).key === "string") {
-            keys.add((receipt as { key: string }).key);
+          const value = parseSqliteJson(read.get(collection, key)!.value_json, db) as Record<string, unknown> | null;
+          checkBudget();
+          const keys = new Set<string>();
+          const add = (receipt: unknown) => {
+            checkBudget();
+            if (receipt && typeof receipt === "object" && typeof (receipt as { key?: unknown }).key === "string") {
+              keys.add((receipt as { key: string }).key);
+            }
+            checkBudget();
+          };
+          if (value && typeof value === "object") {
+            add(value.creationRequest); add(value.adoptedCreationRequest);
+            if (Array.isArray(value.adoptedCreationRequests)) value.adoptedCreationRequests.forEach(add);
           }
-          checkBudget();
-        };
-        if (value && typeof value === "object") {
-          add(value.creationRequest); add(value.adoptedCreationRequest);
-          if (Array.isArray(value.adoptedCreationRequests)) value.adoptedCreationRequests.forEach(add);
-        }
-        if (existing.all(collection, key).some(row => { checkBudget(); return !keys.has(row.request_key); })) {
-          throw new Error("pipeline receipt projection contradicts its retained row");
-        }
-        for (const requestKey of keys) {
-          checkBudget();
-          if (["pipelines", "pipelines_archive"].some(other => { checkBudget(); return conflicts.get(other, requestKey, key); })) {
-            throw new Error("pipeline receipt key has conflicting retained owners");
+          if (existing.all(collection, key).some(row => { checkBudget(); return !keys.has(row.request_key); })) {
+            throw new Error("pipeline receipt projection contradicts its retained row");
           }
-          checkBudget();
-          insert.run(collection, key, requestKey);
-          checkBudget();
+          for (const requestKey of keys) {
+            checkBudget();
+            if (["pipelines", "pipelines_archive"].some(other => { checkBudget(); return conflicts.get(other, requestKey, key); })) {
+              throw new Error("pipeline receipt key has conflicting retained owners");
+            }
+            checkBudget();
+            insert.run(collection, key, requestKey);
+            checkBudget();
+          }
+          after = key;
         }
-        after = key;
+        if (rows.length < 16) break;
       }
-      if (rows.length < 16) break;
     }
+    checkBudget();
+  } finally {
+    for (const statement of statements) statement.finalize();
   }
   checkBudget();
 }
@@ -785,6 +798,64 @@ function insertSeed<T>(db: Database, seed: StateCollectionSeed<T>): void {
   });
 }
 
+/** The format-six writer changes only this recognized, complete pair. SQLite
+ * remains authoritative; legacy mirrors and retained row bytes are never read
+ * as replacement input. The caller already owns the SQLite writer transaction. */
+function upgradePipelineCollectionsToSix(db: Database, filename: string, seeds: readonly StateCollectionSeed<unknown>[]): void {
+  const expected = new Map([["pipelines", "pipelines-json-v1"], ["pipelines_archive", "pipelines-archive-json-v1"]]);
+  const declarations = seeds.filter(seed => expected.has(seed.collection));
+  if (declarations.length !== 2 || [...expected].some(([collection, migration]) =>
+    !declarations.some(seed => seed.collection === collection && seed.schemaVersion === 6 && seed.migrationId === migration))) return;
+  const statements: Array<{ finalize(): void }> = [];
+  const prepare = <Row = unknown, Bindings extends SQLQueryBindings[] = SQLQueryBindings[]>(sql: string) => {
+    const statement = db.prepare<Row, Bindings>(sql);
+    statements.push(statement);
+    return statement;
+  };
+  try {
+    const markers = prepare<{ collection: string; schema_version: number; migration_id: string }, []>(
+      "SELECT collection,schema_version,migration_id FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')",
+    ).all();
+    if (!markers.some(marker => marker.schema_version === 5)) return;
+    if (markers.length !== 2) throw new Error("pipeline format upgrade requires both retained collections");
+    if (markers.some(marker => marker.schema_version !== 5)) throw new Error("pipeline format upgrade refuses mixed collection versions");
+    if (markers.some(marker => marker.migration_id !== expected.get(marker.collection))) {
+      throw new Error("pipeline format upgrade refuses an unknown migration identity");
+    }
+    const directory = path.dirname(filename);
+    assertSqliteInitializationAuthority(filename);
+    assertStateStartupMutation(directory, "pipeline format six migration");
+    const leases = prepare<LeaseRow, []>(
+      "SELECT * FROM state_leases WHERE collection IN ('pipelines','pipelines_archive')",
+    ).all();
+    if (leases.some(lease => stateLeaseOwnerAlive({ pid: lease.owner_pid, startIdentity: lease.owner_start_identity }))) {
+      throw new FileTransactionBusyError("pipeline format upgrade is waiting for a collection writer");
+    }
+    const names = ["pipeline_request_receipts", "pipeline_request_receipt_key", "pipeline_request_receipt_insert",
+      "pipeline_request_receipt_update", "pipeline_request_receipt_delete", "pipeline_adopted_creation_request",
+      "pipeline_integration_format", "pipeline_repository_resolver_capacity"];
+    const installed = new Map(prepare<{ name: string; sql: string | null }, SQLQueryBindings[]>(
+      `SELECT name,sql FROM sqlite_master WHERE name IN (${names.map(() => "?").join(",")})`,
+    ).all(...names).map(row => [row.name, row.sql]));
+    const normalize = (sql: string) => sql.replace("IF NOT EXISTS ", "").replace(/\s+/g, " ").trim();
+    for (const name of names) {
+      const declared = stateSchema[stateSchemaNames.indexOf(name)], current = installed.get(name);
+      if (!declared || !current || normalize(current) !== normalize(declared)) {
+        throw new Error(`pipeline format upgrade requires the verified ${name} schema`);
+      }
+    }
+    backfillPipelineRequestReceipts(db);
+    assertSqliteInitializationAuthority(filename);
+    assertStateStartupMutation(directory, "pipeline format six publication");
+    const changed = prepare("UPDATE state_collections SET schema_version=6 WHERE collection IN ('pipelines','pipelines_archive') AND schema_version=5").run();
+    if (changed.changes !== 2) throw new Error("pipeline format upgrade lost its collection pair");
+    assertSqliteInitializationAuthority(filename);
+    assertStateStartupMutation(directory, "pipeline format six publication");
+  } finally {
+    for (const statement of statements) statement.finalize();
+  }
+}
+
 /** Import one or more legacy collections in one durable first-boot transaction. */
 export function initializeStateCollections(
   filename: string,
@@ -810,6 +881,7 @@ export function initializeStateCollections(
     }
     withImmediateTransaction(db, "state migration is busy", () => {
       assertSqliteInitializationAuthority(filename, allowFencedExisting);
+      if (!options.reimportExisting) upgradePipelineCollectionsToSix(db, filename, seeds);
       if (options.reimportExisting && !collectionMarkersMatch(db, seeds)) {
         const removeLease = db.query("DELETE FROM state_leases WHERE collection = ?");
         const removeCollection = db.query("DELETE FROM state_collections WHERE collection = ?");

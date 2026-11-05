@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import path from "node:path";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
-import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
+import { PIPELINES_SCHEMA_VERSION, buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -12,7 +12,7 @@ import { NATIVE_QUEUE_CAPABILITY } from "./codexCapabilityFlags";
 
 for (const transport of ["host", "native"] as const) {
   for (const change of ["ordinary", "after-journal", "during-prepare"] as const) {
-    test(`format rollback retains unsupported input at ${transport} dispatch: ${change}`, async () => {
+    test(`declared pipeline format governs retained ${transport} input: ${change}`, async () => {
       const f = migrationDeliveryFixture(), previous = process.env.LLV_STATE_DIR;
       process.env.LLV_STATE_DIR = f.root;
       let writes = 0, expose = false, changed = false, busy = false;
@@ -91,10 +91,10 @@ for (const transport of ["host", "native"] as const) {
         if (change === "after-journal") upgrade();
         expose = true; busy = transport === "native" && change === "after-journal";
         await bind(); await kickStructuredDeliveryQueue();
-        if (change !== "ordinary") expect(writes).toBe(0);
+        if (change !== "ordinary" && PIPELINES_SCHEMA_VERSION < 6) expect(writes).toBe(0);
         await bindStructuredDeliveryQueue([], { client: null });
         busy = false; await bind(); await kickStructuredDeliveryQueue();
-        expect(writes).toBe(change === "ordinary" ? 1 : 0);
+        expect(writes).toBe(change === "ordinary" || PIPELINES_SCHEMA_VERSION >= 6 ? 1 : 0);
         expect(f.journal.operationResult("format-send")).not.toBeNull();
         if (changed) {
           const db = new Database(filename, { readonly: true });

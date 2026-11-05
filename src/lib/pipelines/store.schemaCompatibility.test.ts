@@ -5,9 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { initializeStateCollections } from "@/lib/state/sqliteStateStore";
-import { buildPipeline, loadPipelines, loadArchivedPipelines, pipelineStateCollectionSeeds,
+import { PIPELINES_SCHEMA_VERSION, buildPipeline, loadPipelines, loadArchivedPipelines, pipelineStateCollectionSeeds,
   pipelineDeliveryLookup, savePipelines, withPipelineMutation,
   checkpointPipelineRollbackMirrorsForDemotion } from "./store";
+
+// The same retained records are held by the format-five rollback reader and
+// understood by the full format-six reader. Each release runs its own contract.
+const understandsIntegration = PIPELINES_SCHEMA_VERSION >= 6;
 
 function fixture(id: string) {
   return buildPipeline({ id, task: "Format compatibility", project: "fixture", repoDir: "/repo",
@@ -59,11 +63,11 @@ test("the rollback bridge opens format six beside stale JSON and preserves its v
   expect(JSON.parse(fs.readFileSync(path.join(root, "pipelines-archive.json"), "utf8")).schemaVersion).toBe(6);
 }));
 
-test("the rollback bridge preserves future receipt-bearing rows without admitting them", async () => isolated(root => {
+test("readers preserve receipt-bearing rows under their declared format", async () => isolated(root => {
   const future = { ...fixture("future"), adoptedCreationRequests: [{ key: "adopted-key", digest: "digest" }] };
   seed(root, 5, [fixture("healthy"), future]);
   const before = inspect(root).rows.find(row => (row as { row_key: string }).row_key === "future");
-  expect(loadPipelines().map(p => p.id)).toEqual(["healthy"]);
+  expect(loadPipelines().map(p => p.id)).toEqual(understandsIntegration ? ["healthy", "future"] : ["healthy"]);
   savePipelines(loadPipelines());
   expect(inspect(root).rows.find(row => (row as { row_key: string }).row_key === "future")).toEqual(before);
   checkpointPipelineRollbackMirrorsForDemotion();
@@ -71,14 +75,15 @@ test("the rollback bridge preserves future receipt-bearing rows without admittin
   expect(mirror.pipelines.find((p: { id: string }) => p.id === "future")).toEqual(future);
 }));
 
-test.each([false, true])("the rollback bridge refuses an adopted replay before another outcome is admitted, archive=%s", async archived => isolated(root => {
+test.each([false, true])("replay retains its outcome or refuses an unsupported reader, archive=%s", async archived => isolated(root => {
   const future = { ...fixture("future"), creationRequest: { key: "original-key", digest: "original" },
     adoptedCreationRequest: { key: "prior-key", digest: "prior" },
     adoptedCreationRequests: [{ key: "adopted-key", digest: "adopted" }] };
-  seed(root, 5, archived ? [fixture("healthy")] : [fixture("healthy"), future], archived ? [future] : []);
+  seed(root, PIPELINES_SCHEMA_VERSION, archived ? [fixture("healthy")] : [fixture("healthy"), future], archived ? [future] : []);
   const before = inspect(root);
   for (const requestKey of ["original-key", "prior-key", "adopted-key"]) {
-    expect(() => pipelineDeliveryLookup({ requestKey })).toThrow("invalid indexed pipeline row");
+    if (understandsIntegration) expect(pipelineDeliveryLookup({ requestKey })?.id).toBe("future");
+    else expect(() => pipelineDeliveryLookup({ requestKey })).toThrow("invalid indexed pipeline row");
   }
   expect(inspect(root)).toEqual(before);
 }));
@@ -93,7 +98,7 @@ test("the rollback bridge refuses an unsupported version without changing retain
 
 test("receipt projections preserve opaque future fields and index only object keys", async () => isolated(root => {
   const future = { ...fixture("future"), adoptedCreationRequests: [3, "future-token", { key: "retained-key", digest: "digest" }] };
-  seed(root, 5, [fixture("healthy"), future]);
+  seed(root, PIPELINES_SCHEMA_VERSION, [fixture("healthy"), future]);
   const before = inspect(root);
   expect(loadPipelines().map(p => p.id)).toEqual(["healthy"]);
   expect(() => pipelineDeliveryLookup({ requestKey: "retained-key" })).toThrow("invalid indexed pipeline row");
@@ -106,9 +111,12 @@ test("installing the receipt projection backfills retained rows without rewritin
   const db = new Database(path.join(root, "state.sqlite"));
   try { db.exec("DROP TABLE pipeline_request_receipts"); } finally { db.close(); }
   const before = inspect(root);
-  expect(loadPipelines().map(p => p.id)).toEqual(["healthy"]);
-  expect(() => pipelineDeliveryLookup({ requestKey: "retained-key" })).toThrow("invalid indexed pipeline row");
-  expect(inspect(root)).toEqual(before);
+  expect(loadPipelines().map(p => p.id)).toEqual(understandsIntegration ? ["healthy", "future"] : ["healthy"]);
+  if (understandsIntegration) expect(pipelineDeliveryLookup({ requestKey: "retained-key" })?.id).toBe("future");
+  else expect(() => pipelineDeliveryLookup({ requestKey: "retained-key" })).toThrow("invalid indexed pipeline row");
+  const after = inspect(root);
+  expect(after.markers).toMatchObject([{ schema_version: PIPELINES_SCHEMA_VERSION }, { schema_version: PIPELINES_SCHEMA_VERSION }]);
+  expect({ ...after, markers: before.markers }).toEqual(before);
 }));
 
 test("a format-six database with a missing receipt index refuses repair that would lose replay ownership", async () => isolated(root => {
@@ -175,14 +183,20 @@ test("lost startup authority rolls back receipt installation without changing re
 }));
 
 
-test("the bridge refuses a format-six JSON import instead of relabeling it five", async () => isolated(root => {
+test("a reader never relabels imported format-six JSON as five", async () => isolated(root => {
   const source = JSON.stringify({ schemaVersion: 6, pipelines: [fixture("future")] });
   fs.writeFileSync(path.join(root, "pipelines.json"), source);
   fs.writeFileSync(path.join(root, "pipelines-archive.json"), JSON.stringify({ schemaVersion: 6, pipelines: [] }));
-  expect(loadPipelines).toThrow("unsupported pipeline registry schema: 6");
+  if (understandsIntegration) {
+    expect(loadPipelines().map(p => p.id)).toEqual(["future"]);
+    expect(inspect(root).markers).toMatchObject([{ schema_version: 6 }, { schema_version: 6 }]);
+    expect(inspect(root).rows).toHaveLength(1);
+  } else {
+    expect(loadPipelines).toThrow("unsupported pipeline registry schema: 6");
+    expect(inspect(root).markers).toEqual([]);
+    expect(inspect(root).rows).toEqual([]);
+  }
   expect(fs.readFileSync(path.join(root, "pipelines.json"), "utf8")).toBe(source);
-  expect(inspect(root).markers).toEqual([]);
-  expect(inspect(root).rows).toEqual([]);
 }));
 
 

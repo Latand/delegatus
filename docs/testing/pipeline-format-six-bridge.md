@@ -1,5 +1,7 @@
 # Pipeline format six rollback reader
 
+This describes the format-five bridge release. The following feature release uses the [format-six transition](pipeline-format-six-upgrade.md).
+
 Install and verify this compatibility release as the immediate rollback target before upgrading an existing pipeline database to format six. This release continues to create format-five collections. It can open existing format-six collections without changing their markers or importing legacy JSON again.
 
 The rollback reader keeps ordinary pipelines available. Records with integration state or adopted creation receipts remain opaque and preserved. They are excluded from controller and publication projections; queued host and native input is deferred, and paid-credit recovery cannot resume it. Ordinary pipelines may still use an integration-like stage name. Existing accepted native work is not undone by this guard.
