@@ -1747,8 +1747,13 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
     const element = document.querySelector<HTMLElement>(defining);
     const box = element?.getBoundingClientRect();
     const scrollerBox = scroller.getBoundingClientRect();
+    /* One about as tall as the scroller (a short landscape sheet) cannot stand whole, since the end of the scroll starts on a row's
+       top and keeps up to 64 px under the last row: its start or its end is on the screen, or it fills it. */
+    const tall = scroller.contains(element!) && box !== undefined && box.height > scrollerBox.height - 64;
+    const fills = tall && box!.top <= scrollerBox.top + 1 && box!.bottom >= scrollerBox.bottom - 1;
+    const starts = tall && ((box!.top >= scrollerBox.top - 1 && box!.top < scrollerBox.bottom - 16) || (box!.bottom <= scrollerBox.bottom + 1 && box!.bottom > scrollerBox.top + 16));
     if (!box) failures.push(`defining element missing: ${defining}`);
-    else if (!inView(box) || (scroller.contains(element!) && (box.top < scrollerBox.top - 1 || box.bottom > scrollerBox.bottom + 1))) failures.push(`defining element not in view: ${defining}`);
+    else if (tall ? !(fills || starts) || box.left < -0.5 || box.right > vw + 0.5 : !inView(box) || (scroller.contains(element!) && (box.top < scrollerBox.top - 1 || box.bottom > scrollerBox.bottom + 1))) failures.push(`defining element not in view: ${defining} at ${Math.round(box.top)}-${Math.round(box.bottom)}, scroller ${Math.round(scrollerBox.top)}-${Math.round(scrollerBox.bottom)}`);
   }
   /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
   for (const element of scroller.querySelectorAll<HTMLElement>("*")) {

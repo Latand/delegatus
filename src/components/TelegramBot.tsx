@@ -51,8 +51,8 @@ export function formatTime(iso: string | null, locale?: string): string | null {
 }
 
 const inputClass = "h-11 min-w-0 rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8";
-const roomyField = "min-h-9 min-w-0 rounded-control border border-border bg-well px-2.5 text-body text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55 max-sm:min-h-11";
-const roomyButton = "min-h-9 shrink-0 rounded-control border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 max-sm:min-h-11 max-sm:text-body";
+const roomyField = "min-h-9 min-w-0 rounded-control border border-border bg-well px-2.5 text-body text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55 settings-sheet:min-h-11";
+const roomyButton = "min-h-9 shrink-0 rounded-control border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 settings-sheet:min-h-11 settings-sheet:text-body";
 
 /**
  * A chat's posting switch and alias, shared by every surface that draws a chat.
