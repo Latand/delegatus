@@ -110,7 +110,7 @@ export function serveRuntimeHost(socketPath: string, host: RuntimeHostSocketHand
         keepAlive = request.keepAlive === true;
         performanceSpans.request(request.id, request.method);
         performanceSpans.event("rpc.receive", request.id);
-        if (request.method === "viewer-deployment-request") socket.setTimeout(deploymentTimeoutMs);
+        if (request.method === "viewer-deployment-request" || request.method === "viewer-deployment-reconcile") socket.setTimeout(deploymentTimeoutMs);
         const failure = (): RuntimeSocketResponse => ({ id: request.id, ok: false, error: "runtime request failed" });
         const run = () => performanceSpans.correlate(request.id, () => performanceSpans.wait("runtime.handler", () => host.handle(request, { signal: abort!.signal })));
         if (request.method === "wait") {
