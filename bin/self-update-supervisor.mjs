@@ -36,13 +36,10 @@ import { existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, 
 import { basename, dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
-import { RUNTIME_HOST_STARTUP_CEILING_MS } from "./server-runtime.mjs";
+export { RUNTIME_HOST_STARTUP_CEILING_MS, TERMINAL_BOOTSTRAP_TIMEOUT_MS } from "./launcher-deadline.mjs";
 
 export const RECORD_VERSION = 1;
 export const GIT_PROBE_TIMEOUT_MS = 2_000;
-// Runtime host (up to 5min), files (90s), and page+chunk (90s), for both the
-// candidate and rollback release, plus bounded terminal polling/exec slack.
-export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 2 * (RUNTIME_HOST_STARTUP_CEILING_MS + 90_000 + 90_000) + 30_000;
 const REQUEST_ROLES = new Set(["web", "runtime-host", "relaunch"]);
 
 /**

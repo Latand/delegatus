@@ -10,7 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
-import { boundedWait, STOP_TIMEOUT_MS } from "./launcher-deadline.mjs";
+import { boundedWait, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -1703,10 +1703,18 @@ function handOffLauncher({ checkout, entry, record }) {
     process.on("SIGINT", forward);
     process.on("SIGTERM", forward);
     let spawnError = null;
-    child.once("error", (error) => { spawnError = error; });
-    child.once("close", (code, signal) => {
+    let timer;
+    let finished = false;
+    const finish = started => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
       process.off("SIGINT", forward);
       process.off("SIGTERM", forward);
+      done(started);
+    };
+    child.once("error", (error) => { spawnError = error; });
+    child.once("close", (code, signal) => {
       const status = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
       let recorded = false;
       if (child.pid) {
@@ -1715,12 +1723,77 @@ function handOffLauncher({ checkout, entry, record }) {
       const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
-        done(false);
+        finish(false);
       } else {
         process.exitCode = status;
-        done(true);
+        finish(true);
       }
     });
+    const json = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
+    const directory = dirname(record);
+    const suffix = record.slice(record.lastIndexOf("launcher-") + 9);
+    const trialFile = join(directory, `trial-${suffix}`);
+    const applyFile = join(directory, "apply.json");
+    const trial = json(trialFile), apply = json(applyFile);
+    const active = !!(trial && apply && trial.requestId === apply.requestId && trial.target === apply.target
+      && trial.target === json(join(directory, `release-${suffix}`))?.sha
+      && apply.state === "switching");
+    const persistedDeadline = active
+      ? Math.min(switchDeadline(apply), Number.isFinite(trial.switchDeadlineAt) ? trial.switchDeadlineAt : Infinity)
+      : Infinity;
+    const deadline = Math.min(Date.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+      Number.isFinite(persistedDeadline) ? persistedDeadline : Infinity);
+    timer = setTimeout(() => { void (async () => {
+      if (forwarded) return finish(true);
+      const switchOverrun = active && Date.now() >= persistedDeadline;
+      const detail = switchOverrun
+        ? SWITCH_OVERRUN
+        : "The replacement launcher did not become ready before its startup deadline";
+      if (active) {
+        const refusedTrial = switchOverrun ? { ...trial, switchOverrun: trial.switchOverrun ?? SWITCH_OVERRUN } : trial;
+        if (switchOverrun) writeFileSync(trialFile, `${JSON.stringify(refusedTrial)}\n`, { mode: 0o600 });
+        const pointer = join(directory, `release-${suffix}`);
+        if (json(pointer)?.sha === trial.target) {
+          if (trial.rollbackPointer === null) {
+            try { rmSync(pointer, { force: true }); } catch { /* refusal remains durable */ }
+          } else if (typeof trial.rollbackPointer === "string") {
+            const temporary = `${pointer}.${process.pid}.rollback`;
+            try { writeFileSync(temporary, trial.rollbackPointer, { mode: 0o600 }); renameSync(temporary, pointer); }
+            catch { try { rmSync(temporary, { force: true }); } catch { /* refusal remains durable */ } }
+          }
+        }
+        try { writeLauncherRefusal({ record, trial: trialFile, request: join(directory, `request-${suffix}`), releasePointer: pointer }, refusedTrial, detail); }
+        catch (error) { console.error(`[self-update] terminal handoff refusal could not be persisted: ${error.message}`); }
+      }
+      const currentRecord = json(record);
+      const childOwnsRecord = child.pid && child.exitCode == null && child.signalCode == null
+        && currentRecord?.launcher?.pid === child.pid && typeof currentRecord.launcher.startIdentity === "string";
+      if (currentRecord && (active || childOwnsRecord)) {
+        try {
+          const cleanup = import("./launcher-adoption.mjs").then(({ stopRecorded }) => {
+            const latest = json(record), latestApply = json(applyFile), latestTrial = json(trialFile);
+            const refusalStillOwned = active && latestApply?.requestId === trial.requestId && latestApply.target === trial.target
+              && latestApply.state === "failed" && latestTrial?.requestId === trial.requestId && latestTrial.refused === true;
+            const childStillOwnsRecord = childOwnsRecord && latest?.launcher?.pid === child.pid
+              && latest.launcher.startIdentity === currentRecord.launcher.startIdentity;
+            if (!latest || (!refusalStillOwned && !childStillOwnsRecord)) return [];
+            return Promise.all([
+              stopRecorded(latest.web, latest.socket, latest.port, checkout, join(directory, `release-${suffix}`)),
+              stopRecorded(latest.runtimeHost, latest.socket),
+            ]);
+          });
+          await boundedWait(cleanup, STOP_TIMEOUT_MS + 5000, "The replacement launcher's recorded services did not stop before fallback");
+        } catch (error) { console.error(`[self-update] replacement service cleanup exceeded its deadline: ${error.message}`); }
+      }
+      if (child.pid && child.exitCode == null && child.signalCode == null) {
+        const closed = new Promise(resolve => child.once("close", resolve));
+        child.kill("SIGKILL");
+        try { await boundedWait(closed, STOP_TIMEOUT_MS, "The replacement launcher did not exit after SIGKILL"); }
+        catch (error) { console.error(`[self-update] replacement launcher cleanup exceeded its deadline: ${error.message}`); }
+      }
+      finish(true);
+    })(); }, Math.max(1, deadline - Date.now()));
+    timer.unref?.();
   });
 }
 

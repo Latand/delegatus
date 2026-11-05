@@ -20,6 +20,25 @@ import { stopRecorded } from "./launcher-adoption.mjs";
 
 export const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
 
+function stopStartedLauncher(child, identity) {
+  if (!child.pid || child.exitCode != null || child.signalCode != null) return false;
+  if (!identity || readStartIdentity(child.pid) !== identity) {
+    child.kill("SIGKILL");
+    return true;
+  }
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${child.pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (Number(fields[2]) === child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      }
+    } catch (error) { if (error.code !== "ESRCH") throw error; return false; }
+  }
+  try { process.kill(child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+  return true;
+}
+
 function atomic(file, value) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
@@ -106,7 +125,8 @@ async function terminalBootstrap(encoded, nextEntry, args) {
         LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: plan.root, LLV_LAUNCHER_CHECKOUT: plan.root } }).status === 0;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
   const rollback = detail => {
-    restore(); atomic(trialFile, JSON.stringify({ ...intent, state: "rolled-back", detail,
+    const currentTrial = read(trialFile) ?? intent;
+    restore(); atomic(trialFile, JSON.stringify({ ...currentTrial, state: "rolled-back", detail,
       rollbackDeadlineAt: Date.now() + ROLLBACK_TIMEOUT_MS }) + "\n");
   };
   if (!loads) rollback("The replacement launcher failed its load check.");
@@ -117,20 +137,24 @@ async function terminalBootstrap(encoded, nextEntry, args) {
         LLV_LAUNCHER_CHECKOUT: plan.root, LLV_LAUNCHER_TRIAL: intent.requestId } });
     child.on("error", () => {}); child.unref(); return child;
   };
-  const refusePrior = async (detail, priorChild, identity, trial) => {
+  const refuseLauncher = async (detail, launcherChild, identity, trial) => {
     const refused = writeLauncherRefusal(terminalPaths, trial, detail);
     const currentRecord = read(recordFile);
-    const ownsRecord = currentRecord?.launcher?.pid === priorChild.pid
+    const ownsRecord = currentRecord?.launcher?.pid === launcherChild.pid
       && currentRecord.launcher.startIdentity === identity;
-    if (identity && readStartIdentity(priorChild.pid) === identity) {
-      try { process.kill(priorChild.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-    } else if (!priorChild.killed && priorChild.exitCode === null && priorChild.signalCode === null) {
-      priorChild.kill("SIGKILL");
+    let closed;
+    if (launcherChild.pid && launcherChild.exitCode == null && launcherChild.signalCode == null) {
+      closed = new Promise(resolve => launcherChild.once("close", resolve));
     }
-    if (ownsRecord) await Promise.all([
+    const signalled = stopStartedLauncher(launcherChild, identity);
+    const cleanup = [
+      ...(closed && signalled ? [boundedWait(closed, STOP_TIMEOUT_MS, "The refused launcher did not exit after SIGKILL")] : []),
+    ];
+    if (ownsRecord) cleanup.push(
       stopRecorded(currentRecord.web, currentRecord.socket, currentRecord.port, plan.root, plan.releasePointer),
       stopRecorded(currentRecord.runtimeHost, currentRecord.socket),
-    ]);
+    );
+    await Promise.all(cleanup);
     throw new Error(refused.detail);
   };
   const supervisePrior = async priorChild => {
@@ -141,7 +165,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
       await guardLegacyRollback(terminalPaths, trial, plan.root,
         { pid: priorChild.pid, identity: priorIdentity }, previousOwner);
     } catch (error) {
-      await refusePrior(`The prior launcher rollback guard could not start: ${error.message}`,
+      await refuseLauncher(`The prior launcher rollback guard could not start: ${error.message}`,
         priorChild, priorIdentity, trial);
     }
   };
@@ -155,7 +179,8 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
   const rollbackExpiry = failed ? read(trialFile)?.rollbackDeadlineAt : null;
   const deadline = Math.min(performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
-    rollbackExpiry ? performance.now() + Math.max(0, rollbackExpiry - Date.now()) : Infinity);
+    rollbackExpiry ? performance.now() + Math.max(0, rollbackExpiry - Date.now())
+      : owned ? performance.now() + Math.max(0, switchDeadline(apply) - Date.now()) : Infinity);
   while (performance.now() < deadline) {
     const trial = read(trialFile); const record = read(recordFile);
     if (trial?.requestId === intent.requestId && trial.state === "rolled-back") failed = true;
@@ -178,21 +203,26 @@ async function terminalBootstrap(encoded, nextEntry, args) {
     if (child.exitCode !== null || child.signalCode !== null) {
       if (startedPrior) {
         const latest = read(trialFile);
-        throw new Error(latest?.refused ? latest.detail : "The prior release could not start; update custody is retained.");
+        await refuseLauncher(latest?.refused ? latest.detail : "The prior release exited before readiness.", child, priorIdentity, latest ?? read(trialFile));
       }
       failed = true; startedPrior = true; rollback("The replacement launcher failed before readiness."); child = start(priorEntry);
       await supervisePrior(child);
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  if (startedPrior) {
-    const trial = read(trialFile);
-    const detail = trial?.rollbackDeadlineAt && Date.now() >= trial.rollbackDeadlineAt
-      ? "The launcher rollback exceeded its 10 minute deadline"
+  const trial = read(trialFile);
+  const detail = trial?.rollbackDeadlineAt && Date.now() >= trial.rollbackDeadlineAt
+    ? "The launcher rollback exceeded its 10 minute deadline"
+    : owned && Date.now() >= switchDeadline(apply)
+      ? trial?.switchOverrun ?? SWITCH_OVERRUN
       : "Terminal launcher bootstrap exceeded its deadline";
-    await refusePrior(detail, child, priorIdentity, trial);
+  if (owned && Date.now() >= switchDeadline(apply) && trial) {
+    trial.switchOverrun = trial.switchOverrun ?? SWITCH_OVERRUN;
+    atomic(trialFile, JSON.stringify(trial) + "\n");
   }
-  throw new Error("Launcher health could not be verified; update custody is retained.");
+  if (!startedPrior) rollback(detail);
+  await refuseLauncher(detail, child, startedPrior ? priorIdentity : readStartIdentity(child.pid), read(trialFile) ?? trial);
+  throw new Error("Launcher health could not be verified; update custody was retained.");
 }
 function readPointer(raw) { try { return JSON.parse(raw); } catch { return null; } }
 

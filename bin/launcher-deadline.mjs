@@ -8,6 +8,8 @@ export const SWITCH_TIMEOUT_MS = 10 * 60_000;
 export const ROLLBACK_TIMEOUT_MS = 10 * 60_000;
 export const PROBE_TIMEOUT_MS = 2_000;
 export const STOP_TIMEOUT_MS = 10_000;
+export const RUNTIME_HOST_STARTUP_CEILING_MS = 300_000;
+export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 2 * (RUNTIME_HOST_STARTUP_CEILING_MS + 90_000 + 90_000) + 30_000;
 export const SWITCH_OVERRUN = "The launcher switch exceeded its 10 minute deadline";
 
 /** Shared by the launcher and its guard, which can outlive an exec to an old entry. */

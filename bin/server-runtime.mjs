@@ -5,10 +5,10 @@ import { constants, homedir, networkInterfaces } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
-import { probeBind } from "./launcher-deadline.mjs";
+import { probeBind, RUNTIME_HOST_STARTUP_CEILING_MS } from "./launcher-deadline.mjs";
 
 export const RUNTIME_HOST_STARTUP_SILENCE_MS = 30_000;
-export const RUNTIME_HOST_STARTUP_CEILING_MS = 300_000;
+export { RUNTIME_HOST_STARTUP_CEILING_MS };
 
 // Read one candidate's existing startup record, never the shared journal or
 // every startup file. Timestamps and repeated output do not prove progress.

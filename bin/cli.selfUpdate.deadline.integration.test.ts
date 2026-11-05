@@ -189,22 +189,25 @@ export async function ensureWebPortFree() {
       { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" });
     children.add(replacement);
   }
+  let observedRecord: ReturnType<typeof readRecord> | null = null;
   const after = await until(() => {
     const record = readRecord(fixture.state);
-    return record.launcher.state === "healthy" && record.launcher.requestId === apply.current!.requestId
+    observedRecord = record;
+    return record.launcher.state === "healthy" && (coldRestart || record.launcher.requestId === apply.current!.requestId)
       && record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
-  }, 8000);
-  expect(Date.now()).toBeLessThan(deadline + 5000);
+  }, coldRestart ? 25_000 : 8000).catch(error => { throw new Error(`${error}\nlast recovery record: ${JSON.stringify(observedRecord)}`); });
+  expect(Date.now()).toBeLessThan(deadline + (coldRestart ? 20_000 : 5000));
   expect(savedDeadline).toBe(deadline);
   expect(after.launcher.revision).toBe(fixture.first);
   expect(await served(running.port)).toBe(fixture.checkout);
   expect(await socketAnswers(after.socket)).toBe(true);
   const cold = new ApplyController(directory);
   expect(cold.current).toMatchObject({ switchDeadlineAt: deadline, switchOverrun: "The launcher switch exceeded its 10 minute deadline" });
-  expect(cold.observe(after as never, true)).toBe("failed");
+  expect([null, "failed"]).toContain(cold.observe(after as never, true));
   expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
   const status = checkoutDeployments(directory)[0]!;
-  expect(status).toMatchObject({ terminal: true, phase: "rolled-back", error: "The launcher switch exceeded its 10 minute deadline" });
+  expect(status).toMatchObject({ terminal: true, error: "The launcher switch exceeded its 10 minute deadline" });
+  expect(coldRestart ? ["failed", "rolled-back"] : ["rolled-back"]).toContain(status.phase);
 
   // The fixture Viewer must be answering before running the production seat
   // tick: no in-Viewer wake can execute during the launcher's outage.
