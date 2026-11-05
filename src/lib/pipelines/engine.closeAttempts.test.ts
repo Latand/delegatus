@@ -1,5 +1,7 @@
 import { expect, test, Database, path, harness, rawPatchPipeline, closeAndDrain, AgentRegistry, setAgentRegistryForTests,
-  loadPipelines, savePipelines, activationDrainFixture, reserveActivationOnly } from "./engine.fixture";
+  loadPipelines, savePipelines, activationDrainFixture, reserveActivationOnly, tickPipelines, defaultPipelinePorts } from "./engine.fixture";
+import type { AgentRegistry as Registry, SpawnRequest } from "@/lib/agent/registry";
+import { stopPipelineStageAgent } from "./engine";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { buildPipeline, findPipelineRecord, loadPipelinesForProjection, loadPipelinesForList,
   loadPipelinesForStartup, isStoredPipeline, pipelineRevision, loadArchivedPipelinesForList } from "./store";
@@ -18,8 +20,8 @@ function pending(n: number): PipelineStageAttempt {
     input: null, activatedBy: null, output: null, verdict: null, error: null };
 }
 
-function lane(): Pipeline {
-  const pipeline = buildPipeline({ id: "close-attempts", task: "Close untouched work", project: "fixture",
+function lane(id = "close-attempts"): Pipeline {
+  const pipeline = buildPipeline({ id, task: "Close untouched work", project: "fixture",
     repoDir: "/repo", now: START, srcPath: null, srcConversationId: null, publication: "internal",
     stages: [
       { id: "review", kind: "run", prompt: "Review", effectiveRole: { ...role }, next: "publish" },
@@ -42,6 +44,244 @@ function stored(collection = "pipelines", id = "close-attempts"): { json: string
     return { ...row, pipeline: JSON.parse(row.json) };
   } finally { db.close(); }
 }
+
+/** Capture the actual stage producer's reservation input before dispatch. */
+async function closeLaunchFixture(label: string) {
+  const h = harness();
+  const pipeline = lane(`close-produced-${label}`);
+  pipeline.state = "running";
+  pipeline.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
+  pipeline.runs[0]!.attempts[1]!.spawnCalls = 0;
+  savePipelines([pipeline]);
+  let checks = 0;
+  h.ports.structuredDeliveryPublication = () => ++checks <= 2 ? "ready" : "unbound";
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  try { await tickPipelines([], h.ports); }
+  finally { delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+  const produced = loadPipelines()[0]!;
+  const attempt = produced.runs[0]!.attempts.at(-1)!;
+  const input = attempt.activation!.input;
+  delete attempt.activation;
+  Object.assign(attempt, { state: "pending", startedAt: START, spawnCalls: 1 });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `close-produced-${label}.json`));
+  const request = (retry = false) => ({ engine: input.role.engine, cwd: input.cwd, transport: "structured" as const,
+    accountId: input.requestedAccountId, role: input.role.roleId,
+    clientAttemptId: retry ? `handshake_retry_1_${input.clientAttemptId}`.slice(0, 128) : input.clientAttemptId,
+    conversationId: retry ? "conversation_close_retry" as const : "conversation_close_original" as const,
+    origin: { kind: "container" as const, container: "pipeline" as const, containerId: input.membership.containerId,
+      creatorConversationId: input.creatorConversationId?.startsWith("conversation_")
+        ? input.creatorConversationId as `conversation_${string}` : null },
+    memberships: [{ ...input.membership }], launchProfile: { title: input.title, cwd: input.cwd,
+      project: input.project, readOnly: input.role.access === "read-only" } } satisfies SpawnRequest);
+  const stops: Array<{ launchId: string | null | undefined; outcome: string }> = [];
+  h.ports.now = () => CLOSED;
+  const productionStop = defaultPipelinePorts().stopStageAgent;
+  h.ports.stopStageAgent = async (target, options) => {
+    const result = await productionStop(target, options);
+    stops.push({ launchId: target.launchId, outcome: result.outcome });
+    return result;
+  };
+  setAgentRegistryForTests(registry);
+  return { h, pipeline: produced, attempt, input, registry, request, stops,
+    stored: (collection = "pipelines") => stored(collection, produced.id) };
+}
+
+async function reserveUnadmitted(registry: Registry, request: SpawnRequest) {
+  await expect(registry.beginSpawnRequestAsync(request, () => {
+    if (registry.spawnReceiptForClientAttempt(request.clientAttemptId!)) throw new Error("hold before membership admission");
+  })).rejects.toThrow("hold before membership admission");
+  return registry.spawnReceiptForClientAttempt(request.clientAttemptId!)!;
+}
+
+test("production stop of a failed original retains the starting retry across repeated drains", async () => {
+  const f = await closeLaunchFixture("mixed");
+  try {
+    const first = f.registry.beginSpawnRequest(f.request());
+    const retry = f.registry.beginSpawnRequest(f.request(true));
+    expect(f.registry.failSpawn(first.receipt.launchId, "setup failed before host publication")).toBe(true);
+    f.attempt.spawnCalls = 2;
+    const firstReceipt = f.registry.spawnReceipt(first.receipt.launchId);
+    savePipelines([f.pipeline]);
+    for (let drain = 0; drain < 2; drain++) {
+      const result = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+      expect(result.close).toMatchObject({ status: "pending", pending: [expect.objectContaining({ launchId: retry.receipt.launchId })] });
+      expect(f.stored().pipeline.runs[0]!.attempts.at(-1)).toMatchObject({ state: "pending", completedAt: null, verdict: null });
+      expect(f.registry.spawnReceipt(retry.receipt.launchId)!.state).toBe("starting");
+    }
+    expect(f.stops).toEqual([{ launchId: first.receipt.launchId, outcome: "not-running" }]);
+    expect(f.registry.spawnReceipt(first.receipt.launchId)).toEqual(firstReceipt);
+    expect(f.registry.failSpawn(retry.receipt.launchId, "retry setup failed before host publication")).toBe(true);
+    const drained = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+    expect(drained.close).toMatchObject({ status: "settled", pending: [] });
+    expect(f.stored().pipeline.runs[0]!.attempts.at(-1)).toMatchObject({ state: "failed", completedAt: CLOSED });
+    expect(f.stops.map(stop => stop.launchId)).toEqual([first.receipt.launchId, retry.receipt.launchId]);
+    expect(f.stored().pipeline.runs.map(run => run.attempts.length)).toEqual(f.pipeline.runs.map(run => run.attempts.length));
+    expect(f.h.spawnInputs).toEqual([]);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test.each([false, true])("a no-host receipt released after close persists terminal settlement (prior host=%s)", async (priorHost) => {
+  const f = await closeLaunchFixture(`late-no-host-${priorHost}`);
+  try {
+    if (priorHost) {
+      const first = f.registry.beginSpawnRequest(f.request());
+      expect(f.registry.failSpawn(first.receipt.launchId, "original setup failed")).toBe(true);
+      f.attempt.spawnCalls = 2;
+    }
+    const request = f.request(priorHost);
+    const receipt = await reserveUnadmitted(f.registry, request);
+    savePipelines([f.pipeline]);
+    const waiting = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+    expect(waiting.close!.status).toBe("pending");
+    expect(f.stored().pipeline.runs[0]!.attempts.at(-1)!.state).toBe("pending");
+    expect(f.registry.retireUnconsumedSpawn(request.clientAttemptId, "unconsumed admission cancelled")).toBe(true);
+    const settled = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+    expect(settled.close).toMatchObject({ status: "settled", pending: [] });
+    expect(f.stored().pipeline.runs[0]!.attempts.at(-1)).toMatchObject({ state: priorHost ? "failed" : "skipped", completedAt: CLOSED });
+    expect(f.stops).toHaveLength(priorHost ? 1 : 0);
+    expect(f.registry.spawnReceipt(receipt.launchId)).toMatchObject({ state: "failed", membershipAdmitted: false });
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test.each(["missing", "foreign"] as const)("close retains %s original request evidence without stopping an unverified identity", async (variant) => {
+  const f = await closeLaunchFixture(`unverified-${variant}`);
+  try {
+    if (variant === "foreign") {
+      const begun = f.registry.beginSpawnRequest({ ...f.request(), clientAttemptId: "another-original-request" });
+      Object.assign(f.attempt, { launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId });
+    } else f.attempt.launchId = "missing-original-launch";
+    savePipelines([f.pipeline]);
+    for (let drain = 0; drain < 2; drain++) {
+      const closed = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+      expect(closed.close!.status).toBe("pending");
+      expect(closed.close!.pending).toHaveLength(1);
+      expect(f.stored().pipeline.runs[0]!.attempts.at(-1)).toMatchObject({ state: "pending", completedAt: null });
+    }
+    expect(f.stops).toEqual([]);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("a bound starting receipt retains custody until its original host materializes", async () => {
+  const f = await closeLaunchFixture("bound");
+  try {
+    const begun = f.registry.beginSpawnRequest(f.request());
+    Object.assign(f.attempt, { launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId });
+    const target = { stageId: "review", attempt: f.attempt.n, launchId: begun.receipt.launchId,
+      conversationId: begun.receipt.conversationId, agentPath: null, paneId: null };
+    expect(await stopPipelineStageAgent(target)).toEqual({ outcome: "not-running" });
+    savePipelines([f.pipeline]);
+    for (let drain = 0; drain < 2; drain++) {
+      const closed = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+      expect(closed.close).toMatchObject({ status: "pending", pending: [expect.objectContaining({ launchId: begun.receipt.launchId })] });
+      expect(closed.close!.notes).toContainEqual(expect.objectContaining({ launchId: begun.receipt.launchId,
+        detail: expect.stringContaining("still starting") }));
+      expect(f.stored().pipeline.runs[0]!.attempts.at(-1)).toMatchObject({ state: "pending", completedAt: null });
+    }
+    expect(f.stops).toEqual([]);
+    expect(f.registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId: "close-materialized" }, artifactPath: "/codex/close-materialized.jsonl",
+      cwd: f.input.cwd, accountId: null, launchProfile: begun.receipt.launchProfile, status: "idle", host: null,
+      structuredHost: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    }).kind).toBe("settled");
+    const drained = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+    expect(drained.close).toMatchObject({ status: "settled", pending: [], alreadyStopped: [target] });
+    expect(f.stops).toEqual([{ launchId: begun.receipt.launchId, outcome: "not-running" }]);
+    expect(f.stored().pipeline.runs[0]!.attempts.at(-1)).toMatchObject({ state: "failed", launchId: begun.receipt.launchId });
+    expect(f.h.spawnInputs).toEqual([]);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("retained receipt custody is independent of a prior terminal attempt checkpoint", async () => {
+  const f = await closeLaunchFixture("terminal-checkpoint");
+  try {
+    const begun = f.registry.beginSpawnRequest(f.request());
+    savePipelines([f.pipeline]);
+    await rawPatchPipeline(f.pipeline.id, { action: "close" }, f.h.ports);
+    const old = f.stored().pipeline;
+    // A previous controller could have stopped one host and written this state
+    // before checking another original receipt. Its custody still belongs here.
+    Object.assign(old.runs[0]!.attempts.at(-1)!, { state: "failed", completedAt: CLOSED });
+    savePipelines([old]);
+    const closed = await closeAndDrain(old.id, { action: "close" }, f.h.ports);
+    expect(closed.close).toMatchObject({ status: "pending", pending: [expect.objectContaining({ launchId: begun.receipt.launchId })] });
+    expect(f.stops).toEqual([]);
+    expect(f.registry.spawnReceipt(begun.receipt.launchId)!.state).toBe("starting");
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("verified unadmitted launch-only evidence settles durably and through every reader", async () => {
+  const f = await closeLaunchFixture("no-host");
+  try {
+    const request = f.request();
+    const begun = await reserveUnadmitted(f.registry, request);
+    expect(f.registry.retireUnconsumedSpawn(request.clientAttemptId, "unconsumed admission cancelled")).toBe(true);
+    const receipt = f.registry.spawnReceipt(begun.launchId);
+    Object.assign(f.attempt, { launchId: begun.launchId, conversationId: null });
+    savePipelines([f.pipeline]);
+    const earlier = structuredClone(f.pipeline.runs[0]!.attempts[0]);
+    const closed = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
+    expect(closed.close).toMatchObject({ status: "settled", pending: [] });
+    expect(f.stored().pipeline.runs[0]!.attempts.at(-1)).toMatchObject({ state: "skipped", launchId: begun.launchId,
+      conversationId: null, completedAt: CLOSED, startedAt: START, verdict: null });
+    expect(f.stored().pipeline.runs[0]!.attempts[0]).toEqual(earlier);
+    expect(f.stops).toEqual([]);
+    // Old persisted rows can carry the id and either the old or reset counter.
+    for (const spawnCalls of [0, 1]) {
+      const old = f.stored().pipeline;
+      Object.assign(old.runs[0]!.attempts.at(-1)!, { state: "pending", completedAt: null, error: null, spawnCalls });
+      savePipelines([old]);
+      const before = f.stored();
+      for (const rows of [loadPipelines(), loadPipelinesForProjection(), loadPipelinesForList(), loadPipelinesForStartup(), [findPipelineRecord(old.id)!]]) {
+        expect(rows[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ state: "skipped", launchId: begun.launchId, completedAt: CLOSED });
+      }
+      expect(f.stored()).toEqual(before);
+    }
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+    try {
+      db.query("UPDATE state_rows SET collection='pipelines_archive' WHERE collection='pipelines' AND row_key=?").run(f.pipeline.id);
+      db.exec("UPDATE state_collections SET revision=revision+1 WHERE collection IN ('pipelines','pipelines_archive')");
+      const archived = f.stored("pipelines_archive");
+      for (const read of [loadArchivedPipelinesForList().find(row => row.id === f.pipeline.id)!, findPipelineRecord(f.pipeline.id)!]) {
+        expect(read.runs[0]!.attempts.at(-1)).toMatchObject({ state: "skipped", launchId: begun.launchId, completedAt: CLOSED });
+      }
+      expect(f.stored("pipelines_archive")).toEqual(archived);
+    } finally {
+      db.query("UPDATE state_rows SET collection='pipelines' WHERE collection='pipelines_archive' AND row_key=?").run(f.pipeline.id);
+      db.exec("UPDATE state_collections SET revision=revision+1 WHERE collection IN ('pipelines','pipelines_archive')");
+      db.close();
+    }
+    expect(f.registry.spawnReceipt(begun.launchId)).toEqual(receipt);
+    expect(f.h.spawnInputs).toEqual([]);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test.each(["missing", "starting", "retry", "engine", "cwd", "transport", "foreign-key", "admitted"] as const)(
+  "launch-only settlement refuses %s receipt proof even with a reset call count", async (variant) => {
+    const f = await closeLaunchFixture(`no-host-${variant}`);
+    try {
+      const request = { ...f.request(), ...(variant === "engine" ? { engine: "claude" as const } : {}),
+        ...(variant === "cwd" ? { cwd: "/different-worktree" } : {}),
+        ...(variant === "transport" ? { transport: "tmux" as const } : {}),
+        ...(variant === "foreign-key" ? { clientAttemptId: "unrelated-original-request" } : {}) };
+      const begun = variant === "admitted" ? f.registry.beginSpawnRequest(request).receipt
+        : await reserveUnadmitted(f.registry, request);
+      if (variant === "admitted") expect(f.registry.failSpawn(begun.launchId, "admitted setup failed")).toBe(true);
+      else if (variant !== "starting") expect(f.registry.retireUnconsumedSpawn(request.clientAttemptId, "unconsumed admission cancelled")).toBe(true);
+      if (variant === "retry") f.registry.beginSpawnRequest(f.request(true));
+      Object.assign(f.attempt, { launchId: variant === "missing" ? "missing-original-launch" : begun.launchId,
+        spawnCalls: 0, conversationId: null });
+      f.pipeline.state = "closed";
+      f.pipeline.closedAt = CLOSED;
+      f.pipeline.cursor = null;
+      savePipelines([f.pipeline]);
+      const before = f.stored();
+      for (const rows of [loadPipelines(), loadPipelinesForProjection(), loadPipelinesForList(), loadPipelinesForStartup(), [findPipelineRecord(f.pipeline.id)!]]) {
+        expect(rows[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ state: "pending", completedAt: null, launchId: f.attempt.launchId });
+      }
+      expect(f.stored()).toEqual(before);
+      expect(f.stops).toEqual([]);
+    } finally { setAgentRegistryForTests(null); }
+  });
 
 test("close persists every untouched attempt as skipped and preserves earlier verdicts", async () => {
   const h = harness();
@@ -288,7 +528,10 @@ test.each(["pipelines", "pipelines_archive"])("old closed %s read as skipped wit
   savePipelines([pipeline]);
   if (collection === "pipelines_archive") {
     const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
-    try { db.query("UPDATE state_rows SET collection='pipelines_archive' WHERE collection='pipelines' AND row_key=?").run(pipeline.id); }
+    try {
+      db.query("UPDATE state_rows SET collection='pipelines_archive' WHERE collection='pipelines' AND row_key=?").run(pipeline.id);
+      db.exec("UPDATE state_collections SET revision=revision+1 WHERE collection IN ('pipelines','pipelines_archive')");
+    }
     finally { db.close(); }
   }
   const before = stored(collection);
