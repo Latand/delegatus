@@ -11,7 +11,7 @@ import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity"
 import { CodexRealtimeTranscript } from "./codexRealtimeTranscript";
 import type { NativeQueueInput } from "./nativeCodexQueue";
 import { StructuredAnswerError, StructuredSendRefusedError } from "./engineHost";
-import type { FirstDispatchEvidence } from "./engineHost";
+import type { DeliveryTimingMark, DeliveryTimingObserver, FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
 import os from "node:os";
 import { isNonblockingCodexQuestion } from "./codexAttention";
@@ -2228,7 +2228,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -2247,7 +2247,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let reject!: (error: unknown) => void;
     const promise = new Promise<DeliveryReceipt>((fulfill, fail) => { resolve = fulfill; reject = fail; });
     this.sendingDeliveries.set(normalized.id, { contentDigest: normalized.contentDigest, promise });
-    void this.sendOnce(normalized, firstDispatch, authorizeDispatch).then(resolve, reject);
+    void this.sendOnce(normalized, firstDispatch, authorizeDispatch, observeTiming).then(resolve, reject);
     try {
       return await promise;
     } finally {
@@ -2257,15 +2257,19 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
+  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
+    const mark = (name: DeliveryTimingMark) => { try { observeTiming?.(name); } catch { /* Observation only. */ } };
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
     const normalized = normalizeQueueEntry(entry);
+    mark("codex-prepare");
     if (normalized.content.images.length && this.imageInputSupport === "unknown") await this.refreshImageInputSupport();
     entry = this.prepareDelivery(normalized);
+    mark("codex-confirmed-read");
     const confirmed = await this.confirmedDelivery(entry, firstDispatch?.firstDispatch === true
       && firstDispatch.operationId === entry.id && Boolean(firstDispatch.writerClaim));
+    mark("codex-confirmed");
     if (confirmed) return confirmed;
     const currentTurn = this.activeTurnId;
     if (entry.expectedTurnId !== undefined && entry.expectedTurnId !== currentTurn) {
@@ -2287,6 +2291,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         ),
       },
     ];
+    mark("codex-input-ready");
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredSendRefusedError("stale-generation");
     }
@@ -2295,12 +2300,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (currentTurn) {
       if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
       try {
+        mark("codex-rpc-start");
         const result = await this.rpc("turn/steer", {
           threadId: this.identity.threadId,
           expectedTurnId: currentTurn,
           input,
           clientUserMessageId: entry.id,
         });
+        mark("codex-rpc-end");
         return this.awaitDeliveryConfirmation(entry, {
           outcome: "steered",
           turnId: turnIdFromResult(result, "turn/steer"),
@@ -2313,12 +2320,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
     }
     const profile = codexTurnProfile(entry.runtime, { model: this.requestedModel, effort: this.effort }, this.modelCatalog);
+    mark("codex-rpc-start");
     const result = await this.rpc("turn/start", {
       threadId: this.identity.threadId,
       ...profile,
       input,
       clientUserMessageId: entry.id,
     });
+    mark("codex-rpc-end");
     const turnId = turnIdFromResult(result, "turn/start");
     if (typeof profile.model === "string") this.requestedModel = profile.model;
     this.activeTurnId = turnId;
@@ -4784,7 +4793,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
           ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
-        ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
+        ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt, attachedAt: new Date().toISOString() } } : {}),
       });
       /* #862: the compaction item is the completion signal for a manual
          compact control. It is read after the emit so the durable event ledger
