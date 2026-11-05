@@ -11,6 +11,7 @@ import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement } from "@/lib/recordedChecks/store";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "orphan" | "unknown";
+const authorityDisposition = (state: AttemptTempState): "live" | "held" => state === "live" ? "live" : "held";
 export type AttemptTempOwner = {
   directory: string;
   pipelineId: string | null;
@@ -211,6 +212,25 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       let currentDirectory = owner.directory;
       let namespaceOnly = false;
       const scan = () => options.scan([owner.directory, currentDirectory]);
+      const observeReferences = async (directory: string) => {
+        try {
+          const clear = await references(owner.directory, directory, scan());
+          if (!clear) {
+            disposition = "live";
+            reason = "live process, socket, checkout link or container mount";
+          }
+          return clear;
+        }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+            disposition = "live";
+            reason = "consumer checkout became unreadable during retirement";
+            return false;
+          }
+          throw error;
+        }
+      };
       const eligible = async (directory = owner.directory) => {
         currentDirectory = directory;
         checkBudget();
@@ -227,7 +247,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (!settled) return false;
         if (!await inspectAttemptTree(directory, owner.directory)) { disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
         checkBudget();
-        if (!await references(owner.directory, directory, scan())) { disposition = "live"; reason = "live process, socket, checkout link or container mount"; return false; }
+        if (!await observeReferences(directory)) return false;
         checkBudget();
         const evidence = options.mode === "dry-run" ? { current: () => true, namespaceOnly: false }
           : await preserveAttemptEvidence(directory, owner.directory, owner.identity);
@@ -236,7 +256,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // agree after them, at the same dispatch boundary.
         const authority = await options.state(owner, inventory);
         checkBudget();
-        if (authority === "live") { disposition = "live"; reason = "authority became live"; }
         const final = fs.lstatSync(directory, { throwIfNoEntry: false });
         if (recordedRootHeld(owner.directory)) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
         if (authority !== state) { reason = `authority changed from ${state} to ${authority}`; return false; }
@@ -245,29 +264,21 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // Checkout state can change while evidence and producer authority are
         // awaited. Repeat every process/socket/container reference observation
         // at the last eligibility boundary before quarantine or removal.
-        if (!await references(owner.directory, directory, scan())) {
-          disposition = "live";
-          reason = "live process, socket, checkout link or container mount changed during retirement";
-          return false;
-        }
+        if (!await observeReferences(directory)) return false;
         checkBudget();
-        // `references` may await container inspection. The lane's producer
-        // checkout is not necessarily represented by a live process cwd, so
-        // refresh its authority after that await too. Keep every synchronous
-        // deletion fence on the far side of the last await before dispatch.
-        const dispatchAuthority = await options.state(owner, inventory);
-        checkBudget();
+        // All awaited authority and consumer observations are complete.
+        // Decide from their synchronous snapshots so nothing can yield between
+        // the final consumer-reference validation and dispatch.
         const dispatchRoot = fs.lstatSync(directory, { throwIfNoEntry: false });
         if (recordedRootHeld(owner.directory)) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
-        if (dispatchAuthority !== state) { disposition = dispatchAuthority === "live" ? "live" : "held"; reason = `authority changed from ${state} to ${dispatchAuthority} before dispatch`; return false; }
+        if (authority !== state) { disposition = authorityDisposition(authority); reason = `authority changed from ${state} to ${authority} before dispatch`; return false; }
         if (!dispatchRoot?.isDirectory() || dispatchRoot.isSymbolicLink() || `${dispatchRoot.dev}:${dispatchRoot.ino}` !== owner.identity) {
           reason = "identity changed before dispatch";
           return false;
         }
         if (!evidence.current()) { disposition = "evidence"; reason = "evidence changed before dispatch"; return false; }
-        // The final producer authority read can await a separate checkout
-        // inventory. Revalidate every consumer checkout snapshot it follows;
-        // a missing, unreadable, replaced, or newly linked checkout is unknown.
+        // The final synchronous validation includes negative checkout
+        // discoveries and physical symlink destinations from the inventory.
         if (!inventory.unchangedAll()) {
           disposition = "live";
           reason = "checkout changed during final authority read";

@@ -406,7 +406,7 @@ test.each([1, 2, 3])("an absent consumer checkout keeps scratch at removal obser
   // Discover the consumer before its cwd disappears, as in the retained probe.
   expect(inventory.repositoryOf(cwd)).toBe(repository);
   try {
-    expect(await sweep()).toMatchObject({ removed: 0, errors: 1 });
+    expect(await sweep()).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
     expect(reads).toBe(boundary); expect(containers).toBe(boundary - 1);
     expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
     fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(repository, ".git"));

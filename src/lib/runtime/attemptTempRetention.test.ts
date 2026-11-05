@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
+import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
+import { attemptTempState } from "./attemptTempProduction";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -137,6 +140,98 @@ test("a failed completion receipt retains custody but never restores removed all
     expect(f.store.owner(directory)?.bytes).toBe(0);
     expect(fs.existsSync(directory)).toBeFalse();
   } finally { receipt.mockRestore(); f.store.close(); }
+});
+
+test.each([false, true])("final dispatch rechecks checkout discovery and external aliases (journal replay=%s)", async replay => {
+  for (const change of ["control", "absent-no-marker", "restore-no-marker", "alias-retarget"] as const) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-consumer-dispatch-"));
+    const directory = path.join(parent, "llv-stage-root");
+    const consumer = path.join(parent, "consumer"), cwd = path.join(consumer, "work");
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+    fs.mkdirSync(cwd, { recursive: true });
+    const alias = path.join(parent, "external-alias"), unrelated = path.join(parent, "unrelated");
+    fs.mkdirSync(unrelated);
+    if (change === "alias-retarget" || change === "control") fs.mkdirSync(path.join(consumer, ".git"));
+    if (change === "alias-retarget") {
+      fs.symlinkSync(unrelated, alias, "dir");
+      fs.symlinkSync(path.join(alias, path.basename(directory)), path.join(consumer, "dependency"), "dir");
+    }
+    const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+    const pipeline = buildPipeline({ id: "consumer-dispatch-lane", task: "Fixture", project: "fixture", repoDir: parent,
+      stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+      srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+    const producer = pipeline.worktreeDir!;
+    fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    pipeline.state = "running";
+    pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "fixture-launch",
+      effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      verdict: null, error: null }] }];
+    savePipelines([pipeline]);
+    const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+    store.register({ directory, pipelineId: pipeline.id, launchId: "fixture-launch", retainUntilClose: false, createdAt: 1 });
+    store.measure(directory, 4096); store.release(directory);
+    const trash = path.join(parent, ".delegatus-trash-llv-stage-root-replay");
+    if (replay) {
+      const stat = fs.lstatSync(directory);
+      fs.renameSync(directory, trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({
+        directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true,
+      }));
+    }
+    let changed = false, armed = false, now = NOW;
+    let inventory: InstanceType<typeof filesystem.RepositoryLinkInventory>;
+    const nativeRead = fs.promises.readdir.bind(fs.promises);
+    const readdirApi = fs.promises as unknown as {
+      readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+    };
+    const observed = spyOn(readdirApi, "readdir").mockImplementation(async (target, options) => {
+      const entries = await nativeRead(target, options);
+      if (armed && String(target) === producer) {
+        armed = false; changed = true;
+        if (change === "absent-no-marker") fs.renameSync(consumer, consumer + "-old");
+        if (change === "restore-no-marker") {
+          fs.renameSync(consumer, consumer + "-old");
+          fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(consumer, ".git"));
+          fs.symlinkSync(directory, path.join(consumer, "dependency"), "dir");
+        }
+        if (change === "alias-retarget") {
+          fs.unlinkSync(alias); fs.symlinkSync(parent, alias, "dir");
+        }
+      }
+      return entries;
+    });
+    const processes = [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }];
+    const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+      state: (owner, current) => {
+        inventory = current;
+        return attemptTempState(owner, current);
+      },
+      scan: () => ({ ownNamespace: null, processes }),
+      references: (original, current, scan) => {
+        if (!armed && !changed && change !== "control") {
+          fs.writeFileSync(path.join(producer, "force-fresh-inventory"), "refresh"); armed = true;
+        }
+        return attemptReferencesClear(original, current, scan, async () => true, inventory);
+      },
+    });
+    try {
+      const result = await sweep();
+      expect(changed).toBe(change !== "control");
+      expect(result.removed).toBe(change === "control" ? 1 : 0);
+      if (change !== "control") {
+        expect(fs.readFileSync(path.join(replay ? trash : directory, "payload"), "utf8")).toBe("keep");
+        if (change === "absent-no-marker") fs.renameSync(consumer + "-old", consumer);
+        if (change === "restore-no-marker") fs.unlinkSync(path.join(consumer, "dependency"));
+        if (change === "alias-retarget") { fs.unlinkSync(alias); fs.symlinkSync(unrelated, alias, "dir"); }
+        now += 60_001;
+        expect((await sweep()).removed).toBe(1);
+      }
+    } finally {
+      observed.mockRestore(); store.close(); savePipelines([]);
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  }
 });
 
 test("a loaded 727-root sweep defers its remaining page without errors or holds", async () => {

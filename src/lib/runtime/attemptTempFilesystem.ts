@@ -11,6 +11,28 @@ const inside = (file: string, root: string) => file === root || file.startsWith(
 const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
 type RepositoryDirectoryVersion = { path: string; identity: string; mtimeMs: number; ctimeMs: number };
 type RepositoryLinkSnapshot = { lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] };
+type RepositoryLinkRead = { at: number; targets: Promise<string[]>; directories?: RepositoryDirectoryVersion[]; physicalTargets?: string[] };
+type RepositoryDiscovery = { repository: string | null; signature: string };
+const sameStrings = (left: readonly string[], right: readonly string[]) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+const sameRepositoryDiscovery = (left: RepositoryDiscovery, right: RepositoryDiscovery) =>
+  left.repository === right.repository && left.signature === right.signature;
+function resolveObservedPhysicalPath(candidate: string): string {
+  const original = path.resolve(candidate);
+  let current = original;
+  const suffix: string[] = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(current), ...suffix); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return original;
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
 
 async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
   const deadline = performance.now() + (timeout ?? 15_000);
@@ -96,8 +118,8 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
  * soon as any inventoried directory changes. Older reads are also repeated;
  * every walk ends by the tick's budget, then remaining roots are deferred. */
 export class RepositoryLinkInventory {
-  private readonly reads = new Map<string, { at: number; targets: Promise<string[]>; directories?: RepositoryDirectoryVersion[] }>();
-  private readonly repositoriesOf = new Map<string, string>();
+  private readonly reads = new Map<string, RepositoryLinkRead>();
+  private readonly repositoriesOf = new Map<string, RepositoryDiscovery>();
   private readonly deadline: number;
   readonly walks: string[] = [];
   constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number } = {}) {
@@ -120,37 +142,54 @@ export class RepositoryLinkInventory {
   /** Last synchronous fence for every checkout observed during this sweep. */
   unchangedAll() {
     for (const read of this.reads.values()) {
-      if (!read.directories || !this.directoriesUnchanged(read.directories)) return false;
+      if (!read.directories || !this.directoriesUnchanged(read.directories) || !read.physicalTargets) return false;
+      const lexical = this.lexicalTargets.get(read);
+      if (!lexical) return false;
+      try {
+        if (!sameStrings(read.physicalTargets, lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]))) return false;
+      } catch { return false; }
+    }
+    for (const [cwd, observed] of this.repositoriesOf) {
+      try {
+        if (!sameRepositoryDiscovery(observed, this.discoverRepository(cwd))) return false;
+      } catch { return false; }
     }
     return true;
   }
-  /** The nearest enclosing checkout of a process cwd. */
-  repositoryOf(cwd: string): string | null {
-    // Validate the cwd before walking its parents. A stale process snapshot
-    // must not fall through to an enclosing checkout after its own path went
-    // missing, and failed reads must never be interpreted as no dependency.
+  private readonly lexicalTargets = new WeakMap<object, string[]>();
+  private discoverRepository(cwd: string): RepositoryDiscovery {
     const cwdStat = fs.statSync(cwd);
     if (!cwdStat.isDirectory()) throw new Error(`process cwd is not a directory: ${cwd}`);
-    if (this.repositoriesOf.has(cwd)) return this.repositoriesOf.get(cwd)!;
+    const versions: string[] = [];
     let repository: string | null = null;
-    let current = path.resolve(cwd), depth = 0;
-    for (; depth < 64; depth++) {
+    let current = path.resolve(cwd);
+    for (let depth = 0; depth < 64; depth++) {
+      const stat = fs.statSync(current);
+      versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`);
       try {
-        fs.lstatSync(path.join(current, ".git"));
+        const markerPath = path.join(current, ".git");
+        const marker = fs.lstatSync(markerPath);
+        versions.push(`${markerPath}:${marker.dev}:${marker.ino}:${marker.mtimeMs}:${marker.ctimeMs}`);
         repository = current;
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        versions.push(`${path.join(current, ".git")}:absent`);
       }
       const parent = path.dirname(current);
-      if (parent === current) break;
+      if (parent === current) return { repository, signature: JSON.stringify(versions) };
       current = parent;
     }
-    // No checkout is a valid result only after reaching the filesystem root.
-    // A depth limit or a failed lookup is unknown and must defer removal.
-    if (!repository && depth === 64 && current !== path.dirname(current)) throw new Error("process checkout ancestry exceeded its limit");
-    if (repository) this.repositoriesOf.set(cwd, repository);
-    return repository;
+    if (!repository) throw new Error("process checkout ancestry exceeded its limit");
+    return { repository, signature: JSON.stringify(versions) };
+  }
+  /** The nearest enclosing checkout of a process cwd. */
+  repositoryOf(cwd: string): string | null {
+    // Record negative results too: an existing cwd outside a checkout can
+    // become a checkout while another awaited observation is in flight.
+    const discovery = this.discoverRepository(cwd);
+    this.repositoriesOf.set(cwd, discovery);
+    return discovery.repository;
   }
   async targets(repository: string): Promise<string[]> {
     const now = this.now(), cached = this.reads.get(repository);
@@ -159,7 +198,10 @@ export class RepositoryLinkInventory {
       // A link can point through an external alias whose own directory is
       // outside the checkout. Re-resolve its physical destination on every
       // use; checkout directory metadata cannot invalidate that alias change.
-      return (await cached.targets).flatMap(target => [target, resolvePhysicalPath(target)]);
+      const lexical = await cached.targets;
+      const physical = lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]);
+      cached.physicalTargets = physical;
+      return physical;
     }
     const remaining = this.deadline - now;
     if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
@@ -172,16 +214,20 @@ export class RepositoryLinkInventory {
       if (this.now() >= this.deadline) throw new AttemptTempBudgetDeferred(`checkout link inventory exceeded its tick budget; ${attemptTempFailureDetail(error)}`);
       throw error;
     });
-    const read = { at: now, targets: observed, directories: undefined as RepositoryDirectoryVersion[] | undefined };
+    const read: RepositoryLinkRead = { at: now, targets: observed };
     this.reads.set(repository, read);
     void snapshot.then(result => {
       if (this.reads.get(repository) === read) {
         read.directories = result.directories;
+        this.lexicalTargets.set(read, result.lexicalTargets);
         read.at = this.now();
       }
     }, () => undefined);
     this.walks.push(repository);
-    return (await observed).flatMap(target => [target, resolvePhysicalPath(target)]);
+    const lexical = await observed;
+    const physical = lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]);
+    read.physicalTargets = physical;
+    return physical;
   }
 }
 
