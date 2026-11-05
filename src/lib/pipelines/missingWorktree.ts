@@ -15,6 +15,18 @@ export async function restoreMissingLaneWorktree(
   const missing = () => !fs.lstatSync(lane.worktreeDir, { throwIfNoEntry: false });
   const deadline = performance.now() + 60_000;
   const ownPath = path.resolve(lane.worktreeDir);
+  const ref = `refs/heads/${lane.branch}`;
+  const directoryOf = (fields: string[]) => fields.find(field => field.startsWith("worktree "))?.slice(9);
+  const inspectRegistrations = (output: string) => {
+    const registrations = output.split("\0\0").filter(Boolean).map(record => record.split("\0"));
+    const holder = registrations.find(fields => fields.includes(`branch ${ref}`)
+      && directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) !== ownPath);
+    if (holder) throw new Error(`${prefix}; branch ${lane.branch} is held by ${directoryOf(holder)}; release the branch from that worktree or correct the lane directory, then retry the stage`);
+    const registration = registrations.find(fields => directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) === ownPath);
+    if (registration?.some(field => field === "locked" || field.startsWith("locked ")))
+      throw new Error(`${prefix}; its worktree registration is locked; resolve the lock and retry the stage`);
+    return registration;
+  };
   const gitCommonDir = async (directory: string) => {
     const result = await git(["-C", directory, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
     if (result.code !== 0) return null;
@@ -31,13 +43,26 @@ export async function restoreMissingLaneWorktree(
     return result;
   };
   const verifyAppeared = async (head: string, ref: string, expectedCommonDir: string) => {
-    if (missing()) return false;
+    const initial = fs.lstatSync(lane.worktreeDir, { throwIfNoEntry: false });
+    if (!initial || initial.isSymbolicLink()) return false;
     const appearedHead = await git(["-C", lane.worktreeDir, "rev-parse", "--verify", "HEAD"]);
-    if (appearedHead.code !== 0 || appearedHead.stdout.trim() !== head || missing()) return false;
+    if (appearedHead.code !== 0 || appearedHead.stdout.trim() !== head) return false;
+    const afterHead = fs.lstatSync(lane.worktreeDir, { throwIfNoEntry: false });
+    if (!afterHead || afterHead.isSymbolicLink() || afterHead.dev !== initial.dev || afterHead.ino !== initial.ino) return false;
     const appearedBranch = await git(["-C", lane.worktreeDir, "symbolic-ref", "--quiet", "HEAD"]);
-    if (appearedBranch.code !== 0 || appearedBranch.stdout.trim() !== ref || missing()) return false;
+    if (appearedBranch.code !== 0 || appearedBranch.stdout.trim() !== ref) return false;
     const appearedCommonDir = await gitCommonDir(lane.worktreeDir);
-    return appearedCommonDir === expectedCommonDir && !missing();
+    if (appearedCommonDir !== expectedCommonDir) return false;
+    const listing = await git(["worktree", "list", "--porcelain", "-z"]);
+    if (listing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
+    // A matching HEAD and common git directory can belong to a peer checkout
+    // reached through a symlink. Accept only the lane's own registered path,
+    // after refreshing locks and branch holders at this successful return.
+    const registration = inspectRegistrations(listing.stdout);
+    if (!registration || directoryOf(registration) !== ownPath) return false;
+    const final = fs.lstatSync(lane.worktreeDir, { throwIfNoEntry: false });
+    if (!final || final.isSymbolicLink() || final.dev !== initial.dev || final.ino !== initial.ino) return false;
+    return true;
   };
   assertCurrent();
   const repositoryCommonDir = await gitCommonDir(lane.repoDir);
@@ -47,7 +72,6 @@ export async function restoreMissingLaneWorktree(
     if (branchNow.code === 0 && await verifyAppeared(branchNow.stdout.trim(), `refs/heads/${lane.branch}`, repositoryCommonDir)) return;
     throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
   }
-  const ref = `refs/heads/${lane.branch}`;
   const branch = await git(["rev-parse", "--verify", `${ref}^{commit}`]);
   if (!missing()) {
     if (branch.code === 0 && await verifyAppeared(branch.stdout.trim(), ref, repositoryCommonDir)) return;
@@ -56,23 +80,12 @@ export async function restoreMissingLaneWorktree(
   if (branch.code !== 0) throw new Error(`${prefix}; local branch ${lane.branch} cannot be read; restore the local branch in the repository, then retry the stage`);
   const head = branch.stdout.trim();
   const listing = await git(["worktree", "list", "--porcelain", "-z"]);
+  if (listing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
+  const registration = inspectRegistrations(listing.stdout);
   if (!missing()) {
     if (await verifyAppeared(head, ref, repositoryCommonDir)) return;
     throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
   }
-  if (listing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
-  const inspectRegistrations = (output: string) => {
-    const registrations = output.split("\0\0").filter(Boolean).map(record => record.split("\0"));
-    const directoryOf = (fields: string[]) => fields.find(field => field.startsWith("worktree "))?.slice(9);
-    const holder = registrations.find(fields => fields.includes(`branch ${ref}`)
-      && directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) !== ownPath);
-    if (holder) throw new Error(`${prefix}; branch ${lane.branch} is held by ${directoryOf(holder)}; release the branch from that worktree or correct the lane directory, then retry the stage`);
-    const registration = registrations.find(fields => directoryOf(fields) !== undefined && path.resolve(directoryOf(fields)!) === ownPath);
-    if (registration?.some(field => field === "locked" || field.startsWith("locked ")))
-      throw new Error(`${prefix}; its worktree registration is locked; resolve the lock and retry the stage`);
-    return registration;
-  };
-  const registration = inspectRegistrations(listing.stdout);
   const current = await git(["rev-parse", "--verify", `${ref}^{commit}`]);
   if (!missing()) {
     if (current.code === 0 && current.stdout.trim() === head

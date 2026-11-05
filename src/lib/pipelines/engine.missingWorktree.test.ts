@@ -1,6 +1,6 @@
 import { expect, test, fs, path, realWorktreeLane, tickPipelines, loadPipelines, savePipelines, patchPipeline } from "./engine.fixture";
 
-test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch", "locked", "held-at-add", "locked-at-add", "reappeared", "reappeared-at-add", "present-dirty", "wrong-at-list", "wrong-at-first-ref", "wrong-at-second-ref", "foreign-at-add"] as const)(
+test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch", "locked", "held-at-add", "locked-at-add", "held-reappeared", "locked-reappeared", "reappeared", "reappeared-at-add", "symlink-reappeared", "present-dirty", "wrong-at-list", "wrong-at-first-ref", "wrong-at-second-ref", "foreign-at-add"] as const)(
   "activation handles a %s lane checkout before dependency setup", async shape => {
     const f = await realWorktreeLane("missing-checkout", [
       { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null },
@@ -33,11 +33,24 @@ test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch"
         fs.rmSync(f.worktree, { recursive: true });
       }
       const holder = path.join(f.root, "holder");
+      let peerGitDir: string | undefined;
+      let peerIndex: Buffer | undefined;
       if (shape === "missing-ref") await f.git(f.repo, "branch", "-D", lane.branch);
       if (shape === "held-branch") await f.git(f.repo, "worktree", "add", holder, lane.branch);
+      if (shape === "symlink-reappeared") {
+        await f.git(f.repo, "worktree", "add", "--force", holder, lane.branch);
+        fs.writeFileSync(path.join(holder, "staged.txt"), "indexed peer version\n");
+        await f.git(holder, "add", "staged.txt");
+        fs.writeFileSync(path.join(holder, "staged.txt"), "peer working version\n");
+        peerGitDir = await f.git(holder, "rev-parse", "--absolute-git-dir");
+        peerIndex = fs.readFileSync(path.join(peerGitDir, "index"));
+        fs.mkdirSync(path.join(f.root, "peer-dependencies"));
+        fs.symlinkSync(path.join(f.root, "peer-dependencies"), path.join(holder, "node_modules"), "dir");
+        fs.writeFileSync(path.join(holder, "sentinel.tmp"), "peer checkout remains owned\n");
+      }
       if (shape === "locked") await f.git(f.repo, "worktree", "lock", f.worktree);
       f.h.ports.worktreePresent = dir => fs.existsSync(dir);
-      if (["held-at-add", "locked-at-add", "reappeared", "reappeared-at-add", "wrong-at-list", "wrong-at-first-ref", "wrong-at-second-ref", "foreign-at-add"].includes(shape)) {
+      if (["held-at-add", "locked-at-add", "held-reappeared", "locked-reappeared", "reappeared", "reappeared-at-add", "symlink-reappeared", "wrong-at-list", "wrong-at-first-ref", "wrong-at-second-ref", "foreign-at-add"].includes(shape)) {
         const exec = f.h.ports.exec;
         let restored = false;
         let refReads = 0;
@@ -54,7 +67,7 @@ test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch"
           if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === `refs/heads/${lane.branch}^{commit}`)
             refReads++;
           const shouldReappear = !restored && (
-            (shape === "reappeared" && args[0] === "worktree" && args[1] === "list")
+            (["reappeared", "held-reappeared", "locked-reappeared", "symlink-reappeared"].includes(shape) && args[0] === "worktree" && args[1] === "list")
             || (shape === "wrong-at-list" && args[0] === "worktree" && args[1] === "list")
             || (shape === "wrong-at-first-ref" && refReads === 1 && args[0] === "rev-parse")
             || (shape === "wrong-at-second-ref" && refReads === 2 && args[0] === "rev-parse")
@@ -62,7 +75,15 @@ test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch"
           );
           if (shouldReappear) {
             restored = true;
-            if (shape === "foreign-at-add") {
+            if (shape === "symlink-reappeared") {
+              fs.symlinkSync(holder, f.worktree, "dir");
+            } else if (shape === "held-reappeared") {
+              await f.git(f.repo, "worktree", "add", "--force", holder, lane.branch);
+              await f.git(f.repo, "worktree", "add", "--force", f.worktree, lane.branch);
+            } else if (shape === "locked-reappeared") {
+              await f.git(f.repo, "worktree", "add", "--force", f.worktree, lane.branch);
+              await f.git(f.repo, "worktree", "lock", f.worktree);
+            } else if (shape === "foreign-at-add") {
               await f.git(f.repo, "clone", "--no-hardlinks", "--no-checkout", "--branch", lane.branch, f.repo, f.worktree);
               fs.writeFileSync(path.join(f.worktree, "sentinel.tmp"), "owned by the recreated checkout\n");
             } else {
@@ -87,16 +108,24 @@ test.each(["deleted", "removed", "resume", "retry", "missing-ref", "held-branch"
       }
       await tickPipelines([], f.h.ports);
       const current = loadPipelines()[0]!;
-      if (["missing-ref", "held-branch", "locked", "held-at-add", "locked-at-add", "wrong-at-list", "wrong-at-first-ref", "wrong-at-second-ref", "foreign-at-add"].includes(shape)) {
+      if (["missing-ref", "held-branch", "locked", "held-at-add", "locked-at-add", "held-reappeared", "locked-reappeared", "symlink-reappeared", "wrong-at-list", "wrong-at-first-ref", "wrong-at-second-ref", "foreign-at-add"].includes(shape)) {
         expect(current.state).toBe("needs_decision");
         expect(current.stateDetail).toContain(`lane worktree is missing at ${f.worktree}`);
         expect(current.stateDetail).toContain(shape === "missing-ref" ? "restore the local branch"
-          : shape === "locked" || shape === "locked-at-add" ? "resolve the lock"
-          : shape === "held-branch" || shape === "held-at-add" ? "release the branch"
+          : shape === "locked" || shape === "locked-at-add" || shape === "locked-reappeared" ? "resolve the lock"
+          : shape === "held-branch" || shape === "held-at-add" || shape === "held-reappeared" || shape === "symlink-reappeared" ? "release the branch"
           : "checkout appeared during recovery");
         expect(current.stateDetail).not.toContain("check ignored");
         expect(f.h.spawnInputs).toHaveLength(before);
-        expect(fs.existsSync(f.worktree)).toBe(shape.startsWith("wrong-") || shape === "foreign-at-add" || shape === "held-at-add");
+        expect(fs.existsSync(f.worktree)).toBe(shape.startsWith("wrong-") || shape === "foreign-at-add" || shape === "held-at-add" || shape === "held-reappeared" || shape === "locked-reappeared" || shape === "symlink-reappeared");
+        if (shape === "symlink-reappeared") {
+          expect(fs.lstatSync(f.worktree).isSymbolicLink()).toBe(true);
+          expect(peerIndex).toEqual(fs.readFileSync(path.join(peerGitDir!, "index")));
+          expect(await f.git(holder, "show", ":staged.txt")).toBe("indexed peer version");
+          expect(fs.readFileSync(path.join(holder, "staged.txt"), "utf8")).toBe("peer working version\n");
+          expect(fs.lstatSync(path.join(holder, "node_modules")).isSymbolicLink()).toBe(true);
+          expect(fs.readFileSync(path.join(holder, "sentinel.tmp"), "utf8")).toBe("peer checkout remains owned\n");
+        }
         if (shape.startsWith("wrong-") || shape === "foreign-at-add") {
           expect(fs.readFileSync(path.join(f.worktree, "sentinel.tmp"), "utf8")).toBe("owned by the recreated checkout\n");
           if (shape === "foreign-at-add") {
