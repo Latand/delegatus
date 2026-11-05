@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import type { FileEntry } from "@/lib/types";
+import type { ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-read-paths-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -14,15 +15,18 @@ const { savePipelines, buildPipeline } = await import("@/lib/pipelines/store");
 const { createCompanionBoardReadPaths } = await import("./readPaths");
 const { CompanionBoardReads } = await import("./boardReads");
 const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
-const { conversationCatalogSnapshot } = await import("@/lib/scanner/conversationCatalog");
+const { catalogEntryToFileEntry, conversationCatalogSnapshot } = await import("@/lib/scanner/conversationCatalog");
 const { shutdownTranscriptSearchWorker } = await import("@/lib/search/transcriptSearchWorker");
 // Name resolution consumes the scanner's completed project summaries. Publish
 // the fixture's catalog rows at that same boundary, without starting a scan.
-const catalogDomain = {
+const catalogDomain: ViewerMcpDomainDependencies = {
   ...productionDomainDependencies,
   lastCompletedCatalog: () => {
-    const files = conversationCatalogSnapshot();
-    return { files, projectCatalog: files.map(row => ({ project: row.project, displayName: row.projectName, smt: row.mtime, conversations: 1 })) };
+    const entries = conversationCatalogSnapshot();
+    return {
+      files: entries.map(row => catalogEntryToFileEntry(row, Date.parse("2026-10-10T12:00:00.000Z"))),
+      projectCatalog: entries.map(row => ({ project: row.project, displayName: row.projectName, smt: row.mtime, conversations: 1 })),
+    };
   },
 };
 afterAll(async () => {
