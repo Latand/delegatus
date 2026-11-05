@@ -11,7 +11,7 @@ import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
-import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
+import { assertPipelineTurnAllowed, enforceAccountCreditGuard, pipelineRequiresReaderUpgrade } from "./accountCreditGuard";
 import { assertProactiveTaskExecution, proactiveConversationContext, proactiveConversationTaskIds, proactiveTasksRequireDispatchGuard, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
@@ -856,7 +856,8 @@ export async function bindStructuredDeliveryQueue(
   setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
-    requiresDispatchGuard: conversationId => proactiveTasksRequireDispatchGuard(proactiveConversationTaskIds([conversationId], registry)),
+    requiresDispatchGuard: conversationId => pipelineRequiresReaderUpgrade(conversationId, registry)
+      || proactiveTasksRequireDispatchGuard(proactiveConversationTaskIds([conversationId], registry)),
     authorizeDispatch: conversationId => {
       const verdict = seatRecipient(conversationId);
       if (verdict.kind === "revoked") throw new StructuredSendRefusedError(verdict.reason);
