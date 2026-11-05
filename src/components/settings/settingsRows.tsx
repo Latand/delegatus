@@ -128,7 +128,7 @@ export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disa
   id?: string;
   /** A label drawn otherwise than plain, such as one a `<label>` ties to the select. */
   labelNode?: ReactNode;
-  /** Values as long as a device's name: in the window the select takes three fifths of the row, so the name reads whole. */
+  /** Values as long as a device's name: in the window the select takes two thirds of the row, so the name reads whole. */
   wide?: boolean;
   children?: ReactNode;
 }) {
@@ -142,7 +142,7 @@ export function ChoiceRow({ label, ariaLabel = label, hint, value, options, disa
           {density === "sheet"
             ? <SheetChoice label={ariaLabel} value={value} options={options} width={d.pick} disabled={disabled} onChange={onChange} selectAttrs={selectAttrs} describedBy={describedBy} id={id} />
             : (
-              <Select roomy id={id} value={value} disabled={disabled} aria-label={ariaLabel} aria-describedby={describedBy} className={`shrink-0 ${wide ? "w-3/5" : d.pick}`} onChange={(event) => onChange(event.target.value)} {...selectAttrs}>
+              <Select roomy id={id} value={value} disabled={disabled} aria-label={ariaLabel} aria-describedby={describedBy} className={`shrink-0 ${wide ? "w-2/3" : d.pick}`} onChange={(event) => onChange(event.target.value)} {...selectAttrs}>
                 {options.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
               </Select>
             )}

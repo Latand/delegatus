@@ -148,11 +148,11 @@ for (const locale of ["en", "uk"] as const) {
     expect(hint(host, "input")).toBe(inUse(locale, "Навушники AirPods Pro (Bluetooth)"));
   });
 
-  test(`${locale}: in the window the chosen device reads in its select, which takes three fifths of the row, and no line repeats it`, async () => {
+  test(`${locale}: in the window the chosen device reads in its select, which takes two thirds of the row, and no line repeats it`, async () => {
     voice.setVoiceDeviceChoice("input", { id: "mic-pods", label: "Навушники AirPods Pro (Bluetooth)" });
     const host = await mount(locale, "dialog");
     expect(select(host, "input").value).toBe("mic-pods");
-    expect(select(host, "input").className).toContain("w-3/5");
+    expect(select(host, "input").className).toContain("w-2/3");
     expect(hint(host, "input")).toBeNull();
     /* The default's line names a device the select does not: it stays. */
     expect(hint(host, "output")).toBe(inUse(locale, "Realtek Speakers"));
