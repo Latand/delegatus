@@ -171,7 +171,7 @@ import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntim
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
 import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
-import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { RoleMemoryChanged, withCurrentRoleMemory, withRoleMemoryRetry, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -7959,7 +7959,9 @@ function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts)
   attempt.roleMemoryFailures = failures;
   const delayMs = Math.min(30_000, 250 * 2 ** Math.min(failures - 1, 7));
   return {
-    revision: storedLessonRevision(),
+    // Let the retry-protected stability read observe the next revision. This
+    // helper also runs during retirement reconciliation, outside preparation.
+    revision: "",
     observations: 0,
     retryAfter: new Date(unixMs(ports.now()) + delayMs).toISOString(),
   };
@@ -8209,50 +8211,8 @@ async function spawnRunStage(
       if (ignored.code !== 0 && ignored.code !== 1) throw new Error("could not check ignored stage dependencies");
       if (ignored.code === 0) await prepareWorktreeDependencies({ ...pipeline, stages: [{ ...stage, access: "read-only" }] });
     }
-    if (attempt.roleMemoryWait) {
-      if (attempt.roleMemoryWait.ready === true) {
-        roleMemoryWaitReady = true;
-      } else {
-        const revision = storedLessonRevision();
-        const wait = attempt.roleMemoryWait;
-        const failureCount = Number.isSafeInteger(attempt.roleMemoryFailures) && attempt.roleMemoryFailures! >= 0
-          ? attempt.roleMemoryFailures! : 0;
-        if (failureCount !== attempt.roleMemoryFailures) attempt.roleMemoryFailures = failureCount;
-        const retryAt = typeof wait.retryAfter === "string" ? Date.parse(wait.retryAfter) : Number.NaN;
-        const validSchedule = Number.isFinite(retryAt) && failureCount > 0;
-        const resetObservation = typeof wait.revision !== "string" || revision !== wait.revision
-          || !Number.isSafeInteger(wait.observations) || wait.observations < 0 || wait.observations >= 2;
-        if (resetObservation) {
-          attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now() };
-        }
-        const currentWait = attempt.roleMemoryWait;
-        const delay = validSchedule ? Math.max(0, retryAt - unixMs(ports.now())) : 0;
-        if (delay > 0) {
-          attempt.state = "pending";
-          setCursorState(pipeline, stage.id, "pending");
-          pipeline.stateDetail = "stage spawn deferred: waiting before the next role-memory privacy attempt";
-          await persist();
-          ports.scheduleTick?.(delay);
-          return;
-        }
-        if (revision === currentWait.revision && !resetObservation) {
-          currentWait.observations += 1;
-        } else {
-          currentWait.revision = revision;
-          currentWait.observations = 0;
-        }
-        if (currentWait.observations < 2) {
-          attempt.state = "pending";
-          setCursorState(pipeline, stage.id, "pending");
-          pipeline.stateDetail = "stage spawn deferred: waiting for stable role memory";
-          await persist();
-          ports.scheduleTick?.(250);
-          return;
-        }
-        currentWait.ready = true;
-        roleMemoryWaitReady = true;
-      }
-    }
+    // Reconcile an existing delivery before retryable preparation; reopening
+    // a delivered attempt must never be replayed by the privacy retry loop.
     if (recoveringReservation && attempt.launchId && attempt.conversationId) {
       const nativeTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
       if (nativeTurn?.operationConflict) {
@@ -8281,33 +8241,92 @@ async function spawnRunStage(
     const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
     const reserve = Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
     let inputRevision: string | null = null;
-    const preparePrompt = async () => {
+    const preparePrompt = () => withRoleMemoryRetry(async () => {
       if (inputRevision !== null && storedLessonRevision() === inputRevision) return spawnInput.prompt;
       return restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, ports.exec, reserve), attempt);
-    };
-    if (attempt.activation?.prepareInput || prepareInput) {
-      if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value, resolveStageTestGuidance()), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
-      const expected = JSON.stringify(pipeline);
-      const abort = new AbortController();
-      const revalidate = pipelineRecordRevalidator(pipeline.id, (current) => {
-        if (attempt.activation && JSON.stringify(current) !== expected) abort.abort();
-      });
-      const watch = setInterval(revalidate, 50);
-      const exec = createStageInputExec(ports.exec, abort.signal, revalidate, new ActivationSuperseded());
-      try {
-        inputRevision = storedLessonRevision();
-        const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
-        revalidate();
-        if (abort.signal.aborted) throw new ActivationSuperseded();
-        spawnInput = { ...spawnInput, prompt };
-        if (attempt.activation) {
-          attempt.activation.input = spawnInput;
-          attempt.activation.prepareInput = false;
+    });
+    let assertInputCurrent = () => {};
+    const preparedInput = await withRoleMemoryRetry(async () => {
+      assertSetupCurrent();
+      if (attempt.roleMemoryWait) {
+        if (attempt.roleMemoryWait.ready === true) {
+          roleMemoryWaitReady = true;
+        } else {
+          const revision = storedLessonRevision();
+          const wait = attempt.roleMemoryWait;
+          const failureCount = Number.isSafeInteger(attempt.roleMemoryFailures) && attempt.roleMemoryFailures! >= 0
+            ? attempt.roleMemoryFailures! : 0;
+          if (failureCount !== attempt.roleMemoryFailures) attempt.roleMemoryFailures = failureCount;
+          const retryAt = typeof wait.retryAfter === "string" ? Date.parse(wait.retryAfter) : Number.NaN;
+          const validSchedule = Number.isFinite(retryAt) && failureCount > 0;
+          const resetObservation = typeof wait.revision !== "string" || revision !== wait.revision
+            || !Number.isSafeInteger(wait.observations) || wait.observations < 0 || wait.observations >= 2;
+          if (resetObservation) {
+            attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now() };
+          }
+          const currentWait = attempt.roleMemoryWait;
+          const delay = validSchedule ? Math.max(0, retryAt - unixMs(ports.now())) : 0;
+          if (delay > 0) {
+            attempt.state = "pending";
+            setCursorState(pipeline, stage.id, "pending");
+            pipeline.stateDetail = "stage spawn deferred: waiting before the next role-memory privacy attempt";
+            await persist();
+            ports.scheduleTick?.(delay);
+            return false;
+          }
+          if (revision === currentWait.revision && !resetObservation) {
+            currentWait.observations += 1;
+          } else {
+            currentWait.revision = revision;
+            currentWait.observations = 0;
+          }
+          if (currentWait.observations < 2) {
+            attempt.state = "pending";
+            setCursorState(pipeline, stage.id, "pending");
+            pipeline.stateDetail = "stage spawn deferred: waiting for stable role memory";
+            await persist();
+            ports.scheduleTick?.(250);
+            return false;
+          }
+          currentWait.ready = true;
+          roleMemoryWaitReady = true;
         }
-      } catch (error) {
-        if (abort.signal.aborted) throw new ActivationSuperseded();
-        throw error;
-      } finally { clearInterval(watch); }
+      }
+      if (attempt.activation?.prepareInput || prepareInput) {
+        if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value, resolveStageTestGuidance()), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
+        const expected = JSON.stringify(pipeline);
+        const abort = new AbortController();
+        const revalidate = pipelineRecordRevalidator(pipeline.id, (current) => {
+          if (attempt.activation && JSON.stringify(current) !== expected) abort.abort();
+        });
+        assertInputCurrent = () => {
+          revalidate();
+          if (abort.signal.aborted) throw new ActivationSuperseded();
+        };
+        const watch = setInterval(revalidate, 50);
+        const exec = createStageInputExec(ports.exec, abort.signal, revalidate, new ActivationSuperseded());
+        try {
+          inputRevision = storedLessonRevision();
+          const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
+          revalidate();
+          if (abort.signal.aborted) throw new ActivationSuperseded();
+          return { ...spawnInput, prompt };
+        } catch (error) {
+          if (abort.signal.aborted) throw new ActivationSuperseded();
+          throw error;
+        } finally { clearInterval(watch); }
+      }
+      return spawnInput;
+    });
+    if (!preparedInput) return;
+    assertSetupCurrent();
+    assertInputCurrent();
+    spawnInput = preparedInput;
+    if (attempt.activation?.prepareInput || prepareInput) {
+      if (attempt.activation) {
+        attempt.activation.input = spawnInput;
+        attempt.activation.prepareInput = false;
+      }
       // Persist the materialized bytes before reserving or replaying a launch.
       await persist();
     }
