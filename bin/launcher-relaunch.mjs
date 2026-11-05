@@ -445,22 +445,32 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     const transition = trial;
     const handoff = randomUUID();
     const guard = await guardLauncherTransition(paths, transition, installRoot, undefined, undefined, handoff);
-    // Guard readiness yielded. A signal, expiry or recovery may have replaced
-    // this transition while the independent deadline handler was loading.
-    if (stopping || trial !== transition) { guard.kill("SIGKILL"); return; }
-    const safeArgs = args.filter(arg => arg !== "--new-token" && arg !== "--new-operator-token");
-    if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
-    process.chdir(dirname(dirname(nextEntry)));
-    // The next image inherits this launcher's settings. A handoff requirement
-    // was addressed to the terminal command that started this process and
-    // ends with it.
-    const inherited = { ...process.env };
-    delete inherited.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
-    process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
-      ...inherited, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
-      LLV_LAUNCHER_TRIAL: requestId, LLV_LAUNCHER_DEADLINE_HANDOFF: handoff,
-    });
-    throw new Error("launcher exec returned without replacing the process");
+    try {
+      // Guard readiness yielded. A signal, expiry or recovery may have replaced
+      // this transition while the independent deadline handler was loading.
+      if (stopping || trial !== transition) return;
+      const safeArgs = args.filter(arg => arg !== "--new-token" && arg !== "--new-operator-token");
+      if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
+      process.chdir(dirname(dirname(nextEntry)));
+      // The next image inherits this launcher's settings. A handoff requirement
+      // was addressed to the terminal command that started this process and
+      // ends with it.
+      const inherited = { ...process.env };
+      delete inherited.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
+      process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
+        ...inherited, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
+        LLV_LAUNCHER_TRIAL: requestId, LLV_LAUNCHER_DEADLINE_HANDOFF: handoff,
+      });
+      throw new Error("launcher exec returned without replacing the process");
+    } finally {
+      // Successful exec replaces this stack. A cancelled, failed or returned
+      // exec still owns its guard and must reap it before returning custody.
+      if (guard.exitCode === null && guard.signalCode === null) {
+        const closed = new Promise(resolve => guard.once("close", resolve));
+        guard.kill("SIGKILL");
+        await boundedWait(closed, STOP_TIMEOUT_MS, "The launcher deadline guard did not exit after exec failed");
+      }
+    }
   };
   let pendingRecovery = trial?.state === "preflight" || trial?.state === "starting" && trial.stopped === true;
   if (pendingRecovery) directTrial = true;
