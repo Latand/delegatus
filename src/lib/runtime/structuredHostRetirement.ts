@@ -17,7 +17,7 @@ import type { StructuredHostKillRef } from "@/lib/resources";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "@/lib/types";
 
 import { determined, mapDeterminable, undetermined, type Determinable } from "./determinable";
-import { durableRuntimeEventFlushTailSeq } from "./eventStore";
+import { durableRuntimeEventFlushTailSeq, prepareRuntimeEventFlushLedger } from "./eventStore";
 import { flushStructuredHostPersistence } from "./registry";
 import type { HandoffRow } from "./handoffQueue";
 import { handoffQueue } from "./handoffQueueStore";
@@ -1340,13 +1340,40 @@ export async function runStructuredHostRetirementSweep(
     return report;
   }
 
-  const file = snapshot();
-  const all = retirementCandidates(file);
+  let file = snapshot();
+  let all = retirementCandidates(file);
   const beforeKey = (dependencies.readCursor ?? readRetirementCursor)();
-  const next = beforeKey === null ? 0 : all.findIndex(entry => sessionKeyId(entry.key) > beforeKey);
-  const start = next < 0 ? 0 : next;
-  const count = Math.min(all.length, RESOURCE_STRUCTURED_HOST_LIMIT);
-  const candidates = Array.from({ length: count }, (_, index) => all[(start + index) % all.length]!);
+  const select = () => {
+    const next = beforeKey === null ? 0 : all.findIndex(entry => sessionKeyId(entry.key) > beforeKey);
+    const start = next < 0 ? 0 : next;
+    const count = Math.min(all.length, RESOURCE_STRUCTURED_HOST_LIMIT);
+    return { next, start, candidates: Array.from({ length: count }, (_, index) => all[(start + index) % all.length]!) };
+  };
+  let { next, start, candidates } = select();
+  if (!dependencies.durableEventTail && candidates.length) {
+    // One deadline covers cold ledger preparation for the whole page. The
+    // authority path remains synchronous and bounded; a changed, refused or
+    // unfinished proof cannot authorize termination. Re-read every registry
+    // and publication fact after these asynchronous reads, before planning.
+    const signal = AbortSignal.timeout(5_000);
+    await withViewerOperation("hosts.retirement", async () => {
+      for (const entry of candidates) {
+        if (signal.aborted || publicationState() !== "ready") break;
+        const cursor = entry.structuredHost!.eventCursor;
+        const tail = durableRuntimeEventFlushTailSeq(entry.key.sessionId, cursor);
+        if (!tail.determined) await prepareRuntimeEventFlushLedger(entry.key.sessionId, signal);
+      }
+    });
+    if (publicationState() !== "ready") {
+      report.standDown = publicationState();
+      report.finishedAt = new Date(now()).toISOString();
+      record(report);
+      return report;
+    }
+    file = snapshot();
+    all = retirementCandidates(file);
+    ({ next, start, candidates } = select());
+  }
   const planned = retirementInputs({ ...sources, snapshot: () => file }, startedAtMs, candidates.map(entry => sessionKeyId(entry.key)));
   report.evaluated = candidates.length;
 

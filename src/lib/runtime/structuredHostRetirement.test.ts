@@ -725,6 +725,51 @@ test.each([1, 2])("a settled recorded-shape host retires with %s terminal status
   expect(store.load(SESSION)).toEqual(before);
 });
 
+test.each(["settled", "opened turn", "new seat", "publication changed", "cancelled"])(
+  "cold history preparation rechecks %s before retirement", async change => {
+    scratchDirs.push(statePath("structured-host-events", `${SESSION}.jsonl`));
+    fs.mkdirSync(statePath("structured-host-events"), { recursive: true });
+    const filename = path.join(statePath("structured-host-events"), `${SESSION}.jsonl`);
+    fs.writeFileSync(filename, [
+      { kind: "delta", turnId: "settled-turn", text: "x".repeat(70_000), seq: 11 },
+      { kind: "turn-ended", turnId: "settled-turn", status: "completed", seq: 12 },
+      { kind: "session-status", status: "unhosted", seq: 13 },
+    ].map(event => JSON.stringify(event)).join("\n") + "\n");
+    let current = snapshot();
+    let publication: "ready" | "unbound" = "ready";
+    let seats = new Set<string>();
+    const open = fs.promises.open;
+    let prepared = false;
+    let flushed = 0;
+    const controller = new AbortController();
+    const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const read = spyOn(fs.promises, "open").mockImplementation(async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args);
+      if (args[0] === filename && !prepared) {
+        prepared = true;
+        if (change === "opened turn") current = snapshot({ conversations: { [CONVERSATION]: conversation({ turn: { state: "busy" } }) } });
+        if (change === "new seat") seats = new Set([CONVERSATION]);
+        if (change === "publication changed") publication = "unbound";
+        if (change === "cancelled") controller.abort();
+      }
+      return handle;
+    });
+    try {
+      const probe = await sweep({ durableEventTail: undefined, snapshot: () => current,
+        orchestratorSeatConversations: () => determined(seats), publicationState: () => publication,
+        flushEvents: async () => { flushed++; } });
+      expect(prepared).toBe(true);
+      expect(probe.terminated).toHaveLength(change === "settled" ? 1 : 0);
+      expect(flushed).toBe(change === "settled" ? 1 : 0);
+      expect(timeout).toHaveBeenCalledTimes(1);
+      if (change === "cancelled") expect(probe.report.refused[0]?.clause).toBe("events-flushed");
+      if (change === "opened turn") expect(probe.report.refused[0]?.clause).toBe("turn-settled");
+      if (change === "new seat") expect(probe.report.refused[0]?.clause).toBe("seat-free");
+      if (publication !== "ready") expect(probe.report.standDown).toBe("unbound");
+    } finally { read.mockRestore(); timeout.mockRestore(); }
+  },
+);
+
 test("a duplicate at the checkpoint boundary keeps the host alive", async () => {
   const store = retirementLedger();
   const filename = path.join(statePath("structured-host-events"), `${SESSION}.jsonl`);
@@ -1703,4 +1748,28 @@ test("an unsettled own launch explains the unknown turn as a determined retireme
   expect(probe.report.refused[0]!.undetermined).toBeUndefined();
   state.receipts[launchId]!.state = "completed";
   await refusedBy("turn-settled", { snapshot: () => state }, "undetermined");
+});
+
+
+test("review rollback before checkpoint predecessor preserves unflushed output", async () => {
+  scratchDirs.push(statePath("structured-host-events", `${SESSION}.jsonl`));
+  fs.mkdirSync(statePath("structured-host-events"), { recursive: true });
+  const filename = path.join(statePath("structured-host-events"), `${SESSION}.jsonl`);
+  fs.writeFileSync(filename, [
+    { kind: "turn-ended", turnId: "settled-turn", status: "completed", seq: 12 },
+    { kind: "delta", turnId: "settled-turn", text: "unflushed output", seq: 13 },
+    { kind: "turn-ended", turnId: "settled-turn", status: "completed", seq: 11 },
+    { kind: "turn-ended", turnId: "settled-turn", status: "completed", seq: 12 },
+    { kind: "session-status", status: "dead", seq: 13 },
+    { kind: "session-status", status: "unhosted", seq: 14 },
+  ].map(event => JSON.stringify(event)).join("\n") + "\n");
+  expect(() => new FileRuntimeEventStore().load(SESSION)).toThrow();
+  const probe = await sweep({ durableEventTail: undefined });
+  console.log("review checkpoint-prefix result", JSON.stringify({
+    terminations: probe.terminated.length,
+    refused: probe.report.refused,
+    retired: probe.report.retired.length,
+  }));
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toContainEqual(expect.objectContaining({ clause: "events-flushed" }));
 });

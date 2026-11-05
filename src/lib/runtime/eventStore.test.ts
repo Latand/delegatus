@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 
 import type { RuntimeEvent } from "./engineHost";
-import { durableRuntimeEventFlushTailSeq, durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
+import { prepareRuntimeEventFlushLedger, durableRuntimeEventFlushTailSeq, durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
 import { streamingVoiceDelivery } from "./voiceDelivery";
 
 test("retirement exempts only a complete contiguous terminal status suffix, preserving replay and the actual tail", () => {
@@ -91,6 +91,161 @@ test("retirement refuses a ledger replaced or appended during the suffix read", 
     finally { probe.mockRestore(); }
   }
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test.each([1, 8, 128])("retirement rejects a rollback %s predecessors before its checkpoint", distance => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-prefix-"));
+  const cursor = 12 + distance;
+  const filename = path.join(directory, "settled.jsonl");
+  try {
+    const events = [
+      { kind: "turn-ended", turnId: "turn", status: "completed", seq: cursor },
+      { kind: "delta", turnId: "turn", text: "unflushed output", seq: cursor + 1 },
+      ...Array.from({ length: distance + 1 }, (_, index) => ({
+        kind: "turn-ended", turnId: "turn", status: "completed", seq: cursor - distance + index,
+      })),
+      { kind: "session-status", status: "dead", seq: cursor + 1 },
+      { kind: "session-status", status: "unhosted", seq: cursor + 2 },
+    ];
+    fs.writeFileSync(filename, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+    expect(() => new FileRuntimeEventStore(directory).load("settled")).toThrow("sequence gap");
+    expect(durableRuntimeEventFlushTailSeq("settled", cursor, directory).determined).toBe(false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.each(["rollback", "invalid event", "malformed JSON", "empty record"])(
+  "retirement validates %s before the suffix window", async corruption => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-prefix-"));
+    const filename = path.join(directory, "settled.jsonl");
+    try {
+      const record = (seq: number) => JSON.stringify({ kind: "delta", turnId: "turn", text: "x".repeat(70_000), seq });
+      const prefix = corruption === "rollback" ? record(2) + "\n" + record(1)
+        : corruption === "invalid event" ? JSON.stringify({ kind: "unknown", seq: 1 }) + "\n" + record(2)
+        : corruption === "malformed JSON" ? "{invalid\n" + record(2)
+        : "\n" + record(2);
+      fs.writeFileSync(filename, prefix + "\n" + [
+        { kind: "turn-ended", turnId: "turn", status: "completed", seq: 3 },
+        { kind: "session-status", status: "dead", seq: 4 },
+        { kind: "session-status", status: "unhosted", seq: 5 },
+      ].map(event => JSON.stringify(event)).join("\n") + "\n");
+      expect(() => new FileRuntimeEventStore(directory).load("settled")).toThrow();
+      await prepareRuntimeEventFlushLedger("settled", AbortSignal.timeout(5_000), directory);
+      expect(durableRuntimeEventFlushTailSeq("settled", 3, directory).determined).toBe(false);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  },
+);
+
+test("retirement reuses unchanged validation across replay-cache eviction and rechecks its cursor and source", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-prefix-"));
+  const record = (seq: number) => JSON.stringify({ kind: "session-status", status: "unhosted", seq });
+  const load = spyOn(FileRuntimeEventStore.prototype, "load");
+  try {
+    for (let index = 0; index < 65; index++) {
+      fs.writeFileSync(path.join(directory, `settled-${index}.jsonl`),
+        JSON.stringify({ kind: "delta", turnId: "turn", text: "x".repeat(70_000), seq: 11 })
+        + "\n" + record(12) + "\n" + record(13) + "\n");
+      new FileRuntimeEventStore(directory).load(`settled-${index}`);
+      await prepareRuntimeEventFlushLedger(`settled-${index}`, AbortSignal.timeout(5_000), directory);
+      expect(durableRuntimeEventFlushTailSeq(`settled-${index}`, 12, directory)).toEqual({ determined: true, value: 12 });
+    }
+    expect(load).toHaveBeenCalledTimes(65);
+    load.mockClear();
+    for (let index = 0; index < 65; index++) {
+      expect(durableRuntimeEventFlushTailSeq(`settled-${index}`, 12, directory)).toEqual({ determined: true, value: 12 });
+    }
+    expect(load).toHaveBeenCalledTimes(0);
+    // The cached proof establishes the first sequence too: it cannot excuse
+    // a cursor before the retained ledger, even if all visible rows are status.
+    const filename = path.join(directory, "status.jsonl");
+    fs.writeFileSync(filename, record(12) + "\n" + record(13) + "\n");
+    expect(durableRuntimeEventFlushTailSeq("status", 12, directory)).toEqual({ determined: true, value: 12 });
+    expect(durableRuntimeEventFlushTailSeq("status", 11, directory).determined).toBe(false);
+    expect(durableRuntimeEventFlushTailSeq("status", 0, directory).determined).toBe(false);
+    // Same-sized replacement must invalidate the proof, even after warming it.
+    fs.renameSync(filename, filename + ".old");
+    fs.writeFileSync(filename, record(13) + "\n" + record(13) + "\n");
+    expect(durableRuntimeEventFlushTailSeq("status", 12, directory).determined).toBe(false);
+  } finally { load.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("retirement evicts the oldest validation proof at its bound", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-prefix-"));
+  const load = spyOn(FileRuntimeEventStore.prototype, "load");
+  try {
+    const contents = [12, 13].map(seq => JSON.stringify({ kind: "session-status", status: "unhosted", seq })).join("\n") + "\n";
+    for (let index = 0; index < 2049; index++) {
+      fs.writeFileSync(path.join(directory, `settled-${index}.jsonl`), contents);
+      expect(durableRuntimeEventFlushTailSeq(`settled-${index}`, 12, directory)).toEqual({ determined: true, value: 12 });
+    }
+    load.mockClear();
+    expect(durableRuntimeEventFlushTailSeq("settled-2048", 12, directory)).toEqual({ determined: true, value: 12 });
+    expect(load).toHaveBeenCalledTimes(0);
+    expect(durableRuntimeEventFlushTailSeq("settled-0", 12, directory)).toEqual({ determined: true, value: 12 });
+    expect(load).toHaveBeenCalledTimes(1);
+  } finally { load.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.each(["cancelled", "aborted stream", "replaced", "appended", "torn"])("streaming validation refuses a %s history", async change => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-prefix-"));
+  const filename = path.join(directory, "settled.jsonl");
+  const contents = [
+    { kind: "delta", turnId: "turn", text: "x".repeat(70_000), seq: 11 },
+    { kind: "turn-ended", turnId: "turn", status: "completed", seq: 12 },
+    { kind: "session-status", status: "unhosted", seq: 13 },
+  ].map(event => JSON.stringify(event)).join("\n") + "\n";
+  fs.writeFileSync(filename, change === "torn" ? contents + "{partial" : contents);
+  const open = fs.promises.open;
+  const controller = new AbortController();
+  let changed = false;
+  const probe = spyOn(fs.promises, "open").mockImplementation(async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (args[0] === filename && change === "aborted stream") {
+      const create = handle.createReadStream.bind(handle);
+      handle.createReadStream = options => {
+        const stream = create(options);
+        stream.once("data", () => { changed = true; controller.abort(); });
+        return stream;
+      };
+    }
+    if (args[0] === filename && (change === "replaced" || change === "appended")) {
+      changed = true;
+      if (change === "replaced") { fs.renameSync(filename, filename + ".old"); fs.writeFileSync(filename, contents); }
+      else fs.appendFileSync(filename, JSON.stringify({ kind: "delta", turnId: "turn", text: "pending", seq: 14 }) + "\n");
+    }
+    return handle;
+  });
+  try {
+    if (change === "cancelled") controller.abort();
+    await prepareRuntimeEventFlushLedger("settled", controller.signal, directory);
+    expect(durableRuntimeEventFlushTailSeq("settled", 12, directory)).not.toEqual({ determined: true, value: 12 });
+    expect(changed).toBe(change === "replaced" || change === "appended" || change === "aborted stream");
+  } finally { probe.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.each([false, true])("retirement refuses a ledger changed during full replay (replacement=%s)", replace => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-event-prefix-"));
+  const filename = path.join(directory, "settled.jsonl");
+  const contents = [
+    { kind: "turn-ended", turnId: "turn", status: "completed", seq: 12 },
+    { kind: "session-status", status: "unhosted", seq: 13 },
+  ].map(event => JSON.stringify(event)).join("\n") + "\n";
+  fs.writeFileSync(filename, contents);
+  expect(durableRuntimeEventTailSeq("settled", directory)).toEqual({ determined: true, value: 13 });
+  const read = fs.readFileSync;
+  let changed = false;
+  const probe = spyOn(fs, "readFileSync").mockImplementation((...args: unknown[]) => {
+    const result = Reflect.apply(read, fs, args);
+    if (args[0] === filename && !changed) {
+      changed = true;
+      if (replace) { fs.renameSync(filename, filename + ".old"); fs.writeFileSync(filename, contents); }
+      else fs.appendFileSync(filename, JSON.stringify({ kind: "delta", turnId: "turn", text: "pending", seq: 14 }) + "\n");
+    }
+    return result;
+  });
+  try {
+    expect(durableRuntimeEventFlushTailSeq("settled", 12, directory).determined).toBe(false);
+    expect(changed).toBe(true);
+  } finally { probe.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("runtime event store durably replays ordered events and ignores a partial tail", () => {

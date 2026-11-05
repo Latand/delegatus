@@ -2,6 +2,7 @@ import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
@@ -32,6 +33,11 @@ type CachedLedger = { identity: LedgerIdentity; events: RuntimeEvent[] };
 
 const MAX_CACHED_LEDGER_BYTES = 64 * 1024 * 1024;
 const MAX_CACHED_LEDGERS = 64;
+// Retirement retains only validation identities, independently of the much
+// larger replay cache. A sweep can inspect 512 hosts; a replay-cache eviction
+// must not make every unchanged history get parsed again on its next visit.
+const MAX_VALIDATED_FLUSH_LEDGERS = 2048;
+const validatedFlushLedgers = new Map<string, { identity: LedgerIdentity; firstSeq: number; lastSeq: number }>();
 const eventStoreGlobals = globalThis as typeof globalThis & {
   __llvRuntimeEventLedgers?: Map<string, CachedLedger>;
 };
@@ -197,6 +203,91 @@ function validEvent(value: unknown): value is RuntimeEvent {
   }
 }
 
+/** Shared by replay and retirement's streaming prefix validation. */
+function parseLedgerRecord(line: string, previous: RuntimeEvent | undefined, partialTail: boolean): RuntimeEvent | null {
+  if (!line) throw new Error("runtime event ledger contains an empty record");
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch {
+    if (partialTail) return null;
+    throw new Error("runtime event ledger contains malformed JSON");
+  }
+  if (!validEvent(parsed)) {
+    if (partialTail) return null;
+    throw new Error("runtime event ledger contains an invalid event");
+  }
+  if (previous && parsed.seq !== previous.seq + 1) {
+    throw new Error(`runtime event ledger sequence gap after ${previous.seq}`);
+  }
+  return parsed;
+}
+
+function rememberValidatedFlushLedger(filename: string, proof: { identity: LedgerIdentity; firstSeq: number; lastSeq: number }): void {
+  validatedFlushLedgers.delete(filename);
+  validatedFlushLedgers.set(filename, proof);
+  if (validatedFlushLedgers.size > MAX_VALIDATED_FLUSH_LEDGERS) {
+    validatedFlushLedgers.delete(validatedFlushLedgers.keys().next().value!);
+  }
+}
+
+/** Cold history validation runs off the sweep's synchronous admission path.
+ * Retain only sequence bounds, never payloads. A proof belongs to the exact
+ * file identity; the synchronous suffix probe checks it again before use. */
+export async function prepareRuntimeEventFlushLedger(
+  threadId: string,
+  signal: AbortSignal,
+  directory: string = statePath("structured-host-events"),
+): Promise<void> {
+  const filename = path.join(directory, `${encodeURIComponent(threadId)}.jsonl`);
+  let stream: fs.ReadStream | undefined;
+  let handle: import("node:fs/promises").FileHandle | undefined;
+  try {
+    const before = ledgerIdentity(await fs.promises.stat(filename));
+    const cached = validatedFlushLedgers.get(filename);
+    if (cached && sameLedgerIdentity(before, cached.identity)) {
+      rememberValidatedFlushLedger(filename, cached);
+      return;
+    }
+    validatedFlushLedgers.delete(filename);
+    if (signal.aborted) return;
+    handle = await fs.promises.open(filename, "r");
+    if (!sameLedgerIdentity(before, ledgerIdentity(await handle.stat())) || signal.aborted) return;
+    stream = handle.createReadStream({ encoding: "utf8", signal, autoClose: false });
+    stream.on("error", () => { /* the async iterator records the refusal below */ });
+    let previous: RuntimeEvent | undefined;
+    let firstSeq = 0;
+    let pending = "";
+    for await (const chunk of stream) {
+      const scanned = pending.length;
+      pending += chunk;
+      let start = 0;
+      for (let end = pending.indexOf("\n", scanned); end >= 0; end = pending.indexOf("\n", start)) {
+        const event = parseLedgerRecord(pending.slice(start, end), previous, false)!;
+        firstSeq ||= event.seq;
+        previous = event;
+        start = end + 1;
+      }
+      pending = pending.slice(start);
+      if (pending.length > EVENT_TAIL_MAX_RECORD_BYTES || signal.aborted) return;
+      await yieldToLoop();
+    }
+    // A torn append cannot provide authority, even if replay can salvage its
+    // completed prefix. The synchronous suffix reader enforces this too.
+    if (pending) return;
+    const after = ledgerIdentity(await fs.promises.stat(filename));
+    if (!signal.aborted && sameLedgerIdentity(before, after)
+      && sameLedgerIdentity(before, ledgerIdentity(await handle.stat()))) {
+      rememberValidatedFlushLedger(filename, { identity: before, firstSeq, lastSeq: previous?.seq ?? 0 });
+    }
+  } catch {
+    // Failure grants no authority. The admission reader refuses a large
+    // unvalidated ledger, or names the error from its bounded replay.
+    validatedFlushLedgers.delete(filename);
+  } finally {
+    stream?.destroy();
+    await handle?.close();
+  }
+}
+
 /** Bytes per backwards step while looking for a record boundary. This bounds
     the read, never the record: the scan keeps stepping until it finds the
     newline, so a record larger than one step is found rather than missed. */
@@ -292,7 +383,9 @@ export function durableRuntimeEventTailSeq(
  * claim has ended, so waiting for that writer to checkpoint them never ends.
  * Prove the entire suffix contiguous and terminal before exempting it. The
  * ledger stays intact for replay; every other event still needs its writer.
- * Work is bounded to 64 KiB of the suffix, independent of session history. */
+ * The synchronous read is bounded to 64 KiB. Longer histories need the
+ * streaming preparation proof; both paths reuse replay's record validation.
+ * Subsequent unchanged visits retain only that proof in a bounded LRU. */
 export function durableRuntimeEventFlushTailSeq(
   threadId: string,
   flushedCursor: number,
@@ -327,43 +420,29 @@ export function durableRuntimeEventFlushTailSeq(
       end = newline;
       if (end < 0 && expected > flushedCursor) return undetermined("the runtime event suffix does not reach the flushed cursor");
     }
-    /* The suffix is safe only after a checkpoint row that is the first
-       retained ledger row or follows cursor - 1. Checking only the suffix lets
-       a repeated checkpoint hide intervening output (for example
-       checkpoint(12), delta(13), checkpoint(12), dead(13), unhosted(14)). */
-    if (flushedCursor > 0) {
-      const newline = end > 0 ? buffer.lastIndexOf(0x0a, end - 1) : -1;
-      if (newline < 0 && start > 0) return undetermined("the runtime event suffix boundary exceeds its read budget");
-      const checkpointStart = newline + 1;
-      let checkpoint: unknown;
-      try { checkpoint = JSON.parse(buffer.subarray(checkpointStart, end).toString("utf8")); }
-      catch { return undetermined("the runtime event suffix boundary is not JSON"); }
-      if (!validEvent(checkpoint) || checkpoint.seq !== flushedCursor) {
-        return undetermined("the runtime event suffix does not follow the flushed cursor");
-      }
-      if (start + checkpointStart > 0) {
-        const previousEnd = checkpointStart - 1;
-        const previousNewline = previousEnd > 0 ? buffer.lastIndexOf(0x0a, previousEnd - 1) : -1;
-        if (previousNewline < 0 && start > 0) {
-          return undetermined("the flushed prefix boundary exceeds its read budget");
-        }
-        let predecessor: unknown;
-        try { predecessor = JSON.parse(buffer.subarray(previousNewline + 1, previousEnd).toString("utf8")); }
-        catch { return undetermined("the flushed prefix boundary is not JSON"); }
-        if (!validEvent(predecessor) || predecessor.seq !== flushedCursor - 1) {
-          return undetermined("the checkpoint row does not follow a contiguous flushed prefix");
-        }
-      }
-    } else if (start + end + 1 !== 0) {
-      // With no checkpoint row, the terminal suffix is safe only when it
-      // begins at the first byte of the ledger. Otherwise an unexamined
-      // prefix may contain output sharing a sequence with a terminal row.
-      return undetermined("the runtime event suffix does not begin at the ledger start");
+    // A matching checkpoint and any fixed number of predecessors cannot
+    // establish the flushed prefix: a rollback farther back can hide output.
+    // Use the replay reader's event and sequence validation for the entire
+    // ledger, including bytes outside the bounded suffix window.
+    let validated = validatedFlushLedgers.get(filename);
+    if (!validated || !sameLedgerIdentity(before, validated.identity)) {
+      validatedFlushLedgers.delete(filename);
+      if (before.size > 64 * 1024) return undetermined("the runtime event prefix has no current validation proof");
+      const events = new FileRuntimeEventStore(directory).load(threadId);
+      validated = { identity: before, firstSeq: events[0]?.seq ?? 0, lastSeq: events.at(-1)?.seq ?? 0 };
+    }
+    // Replay permits a retained ledger to start above one. For a nonzero
+    // cursor its checkpoint must still exist in that contiguous sequence;
+    // cursor zero requires a ledger starting at sequence one.
+    if (validated.lastSeq !== tail.value || validated.firstSeq === 0
+      || (flushedCursor > 0 ? validated.firstSeq > flushedCursor : validated.firstSeq !== 1)) {
+      return undetermined("the runtime event suffix does not follow the flushed cursor");
     }
     if (!sameLedgerIdentity(before, ledgerIdentity(fs.fstatSync(handle)))
       || !sameLedgerIdentity(before, ledgerIdentity(fs.statSync(filename)))) {
       return undetermined("the runtime event suffix changed while being read");
     }
+    rememberValidatedFlushLedger(filename, validated);
     return determined(flushedCursor);
   } catch (error) {
     return undetermined(`the runtime event suffix could not be read (${(error as NodeJS.ErrnoException).code ?? "unknown"})`);
@@ -669,19 +748,8 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
     for (const [index, line] of lines.entries()) {
       if (!line && index === lines.length - 1 && hasTerminatingNewline) continue;
       if (!line) throw new Error("runtime event ledger contains an empty record");
-      let parsed: unknown;
-      try { parsed = JSON.parse(line); } catch {
-        if (index === lines.length - 1 && !hasTerminatingNewline) break;
-        throw new Error("runtime event ledger contains malformed JSON");
-      }
-      if (!validEvent(parsed)) {
-        if (index === lines.length - 1 && !hasTerminatingNewline) break;
-        throw new Error("runtime event ledger contains an invalid event");
-      }
-      const previous = events.at(-1);
-      if (previous && parsed.seq !== previous.seq + 1) {
-        throw new Error(`runtime event ledger sequence gap after ${previous.seq}`);
-      }
+      const parsed = parseLedgerRecord(line, events.at(-1), index === lines.length - 1 && !hasTerminatingNewline);
+      if (parsed === null) break;
       events.push(parsed);
     }
     try {
