@@ -215,7 +215,8 @@ test(`${code} owner completion keeps delivery uncertain (lost ACK: ${lostFirst})
   });
   try {
     const until = Date.now() + 10000;
-    expect(await completeRelayRequest(f.relay, "complete_uncertain", body, () => until, () => true)).toEqual({ body, delivery: "unconfirmed" });
+    expect(await completeRelayRequest(f.relay, "complete_uncertain", body, () => until, () => true)).toEqual({ body, delivery: "unconfirmed",
+      ...(code === "lease_lost" ? { refusalCode: code } : {}) });
     expect(calls).toBe(lostFirst ? 2 : 1);
   } finally { await f.close(); }
 });

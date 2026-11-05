@@ -318,6 +318,7 @@ export class TelegramBotStore {
         ["chats", "forum_known", "INTEGER NOT NULL DEFAULT 0"],
         ["chats", "assigned_bot", "TEXT"], ["chats", "last_delivery", "TEXT"],
         ["sends", "bot_id", "TEXT"], ["sends", "bot_identity", "TEXT"], ["sends", "attempts", "TEXT NOT NULL DEFAULT '[]'"],
+        ["sends", "clone_keys", "TEXT NOT NULL DEFAULT '{}'"],
       ]) {
         const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
         if (!columns.some(c => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -686,7 +687,7 @@ export class TelegramBotStore {
       if (existing && (existing.state !== "failed" || existing.messageIds.length > 0)) return { claimed: false as const, row: existing };
       this.db.query(`
         INSERT INTO sends (caller_key, client_request_id, state, chat_id, created_at) VALUES (?1, ?2, 'pending', ?3, ?4)
-        ON CONFLICT(caller_key, client_request_id) DO UPDATE SET state = 'pending', chat_id = ?3, error_code = NULL, message_ids = '[]', parts = 0, bot_id = NULL, bot_identity = NULL, attempts = '[]'
+        ON CONFLICT(caller_key, client_request_id) DO UPDATE SET state = 'pending', chat_id = ?3, error_code = NULL, message_ids = '[]', parts = 0, bot_id = NULL, bot_identity = NULL, attempts = '[]', clone_keys = '{}'
       `).run(callerKey, clientRequestId, chatId, now.toISOString());
       return { claimed: true as const };
     });

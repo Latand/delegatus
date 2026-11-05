@@ -189,6 +189,7 @@ import { statePath } from "@/lib/configDir";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
+import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
@@ -679,11 +680,13 @@ async function dispatchViewerControl(
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
   const now = Date.now();
+  const fileBudget = pathname === "/api/telegram/bot/agent" && (body.op === "send_document" || body.op === "send_media")
+    ? cloneFileCallBudgetMs() : null;
   const budgetMs = context.deadlineAt === undefined
-    ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
+    ? fileBudget ?? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(1, context.deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
   const reconnectSend = pathname === "/api/tmux";
-  const expiresAt = now + Math.min(CONTROL_RECOVERY_BUDGET_MS, budgetMs);
+  const expiresAt = now + Math.min(fileBudget ?? CONTROL_RECOVERY_BUDGET_MS, budgetMs);
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
   requestHeaders.set("sec-fetch-site", "same-origin");
@@ -706,7 +709,7 @@ async function dispatchViewerControl(
   while (true) {
     assertWorkspaceMcpCall();
     context.assertCaller?.();
-    attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
+    attempt = deadlineSignal(Math.min(fileBudget ?? CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
       scheduler,
       signal: context.signal,
       reason: "Viewer control dispatch timed out",

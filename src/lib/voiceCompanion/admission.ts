@@ -189,7 +189,8 @@ export class CompanionAdmission {
     if (event.type === "session.closed") {
       session.endedAt = now;
       this.record(session.id, { id: "end", kind: "session_end", atMs: event.atMs,
-        data: { reason: event.reason, seconds: session.usage?.seconds ?? 0, endedAt: now, incomplete: event.incomplete } });
+        data: { reason: event.reason, seconds: session.usage?.seconds ?? 0, endedAt: now, incomplete: event.incomplete,
+          ...(event.cause ? { cause: event.cause } : {}), ...(event.episode ? { episode: event.episode } : {}) } });
       this.records.finish(session.id);
     } else if (event.type === "delegation.tool.called") {
       this.requestRecord(session.id, { id: `request-${event.callId}`, kind: "request", atMs: event.atMs,

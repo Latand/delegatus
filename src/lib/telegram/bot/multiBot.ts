@@ -7,7 +7,7 @@ import { TelegramBotError, sendFailure } from "./errors";
 import { outboundState, releaseUnsentClaim, type PublicationTarget } from "./outbound";
 import type { ChatRow, TelegramBotStore } from "./store";
 import type { BotCallResult, BotTransport } from "./transport";
-import { cloneChatView, cloneInput, clonePayloadSupported, cloneTransport, type ClonePostingPort } from "./clone";
+import { cloneChatView, cloneSupports, cloneTransport, type ClonePostingPort } from "./clone";
 import type { CloneRoute } from "@/lib/externalRelay/cloneDirectory";
 
 export type PostingBot = TelegramPostingBot & { id: string; transport: BotTransport; clone?: CloneRoute };
@@ -199,7 +199,7 @@ export class BotSelector {
         throw new TelegramBotError("send_uncertain", "the delivery outcome could not be recorded; keep the same send key to avoid a duplicate");
       }
     };
-    const record = async (bot: PostingBot, error: TelegramBotError, source: "send" | "check") => {
+    const record = async (bot: Pick<PostingBot, "id" | "name" | "username">, error: TelegramBotError, source: "send" | "check") => {
       const refusal: BotAttempt = { botId: bot.id, bot: publicBot(bot), code: error.code, reason: scrubTelegramDiagnostic(error.message), source, at: this.now().toISOString() };
       const previous = attempts.findIndex(a => a.botId === bot.id);
       if (previous < 0) attempts.push(refusal); else attempts[previous] = refusal;
@@ -253,12 +253,21 @@ export class BotSelector {
       const bots = connected.filter(b => chat.type !== "private" || b.receiving);
       bots.sort((a, b) => Number(b.id === retryBot) - Number(a.id === retryBot) || Number(b.id === assigned) - Number(a.id === assigned));
       const candidates: Array<{ bot: PostingBot; checked?: boolean; membership?: Membership | null }> = bots.map(bot => ({ bot }));
-      if (!assigned && method === "sendMessage" && chat.type !== "private" && this.clones) {
+      if (!assigned && chat.type !== "private" && this.clones) {
         const route = await this.clones.route(chat.chatId);
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)
-          && clonePayloadSupported(cloneInput(route, caller, key, params, options?.partIndex ?? 0))) {
+          && cloneSupports(route, caller, key, method, params, options?.partIndex ?? 0)) {
           candidates.unshift({ bot: { id: route.id, name: route.name, username: null, receiving: false, tokenState: "ok", clone: route,
-            transport: cloneTransport(this.clones, route, caller, key, authorizeClone) }, checked: true });
+            transport: cloneTransport(this.clones, route, caller, key, authorizeClone, async (input, part) => {
+              await outboundState(this.store.filename, true, db => {
+                const row = db.query<{ clone_keys: string }, [string, string]>("SELECT clone_keys FROM sends WHERE caller_key=? AND client_request_id=? AND state='pending'").get(caller, key);
+                if (!row) throw new TelegramBotError("send_uncertain", "the clone send claim is unavailable");
+                const keys = parseSqliteJson(row.clone_keys, db) as Record<string, string>;
+                if (keys[part] && keys[part] !== input.client_key) throw new TelegramBotError("send_uncertain", "the clone send key changed");
+                keys[part] = input.client_key;
+                db.query("UPDATE sends SET clone_keys=? WHERE caller_key=? AND client_request_id=? AND state='pending'").run(JSON.stringify(keys), caller, key);
+              });
+            }) }, checked: true });
         }
       }
       for (const candidate of candidates) {
@@ -319,7 +328,37 @@ export class BotSelector {
         await record(bot, error, "send");
         if (!bot.clone) await refreshRefusal(bot, result, error);
       }
-      const first = attempts[0];
+      let first: BotAttempt | undefined = attempts[0];
+      // Explain the clone's capability gap only after local file senders are
+      // exhausted. It never becomes a file candidate on the text transport.
+      if (capability !== "canPost" && chat.type !== "private" && this.clones && !await assignedBot()) {
+        const route = await this.clones.route(chat.chatId);
+        if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)) {
+          try {
+            authorize();
+          } catch (cause) {
+            const error = cause instanceof TelegramBotError ? cause : new TelegramBotError("chat_not_allowed", "posting permission changed");
+            const bot = { id: route.id, name: route.name, username: null };
+            const refusal: BotAttempt = { botId: bot.id, bot: publicBot(bot), code: error.code,
+              reason: scrubTelegramDiagnostic(error.message), source: "check", at: this.now().toISOString() };
+            attempts.push(refusal);
+            try {
+              await outboundState(this.store.filename, true, db => {
+                db.query("UPDATE sends SET attempts=?, state='failed', error_code=? WHERE caller_key=? AND client_request_id=? AND state='pending'")
+                  .run(JSON.stringify(attempts), error.code, caller, key);
+                db.query("UPDATE chats SET last_delivery=? WHERE chat_id=COALESCE((SELECT chat_id FROM sends WHERE caller_key=? AND client_request_id=?), ?)")
+                  .run(JSON.stringify({ at: this.now().toISOString(), state: "refused", ...(selected ? { bot: publicBot(selected) } : {}), refusals: publicRefusals(attempts) }), caller, key, chat.chatId);
+              });
+            } catch {
+              throw new TelegramBotError("send_uncertain", "the delivery outcome could not be recorded; keep the same send key to avoid a duplicate");
+            }
+            throw new TelegramBotError(error.code, error.message, { ...error.extra, refusals: publicRefusals(attempts) });
+          }
+          await record({ id: route.id, name: route.name, username: null }, new TelegramBotError("clone_files_unsupported",
+            `The paired clone "${route.name.slice(0, 128)}" covers this chat but cannot send files yet.`), "check");
+          first = attempts.at(-1);
+        }
+      }
       await delivery("refused");
       await outboundState(this.store.filename, true, db => {
         db.query("UPDATE sends SET state='failed', error_code=? WHERE caller_key=? AND client_request_id=? AND state='pending'").run(first?.code ?? "bot_not_in_chat", caller, key);
