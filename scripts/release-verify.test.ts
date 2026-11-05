@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { releasePreflight, releasePublished, verifyRelease, type ReleasePreflight, type VerifyPorts } from "./release-verify";
 const valid = (): ReleasePreflight => ({ tag: "v1.2.0", version: "1.2.0", localTag: "absent", remoteTag: "absent", npmVersion: false,
   files: ["CHANGELOG.md", "package.json", "docs/media/readme/board.svg"], provenance: true, clean: true });
@@ -120,6 +124,8 @@ test("a green checkout-triggered macOS run cannot replace the install run linked
 test("real preflight rejects a product path with recorded commands and never writes", async () => {
   const ports: VerifyPorts = { now: () => 0, wait: async () => {}, provenance: () => true, registry: async () => null,
     command: async (file, args) => {
+      args = args.filter(arg => arg !== "--no-replace-objects");
+      if (args[0] === "fetch") return "";
       if (file !== "git") throw new Error("unexpected command");
       if (args[0] === "show") return JSON.stringify({ name: "package-example", version: "1.2.0" });
       if (args[0] === "diff") return "src/components/Feed.tsx";
@@ -135,6 +141,9 @@ test("preflight distinguishes a matching local-only tag, a confirmed remote tag,
   const runPreflight = async (local: boolean, localCommit: string, remoteLines: string, packagePublished = false, message = "Delegatus 1.2.0") => verifyRelease("v1.2.0", "a".repeat(40), {
     now: () => 0, wait: async () => {}, provenance: () => true, registry: async () => packagePublished ? { version: "1.2.0" } : null,
     command: async (_file, args) => {
+      args = args.filter(arg => arg !== "--no-replace-objects");
+      if (args[0] === "fetch") return "";
+      if (args[0] === "rev-parse" && args[1].endsWith("^{tree}")) return "f".repeat(40);
       if (args[0] === "show" && args[1] === "HEAD:package.json") return JSON.stringify({ name: "package-example", version: "1.2.0" });
       if (args[0] === "show" && args[1] === "v1.2.0:package.json") return JSON.stringify({ version: "1.2.0" });
       if (args[0] === "for-each-ref") return local ? "refs/tags/v1.2.0" : "";
@@ -273,4 +282,59 @@ test("buildx imagetools stays the first choice and manifest inspect is not calle
   }, calls);
   expect(await verifyRelease("v1.2.0", null, ports)).toEqual({ errors: [] });
   expect(calls.filter(c => c.startsWith("docker ")).length).toBe(3);
+});
+
+// Exercise native Git ancestry and tag objects; only the forge and registry are stubbed.
+test.each(["unmerged", "open PR", "moved head", "checkout moved", "reviewed", "squash", "different tree", "off main", "unreadable main"])("release main admission: %s", async scenario => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-main-"));
+  const lane = path.join(root, "lane"), remote = path.join(root, "origin.git");
+  fs.mkdirSync(lane);
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "no-config"), GIT_CONFIG_COUNT: "0",
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: ["noreply", "example.invalid"].join("@"), GIT_COMMITTER_EMAIL: ["noreply", "example.invalid"].join("@"),
+    GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" };
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: lane, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  let registryReads = 0;
+  try {
+    git("init", "--bare", "--initial-branch=main", remote);
+    git("init", "--initial-branch=release");
+    fs.writeFileSync(path.join(lane, "package.json"), JSON.stringify({ name: "package-example", version: "1.1.0" }));
+    git("add", "."); git("commit", "-m", "base");
+    const cut = git("rev-parse", "HEAD");
+    git("remote", "add", "origin", remote); git("push", "origin", "HEAD:refs/heads/main");
+    fs.writeFileSync(path.join(lane, "package.json"), JSON.stringify({ name: "package-example", version: "1.2.0" }));
+    git("add", "."); git("commit", "-m", "release");
+    const reviewed = git("rev-parse", "HEAD");
+    let tree = git("rev-parse", "HEAD^{tree}");
+    if (scenario === "different tree") tree = git("rev-parse", `${cut}^{tree}`);
+    const merged = scenario === "reviewed" ? reviewed : git("commit-tree", tree, "-p", cut, "-m", "squash release");
+    if (!["unmerged", "off main"].includes(scenario)) git("push", "origin", `${merged}:refs/heads/main`);
+    if (scenario === "unreadable main") git("remote", "set-url", "origin", path.join(root, "missing.git"));
+    const ports: VerifyPorts = { now: () => 0, wait: async () => {}, provenance: () => true,
+      registry: async () => { registryReads++; return null; },
+      command: async (file, args) => {
+        if (file === "git") return git(...args);
+        if (scenario === "checkout moved") git("commit", "--allow-empty", "-m", "head moves during forge read");
+        return JSON.stringify({ state: scenario === "open PR" ? "OPEN" : "MERGED", baseRefName: "main",
+          headRefOid: scenario === "moved head" ? cut : reviewed, mergeCommit: { oid: merged } });
+      },
+    };
+    const run = () => verifyRelease("v1.2.0", cut, ports, scenario === "unmerged" || scenario === "reviewed" ? undefined : "7");
+    const result = await run();
+    if (scenario === "squash" || scenario === "reviewed") {
+      expect(result).toEqual({ errors: [], nextStep: "create-and-push", tagCommit: merged });
+      if (scenario === "squash") expect(merged).not.toBe(reviewed);
+      git("tag", "-a", "v1.2.0", merged, "-m", "Delegatus 1.2.0");
+      expect(await run()).toEqual({ errors: [], nextStep: "push-existing", tagCommit: merged });
+      git("push", "origin", "refs/tags/v1.2.0");
+      expect(await run()).toEqual({ errors: [], nextStep: "verify-remote", tagCommit: merged });
+      expect(git("rev-parse", "HEAD")).toBe(reviewed);
+    } else {
+      const reason = scenario === "open PR" ? "release PR is unmerged" : scenario === "moved head" ? "release PR head moved"
+        : scenario === "checkout moved" ? "release checkout head moved" : scenario === "different tree" ? "merged release tree differs" : scenario === "unreadable main" ? "cannot refresh origin/main" : "release tag commit is not on origin/main";
+      expect(result.errors.join("\n")).toContain(reason);
+      expect(result.nextStep).toBeUndefined();
+      expect(registryReads).toBe(scenario === "checkout moved" ? 1 : 0);
+      expect(git("tag", "--list")).toBe("");
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

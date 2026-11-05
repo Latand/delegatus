@@ -89,7 +89,10 @@ every clone shares a remote id. Shared recorded GitHub remotes also check the fo
 
 Run `git config core.hooksPath .githooks` once per clone. Worktrees inherit
 that config and run the hooks from their own checkout. Pre-commit runs staged
-whitespace, privacy with the committed fingerprints, and eslint. Pre-push checks
+whitespace and eslint. Pre-push scans each commit's added lines with three lines
+of context, each new binary blob, messages and identities, using the committed
+fingerprints and supplied learned-rule texts. The hosted privacy check keeps
+whole-file coverage. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
