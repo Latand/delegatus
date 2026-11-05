@@ -5,7 +5,7 @@
     "src/lib/runtime/structuredHostRetirement.ts": "ab46444807a07cd5810f33ccae20f55f2c0ed088730d23a8052065b3a9a0dc46",
     "src/lib/runtime/structuredHostRetirement.paging.fixture.ts": "e83d2b7ede1483b26c7d9008211e69e5b6f4cf549e63d1d678977a69a8f4fbc5",
     "src/lib/runtime/structuredHostRetirement.paging.test.ts": "95d8fd068133676f3b8c043cfdb325192b19c5ad3c395abc48edfa862d5ee3a2",
-    "src/lib/runtime/structuredHostRetirement.test.ts": "ba88b1185c15d49f1bdb16419b73fcd6736b22e78483a02aa641aaf061ab4c21"
+    "src/lib/runtime/structuredHostRetirement.test.ts": "e6d7ab847c0ede6aeedd5cde9f182419474def2557bfe9d8779c4980c6d8e634"
   },
   "isolation": "Each direct invocation had private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, control URL on closed port 1, and the repository preload owned its children. No live sweep was run.",
   "initialReadOnlyObservation": {
@@ -142,6 +142,27 @@
       "liveIdle": 53,
       "inferredRecencyRefusal": 48,
       "inferredSeatRefusal": 5
+    }
+  },
+  "publicationRepair": {
+    "cause": "TS2783: a version field preceding a RegistryFile spread could be overwritten.",
+    "change": "Place the explicit schema version after the snapshot spread; persisted fixture data and production behaviour are unchanged.",
+    "acceptedTestSha256": "ba88b1185c15d49f1bdb16419b73fcd6736b22e78483a02aa641aaf061ab4c21",
+    "repairedTestSha256": "e6d7ab847c0ede6aeedd5cde9f182419474def2557bfe9d8779c4980c6d8e634",
+    "focusedTest": {
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.test.ts",
+      "passed": 74,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "typecheck": {
+      "command": "bunx tsc --noEmit",
+      "configuration": "Unchanged tsconfig.json, incremental enabled, fresh export of tracked files, Node heap limit 11264 MiB, isolated environment and owned runner.",
+      "exitCode": 0
+    },
+    "lint": {
+      "file": "src/lib/runtime/structuredHostRetirement.test.ts",
+      "exitCode": 0
     }
   }
 }

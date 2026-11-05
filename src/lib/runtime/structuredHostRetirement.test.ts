@@ -1458,14 +1458,14 @@ test.each(["retired", "gone"] as const)("a %s conversation still opens and resum
   eventStore.append(SESSION, event);
   const eventsBefore = eventStore.load(SESSION);
   if (mode === "gone") {
-    const file = normalizeRegistry({ version: 2, ...snapshot({ entries: {
+    const file = normalizeRegistry({ ...snapshot({ entries: {
       [`claude:${SESSION}`]: entry({ artifactPath: transcript, cwd,
         structuredHost: { ...(entry().structuredHost as object),
           process: { pid: 2_147_483_647, startIdentity: "exited-host", bootEpoch: BOOT_EPOCH },
           scope: { unit: "delegatus-agent-resume.scope", bootEpoch: BOOT_EPOCH },
           eventCursor: 0, activeTurnRef: "unsettled-turn" },
       }),
-    } }) });
+    } }), version: 2 });
     const filename = path.join(home, "registry.json");
     fs.writeFileSync(filename, JSON.stringify(file));
     const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", now: () => NOW });
