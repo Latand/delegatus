@@ -18,6 +18,7 @@ const {
   appendRunRecord,
   appendSeatTickRecord,
   appendSeatTickRecordAsync,
+  readSeatTickAlarmRecords,
   readRunRecords,
   readSeatTickRecords,
   sanitizeRunRecord,
@@ -171,6 +172,21 @@ describe("seat tick check journal", () => {
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual(timing);
     expect(sanitizeSeatTickRecord(check())?.timing).toBeUndefined();
+  });
+
+  test("alarm reader keeps outcomes without parsing retained timing phases", async () => {
+    const file = path.join(SANDBOX, "alarm-timing.ndjson");
+    const phases = Array.from({ length: 512 }, (_, index) => [index % 4, index, index + 1, 10]);
+    const timing = { checkId: "fixed-check", startedAt: "2026-08-28T12:00:00.000Z", elapsedMs: 512, cpuUs: 512,
+      dropped: 0, names: ["check.registry", "reports.log", "curation.launchIfDue", "children.get"], phases };
+    appendSeatTickRecord(check({ verdict: "error", detail: "failed one", timing: timing as never }), file);
+    appendSeatTickRecord(check({ verdict: "error", detail: "failed two", timing: timing as never }), file);
+    appendSeatTickRecord(check({ verdict: "error", detail: "failed three", timing: timing as never }), file);
+    const recent = readSeatTickAlarmRecords(SEAT_TICK_RUN_HISTORY, file, "viewer");
+    expect(recent.map(row => row.detail)).toEqual(["failed one", "failed two", "failed three"]);
+    expect(recent.every(row => row.timing === undefined)).toBe(true);
+    const { seatTickCheckErrorAlarm } = await import("./seatTickWatchdog");
+    expect(seatTickCheckErrorAlarm(recent)?.detail).toContain("last 3 checks failed");
   });
 
   test("async timing writes share legacy retention, preserve old rows and propagate write failure", async () => {

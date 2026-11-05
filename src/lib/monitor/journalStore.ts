@@ -336,3 +336,96 @@ export function readSeatTickRecords(limit: number, filePath = seatTickJournalPat
   }
   return readJournalRecords(limit, { filePath, sanitize: sanitizeSeatTickRecord });
 }
+
+/** Read the compact fields needed to reconcile a check-error alarm. Skip each
+ * record's potentially large timing value before JSON.parse so this post-check
+ * bookkeeping never rebuilds the phase history on the Viewer thread. */
+export function readSeatTickAlarmRecords(limit: number, filePath = seatTickJournalPath(), project?: string): SeatTickRunRecord[] {
+  const scoped = project === undefined ? filePath : seatTickProjectJournalPath(project, filePath);
+  let source = scoped;
+  if (project !== undefined && !fs.existsSync(scoped)) source = filePath;
+  let raw: string;
+  try { raw = fs.readFileSync(source, "utf8"); }
+  catch { return []; }
+  const rows: SeatTickRunRecord[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const compact = omitTopLevelJsonProperty(line, "timing");
+      const row = sanitizeSeatTickRecord(JSON.parse(compact));
+      if (row && (project === undefined || row.project === project)) rows.push(row);
+    } catch { /* A malformed line does not hide records around it. */ }
+  }
+  return rows.slice(-Math.max(0, limit));
+}
+
+/** Remove one top-level JSON property without parsing its value. */
+function omitTopLevelJsonProperty(json: string, property: string): string {
+  let cursor = 1;
+  while (cursor < json.length) {
+    while (/[\s,]/.test(json[cursor] ?? "")) cursor++;
+    if (json[cursor] === "}") return json;
+    if (json[cursor] !== '"') return json;
+    const keyStart = cursor;
+    cursor++;
+    let escaped = false;
+    while (cursor < json.length) {
+      const char = json[cursor++]!;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') break;
+    }
+    const keyEnd = cursor;
+    while (/\s/.test(json[cursor] ?? "")) cursor++;
+    if (json[cursor++] !== ":") return json;
+    while (/\s/.test(json[cursor] ?? "")) cursor++;
+    const valueStart = cursor;
+    if (json.slice(keyStart + 1, keyEnd - 1) === property) {
+      cursor = skipJsonValue(json, cursor);
+      let end = cursor;
+      while (/\s/.test(json[end] ?? "")) end++;
+      if (json[end] === ",") return json.slice(0, keyStart) + json.slice(end + 1);
+      let start = keyStart;
+      while (start > 0 && /\s/.test(json[start - 1]!)) start--;
+      if (json[start - 1] === ",") start--;
+      return json.slice(0, start) + json.slice(end);
+    }
+    cursor = skipJsonValue(json, valueStart);
+    while (/\s/.test(json[cursor] ?? "")) cursor++;
+    if (json[cursor] === "}") return json;
+  }
+  return json;
+}
+
+function skipJsonValue(json: string, start: number): number {
+  if (json[start] === '"') {
+    let escaped = false;
+    for (let cursor = start + 1; cursor < json.length; cursor++) {
+      const char = json[cursor]!;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') return cursor + 1;
+    }
+    return json.length;
+  }
+  if (json[start] !== "{" && json[start] !== "[") {
+    let end = start;
+    while (end < json.length && json[end] !== "," && json[end] !== "}") end++;
+    return end;
+  }
+  const stack = [json[start] === "{" ? "}" : "]"];
+  let quoted = false, escaped = false;
+  for (let cursor = start + 1; cursor < json.length; cursor++) {
+    const char = json[cursor]!;
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "{" || char === "[") stack.push(char === "{" ? "}" : "]");
+    else if (char === "}" || char === "]") {
+      if (stack.pop() === char && stack.length === 0) return cursor + 1;
+    }
+  }
+  return json.length;
+}

@@ -97,6 +97,22 @@ measurements; production main-loop impact remains unmeasured. File I/O is awaite
 asynchronously. The early synchronous timing prototype was rejected after its
 full-ring overhead was measured; it is not the shipped writer.
 
+### Alarm reader follow-up
+
+After review, alarm reconciliation stopped expanding stored timing rows. The
+follow-up pair in `alarm-read-followup.json` uses the actual asynchronous writer
+before each alarm read, with identical 500-row global and project rings and 512
+phases in every row. Five alternating-order trials of ten check cycles compare
+the former full reader with the alarm-only reader in one isolated Bun 1.4.0
+process; both feed the same error-alarm projection. The fixture hash is
+`9f26cc4532b77d7634c40781b9c0f7876ea5c079e3b7eeefaac362763809a56b`.
+
+Median main-thread CPU fell from 29.86 ms to 16.40 ms per write plus alarm read
+(45%); median awaited wall time fell from 39.64 ms to 25.55 ms (36%). This is
+the upper-bound full-ring fixture, not a normal check's measured history size.
+It removes about 13.5 ms of main-thread work from this fixture. It does not
+explain the historical 75-second overruns or establish that ticks are fixed.
+
 ## Regression evidence
 
 Tests cover recipient isolation, both alias directions, exact keys, N candidate

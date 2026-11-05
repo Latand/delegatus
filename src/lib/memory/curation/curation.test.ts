@@ -24,6 +24,7 @@ import { curationForSweep, productionCurationController } from "./run";
 import { permitCuratorTool } from "@/lib/mcp/toolAllowlist";
 import { reconcileSeatTick, runSeatTickCheck } from "@/lib/monitor/seatTickController";
 import { emptySeatTickState } from "@/lib/monitor/types";
+import { SeatTickWork, seatTickWorkSignal } from "@/lib/monitor/seatTickWork";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
@@ -427,6 +428,33 @@ test("review: a due project whose wake lands later in the sweep still launches",
   const due = sweep.launchIfDue({ ...tickInput(), project: PROJECT });
   expect(await Promise.all([early, due])).toEqual([`launched ${PROJECT}`, `launched ${PROJECT}`]);
   expect(choices).toBe(1);
+});
+
+test("review: a canceled first check cannot cancel the shared due curator admission", async () => {
+  fixture(); const f = hostingFixture();
+  f.seat("quiet-seat", at(86_400_000));
+  f.seat(PROJECT, at(-1_000));
+  const observedSignals: (AbortSignal | undefined)[] = [];
+  const liveness = f.sources.liveness;
+  f.sources.liveness = async (...args) => {
+    observedSignals.push(seatTickWorkSignal());
+    return liveness(...args);
+  };
+  const sweep = curationForSweep(f.controller, ["quiet-seat", PROJECT]);
+  const quietWork = new SeatTickWork("quiet-seat", 1_000);
+  let quietChoice!: Promise<string | null>;
+  await quietWork.run(async () => {
+    quietChoice = sweep.launchIfDue({ ...f.tick, project: "quiet-seat" });
+    quietWork.close();
+  });
+  const dueWork = new SeatTickWork(PROJECT, 1_000);
+  const dueChoice = await dueWork.run(() => sweep.launchIfDue(f.tick));
+  await quietChoice;
+  dueWork.close();
+  expect(dueChoice).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0]!.project).toBe(PROJECT);
+  expect(observedSignals).toEqual([undefined]);
 });
 
 test("a sweep starting at a disabled project still launches a due eligible project", async () => {

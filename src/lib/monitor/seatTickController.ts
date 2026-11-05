@@ -54,7 +54,7 @@ import type { ProposalIssue } from "./githubEvidence";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { recordedProjectRemote } from "@/lib/projects/aliases";
-import { appendSeatTickRecord, appendSeatTickRecordAsync, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
+import { appendSeatTickRecord, appendSeatTickRecordAsync, readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
@@ -1547,7 +1547,7 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     try {
       const recent = dependencies.readRecords
         ? dependencies.readRecords(project, SEAT_TICK_RUN_HISTORY)
-        : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project);
+        : readSeatTickAlarmRecords(SEAT_TICK_RUN_HISTORY, undefined, project);
       const alarm = seatTickCheckErrorAlarm(recent);
       const read = dependencies.readState ?? readSeatTickState;
       const pending = read(project).checkErrorAlarmPending;

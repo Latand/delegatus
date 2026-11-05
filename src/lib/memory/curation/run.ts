@@ -11,6 +11,7 @@ import { withSystemRunTask } from "@/lib/tasks/systemRun";
 import { curatorBrief } from "./brief";
 import { admissionHeld, hostAdmission, settle, curationTimedOut, type CurationAdmissionPorts } from "./admission";
 import { claimPass, curationStatusCooperatively, currentPassAuthority, machinePassAuthority, patchPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
+import { outsideSeatTickWork } from "@/lib/monitor/seatTickWork";
 
 const LAUNCH_GRACE_MS = 15 * 60_000;
 export interface CurationController {
@@ -56,7 +57,7 @@ export function curationForSweep(controller: CurationController, projects: reado
         markReady(input.project);
         return launch ??= allReady.then(() => {
           const eligible = inputs.find(candidate => candidate.settings.enabled);
-          return eligible ? controller.launchIfDue(eligible) : "curation: paused, wakes off";
+          return eligible ? outsideSeatTickWork(() => controller.launchIfDue(eligible)) : "curation: paused, wakes off";
         });
       }
       if (!input.settings.enabled) return Promise.resolve("curation: paused, wakes off");
