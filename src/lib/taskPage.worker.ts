@@ -1,3 +1,4 @@
+import { PrivacyWorkError, privacyFailureOf } from "./memory/privacyFailure";
 import readline from "node:readline";
 import { TaskPageBuilder, type PageBuildRequest } from "./links/taskPageBuild";
 
@@ -61,15 +62,15 @@ for await (const line of lines) {
           ? renderReport({ ...request.input, at: new Date(request.input.at), deny: localDeny })
           : scrubIssueReport(request.report, localDeny));
       }
-      if (storedLessonRevision() !== privacyRevision) throw new Error("LESSON_PRIVACY_UNAVAILABLE");
+      if (storedLessonRevision() !== privacyRevision) throw new PrivacyWorkError("store-changed");
       process.stdout.write(`${JSON.stringify({ id, result: { privacyRevision, value } })}\n`);
       continue;
     }
     const result = builder.build(frame.request as PageBuildRequest);
     const cpuUsed = process.cpuUsage(cpu);
     process.stdout.write(`{"id":${JSON.stringify(id)},"result":{"page":${result.pageJson},"privacyRevision":${JSON.stringify(result.privacyRevision)},"builds":${result.builds},"startRevision":${result.startRevision},"cpu":${JSON.stringify(cpuUsed)}}}\n`);
-  } catch {
+  } catch (error) {
     // Store errors may contain task text or paths. Carry only the error class.
-    process.stdout.write(`${JSON.stringify({ id, error: "LESSON_PRIVACY_UNAVAILABLE" })}\n`);
+    process.stdout.write(`${JSON.stringify({ id, error: "LESSON_PRIVACY_UNAVAILABLE", failure: privacyFailureOf(error) })}\n`);
   }
 }
