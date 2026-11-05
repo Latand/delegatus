@@ -1,6 +1,7 @@
 // Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, REMOTE_BRANCH, create, realWorktreeLane, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 
 
 test("a failover whose remaining capacity disappears waits with the limit detail (#1371)", async () => {
@@ -1897,6 +1898,28 @@ test("closing an initial pending stage does not allocate a future attempt (#353)
   expect(reloaded.cursor).toBeNull();
   expect(reloaded.runs.find((run) => run.stageId === "plan")!.attempts).toHaveLength(0);
   expect(reloaded.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
+test("closing after pre-reservation account admission settles the pending attempt", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports); // provision
+  h.ports.spawnAgent = async () => { throw new AccountMutationBusyError(); };
+  await tickPipelines([], h.ports); // admission refuses before onReserved
+  const admissionDeferred = loadPipelines().find(item => item.id === pipeline.id)!;
+  const deferred = admissionDeferred.runs.find(run => run.stageId === "plan")!.attempts[0]!;
+  expect(admissionDeferred.state).toBe("running");
+  expect(deferred).toMatchObject({ state: "pending", startedAt: expect.any(String), spawnCalls: 1,
+    launchId: null, conversationId: null });
+
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+
+  const closed = loadPipelines().find(item => item.id === pipeline.id)!;
+  expect(closed.runs.find(run => run.stageId === "plan")!.attempts[0]).toMatchObject({
+    state: "skipped", startedAt: deferred.startedAt, completedAt: closed.closedAt,
+    launchId: null, conversationId: null,
+  });
   expect(h.spawnInputs).toHaveLength(0);
 });
 

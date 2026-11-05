@@ -1,7 +1,8 @@
-import { expect, test, Database, path, harness, rawPatchPipeline, closeAndDrain,
+import { expect, test, Database, path, harness, rawPatchPipeline, closeAndDrain, AgentRegistry, setAgentRegistryForTests,
   loadPipelines, savePipelines, activationDrainFixture, reserveActivationOnly } from "./engine.fixture";
 import { buildPipeline, findPipelineRecord, loadPipelinesForProjection, loadPipelinesForList,
   loadPipelinesForStartup, isStoredPipeline, pipelineRevision, loadArchivedPipelinesForList } from "./store";
+import { settleClosedPipelineAttempts } from "./closeAttempts";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const START = "2026-10-25T10:00:00.000Z";
@@ -64,6 +65,73 @@ test("close persists every untouched attempt as skipped and preserves earlier ve
   expect(h.spawnInputs).toHaveLength(0);
   await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
   expect(stored().pipeline.runs).toEqual(closed.runs);
+});
+
+test("close settles a preparation timestamp after explicit zero-call admission", async () => {
+  const h = harness();
+  h.ports.now = () => CLOSED;
+  const pipeline = lane();
+  const preparedAt = "2026-10-25T10:30:00.000Z";
+  Object.assign(pipeline.runs[0]!.attempts[1]!, { spawnCalls: 0, startedAt: preparedAt });
+  savePipelines([pipeline]);
+
+  const result = await rawPatchPipeline(pipeline.id, { action: "close" }, h.ports);
+
+  expect(result.error).toBeUndefined();
+  expect(stored().pipeline.runs[0]!.attempts[1]).toMatchObject({ state: "skipped",
+    startedAt: preparedAt, completedAt: CLOSED, verdict: null });
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
+test("closed pending history with an unresolved original launch remains pending", () => {
+  const pipeline = lane();
+  pipeline.state = "closed";
+  pipeline.cursor = null;
+  pipeline.closedAt = CLOSED;
+  Object.assign(pipeline.runs[0]!.attempts[1]!, { spawnCalls: 1 });
+  settleClosedPipelineAttempts(pipeline, () => "uncertain");
+
+  expect(pipeline.runs[0]!.attempts[1]).toMatchObject({ state: "pending", completedAt: null, spawnCalls: 1 });
+  expect(pipeline.runs[1]!.attempts[0]!.state).toBe("pending");
+});
+
+test.each([1, undefined] as const)("close binds an unresolved registry reservation with spawnCalls=%s", async (spawnCalls) => {
+  const h = harness();
+  const pipeline = lane();
+  const attempt = pipeline.runs[0]!.attempts[1]!;
+  if (spawnCalls !== undefined) attempt.spawnCalls = spawnCalls;
+  const variant = spawnCalls ?? "legacy";
+  const conversationId: `conversation_${string}` = `conversation_original_reserved_${variant}`;
+  const clientAttemptId = `pipeline_${pipeline.id}_review_2`;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `close-launch-registry-${variant}.json`));
+  setAgentRegistryForTests(registry);
+  try {
+    const membership = { kind: "pipeline" as const, containerId: pipeline.id, role: "agent", slot: "review:2",
+      stageId: "review", stageOrder: 0, round: 2, parentConversationId: null };
+    const reservation = registry.beginSpawnRequest({ engine: "codex", cwd: pipeline.worktreeDir,
+      transport: "structured", clientAttemptId, conversationId, role: "agent", memberships: [membership],
+      launchProfile: { title: "Reserved pipeline stage" } });
+    if (reservation.kind !== "created") throw new Error(`fixture reservation returned ${reservation.kind}`);
+    expect(registry.pipelineSpawnHistory(clientAttemptId)).toMatchObject([{
+      launchId: reservation.receipt.launchId, engine: "codex", cwd: pipeline.worktreeDir,
+      transport: "structured", clientAttemptId, state: "starting",
+    }]);
+    expect(registry.conversationMemberships(conversationId)).toMatchObject([membership]);
+    savePipelines([pipeline]);
+    expect(isStoredPipeline(loadPipelines().find(row => row.id === pipeline.id))).toBe(true);
+
+    const result = await rawPatchPipeline(pipeline.id, { action: "close" }, h.ports);
+
+    expect(result.error).toBeUndefined();
+    const closed = stored("pipelines", pipeline.id).pipeline;
+    expect({ ...closed.runs[0]!.attempts[1], spawnCalls: closed.runs[0]!.attempts[1]!.spawnCalls ?? null }).toMatchObject({
+      state: "pending", spawnCalls: spawnCalls ?? null,
+      launchId: reservation.receipt.launchId, conversationId });
+    expect(result.close!.pending).toMatchObject([{ stageId: "review", attempt: 2,
+      launchId: reservation.receipt.launchId, conversationId }]);
+    expect(loadPipelines().find(row => row.id === pipeline.id)!.runs[0]!.attempts[1]).toMatchObject({ state: "pending",
+      launchId: reservation.receipt.launchId, conversationId });
+  } finally { setAgentRegistryForTests(null); }
 });
 
 test.each(["empty", "terminal"] as const)("close allocates no attempt for a pending cursor with %s history", async (history) => {

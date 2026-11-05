@@ -2917,7 +2917,7 @@ function stageReservationReceipt(pipeline: Pipeline, stageId: string, attempt: P
       || registry.conversationMemberships(receipt.conversationId).some(member =>
       member.kind === "pipeline" && member.containerId === pipeline.id && member.stageId === stageId
       && member.slot === `${stageId}:${attempt.n}` && member.round === attempt.n
-      && member.role === (input?.membership.role ?? attempt.effectiveRole.roleId)))) {
+      && member.role === (input?.membership.role ?? attempt.effectiveRole.roleId ?? "agent")))) {
     throw new Error("stage receipt membership, runtime or worktree identity conflicts with the original attempt");
   }
   return receipt;
@@ -18151,6 +18151,7 @@ export async function patchPipeline(
         const pendingSwitch = openRuntimeSwitch(item);
         if (pendingSwitch) { pendingSwitch.phase = "superseded"; pendingSwitch.settledAt = ports.now(); pendingSwitch.outcome = "pipeline closed"; }
       }
+      reconcileClosedAttemptLaunches(pipeline);
       const activations = pipeline.runs.flatMap((run) => run.attempts).filter((item) => item.activation);
       for (const item of activations) item.activation!.closeRequested = true;
       // Freeze recorded identities before releasing the collection. A permitted
@@ -18189,6 +18190,40 @@ export async function patchPipeline(
   /* The lock is gone: ask the sweep to read what the new links name. */
   for (const repository of linkRepositories) nudgeForgeSweep(repository);
   return patched;
+}
+
+/** Reconcile every original request key before close decides an unbound
+ * pending row never launched. Registry read failures retain the attempt. */
+function reconcileClosedAttemptLaunches(pipeline: Pipeline): void {
+  const registry = agentRegistry();
+  for (const run of pipeline.runs) for (const attempt of run.attempts) {
+    if (attempt.state !== "pending" || attempt.activation || attempt.launchId || attempt.conversationId
+      || attempt.sessionId || attempt.agentPath || attempt.paneId || attempt.flowId) continue;
+    if (attempt.spawnCalls === 0) continue;
+    try {
+      const stage = pipeline.stages.find(candidate => candidate.id === run.stageId);
+      if (!stage) continue;
+      const base = clientAttemptId(pipeline, stage, attempt);
+      const history = registry.pipelineSpawnHistory(base);
+      const receipts = history.map(receipt => {
+        if (!receipt.clientAttemptId) throw new Error("original spawn request has no key");
+        return stageReservationReceipt(pipeline, run.stageId, attempt, receipt.clientAttemptId);
+      });
+      const noHostFailure = (receipt: NonNullable<typeof receipts[number]>) => receipt.state === "failed"
+        && receipt.membershipAdmitted === false && !receipt.key && !receipt.pane
+        && !receipt.verifiedHost && !receipt.artifactPath;
+      if ((!receipts.length && (attempt.spawnCalls !== undefined || !attempt.startedAt))
+        || receipts.length > 0 && receipts.every(receipt => receipt && noHostFailure(receipt))) {
+        attempt.spawnCalls = 0;
+        continue;
+      }
+      const unresolved = receipts.find(receipt => receipt && receipt.state === "starting")
+        ?? receipts.find(receipt => receipt && !noHostFailure(receipt));
+      if (unresolved) bindStageReservation(attempt, unresolved);
+    } catch {
+      // A missing or conflicting registry read never proves non-execution.
+    }
+  }
 }
 
 /**
