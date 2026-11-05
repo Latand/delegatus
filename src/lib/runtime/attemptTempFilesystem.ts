@@ -97,7 +97,7 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
  * every walk ends by the tick's budget, then remaining roots are deferred. */
 export class RepositoryLinkInventory {
   private readonly reads = new Map<string, { at: number; targets: Promise<string[]>; directories?: RepositoryDirectoryVersion[] }>();
-  private readonly repositoriesOf = new Map<string, string | null>();
+  private readonly repositoriesOf = new Map<string, string>();
   private readonly deadline: number;
   readonly walks: string[] = [];
   constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number } = {}) {
@@ -112,14 +112,37 @@ export class RepositoryLinkInventory {
         && current.mtimeMs === directory.mtimeMs && current.ctimeMs === directory.ctimeMs;
     });
   }
+  /** Synchronous last check after the inventory's asynchronous observations. */
+  unchanged(repository: string) {
+    const read = this.reads.get(repository);
+    return !!read?.directories && this.directoriesUnchanged(read.directories);
+  }
   /** The nearest enclosing checkout of a process cwd. */
   repositoryOf(cwd: string): string | null {
+    // Validate the cwd before walking its parents. A stale process snapshot
+    // must not fall through to an enclosing checkout after its own path went
+    // missing, and failed reads must never be interpreted as no dependency.
+    const cwdStat = fs.statSync(cwd);
+    if (!cwdStat.isDirectory()) throw new Error(`process cwd is not a directory: ${cwd}`);
     if (this.repositoriesOf.has(cwd)) return this.repositoriesOf.get(cwd)!;
     let repository: string | null = null;
-    for (let current = cwd, depth = 0; depth < 64 && current !== path.dirname(current); depth++, current = path.dirname(current)) {
-      if (fs.existsSync(path.join(current, ".git"))) { repository = current; break; }
+    let current = path.resolve(cwd), depth = 0;
+    for (; depth < 64; depth++) {
+      try {
+        fs.lstatSync(path.join(current, ".git"));
+        repository = current;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
     }
-    this.repositoriesOf.set(cwd, repository);
+    // No checkout is a valid result only after reaching the filesystem root.
+    // A depth limit or a failed lookup is unknown and must defer removal.
+    if (!repository && depth === 64 && current !== path.dirname(current)) throw new Error("process checkout ancestry exceeded its limit");
+    if (repository) this.repositoriesOf.set(cwd, repository);
     return repository;
   }
   async targets(repository: string): Promise<string[]> {
@@ -183,15 +206,29 @@ export async function attemptReferencesClear(original: string, current: string, 
     }
   }
   const repositories = new Set<string>();
+  const processCwds: string[] = [];
   for (const process of scan.processes) {
     const cwd = process.paths[0];
+    if (cwd?.startsWith(path.sep)) processCwds.push(cwd);
     const repository = cwd?.startsWith(path.sep) ? inventory.repositoryOf(cwd) : null;
     if (repository) repositories.add(repository);
   }
   for (const repository of [...repositories].sort()) {
     if (await repositoryReferencesAttemptTemp(repository, original, current, inventory)) return false;
   }
-  return process.platform !== "linux" || await containers([original, current]);
+  if (process.platform === "linux" && !await containers([original, current])) return false;
+  // The container query yields. Re-resolve every consumer checkout and links
+  // after it, then synchronously validate the directory snapshots so a late
+  // disappearance, permission change, replacement, or link creation cannot
+  // ride on the earlier negative inventory.
+  for (const cwd of processCwds) {
+    const repository = inventory.repositoryOf(cwd);
+    if (repository) repositories.add(repository);
+  }
+  for (const repository of [...repositories].sort()) {
+    if (await repositoryReferencesAttemptTemp(repository, original, current, inventory)) return false;
+  }
+  return [...repositories].every(repository => inventory.unchanged(repository));
 }
 
 async function containerMountsClear(roots: readonly string[]): Promise<boolean> {

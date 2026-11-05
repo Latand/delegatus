@@ -65,6 +65,82 @@ test("a settled root retires beside more than 32 unrelated checkouts; a linking 
   expect(await attemptReferencesClear(directory, directory, scan(), async () => true)).toBeFalse();
 });
 
+test("a missing process cwd cannot become a cached no-checkout result", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-unproven-cwd"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 41, namespace: null, stamped: false, paths: [cwd] }] };
+  fs.rmSync(cwd, { recursive: true });
+  await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toThrow();
+  expect(inventory.walks).toHaveLength(0);
+});
+
+test("an unreadable process cwd cannot become a cached no-checkout result", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-unreadable-cwd"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }] };
+  fs.chmodSync(repository, 0);
+  try {
+    await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toMatchObject({ code: "EACCES" });
+    expect(inventory.walks).toHaveLength(0);
+  } finally { fs.chmodSync(repository, 0o700); }
+});
+
+test.each(["absent", "unreadable", "restored"] as const)("the final removal check observes a checkout changed during container observation (%s)", async change => {
+  const parent = root(), directory = path.join(parent, "llv-stage-final-boundary");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  const inventory = new RepositoryLinkInventory();
+  let changed = false;
+  let containerObservations = 0;
+  const oldRepository = `${repository}-old`;
+  const readdir = fs.promises.readdir.bind(fs.promises);
+  const denied = change === "unreadable" ? spyOn(fs.promises, "readdir").mockImplementation(async (target, options) => {
+    if (changed && path.resolve(String(target)) === repository) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return readdir(target, options as never);
+  }) : undefined;
+  const mutate = () => {
+    changed = true;
+    if (change === "absent") fs.renameSync(repository, oldRepository);
+    if (change === "unreadable") fs.chmodSync(repository, 0);
+    if (change === "restored") {
+      fs.renameSync(repository, oldRepository);
+      fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+      fs.mkdirSync(path.join(repository, "work"));
+      fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+    }
+  };
+  const references = (original: string, current: string, scan: Parameters<typeof attemptReferencesClear>[2]) =>
+    attemptReferencesClear(original, current, scan, async () => {
+      containerObservations++;
+      if (containerObservations === 3) mutate();
+      return true;
+    }, inventory);
+  let now = 2;
+  const sweep = (processes: Array<{ pid: number; namespace: null; stamped: boolean; paths: string[] }>) => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+    state: async () => "closed", references, scan: () => ({ ownNamespace: null, processes }) });
+  const processes = [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }];
+  try {
+    const result = await sweep(processes);
+    expect(changed).toBeTrue();
+    expect(containerObservations).toBeGreaterThanOrEqual(3);
+    expect(result.removed).toBe(0);
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    if (change === "unreadable") fs.chmodSync(repository, 0o700);
+    if (change === "restored") fs.unlinkSync(path.join(repository, "dependency"));
+    now += 60_001;
+    expect((await sweep([])).removed).toBe(1);
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { denied?.mockRestore(); fs.chmodSync(change === "unreadable" ? repository : parent, 0o700); store.close(); }
+});
+
 test("one tick shares checkout walks and invalidates a negative result after a late link", async () => {
   const parent = root(), first = path.join(parent, "llv-stage-first"), second = path.join(parent, "llv-stage-second");
   fs.mkdirSync(first); fs.mkdirSync(second);

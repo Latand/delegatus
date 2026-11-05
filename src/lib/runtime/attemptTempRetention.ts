@@ -242,6 +242,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (authority !== state) { reason = `authority changed from ${state} to ${authority}`; return false; }
         if (!final?.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== owner.identity) { reason = "identity changed after observations"; return false; }
         if (!evidence.current()) { disposition = "evidence"; reason = "evidence changed after preservation"; return false; }
+        // Checkout state can change while evidence and producer authority are
+        // awaited. Repeat every process/socket/container reference observation
+        // at the last eligibility boundary before quarantine or removal.
+        if (!await references(owner.directory, directory, scan())) {
+          disposition = "live";
+          reason = "live process, socket, checkout link or container mount changed during retirement";
+          return false;
+        }
+        checkBudget();
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }
