@@ -1,6 +1,6 @@
 "use client";
 
-import { AudioLines, Bell, Brain, ChevronLeft, ChevronRight, KeyRound, Languages, Link2, MessagesSquare, Mic, Power, Send, Settings, ShieldCheck, SlidersHorizontal, X, type LucideIcon } from "lucide-react";
+import { ArrowUpRight, AudioLines, Brain, ChevronLeft, ChevronRight, KeyRound, Link2, MessagesSquare, Mic, Send, Settings, ShieldCheck, SlidersHorizontal, X, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -8,10 +8,10 @@ import { openExternalRelaySettings } from "@/components/externalRelay/openExtern
 import { StopAllQuestion, useMayStop } from "@/components/headerMenu/HeaderMenu";
 import { HEADER_LAYOUTS, settingsSectionsOf } from "@/components/headerMenu/headerMenuModel";
 import { KeepAwakeMenuRow, useKeepAwake } from "@/components/KeepAwakeControl";
+import { LanguageToggle } from "@/components/LanguageToggle";
 import { KeysImportPage, KeysMenuPage, KeysStateWord } from "@/components/keys/KeysSection";
 import { featureName, OpenAiFeaturePage, type ServiceFeature } from "@/components/keys/OpenAiServices";
 import { onOpenKeys, pendingKeys, settleKeys } from "@/components/keys/openKeys";
-import { LanguageToggle } from "@/components/LanguageToggle";
 import { LAYER, Z } from "@/components/layers";
 import { openLinkedSettings } from "@/components/links/openLinkedSettings";
 import { MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
@@ -31,7 +31,7 @@ import type { KeyId } from "@/lib/keys/shared";
 
 import { onOpenSettings, setSettingsWindowShown, type SettingsSection, type SettingsSub } from "./openSettings";
 import { PrivacySection } from "./PrivacySection";
-import { FOCUS, Rows, SettingsDensity, useWholeRows } from "./settingsRows";
+import { FOCUS, LinkRow, Rows, SettingsDensity, useWholeRows, wholeRowsTop } from "./settingsRows";
 import { TelegramSection } from "./TelegramSection";
 import { VoiceSection } from "./VoiceSection";
 
@@ -78,34 +78,32 @@ function GeneralSection({ phone, sub, go, back }: { phone: boolean; sub: Setting
   const mayStop = useMayStop();
   const [push, setPush] = useState({ supported: false, enabled: false });
   const onPushStatus = useCallback((status: { supported: boolean; enabled: boolean }) => setPush(status), []);
-  const pushLabel = !push.supported ? t("rail.menuNotificationsUnavailable") : push.enabled ? t("rail.menuNotificationsOn") : t("rail.menuNotificationsOff");
+  const pushState = t(!push.supported ? "settings.general.pushUnavailable" : push.enabled ? "settings.general.pushOn" : "settings.general.pushOff");
   if (sub?.id === "stop") return <Rows data-header-menu-page="stop"><div data-settings-unit=""><StopAllQuestion phone onCancel={back} /></div></Rows>;
-  const still = `flex items-center gap-3 ${phone ? "min-h-11 px-4 py-1.5" : "min-h-10 px-5 py-1.5"} text-body font-semibold text-primary`;
-  const glyph = "h-4 w-4 shrink-0 text-secondary";
+  /* The rows of every other section: a label, its muted line, the control at the right edge. */
+  const still = `flex items-center gap-3 ${phone ? "min-h-11 px-4 py-1.5" : "min-h-10 px-5 py-1.5"}`;
   return (
     <Rows data-header-menu-page="settings">
       {phone ? (
         <>
-          <div data-settings-unit="" className={still}><span className="min-w-0 flex-1">{t("mobile2.menu.sound")}</span><SoundToggle /></div>
+          <div data-settings-unit="" className={still}><span className="min-w-0 flex-1 text-body font-semibold text-primary">{t("mobile2.menu.sound")}</span><SoundToggle /></div>
           {keepAwake ? <div data-settings-unit="" className="px-2.5"><KeepAwakeMenuRow /></div> : null}
-          {mayStop ? (
-            <button type="button" data-settings-unit="" data-settings-sub="stop:" data-mobile2-menu-row="stop-all" onClick={() => go({ id: "stop", title: t("headerMenu.stopAll") })} className={`${still} w-full text-left active:bg-sunken ${FOCUS}`}>
-              <Power className={glyph} aria-hidden />
-              <span className="min-w-0 flex-1 truncate">{t("headerMenu.stopAll")}</span>
-              <ChevronRight data-settings-chevron="" className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-            </button>
-          ) : null}
+          {mayStop ? <LinkRow sub="stop:" buttonAttrs={{ "data-mobile2-menu-row": "stop-all" }} label={t("headerMenu.stopAll")} onOpen={() => go({ id: "stop", title: t("headerMenu.stopAll") })} /> : null}
         </>
       ) : (
         <>
           <div data-settings-unit="" data-header-menu-language="" className={still}>
-            <Languages className={glyph} aria-hidden />
-            <span className="min-w-0 flex-1 truncate">{t("rail.menuLanguage")}: {locale === "en" ? "English" : "Українська"}</span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-body font-semibold text-primary">{t("rail.menuLanguage")}</span>
+              <span className="text-ui leading-snug text-muted">{locale === "en" ? "English" : "Українська"}</span>
+            </span>
             <LanguageToggle />
           </div>
           <div data-settings-unit="" data-header-menu-push="" className={still}>
-            <Bell className={glyph} aria-hidden />
-            <span className="min-w-0 flex-1 truncate">{pushLabel}</span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-body font-semibold text-primary">{t("settings.general.push")}</span>
+              <span className="text-ui leading-snug text-muted">{pushState}</span>
+            </span>
             <PushBell onStatus={onPushStatus} />
           </div>
         </>
@@ -118,17 +116,12 @@ function RolesSection({ phone, project, close }: { phone: boolean; project: stri
   const { t } = useLocale();
   return (
     <Rows data-header-menu-page="roles">
-      <button
-        type="button"
-        data-settings-unit=""
-        {...(phone ? { "data-mobile2-menu-row": "agent-mapping", "data-testid": "menu-agent-mapping" } : { "data-rail-menu-agent-mapping": "" })}
-        onClick={() => { close(); openOnboarding("mapping"); }}
-        className={`flex w-full items-center gap-3 text-left text-body font-semibold text-primary hover:bg-sunken active:bg-sunken ${phone ? "min-h-11 px-4" : "min-h-10 px-5"} ${FOCUS}`}
-      >
-        <SlidersHorizontal className="h-4 w-4 shrink-0 text-secondary" aria-hidden />
-        <span className="min-w-0 flex-1 truncate">{t("headerMenu.mapping")}</span>
-      </button>
-      <div data-settings-unit="" className={phone ? "" : "px-3"}><WorkerLimitSettingsRow project={project} phone={phone} /></div>
+      <LinkRow
+        buttonAttrs={phone ? { "data-mobile2-menu-row": "agent-mapping", "data-testid": "menu-agent-mapping" } : { "data-rail-menu-agent-mapping": "" }}
+        label={t("headerMenu.mapping")}
+        onOpen={() => { close(); openOnboarding("mapping"); }}
+      />
+      <div data-settings-unit=""><WorkerLimitSettingsRow project={project} phone={phone} /></div>
     </Rows>
   );
 }
@@ -142,7 +135,7 @@ function SectionBody({ section, sub, go, back, phone, project, close, keysFocus 
   switch (section) {
     case "general": return <GeneralSection phone={phone} sub={sub} go={go} back={back} />;
     case "memory": return (
-      <div data-header-menu-page="memory" className={inset}>
+      <div data-header-menu-page="memory" className="pt-2 settings-sheet:pt-0">
         {project ? <MemoryPanel size={size} /> : null}
         <div data-settings-unit=""><MemorySourceRow phone={phone} /></div>
       </div>
@@ -272,7 +265,8 @@ function PhoneWindow({ sections, section, sub, go, back, choose, close, project,
                     <Glyph className="h-[18px] w-[18px] shrink-0 text-secondary" aria-hidden />
                     <span className="min-w-0 flex-1 truncate">{t(name)}</span>
                     {stateWord(id, true)}
-                    {HAND_OFF[id] ? null : <ChevronRight data-settings-chevron="" className="h-4 w-4 shrink-0 text-muted" aria-hidden />}
+                    {/* A section that is a window of its own leaves this one: its sign points out. */}
+                    {HAND_OFF[id] ? <ArrowUpRight data-settings-chevron="" data-settings-hand-off="" className="h-4 w-4 shrink-0 text-muted" aria-hidden /> : <ChevronRight data-settings-chevron="" className="h-4 w-4 shrink-0 text-muted" aria-hidden />}
                   </button>
                 );
               })}
@@ -360,7 +354,7 @@ export function SettingsWindowHost({ project }: { project: string | null }) {
     else if (landing && body) {
       landing.focus({ preventScroll: true });
       /* From its top the rows fall whole, as they do at the end of the scroll. */
-      body.scrollTop += landing.getBoundingClientRect().top - body.getBoundingClientRect().top;
+      body.scrollTop = wholeRowsTop(body, body.scrollTop + landing.getBoundingClientRect().top - body.getBoundingClientRect().top);
     } else [...(body?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])].find((element) => !element.hasAttribute("disabled"))?.focus();
   });
 

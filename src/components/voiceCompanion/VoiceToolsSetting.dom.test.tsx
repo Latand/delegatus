@@ -159,7 +159,9 @@ test("a pending proposal shows what will run by name, takes its secret once and 
   const host = await mount();
   const row = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
   expect(row.querySelector("[data-voice-tool-dry-run-hint] dd")?.textContent).toBe(translate("en", "voiceCompanion.tools.dryRunHint"));
-  expect(row.querySelector<HTMLInputElement>("input[data-destinations]")?.placeholder).toBe(spotify().secretRecipient);
+  /* The field asks in words; the long recipient it may take reads whole in «Details», never cut inside a field. */
+  expect(row.querySelector<HTMLInputElement>("input[data-destinations]")?.placeholder).toBe(translate("en", "settings.voice.destinationsPlaceholder"));
+  expect(row.querySelector("[data-voice-tool-recipient] dd")?.textContent).toBe(spotify().secretRecipient);
   expect(row.dataset.state).toBe("pending");
   expect(row.querySelector("[data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
   expect(row.querySelector("[data-voice-tool-runs] dd")?.textContent).toBe("bun run '/srv/tools/notes server.ts'");
@@ -385,6 +387,9 @@ test("unavailable stdio containment shows localized risk and only the explicit c
       const host = await mount();
       expect(host.querySelector("[data-voice-tool-uncontained]")?.textContent).toContain(translate(locale, "voiceCompanion.tools.uncontained.warning"));
       expect(host.querySelector("[data-voice-tool-platform]")?.textContent).toBe(translate(locale, "voiceCompanion.tools.containment.WINDOWS"));
+      /* The platform's reason reads once, in the dry run's own line. */
+      expect(host.querySelector("[data-voice-tool-platform]")?.closest("[data-voice-tool-dry-run]")).not.toBeNull();
+      expect(host.querySelector("[data-voice-tool-server]")!.textContent!.split(translate(locale, "voiceCompanion.tools.containment.WINDOWS")).length).toBe(2);
       expect(writes()).toEqual([]);
       await click(button(host, "confirm-uncontained"));
       expect(writes()).toEqual([{ action: "dry-run", name: "spotify", digest: digestOf(1), confirmUncontained: { reason: "WINDOWS", runId: digestOf(700) } }]);

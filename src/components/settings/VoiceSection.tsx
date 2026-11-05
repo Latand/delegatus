@@ -72,6 +72,7 @@ export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (
           <>
             <ChoiceRow
               label={t("voiceCompanion.settings.backend")}
+              wide
               value={settings.backend}
               attrs={{ "data-voice-companion-backend": settings.backend }}
               selectAttrs={{ "data-voice-backend-select": "" }}
@@ -84,7 +85,12 @@ export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (
             {settings.held ? (
               <div data-voice-companion-held="" data-settings-unit="">
                 <TextRow tone="warning">{t("settings.voice.held")}</TextRow>
-                <BlockRow><button type="button" data-voice-companion-stay="" className={BUTTON} onClick={() => void change({ backend: "codex" }, "backend")}>{t("settings.voice.stayOnCodex")}</button></BlockRow>
+                <BlockRow>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <button type="button" data-voice-companion-held-key="" className={BUTTON} onClick={() => openKeys("openai")}>{t("openaiServices.addKey")}</button>
+                    <button type="button" data-voice-companion-stay="" className={BUTTON} onClick={() => void change({ backend: "codex" }, "backend")}>{t("settings.voice.stayOnCodex")}</button>
+                  </span>
+                </BlockRow>
               </div>
             ) : null}
             {refusal("backend")}
@@ -112,7 +118,7 @@ export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (
             ) : null}
             {settings.uncertainSession ? (
               <div data-voice-companion-uncertain="" data-settings-unit="">
-                <TextRow tone="danger" role="alert">{companionErrorMessage("MINT_UNCERTAIN", speech)}</TextRow>
+                <TextRow tone="danger" role="alert">{t("settings.voice.uncertain")}</TextRow>
                 <BlockRow><button type="button" disabled={busy} className={BUTTON} onClick={() => void change({ releaseUncertainSession: true }, "release")}>{t("voiceCompanion.settings.uncertain.release")}</button></BlockRow>
                 {refusal("release")}
               </div>
@@ -170,25 +176,29 @@ function CodexLines({ settings }: { settings: NonNullable<ReturnType<typeof useV
   const clock = useNowSeconds(60_000);
   const now = clock ? clock * 1000 : plan?.observedAt ?? 0;
   const date = call ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short" }).format(new Date(call.endedAt)) : "";
-  const readAt = plan ? new Intl.DateTimeFormat(locale, now - plan.observedAt < 86_400_000 ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(plan.observedAt)) : "";
+  const windows = plan ? planWindows(plan) : [];
+  /* The window that runs out first says when it comes back. */
+  const tightest = windows.reduce<(typeof windows)[number] | null>((most, window) => !most || window.usedPercent > most.usedPercent ? window : most, null);
+  const [before, after = ""] = plan ? t("voiceCompanion.settings.planUsed", { plan: planName(plan), windows: "\u0001" }).split("\u0001") : [""];
   return (
     <div data-voice-companion-codex="" className="flex flex-col gap-0.5 px-5 pb-1.5 text-ui leading-snug text-muted tabular-nums settings-sheet:px-4">
       <p data-voice-companion-last-call="" data-settings-unit="">{call ? t("voiceCompanion.settings.lastCodexCall", { duration: callDuration(call.seconds), date }) : t("voiceCompanion.settings.noCall")}</p>
-      {/* The plan as the footer sets it: one short line a window with its figure emphasised, the whole-account note once above them and the reading time below. */}
-      {plan ? <div className="flex flex-col gap-0.5" data-voice-companion-plan="" data-tone={planTone(plan)}>
-        <p data-settings-unit="">{t("voiceCompanion.settings.planHead", { plan: planName(plan) })}</p>
-        {planWindows(plan).map((window, index) => {
-          const used = `${Math.round(window.usedPercent)}%`;
-          const figureTone = windowTone(window, plan);
-          const text = window.resetsAt === null
-            ? t("voiceCompanion.usage.windowFigure", { window: windowName(window, t), used: "\u0001" })
-            : t("voiceCompanion.usage.windowFigureReset", { window: windowName(window, t), used: "\u0001", reset: limitResetText(window.resetsAt, speech, now) });
-          return <p key={index} className="text-secondary" data-plan-window="" data-settings-unit="">
-            {text.split("\u0001").map((part, at) => at === 0 ? part : [<span key="figure" className="font-semibold text-primary" data-plan-figure="" data-tone={figureTone} style={{ color: figureTone ? `var(--color-${figureTone})` : undefined }}>{used}</span>, part])}
-          </p>;
-        })}
-        <p data-settings-unit="">{t("voiceCompanion.settings.asOf", { time: readAt })}</p>
-      </div> : null}
+      {/* The plan in one line: what each window has used, its figure emphasised, and when the fullest one resets. */}
+      {plan ? (
+        <p data-voice-companion-plan="" data-settings-unit="" data-tone={planTone(plan)} className="text-secondary">
+          {before}
+          {windows.map((window, index) => {
+            const figureTone = windowTone(window, plan);
+            return (
+              <span key={index} data-plan-window="" className="whitespace-nowrap">
+                {index ? ", " : ""}{windowName(window, t)} <span className="font-semibold text-primary" data-plan-figure="" data-tone={figureTone} style={{ color: figureTone ? `var(--color-${figureTone})` : undefined }}>{`${Math.round(window.usedPercent)}%`}</span>
+              </span>
+            );
+          })}
+          {after}
+          {tightest && tightest.resetsAt !== null ? <span data-plan-reset="">{" · "}{t("voiceCompanion.settings.planReset", { window: windowName(tightest, t), reset: limitResetText(tightest.resetsAt, speech, now) })}</span> : null}
+        </p>
+      ) : null}
     </div>
   );
 }

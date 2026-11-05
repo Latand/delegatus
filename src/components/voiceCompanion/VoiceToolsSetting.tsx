@@ -113,7 +113,14 @@ const FILTER_ABOVE = 6;
 
 /** One row per server, waiting ones first, and how a tool gets here. */
 export function VoiceToolRows({ tools, onOpen }: { tools: VoiceTools; onOpen: (name: string, title: string) => void }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  /* The row says the state; its dot says what the last dry run found. */
+  const note = (server: Server) => {
+    const run = server.lastDryRun;
+    if (!run) return t("voiceCompanion.tools.dryRun.none");
+    const time = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(run.at));
+    return run.code === "OK" && server.catalog ? t("voiceCompanion.tools.dryRun.ok", { time, count: server.catalog.tools.length }) : t("settings.voice.toolNoteFailed", { time });
+  };
   const { view, servers, loading, loadError, signInRequired, read } = tools;
   const status = loading && !view ? t("voiceCompanion.tools.loading") : loadError ? t(signInRequired ? "voiceCompanion.tools.signIn" : "voiceCompanion.tools.error") : view && !servers.length ? t("voiceCompanion.tools.empty") : "";
   return <div data-voice-tools="" data-settings-landing="" tabIndex={-1} role="group" aria-label={t("voiceCompanion.tools.title")} className="outline-none">
@@ -126,7 +133,7 @@ export function VoiceToolRows({ tools, onOpen }: { tools: VoiceTools; onOpen: (n
         attrs={{ "data-voice-tool-server": name, "data-state": server.state }}
         sub={`tool:${name}`}
         label={server.title}
-        dot={{ tone: STATE_TONE[server.state], note: t(`voiceCompanion.tools.state.${server.state}` as MessageKey) }}
+        dot={{ tone: STATE_TONE[server.state], note: note(server) }}
         value={<span data-voice-tool-state={server.state}>{t(`voiceCompanion.tools.state.${server.state}` as MessageKey)}</span>}
         hint={server.capability}
         onOpen={() => onOpen(name, server.title)}
@@ -175,8 +182,10 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
   const catalog = server.catalog?.tools ?? [];
   const shownTools = filter.trim() ? catalog.filter(tool => `${tool.name} ${tool.description ?? ""}`.toLowerCase().includes(filter.trim().toLowerCase())) : catalog;
   const waiting = state === "pending" || state === "changed";
-  const dryRunLine = !dryRun ? t("voiceCompanion.tools.dryRun.none")
+  /* A run held for containment says the platform's reason in its own line, once; the confirmation stands under it. */
+  const dryRunLine: ReactNode = !dryRun ? t("voiceCompanion.tools.dryRun.none")
     : passed ? t("voiceCompanion.tools.dryRun.ok", { time: when(dryRun.at), count: toolCount })
+    : needsConfirmation ? <>{t("voiceCompanion.tools.dryRun.failed", { time: when(dryRun.at), reason: "\u0000" }).split("\u0000")[0]}<span data-voice-tool-platform="">{t(`voiceCompanion.tools.containment.${needsConfirmation}` as MessageKey)}</span></>
     : t("voiceCompanion.tools.dryRun.failed", { time: when(dryRun.at), reason: t((DRY_RUN_CODES.includes(dryRun.code) ? `voiceCompanion.tools.dryRun.${dryRun.code}` : "voiceCompanion.tools.dryRun.PROTOCOL_ERROR") as MessageKey) });
   return <div data-voice-tool-server={name} data-state={state} className="flex flex-1 flex-col break-words pb-4 pt-2 font-normal settings-sheet:pt-1">
     <TextRow>{server.capability}</TextRow>
@@ -223,10 +232,10 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
               onChange={event => { const filled = event.target.value.length > 0; setTyped(current => { const next = new Set(current); if (filled) next.add(ref); else next.delete(ref); return next; }); }} className={`${FIELD} mt-1 font-mono`} />
             <label className="mt-1.5 block text-ui text-muted">{t("voiceCompanion.tools.destinations")}
               <input type="text" data-destinations={ref} defaultValue={server.secretDestinations?.[ref]?.join(", ") ?? ""} maxLength={4096} disabled={busy} required={typed.has(ref)}
-                placeholder={server.secretRecipient} className={`${FIELD} mt-1 font-mono`}
+                placeholder={t("settings.voice.destinationsPlaceholder")} className={`${FIELD} mt-1 font-mono`}
                 onChange={() => setTyped(current => new Set([...current, ref]))} />
             </label>
-            <p data-voice-tool-destinations="" className="mt-1 text-ui leading-snug text-muted">{t("voiceCompanion.tools.destinationsSaved", { hosts: server.secretDestinations?.[ref]?.join(", ") || t("voiceCompanion.tools.none") })}</p>
+            <p data-voice-tool-destinations="" className="mt-1 text-ui leading-snug text-muted">{t("voiceCompanion.tools.destinationsSaved", { hosts: "\u0000" }).split("\u0000")[0]}{server.secretDestinations?.[ref]?.length ? server.secretDestinations[ref].map((host, at) => <span key={host}>{at ? ", " : ""}<Literal text={host} /></span>) : t("voiceCompanion.tools.none")}</p>
           </div>;
         })}
       </div>
@@ -240,7 +249,6 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
 
     <TextRow tone={dryRun && !passed ? "warning" : "muted"} role="status" attrs={{ "data-voice-tool-dry-run": dryRun?.code ?? "none" }}>{dryRunLine}</TextRow>
     {state !== "enabled" && transport.type === "stdio" && needsConfirmation ? <div role="alert" data-voice-tool-uncontained="" data-settings-unit="">
-      <TextRow tone="warning" attrs={{ "data-voice-tool-platform": "" }}>{t(`voiceCompanion.tools.containment.${needsConfirmation}` as MessageKey)}</TextRow>
       <TextRow attrs={{ id: ids.uncontained }}>{t("voiceCompanion.tools.uncontained.warning")}</TextRow>
       <TextRow tone="muted">{t("voiceCompanion.tools.uncontained.once")}</TextRow>
     </div> : null}
@@ -290,6 +298,7 @@ function ServerPage({ name, server, when, busy, writing, refusal, write }: {
         ? { label: label("voiceCompanion.tools.env", "names"), attrs: { "data-voice-tool-env": "" }, value: variables(transport.envNames, transport.envValues) }
         : { label: label("voiceCompanion.tools.headers", "names"), attrs: { "data-voice-tool-headers": "" }, value: variables(transport.headerNames, transport.headerValues) },
       server.entryFile ? { label: label("voiceCompanion.tools.entry", "path"), attrs: { "data-voice-tool-entry": "" }, value: <><Literal text={server.entryFile.path} />{" · SHA-256\u00a0"}<Literal text={`${server.entryFile.sha256.slice(0, 12)}…`} /></> } : null,
+      server.secretRefs.length && transport.type === "stdio" ? { label: t("settings.voice.recipient"), attrs: { "data-voice-tool-recipient": "" }, value: <Literal text={server.secretRecipient} /> } : null,
       state !== "enabled" && transport.type === "stdio" ? { label: t("settings.voice.dryRunDetail"), attrs: { id: ids.dryRunHint, "data-voice-tool-dry-run-hint": "" }, value: t("voiceCompanion.tools.dryRunHint") } : null,
       { label: t("voiceCompanion.tools.title"), value: t("voiceCompanion.tools.intro") },
     ]} />

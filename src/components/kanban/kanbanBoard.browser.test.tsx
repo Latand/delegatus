@@ -27856,11 +27856,11 @@ describe("floating voice companion", () => {
        board's 24-hour form: the whole-account note, one line a window, the reading time. */
     const planLines = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
       const loaded = (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded;
-      const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000));
       const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: lang === "uk" ? "long" : "short" }).format(new Date(seconds * 1000));
+      /* One line: what each window used, and when the fuller one, the week, resets. */
       return lang === "uk"
-        ? ["План Pro, увесь акаунт разом з агентами", `5\u00a0год 23%, оновлення ${time(loaded + 7_200)}`, `тиждень 77%, оновлення ${date(loaded + 4 * 86_400)}`, `Станом на ${time(loaded)}.`]
-        : ["Pro plan, the whole account with its agents", `5\u00a0h 23%, resets ${time(loaded + 7_200)}`, `week 77%, resets ${date(loaded + 4 * 86_400)}`, `As of ${time(loaded)}.`];
+        ? [`План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · тиждень: оновлення ${date(loaded + 4 * 86_400)}`]
+        : [`Pro plan, whole account: 5\u00a0h 23%, week 77% used · week resets ${date(loaded + 4 * 86_400)}`];
     }, lang);
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
@@ -27938,7 +27938,7 @@ describe("floating voice companion", () => {
           const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
           expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
           const codexPlan = await section.locator("[data-voice-companion-plan]").evaluate((block) => {
-            const lines = [...block.children] as HTMLElement[];
+            const lines = [block as HTMLElement];
             /* Every number joined to its unit stays on one line box, and each window reads as one line. */
             const parted = [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].flatMap((line) => {
               const node = line.firstChild!;
@@ -27953,14 +27953,13 @@ describe("floating voice companion", () => {
               lines: lines.map((line) => line.textContent ?? ""),
               windowLines: [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].map((line) => Math.round(line.getBoundingClientRect().height / parseFloat(getComputedStyle(line).lineHeight))),
               figures: [...block.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((figure) => ({ text: figure.textContent, weight: Number(getComputedStyle(figure).fontWeight), color: getComputedStyle(figure).color })),
-              muted: getComputedStyle(lines[0]!).color, lastMuted: getComputedStyle(lines.at(-1)!).color,
+              muted: getComputedStyle(lines[0]!).color,
               parted, twelveHour: /AM|PM/u.test(block.textContent ?? ""),
             };
           });
-          expect(codexPlan.lines, `${label}: the plan window, one line a window`).toEqual(await planLines(page, lang));
+          expect(codexPlan.lines, `${label}: the plan in one line`).toEqual(await planLines(page, lang));
           expect([codexPlan.parted, codexPlan.windowLines, codexPlan.twelveHour], `${label}: no window name split, each window one line, 24-hour times`).toEqual([[], [1, 1], false]);
           expect(codexPlan.figures.map((figure) => [figure.text, figure.weight >= 600, figure.color !== codexPlan.muted]), `${label}: the figures read at a glance`).toEqual([["23%", true, true], ["77%", true, true]]);
-          expect(codexPlan.lastMuted, `${label}: the reading time is muted`).toBe(codexPlan.muted);
           const codexRows = await section.evaluate((node) => ({
             keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.textContent ?? ""),
           }));

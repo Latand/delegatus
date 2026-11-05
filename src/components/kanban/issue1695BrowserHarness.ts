@@ -363,7 +363,7 @@ export async function captureDoneFrames(browser: Browser, phone: boolean) {
   return failures;
 }
 
-type WorkersRowReading = { icon: number; titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
+type WorkersRowReading = { titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
   inputWeight: number; inputAlign: string; inputX: number; inputY: number; inputH: number; stateRight: number; stateTop: number; stateBottom: number };
 
 /** Worker-limit frames shared by the board and phone drivers. The fixture
@@ -422,11 +422,11 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
         if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
       }
-      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]"), iconEl = element.querySelector("[data-worker-limit-icon]");
-      const row = titleEl && stateEl && iconEl && input ? (() => {
+      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]");
+      const row = titleEl && stateEl && input ? (() => {
         const title = getComputedStyle(titleEl), state = getComputedStyle(stateEl), field = getComputedStyle(input);
         const stateBox = stateEl.getBoundingClientRect(), inputBox = input.getBoundingClientRect();
-        return { icon: iconEl.getBoundingClientRect().width, titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
+        return { titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
           titleX: titleEl.getBoundingClientRect().left - box.left, stateWeight: Number(state.fontWeight), stateColor: state.color,
           inputWeight: Number(field.fontWeight), inputAlign: field.textAlign, inputX: inputBox.left, inputY: inputBox.top, inputH: inputBox.height,
           stateRight: stateBox.right, stateTop: stateBox.top, stateBottom: stateBox.bottom };
@@ -452,10 +452,10 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
     if (selector === "[data-header-menu-workers]") {
       if (Math.abs((measurement.inputWidth ?? 0) - 48) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
       const row = measurement.row as WorkersRowReading | null;
-      const want = phone ? { icon: 18, title: 13, titleX: 46, stateWeight: 500 } : { icon: 16, title: 12, titleX: 32, stateWeight: 500 };
+      /* The Settings window's row recipe: no icon, a 13 px title at the rows' inset, the muted line in the body weight. */
+      const want = phone ? { title: 13, titleX: 16, stateWeight: 400 } : { title: 13, titleX: 20, stateWeight: 400 };
       if (!row) failures.push(`${name}: row geometry missing`);
       else {
-        if (Math.abs(row.icon - want.icon) > .5) failures.push(`${name}: icon ${row.icon}px, siblings ${want.icon}px`);
         if (Math.abs(row.titleSize - want.title) > .5 || row.titleWeight !== 600) failures.push(`${name}: title ${row.titleSize}px/${row.titleWeight}`);
         if (Math.abs(row.titleX - want.titleX) > .5) failures.push(`${name}: label x ${row.titleX}, siblings ${want.titleX}`);
         if (row.stateWeight !== want.stateWeight || row.stateColor === row.titleColor) failures.push(`${name}: state line ${row.stateWeight}/${row.stateColor} is not the muted sibling word`);
@@ -1606,6 +1606,13 @@ const OPEN_MENU = async (page: Page, phone: boolean) => {
   await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
 };
 const toolPage = (name: string) => async (page: Page) => pressRow(page, `data-voice-tool-server="${name}"`);
+const openFeature = (feature: string) => async (page: Page) => {
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } })));
+  const row = page.locator(`[data-openai-service="${feature}"]`);
+  await row.scrollIntoViewIfNeeded();
+  await row.click();
+  await page.locator(`[data-openai-feature-page="${feature}"]`).waitFor();
+};
 const removeTool = (name: string) => async (page: Page) => {
   await toolPage(name)(page);
   await page.locator("[data-voice-tool-action='remove']").click();
@@ -1616,6 +1623,10 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   /* The window. */
   { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
   { surface: "window", name: "keys-on-key", scene: "voice-file", steps: async (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } }))), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
+  /* A feature the OpenAI key serves, opened from its row under «Keys»: its choices are rows of the page, with no box around them. */
+  { surface: "window", name: "keys-feature", scene: "voice-file", steps: openFeature("dictation"), defining: "[data-openai-feature-page='dictation'] [role=radiogroup]" },
+  { surface: "window", name: "keys-feature-no-key", scene: "voice-missing", steps: openFeature("read"), defining: "[data-openai-feature-page='read'] [data-openai-add-key]" },
+  { surface: "window", name: "keys-feature-chosen", scene: "voice-file", steps: async (page) => { await openFeature("memory")(page); await page.locator("[data-openai-option='openai'] input").check(); }, defining: "[data-openai-option='openai'][data-selected]" },
   { surface: "window", name: "notice-opens-privacy", scene: "privacy-notice", steps: async (page) => { await page.locator("[data-telemetry-notice] button").first().click(); }, defining: "[data-telemetry-settings]" },
   /* First run: the setup guide fills the screen, and the install notice's button still opens a window a person can reach. */
   { surface: "window", name: "over-onboarding", scene: "privacy-notice", steps: async (page) => {
@@ -1631,7 +1642,9 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "privacy", name: "rest", scene: "privacy-rest", section: "privacy", defining: "[data-swarm-setting]" },
   { surface: "privacy", name: "swarm-on", scene: "privacy-swarm", section: "privacy", defining: "[data-swarm-setting] [role=switch][aria-checked=true]" },
   { surface: "privacy", name: "locked", scene: "privacy-locked", section: "privacy", defining: "[data-telemetry-ping]:disabled" },
-  { surface: "privacy", name: "consent-failed", scene: "privacy-consent-failed", section: "privacy", defining: "[data-subscription-api] [role=alert]" },
+  { surface: "privacy", name: "consent-failed", scene: "privacy-consent-failed", section: "privacy", defining: "[data-subscription-api-retry]" },
+  /* From the read failure one control reads the setting again. */
+  { surface: "privacy", name: "consent-retry", scene: "privacy-consent-failed", section: "privacy", steps: async (page) => { await page.locator("[data-subscription-api-retry]").click(); }, defining: "[data-subscription-api-retry]" },
   { surface: "privacy", name: "ping-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-telemetry-ping]").click(), defining: "[role=alert]" },
   { surface: "privacy", name: "direct-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-subscription-api] [role=switch]").click(), defining: "[data-subscription-api] [role=alert]" },
   { surface: "privacy", name: "swarm-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-swarm-setting] [role=switch]").click(), defining: "[data-swarm-setting] [role=alert]" },
@@ -1643,8 +1656,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "telegram", name: "popover-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, "data-telegram-bot-row"), defining: "[data-settings-dot-popover]" },
   { surface: "telegram", name: "popover-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-settings-dot-popover]" },
   { surface: "telegram", name: "popover-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-settings-dot-popover]" },
-  { surface: "telegram", name: "bot-page", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='saved']" },
-  { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']" },
+  { surface: "telegram", name: "bot-page", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='saved']", absent: /Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки/ },
+  { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']", absent: /Atlas team|Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки/ },
   { surface: "telegram", name: "webhook-elsewhere", scene: "telegram-webhook", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-page] [role=status]" },
   { surface: "telegram", name: "sending-rejected", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"'), defining: "[data-telegram-sending-bot-page] [role=status]" },
   /* A sender removed from its own page: the section again, and the keyboard on its first control. */
@@ -1662,7 +1675,7 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "telegram", name: "chat-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-telegram-chat-bot='Nova']" },
   { surface: "telegram", name: "chat-no-suggestion", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000505"'), defining: "[data-telegram-chat-alias]" },
   { surface: "telegram", name: "chat-post-refused", scene: "telegram-rest", query: "refuse=1", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-telegram-chat-test]").click(); }, defining: "[data-telegram-failure]" },
-  { surface: "telegram", name: "chat-long-title", scene: "telegram-long", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-chat-switch]" },
+  { surface: "telegram", name: "chat-long-title", scene: "telegram-long", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-chat-name]" },
   { surface: "telegram", name: "add-chat", scene: "telegram-rest", section: "telegram", steps: async (page) => { await pressRow(page, "data-telegram-add-chat-row"); await page.locator("[data-telegram-add-chat-input]").fill("-1000000000808"); await page.locator("[data-telegram-add-chat-submit]").click(); await page.locator("[data-telegram-add-chat-added]").waitFor(); }, defining: "[data-telegram-add-chat-added]" },
   { surface: "telegram", name: "inactive-fold", scene: "telegram-rest", section: "telegram", steps: async (page) => { await page.locator("[data-telegram-inactive-fold]").scrollIntoViewIfNeeded(); await page.locator("[data-telegram-inactive-fold]").click(); }, defining: '[data-telegram-chat-row="-1000000000606"]' },
   { surface: "telegram", name: "reports", scene: "telegram-rest", section: "telegram", steps: async (page) => page.locator("[data-telegram-project-reports-warning]").scrollIntoViewIfNeeded(), defining: "[data-telegram-project-reports-warning]" },
@@ -1688,6 +1701,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "voice", name: "cap-incomplete", scene: "voice-incomplete", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-last-call]" },
   { surface: "voice", name: "cap-refused", scene: "voice-file", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await pressRow(page, "data-voice-companion-cap-row"); const field = page.locator("[data-voice-companion-cap-input]"); await field.fill("35"); await field.press("Enter"); }, defining: "[data-voice-companion-setting-error]" },
   { surface: "voice", name: "held", scene: "voice-held", section: "voice", query: "dev=default", defining: "[data-voice-companion-stay]" },
+  /* The held line's key action lands on «Keys» at the OpenAI key. */
+  { surface: "voice", name: "held-opens-keys", scene: "voice-held", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-companion-held-key]").click(), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
   { surface: "voice", name: "uncertain", scene: "voice-uncertain", section: "voice", query: "dev=default", defining: "[data-voice-companion-uncertain]" },
   { surface: "voice", name: "devices-permission", scene: "voice-codex", section: "voice", query: "dev=noperm", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-devices-allow]" },
   { surface: "voice", name: "devices-denied", scene: "voice-codex", section: "voice", query: "dev=denied", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='input']" },
@@ -1773,7 +1788,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   }
   /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
   for (const element of scroller.querySelectorAll<HTMLElement>("*")) {
-    if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-keys-page], [data-memory-page], [data-header-menu-workers]")) continue;
+    if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-memory-page], [data-header-menu-workers]")) continue;
     const style = getComputedStyle(element);
     if (["Top", "Right", "Bottom", "Left"].every((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0) && element.getBoundingClientRect().height > 44) failures.push(`bordered box: ${element.tagName} ${element.className}`);
   }
@@ -1850,7 +1865,8 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
     /* A 44 px target for each control, read from the point a thumb lands on. */
     scroller.scrollTop = held;
     for (const control of surface.querySelectorAll<HTMLElement>("button, select, input")) {
-      const box = control.getBoundingClientRect();
+      /* A radio's target is the label it sits in. */
+      const box = (control.matches("input[type=radio]") ? control.closest("label") ?? control : control).getBoundingClientRect();
       /* Keys, Memory and the worker limit are hosted unchanged, with their own recipes. */
       if (box.width === 0 || control.closest("[data-keys-page], [data-memory-page], [data-telegram-add-chat], [data-header-menu-workers]")) continue;
       if (box.height < 43.5 || (box.width < 43.5 && !control.matches("input"))) failures.push(`target ${Math.round(box.width)}x${Math.round(box.height)}: ${control.getAttribute("aria-label") ?? control.textContent?.slice(0, 30)}`);
@@ -1878,6 +1894,17 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
     if (lines.size > 2) failures.push(`popover takes ${lines.size} lines`);
     const background = getComputedStyle(popover).backgroundColor;
     if (/rgba\(.*, 0\)|transparent/.test(background)) failures.push("popover is not opaque");
+    /* It covers no words of another row: only its own row's, which it explains. */
+    const own = document.querySelector<HTMLElement>("[data-settings-dot][aria-expanded=true]")?.closest<HTMLElement>("[data-settings-unit]");
+    const under: string[] = [];
+    const words = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = words.nextNode(); node; node = words.nextNode()) {
+      if (!(node.textContent ?? "").trim() || own?.contains(node) || node.parentElement?.closest("option, select")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 0 && rect.left < box.right - 0.5 && rect.right > box.left + 0.5 && rect.top < box.bottom - 0.5 && rect.bottom > box.top + 0.5) under.push((node.textContent ?? "").trim().slice(0, 40));
+    }
+    if (under.length) failures.push(`popover covers another row's words: ${[...new Set(under)].join(" | ")}`);
   }
   /* What a page must not mention. */
   if (absent) {
@@ -1933,8 +1960,9 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
         await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
         /* The fold's own height moved the scroller's end, and the whole-rows fit can answer after the first scroll: the frame reads the end as it settled. */
         if (frame.details) await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
-        /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it. */
-        if (frame.defining && !frame.details) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
+        /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it; where the
+           window scrolled itself, the frame reads the screen it landed on. */
+        if (frame.defining && !frame.details && !frame.landed) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
         const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null, landed: frame.landed === true });
         reading.failures.push(...read.failures);
         reading.end = read.end;

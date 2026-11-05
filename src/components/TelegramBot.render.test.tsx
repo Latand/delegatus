@@ -126,11 +126,11 @@ const postingBots = connected({ chats: [chat({
 test("each connected bot has a visible and accessible posting state", () => {
   const html = chatPage(postingBots);
   expect(html).toContain('data-telegram-bot-posting-state="removed">removed from the chat</span>');
-  expect(html).toContain('data-telegram-bot-posting-state="may-post">Agents may post</span>');
+  expect(html).toContain('data-telegram-bot-posting-state="may-post">Can post</span>');
   expect(html).toContain('data-telegram-bot-posting-state="cannot-post">may not post here</span>');
   expect(html).toContain('data-telegram-bot-posting-state="not-checked">Not checked yet</span>');
   expect(html).toContain('aria-label="Removed Bot: ');
-  expect(html).toContain('aria-label="Ready Bot: Agents may post');
+  expect(html).toContain('aria-label="Ready Bot: Can post');
 });
 
 test("a webhook elsewhere says reading is blocked and why", () => {

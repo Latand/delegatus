@@ -188,20 +188,20 @@ export function OpenAiServicesList({ size = "menu", onOpen }: { size?: Size; onO
   const { view } = useOpenAiServices();
   if (!view) return null;
   const sheet = size === "sheet";
-  const small = sheet ? "text-label leading-4" : "text-[11px] leading-[14px]";
+  const small = sheet ? "text-label leading-4" : "text-ui leading-4";
   const row = sheet
     ? "flex min-h-11 w-full items-center gap-3 px-4 py-1 text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-    : `flex w-full min-h-[30px] items-center gap-2 rounded-[8px] px-2 py-1 text-left text-[12px] font-semibold text-primary hover:bg-sunken ${FOCUS}`;
+    : `flex w-full min-h-10 items-center gap-2 rounded-[8px] px-2 py-1 text-left text-body font-semibold text-primary hover:bg-sunken ${FOCUS}`;
   const keySaved = view.openaiKey === "file" || view.openaiKey === "env";
   return (
     /* On the phone the list hangs from the OpenAI row's name column; its chevrons end on the ⋯ glyph's edge. */
     <div data-openai-services="" role="group" aria-label={t("openaiServices.group")} className={`${sheet ? "mb-2 ml-[52px] mr-4" : "mb-1 ml-2 mr-1"} ${WITHIN} flex flex-col`}>
-      <p className={`font-semibold text-secondary ${sheet ? "px-4 pt-1 text-label" : "px-2 pt-0.5 text-[11px] leading-[14px]"}`}>{t("openaiServices.group")}</p>
+      <p className={`font-semibold text-secondary ${sheet ? "px-4 pt-1 text-label" : "px-2 pt-0.5 text-ui leading-4"}`}>{t("openaiServices.group")}</p>
       {view.features.map((state) => {
         const Icon = ICON[state.feature];
         const now = providerName(t, state.effective);
         return (
-          <button key={state.feature} type="button" data-openai-service={state.feature} data-held={state.held ? "" : undefined} className={row} onClick={() => onOpen(state.feature)}>
+          <button key={state.feature} type="button" data-settings-unit="" data-openai-service={state.feature} data-held={state.held ? "" : undefined} className={row} onClick={() => onOpen(state.feature)}>
             <Icon className={sheet ? "h-[18px] w-[18px] shrink-0 text-secondary" : "h-4 w-4 shrink-0 text-secondary"} aria-hidden />
             <span className="flex min-w-0 flex-1 flex-col gap-px">
               <span className="truncate leading-4">{featureName(t, state.feature)}</span>
@@ -260,24 +260,24 @@ function OptionRow({ feature, state, option, size, locked, onChoose }: {
   const held = openai && state.held;
   const reason = held ? t("openaiServices.held") : unavailableReason(t, feature, option);
   const disabled = locked || !option.available;
-  const small = sheet ? "text-label leading-4" : "text-[11px] leading-[14px]";
+  const small = sheet ? "text-label leading-4" : "text-ui leading-4";
   /* «Add the key» sits beside the radio's label on the phone, under it in the 232 px panel, never inside the label. */
   const addKey = openai && !option.available ? (
     <button type="button" data-openai-add-key="" onClick={() => openKeys("openai")}
-      className={`shrink-0 self-start rounded-[6px] font-semibold text-accent hover:underline ${FOCUS} ${sheet ? "min-h-11 px-1 text-label" : "ml-6 min-h-6 text-[11px]"}`}>
+      className={`shrink-0 self-start rounded-[6px] font-semibold text-accent hover:underline ${FOCUS} ${sheet ? "min-h-11 px-1 text-label" : "ml-6 min-h-6 text-ui"}`}>
       {t("openaiServices.addKey")}
     </button>
   ) : null;
   return (
-    <div data-openai-option={option.id} data-selected={selected ? "" : undefined}
-      className={`flex border-b border-border last:border-b-0 ${sheet ? "items-center gap-1 px-3 py-1.5" : "flex-col px-2 py-1.5"} ${selected ? "bg-accent-soft/40" : "bg-card"}`}>
+    <div data-openai-option={option.id} data-settings-unit="" data-selected={selected ? "" : undefined}
+      className={`flex border-b border-border last:border-b-0 ${sheet ? "items-center gap-1 py-1.5" : "flex-col py-1.5"}`}>
       <label className={`flex min-w-0 flex-1 gap-2 ${sheet ? "min-h-11 items-center" : "min-h-6 items-start"} ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
         <input type="radio" name={`openai-service-${feature}`} value={option.id} checked={selected} disabled={disabled}
           onChange={() => onChoose(option.id)}
           onClick={() => { if (selected && state.held) onChoose(option.id); }}
           className={`shrink-0 accent-[var(--color-accent)] ${sheet ? "h-5 w-5" : "mt-0.5 h-4 w-4"} ${disabled ? "opacity-50" : ""}`} />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className={`font-semibold ${disabled ? "text-muted" : "text-primary"} ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{words.name}</span>
+          <span className={`font-semibold text-body ${disabled ? "text-muted" : "text-primary"} ${sheet ? "leading-5" : "leading-[18px]"}`}>{words.name}</span>
           <span className={`text-secondary ${small}`}>{words.note}</span>
           {reason ? <span data-openai-option-reason={held ? "held" : "unavailable"} className={`font-medium ${held ? "text-warning" : "text-muted"} ${small}`}>{reason}</span> : null}
         </span>
@@ -294,7 +294,7 @@ function VoiceEnable({ size }: { size: Size }) {
   const sheet = size === "sheet";
   return (
     <div className={`flex items-center gap-2 ${sheet ? "min-h-11" : "min-h-8"}`}>
-      <span className={`min-w-0 flex-1 font-semibold text-primary ${sheet ? "text-body" : "text-[12px]"}`}>{t("voiceCompanion.settings.enable")}</span>
+      <span className="min-w-0 flex-1 text-body font-semibold text-primary">{t("voiceCompanion.settings.enable")}</span>
       <SettingSwitch enabled={settings?.enabled ?? false} disabled={!settings} size={sheet ? "sheet" : "row"} aria-label={t("voiceCompanion.settings.enable")} data-openai-voice-enable=""
         onClick={() => { if (settings) void update({ enabled: !settings.enabled }); }} />
     </div>
@@ -308,7 +308,7 @@ export function OpenAiFeaturePage({ feature, size = "menu" }: { feature: Service
   const [error, setError] = useState(false);
   const sheet = size === "sheet";
   const state = view?.features.find((candidate) => candidate.feature === feature) ?? null;
-  const line = sheet ? "text-body" : "text-[12px] leading-4";
+  const line = sheet ? "text-body" : "text-body leading-[18px]";
   const groupLabel = feature === "dictation" ? t("onboarding.voice.heading") : feature === "voice" ? t("voiceCompanion.settings.backend") : t("openaiServices.whoServes");
   const pick = async (id: string) => {
     if (!state || state.lockedBy || (id === state.effective && !state.held)) return;
@@ -319,23 +319,24 @@ export function OpenAiFeaturePage({ feature, size = "menu" }: { feature: Service
   const lockSentence = LOCKED[feature];
   return (
     <div data-openai-feature-page={feature} className={`flex flex-col font-normal ${sheet ? "gap-2 px-4 pb-4 pt-2" : "gap-1.5 px-2 pb-1.5 pt-2"}`}>
-      <p className={`font-medium text-muted ${sheet ? "text-label leading-4" : "text-[11px] leading-[14px]"}`}>{t(WHAT[feature])}</p>
-      {failed && !view ? <p role="alert" data-openai-feature-failed="" className={`leading-snug text-danger ${sheet ? "text-label" : "text-[11px]"}`}>{t("keys.loadFailed")}</p> : null}
+      <p data-settings-unit="" className={`font-medium text-muted ${sheet ? "text-label leading-4" : "text-ui leading-4"}`}>{t(WHAT[feature])}</p>
+      {failed && !view ? <p role="alert" data-openai-feature-failed="" className={`leading-snug text-danger ${sheet ? "text-label" : "text-ui"}`}>{t("keys.loadFailed")}</p> : null}
       {state ? (
         <>
-          <p data-openai-feature-now="" className={`font-semibold text-primary ${line}`}>{t("openaiServices.now", { name: providerName(t, state.effective) })}</p>
+          <p data-openai-feature-now="" data-settings-unit="" className={`font-semibold text-primary ${line}`}>{t("openaiServices.now", { name: providerName(t, state.effective) })}</p>
           {locked && lockSentence ? (
-            <p data-openai-feature-locked="" className={`flex items-center gap-2 rounded-[8px] bg-sunken text-secondary ${sheet ? "px-3 py-2 text-label" : "px-2 py-1.5 text-[11px] leading-[14px]"}`}>
+            <p data-openai-feature-locked="" className={`flex items-center gap-2 rounded-[8px] bg-sunken text-secondary ${sheet ? "px-3 py-2 text-label" : "px-2 py-1.5 text-ui leading-4"}`}>
               <Lock className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
               {t(lockSentence)}
             </p>
           ) : null}
           {feature === "voice" ? <VoiceEnable size={size} /> : null}
-          <p className={`font-semibold text-primary ${line}`}>{groupLabel}</p>
-          <div role="radiogroup" aria-label={groupLabel} className="flex flex-col overflow-hidden rounded-[12px] border border-border">
+          <p data-settings-unit="" className={`font-semibold text-primary ${line}`}>{groupLabel}</p>
+          {/* The choices are rows of the page under one hairline each: no box stands around them (no card in a card). */}
+          <div role="radiogroup" aria-label={groupLabel} className="flex flex-col border-t border-border">
             {state.options.map((option) => <OptionRow key={option.id} feature={feature} state={state} option={option} size={size} locked={locked} onChoose={(id) => void pick(id)} />)}
           </div>
-          {error ? <p role="alert" data-openai-feature-error="" className={`w-full leading-snug text-danger ${sheet ? "text-label" : "text-[11px]"}`}>{t("openaiServices.saveFailed")}</p> : null}
+          {error ? <p role="alert" data-openai-feature-error="" className={`w-full leading-snug text-danger ${sheet ? "text-label" : "text-ui"}`}>{t("openaiServices.saveFailed")}</p> : null}
         </>
       ) : null}
     </div>

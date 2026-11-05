@@ -47,14 +47,14 @@ function senderLine(t: TFunction, bot: TelegramChatBot | undefined): string | nu
   return bot.clone ? t("settings.telegram.postsAsClone", { name: bot.name, relay: bot.clone.relay }) : t("settings.telegram.postsAsBot", { name: bot.name });
 }
 
-function chatDot(t: TFunction, chat: TelegramBotChatView): RowDot & { word: string } {
+function chatDot(t: TFunction, chat: TelegramBotChatView, lastPost: string | null): RowDot & { word: string } {
   if (chat.lastDelivery?.state === "refused") {
     const first = chat.lastDelivery.refusals[0];
     return { tone: "warn", word: t("settings.telegram.chat.notDelivered"), note: first ? `${first.bot.name}: ${telegramRefusalLabel(t, chat, first)}` : t("settings.telegram.chat.notDelivered") };
   }
   if (chat.postAllowed && chat.alias) {
     return chat.member
-      ? { tone: "ok", word: t("settings.telegram.chat.posting"), note: senderLine(t, sender(chat)) ?? t("telegram.bot.mayPost") }
+      ? { tone: "ok", word: t("settings.telegram.chat.posting"), note: lastPost ? t("settings.telegram.note.lastPost", { time: lastPost }) : t("settings.telegram.note.noPost") }
       : { tone: "warn", word: t("settings.telegram.chat.notMember"), note: t("telegram.bot.notInChat") };
   }
   return chat.member
@@ -166,7 +166,7 @@ function TokenRow({ state }: { state: TelegramBotState }) {
       dot={connected
         ? rejected ? { tone: "warn", note: t("settings.telegram.note.token_rejected") } : { tone: "ok", note: t("settings.telegram.token.savedNote") }
         : { tone: "off", note: t("settings.telegram.token.missingNote") }}
-      value={t(connected ? rejected ? "settings.telegram.word.token_rejected" : "settings.saved" : "settings.notSet")}
+      value={t(connected ? rejected ? "settings.telegram.token.replace" : "settings.saved" : "settings.notSet")}
       hint={t("settings.opensKeys")}
       onOpen={() => openKeys("telegram")}
     />
@@ -176,8 +176,8 @@ function TokenRow({ state }: { state: TelegramBotState }) {
 function ChatListRow({ chat, go }: { chat: TelegramBotChatView; go: SectionProps["go"] }) {
   const { t } = useLocale();
   const formatTime = useFormatTime();
-  const dot = chatDot(t, chat);
   const lastPost = formatTime(chat.lastPostAt);
+  const dot = chatDot(t, chat, lastPost);
   const line = chat.lastDelivery?.state === "refused" && lastPost ? t("settings.telegram.chat.lastPost", { time: lastPost }) : senderLine(t, sender(chat));
   return (
     <LinkRow
@@ -187,7 +187,7 @@ function ChatListRow({ chat, go }: { chat: TelegramBotChatView; go: SectionProps
       dot={{ tone: dot.tone, note: dot.note }}
       value={dot.word}
       hint={[typeWord(t, chat), line].filter(Boolean).join(" · ")}
-      onOpen={() => go({ id: "chat", arg: chat.chatId, title: chat.title })}
+      onOpen={() => go({ id: "chat", arg: chat.chatId, title: t("settings.telegram.chatPage") })}
     />
   );
 }
@@ -259,7 +259,9 @@ function MainBotPage({ state, failure, here }: { state: TelegramBotState; failur
   const dot = receivingDot(t, status);
   const checked = formatTime(status?.lastCheckedAt ?? null);
   const updated = formatTime(status?.lastUpdateAt ?? null);
-  const posts = status?.chats.filter((chat) => chat.postable).map((chat) => chat.title) ?? [];
+  /* The chats this bot itself posts to: it is their sender and may post there. A rejected token posts nowhere. */
+  const mine = (bot: TelegramChatBot | undefined) => Boolean(bot && !bot.clone && bot.canPost === true && bot.username === status?.bot?.username);
+  const posts = receiving === "token_rejected" ? [] : status?.chats.filter((chat) => chat.postable && mine(sender(chat))).map((chat) => chat.title) ?? [];
   return (
     <Rows data-telegram-bot-page="">
       <LinkRow
@@ -267,12 +269,13 @@ function MainBotPage({ state, failure, here }: { state: TelegramBotState; failur
         dot={{ tone: dot.tone, note: dot.note }}
         hint={[status?.bot?.username ? `@${status.bot.username}` : null, updated ? t("settings.telegram.updatedAt", { time: updated }) : null].filter(Boolean).join(" · ") || undefined}
       />
-      {receiving === "polling"
+      {/* The state row and the token row say a rejected token: no third line repeats it. */}
+      {receiving === "polling" || receiving === "token_rejected"
         ? null
         : <TextRow tone="warning" role="status"><Prose text={t(receivingKey(receiving))} /></TextRow>}
-      <TextRow tone="muted">
+      {posts.length || checked ? <TextRow tone="muted" attrs={{ "data-telegram-bot-posts": String(posts.length) }}>
         {[posts.length ? t("settings.telegram.postsIn", { chats: posts.join(", ") }) : null, checked ? t("settings.telegram.lastChecked", { time: checked }) : null].filter(Boolean).join(" ")}
-      </TextRow>
+      </TextRow> : null}
       <TokenRow state={state} />
       {failure}
       <ActionsRow foot note={<Prose text={t("telegram.bot.revokeHint")} />}>
@@ -325,17 +328,18 @@ function ChatPage({ chat, state, failure, here }: { chat: TelegramBotChatView; s
   const refused = chat.lastDelivery?.state === "refused" ? chat.lastDelivery : null;
   return (
     <Rows data-telegram-chat-page={chat.chatId}>
+      {/* The back row names the page «Chat»: the chat's name reads whole here, however long. */}
+      <ValueRow attrs={{ "data-telegram-chat-name": "" }} value={chat.title} hint={chat.member || posting ? typeWord(t, chat) : `${typeWord(t, chat)} · ${t("telegram.bot.notInChat")}`} />
       {chat.member || posting ? (
         <SwitchRow
           label={t("telegram.bot.mayPost")}
-          hint={typeWord(t, chat)}
           enabled={posting}
           disabled={busy || (!posting && adopt === "")}
           onToggle={toggle}
           onPressStart={pressStart}
           switchAttrs={{ "data-telegram-chat-switch": "" }}
         />
-      ) : <TextRow tone="muted">{`${typeWord(t, chat)} · ${t("telegram.bot.notInChat")}`}</TextRow>}
+      ) : null}
       {refused ? (
         <TextRow tone="warning" attrs={{ "data-telegram-delivery": "refused" }}>
           {t("telegram.bot.deliveryRefused", { time: formatTime(refused.at) ?? "" })} {refused.refusals.map((refusal) => `${refusal.bot.name}: ${telegramRefusalLabel(t, chat, refusal)}`).join("; ")}
@@ -397,7 +401,7 @@ function ChatBotRow({ bot }: { bot: TelegramChatBot }) {
   const { t } = useLocale();
   const formatTime = useFormatTime();
   const removed = bot.member === false || bot.status === "kicked" || bot.status === "left" || bot.reason === "bot_not_in_chat";
-  const word = bot.canPost === true ? t("telegram.bot.mayPost")
+  const word = bot.canPost === true ? t("settings.telegram.bot.canPost")
     : bot.canPost === false ? removed ? t("telegram.bot.removedFromChat") : t("telegram.bot.mayNotPost")
     : t("telegram.bot.notChecked");
   const reason = bot.reason ? t(ERROR_KEYS[bot.reason] ?? "telegram.actionFailed") : word;

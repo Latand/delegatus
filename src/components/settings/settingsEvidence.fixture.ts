@@ -123,6 +123,21 @@ let tools = TOOLS() as { revision: number; servers: Record<string, Record<string
 if (SETTINGS_SCENE === "voice-tools-empty") tools = { revision: 1, servers: {} };
 if (SETTINGS_SCENE === "voice-tools-one") tools = { ...tools, servers: { drive: tools.servers.drive! } };
 
+/* What the OpenAI key can serve (GET /api/openai-services): each feature's choices, OpenAI last, as the policy lists them. */
+const keyed = voice.keySource !== "missing";
+const feature = (name: string, effective: string, ids: string[], over: Record<string, unknown> = {}) => ({
+  feature: name, requested: effective, effective, held: false, available: true, lockedBy: null,
+  options: ids.map((id) => ({ id, available: id === "openai" || id === "api" ? keyed : id !== "soniox" })), ...over,
+});
+let services = [
+  feature("asks", "openrouter", ["openrouter", "openai"]),
+  feature("memory", "openrouter", ["openrouter", "openai"]),
+  feature("rules", "openrouter", ["openrouter", "openai"]),
+  feature("dictation", "chatgpt", ["local", "chatgpt", "elevenlabs", "soniox", "openai"]),
+  feature("read", "elevenlabs", ["elevenlabs", "soniox", "fishaudio", "openai"]),
+  feature("voice", String(voice.backend === "api" ? "api" : "codex"), ["codex", "api"]),
+];
+
 const KEYS = () => ({ staging: false, owner: true, keys: [
   { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "missing", masked: null },
   { id: "openai", variable: "OPENAI_API_KEY", source: voice.keySource, masked: voice.keySource === "missing" ? null : "sk-proj-••••••••2222" },
@@ -187,7 +202,11 @@ export async function settingsEvidenceRoute(url: URL, method: string, init?: Req
     return json(tools);
   }
   if (url.pathname === "/api/keys") return json(KEYS());
-  if (url.pathname === "/api/openai-services") return json({ openaiKey: voice.keySource, features: [] });
+  if (url.pathname === "/api/openai-services") {
+    if (write && REFUSE) return json({}, 500);
+    if (write) services = services.map((state) => state.feature === body.feature ? { ...state, requested: String(body.provider), effective: String(body.provider), held: false } : state);
+    return json({ openaiKey: voice.keySource, features: services });
+  }
   if (url.pathname === "/api/memory/settings") return json({ enabled: true, reasons: [], capUsd: 5, spentUsd: 1.2, month: "2026-11", counts: { delivered: 8, decisions: 12 } });
   if (url.pathname === "/api/operator/worker-limit") return json({ machine: { value: 12 }, project: { key: "atlas", value: null, effective: 12, source: "machine" }, running: { here: 2, machine: 5 } });
   return null;

@@ -264,7 +264,7 @@ test("a later failed read is unknown with the switch where it was, and the next 
   expect(lineOf(host)).toBe(DESIGN.en.active);
 });
 
-test("the phone's row takes the sheet's 44 px switch and its type; the desktop's the panel's", async () => {
+test("the phone's row takes the sheet's 44 px switch; both take the Settings rows' type", async () => {
   serve(() => VIEWS.importing);
   const phone = await render(true);
   expect(switchOf(phone).className).toContain("h-11");
@@ -272,7 +272,8 @@ test("the phone's row takes the sheet's 44 px switch and its type; the desktop's
   act(() => root?.unmount()); root = undefined; document.body.innerHTML = "";
   const desktop = await render(false);
   expect(switchOf(desktop).className).toContain("h-6");
-  expect(desktop.querySelector("[data-memory-source-line]")!.className).toContain("text-[11px]");
+  expect(desktop.querySelector("[data-memory-source-title]")!.parentElement!.className).toContain("text-body");
+  expect(desktop.querySelector("[data-memory-source-line]")!.className).toContain("text-ui");
 });
 
 test("a write that landed before the connection dropped: the next read moves the switch and clears the notice", async () => {

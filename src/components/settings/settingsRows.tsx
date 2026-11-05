@@ -183,7 +183,7 @@ export function LinkRow({ label, hint, value, dot, onOpen, attrs, buttonAttrs, s
     <>
       <span className="flex w-full items-center gap-2">
         {dot ? <span aria-hidden className="block h-[7px] w-[7px] shrink-0" /> : null}
-        <span className={`min-w-0 flex-1 truncate font-semibold text-primary ${d.label}`}>{label}</span>
+        <span data-settings-row-label="" className={`min-w-0 flex-1 truncate font-semibold text-primary ${d.label}`}>{label}</span>
         {value !== undefined && value !== null ? <span className={`shrink-0 font-medium text-muted ${d.hint}`} data-settings-row-value="">{value}</span> : null}
         {onOpen ? <ChevronRight data-settings-chevron="" className="h-4 w-4 shrink-0 text-muted" aria-hidden /> : value !== undefined && value !== null ? <span className="w-4 shrink-0" aria-hidden /> : null}
       </span>
@@ -264,8 +264,8 @@ export function ActionsRow({ children, note, foot = false, attrs }: { children: 
   const d = DENSITY[useDensity()];
   return (
     <div {...attrs} data-settings-unit="" data-settings-row="actions" className={`mt-1 flex flex-col gap-2 border-t border-border pb-2 pt-3 ${d.pad} ${foot ? "settings-sheet:mt-auto" : ""}`}>
-      <div className="flex flex-wrap items-center gap-2">{children}</div>
-      {note ? <span className={`block font-normal leading-snug text-muted ${d.hint}`}>{note}</span> : null}
+      <div data-settings-unit="" className="flex flex-wrap items-center gap-2">{children}</div>
+      {note ? <span data-settings-unit="" className={`block font-normal leading-snug text-muted ${d.hint}`}>{note}</span> : null}
     </div>
   );
 }
@@ -399,6 +399,52 @@ export function Gone({ back }: { back: () => void }) {
  * `content` is any element inside the scroller; a new `page` fits before the
  * browser paints it, so what lands on a row reads the scroll it will keep.
  */
+/* NodeFilter.SHOW_TEXT, which not every DOM a test runs in defines globally. */
+const SHOW_TEXT = 4;
+
+/** Lines of words in the scroller, measured from the top of its content. */
+function contentLines(scroller: HTMLElement): { top: number; bottom: number }[] {
+  const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
+  const lines: { top: number; bottom: number }[] = [];
+  const walker = document.createTreeWalker(scroller, SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const box of range.getClientRects?.() ?? []) if (box.width > 0 && box.height > 0) lines.push({ top: box.top - origin, bottom: box.bottom - origin });
+  }
+  return lines;
+}
+
+/**
+ * A scroll position as near `desired` as rows allow: at or above it, with no line cut by the top edge or the
+ * bottom one. A page the window lands on mid-scroll keeps the whole rows its first screen keeps.
+ */
+export function wholeRowsTop(scroller: HTMLElement, desired: number): number {
+  const height = scroller.clientHeight;
+  const want = Math.max(0, Math.min(desired, scroller.scrollHeight - height));
+  const lines = contentLines(scroller);
+  const cuts = (y: number) => lines.some((line) => line.top < y - 0.5 && line.bottom > y + 0.5);
+  const fits = (top: number) => !cuts(top) && !cuts(top + height);
+  if (fits(want)) return want;
+  /* Every place where the top edge or the bottom one falls between lines, nearest first, within half a screen above. */
+  const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
+  const tops = [...scroller.querySelectorAll<HTMLElement>("[data-settings-unit]")].map((unit) => Math.floor(unit.getBoundingClientRect().top - origin));
+  for (const line of lines) tops.push(Math.floor(line.top) - 1, Math.ceil(line.bottom), Math.ceil(line.bottom) - height, Math.floor(line.top) - 1 - height);
+  for (const top of [...new Set(tops)].filter((top) => top <= want && top >= Math.max(0, want - height / 2)).sort((a, b) => b - a)) if (fits(top)) return top;
+  return want;
+}
+
+/** Whether the phone's voice head stands over the sheet: covered by this window, the room its stylesheet keeps is waste. */
+function headOverSheet(): boolean {
+  const head = document.querySelector<HTMLElement>("[data-phone-voice-head]");
+  if (!head) return true;
+  const box = head.getBoundingClientRect();
+  if (!box.width || !box.height) return false;
+  const top = document.elementFromPoint?.(box.left + box.width / 2, box.top + box.height / 2);
+  return Boolean(top && head.contains(top));
+}
+
 export function useWholeRows(content: RefObject<HTMLElement | null>, page?: string): void {
   useLayoutEffect(() => {
     const inner = content.current;
@@ -410,8 +456,11 @@ export function useWholeRows(content: RefObject<HTMLElement | null>, page?: stri
       const held = scroller.scrollTop;
       scroller.style.maxHeight = "";
       scroller.style.paddingBottom = "";
-      /* A live voice head keeps room at a phone body's end through a stylesheet: what is added here comes on top of it. */
-      const base = parseFloat(window.getComputedStyle(scroller).paddingBottom) || 0;
+      /* A live voice head keeps room at a phone body's end through a stylesheet: what is added here comes on top of it.
+         A head this window covers keeps none. */
+      const kept = parseFloat(window.getComputedStyle(scroller).paddingBottom) || 0;
+      const base = headOverSheet() ? kept : 0;
+      if (base !== kept) scroller.style.paddingBottom = `${base}px`;
       const available = scroller.clientHeight;
       const height = scroller.scrollHeight;
       if (available && height > available + 0.5) {
@@ -426,12 +475,18 @@ export function useWholeRows(content: RefObject<HTMLElement | null>, page?: stri
           const edge = Math.ceil(end);
           scroller.style.maxHeight = `${edge}px`;
           const rest = height - edge;
-          const head = units.find((unit) => unit.top >= rest - 0.5);
-          const pad = head ? Math.ceil(head.top - rest) : 0;
+          /* The first row at or under the end's top; where that row is far below, the first line of words under it. */
+          const unitTop = units.find((unit) => unit.top >= rest - 0.5)?.top;
+          const lineTop = contentLines(scroller).map((line) => line.top).filter((top) => top >= rest - 0.5).sort((a, b) => a - b)[0];
+          const headTop = unitTop !== undefined && unitTop - rest <= 64 ? unitTop : lineTop !== undefined && lineTop - rest <= 64 ? Math.floor(lineTop) - 2 : unitTop;
+          const pad = headTop !== undefined ? Math.ceil(headTop - rest) : 0;
           if (pad > 0 && pad <= 64) scroller.style.paddingBottom = `${base + pad}px`;
+          else if (base !== kept) scroller.style.paddingBottom = `${base}px`;
         }
       }
       scroller.scrollTop = held;
+      /* A fit after the window landed mid-scroll (a list that shrank under it) keeps that screen on whole rows. */
+      if (held > 0) scroller.scrollTop = wholeRowsTop(scroller, held);
       cue();
     };
     fit();

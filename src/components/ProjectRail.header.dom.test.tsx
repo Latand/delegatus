@@ -158,11 +158,15 @@ test("the menu leads with three places as icon cells, then Open on phone, Settin
   await act(async () => { openSettings("general"); });
   const page = document.querySelector("[data-settings-window] [data-header-menu-page='settings']") as HTMLElement;
   expect(page).not.toBeNull();
-  expect(page.textContent ?? "").toContain(`${translate("en", "rail.menuLanguage")}: English`);
-  /* The bell reports its own state to the label. Under happy-dom there is no
+  /* Each row names what it is, and its line under the name says where it stands. */
+  const languageRow = page.querySelector<HTMLElement>("[data-header-menu-language]")!;
+  expect([...languageRow.querySelectorAll("span span")].map((node) => node.textContent)).toEqual([translate("en", "rail.menuLanguage"), "English"]);
+  /* The bell reports its own state to the row. Under happy-dom there is no
      PushManager, so the honest state is «unavailable» — which is the point: the
      row says what it is and where it stands instead of being a bare icon. */
-  expect(page.textContent ?? "").toContain(translate("en", "rail.menuNotificationsUnavailable"));
+  const push = page.querySelector<HTMLElement>("[data-header-menu-push]")!;
+  expect(push.textContent ?? "").toContain(translate("en", "settings.general.push"));
+  expect(push.textContent ?? "").toContain(translate("en", "settings.general.pushUnavailable"));
 
   /* The behaviour is the existing controls', not a rewrite: the language
      button still switches the locale, from inside the menu. */

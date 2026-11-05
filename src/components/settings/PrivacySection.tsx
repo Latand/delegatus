@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useLocale } from "@/lib/i18n";
 
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
-import { DetailsRow, markLiterals, Prose, RefusalLine, Rows, SectionHead, SwitchRow, TextRow } from "./settingsRows";
+import { BlockRow, BUTTON, DetailsRow, markLiterals, Prose, RefusalLine, Rows, SectionHead, SwitchRow, TextRow } from "./settingsRows";
 
 type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean; swarmRules: boolean };
 
@@ -33,14 +33,18 @@ export function PrivacySection() {
   const saving = useRef(false);
   const consentSaving = useRef(false);
 
-  useEffect(() => {
-    let disposed = false;
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+  /* A read that failed leaves a control to read it again: a disabled switch under a refusal is no dead end. */
+  const loadStatus = useCallback(() => {
     fetch("/api/telemetry", { cache: "no-store" }).then((response) => { if (!response.ok) throw new Error(); return response.json(); })
-      .then((next) => { if (!disposed) setStatus(next); })
-      .catch(() => { if (!disposed) setFailed("read"); });
-    readConsent().then((value) => { if (!disposed) setConsent(value); }).catch(() => { if (!disposed) setConsentFailed(true); });
-    return () => { disposed = true; };
+      .then((next) => { if (mounted.current) setStatus(next); })
+      .catch(() => { if (mounted.current) setFailed("read"); });
   }, []);
+  const loadConsent = useCallback(() => {
+    readConsent().then((value) => { if (mounted.current) setConsent(value); }).catch(() => { if (mounted.current) setConsentFailed(true); });
+  }, []);
+  useEffect(() => { loadStatus(); loadConsent(); }, [loadStatus, loadConsent]);
 
   /* One write at a time, as the notice's own; a refusal restores what was stored. */
   const save = async (update: Partial<Status>, control: "ping" | "swarm") => {
@@ -93,7 +97,12 @@ export function PrivacySection() {
           >
             {failed === "ping" ? <RefusalLine>{t("telemetry.error")}</RefusalLine> : null}
           </SwitchRow>
-        ) : failed === "read" ? <RefusalLine>{t("telemetry.error")}</RefusalLine> : null}
+        ) : failed === "read" ? (
+          <div data-settings-unit="" data-telemetry-read-failed="">
+            <RefusalLine>{t("telemetry.error")}</RefusalLine>
+            <BlockRow><button type="button" data-telemetry-retry="" className={BUTTON} onClick={() => { setFailed(false); loadStatus(); }}>{t("settings.privacy.retry")}</button></BlockRow>
+          </div>
+        ) : null}
         <SwitchRow
           attrs={{ "data-subscription-api": "" }}
           label={t("subscriptionApi.label")}
@@ -103,6 +112,7 @@ export function PrivacySection() {
           onToggle={() => void saveConsent(!consent)}
         >
           {consentFailed ? <RefusalLine>{t("telemetry.error")}</RefusalLine> : null}
+          {consentFailed && consent === null ? <BlockRow><button type="button" data-subscription-api-retry="" className={BUTTON} onClick={() => { setConsentFailed(false); loadConsent(); }}>{t("settings.privacy.retry")}</button></BlockRow> : null}
         </SwitchRow>
         {status ? (
           <SwitchRow
