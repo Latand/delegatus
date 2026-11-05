@@ -148,9 +148,10 @@ test("a pairing alone sends files without a local bot token", async () => {
   expect(await media()).toMatchObject({ messageIds: [102], sentBy: { name: "Report clone" } });
   expect(bot.calls).toHaveLength(before); expect(sends).toHaveLength(2);
 });
-test("without the feature, a pairing-only file send retains its disconnected refusal", async () => {
+test("without the feature, a pairing-only file send explains the clone limitation", async () => {
   fs.rmSync(telegramBotTokenPath()); relay.features = [];
-  await expect(document()).rejects.toMatchObject({ code: "bot_not_connected" });
+  await expect(document()).rejects.toMatchObject({ code: "clone_files_unsupported" });
+  expect(store.sendRow("document:fixture-writer", "pdf")).toMatchObject({ state: "failed", errorCode: "clone_files_unsupported", messageIds: [] });
   expect(sends).toEqual([]); expect(descriptors).toBe(0); expect(rightsReads).toBe(0);
   expect(await service.send({ ...common("legacy-pairing-text"), text: "Legacy" })).toMatchObject({ sentBy: { name: "Report clone" } });
 });

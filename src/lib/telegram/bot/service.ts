@@ -365,7 +365,7 @@ export class TelegramBotService {
     try { chat = this.resolveChat(store, input.chat); } catch { /* Preserve the legacy disconnected refusal below. */ }
     if (chat && chat.type !== "private") {
       const route = await this.deps.clones?.route(chat.chatId);
-      if (route?.methodsFeature && route.send && this.deps.clones?.valid(route, chat.chatId)) return store;
+      if (route && this.deps.clones?.valid(route, chat.chatId)) return store;
     }
     return this.connectedStore();
   }

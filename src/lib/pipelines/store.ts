@@ -1975,12 +1975,12 @@ export async function withPipelineStartupAdmission<T>(
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
   compact = false,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; waitMs?: number } = {},
 ): Promise<T> {
   return withViewerOperation("pipelines.startup-admission", () => withWaitCorrelation({ label: `pipelines.startup-admission:${phase}` }, async () => {
     let entered = false;
     let prepared: PreparedPipelineEvidence | undefined;
-    const waitMs = pipelineLockWaitMs();
+    const waitMs = Math.max(0, Math.min(pipelineLockWaitMs(), options.waitMs ?? Infinity));
     const deadline = performance.now() + waitMs;
     try {
       const outcome = await waitForStateLock("pipelines.startup-admission", async () => {
@@ -2090,11 +2090,12 @@ export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<
   return pipelineStore().boundedPatch(16, operation);
 }
 
-export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
-  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).boundedPatchAsync(limit, (tx) => {
+export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16, admissionDeadline = Infinity): Promise<R> {
+  const remaining = () => Math.min(pipelineLockWaitMs(), Math.max(0, admissionDeadline - performance.now()));
+  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: remaining() })).boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
-  }, pipelineLockWaitMs()));
+  }, remaining()));
 }
 
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */
@@ -2115,6 +2116,8 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
 
 export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
   requireOwner?: boolean;
+  /** Monotonic deadline shared by store opening and writer admission. */
+  admissionDeadline?: number;
   assertAuthority?: () => void;
   /** Outside the lease; repeated after contention before another create attempt. */
   prepare?: () => Promise<void>;
@@ -2157,7 +2160,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   };
   const limit = options.requireOwner ? 4096 : 16;
   const prepare = options.prepare;
-  if (!prepare) return withDeliveryMutationAsync(create, limit);
+  if (!prepare) return withDeliveryMutationAsync(create, limit, options.admissionDeadline);
   return refuseBusyBeforeAdmission(admitted => waitForStateLock("pipelines.create", async () => {
     const store = pipelineStore();
     // A committed replay needs live authorization, but no fresh source capture.
@@ -2173,7 +2176,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
       // A peer may have committed while preparation was running or refused.
       return create(tx, preparationFailure);
     });
-  }, { waitMs: pipelineLockWaitMs(), subject: "pipelines" }));
+  }, { waitMs: Math.min(pipelineLockWaitMs(), Math.max(0, (options.admissionDeadline ?? Infinity) - performance.now())), subject: "pipelines" }));
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {

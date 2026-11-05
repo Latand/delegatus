@@ -42,6 +42,7 @@ export type TelegramBotErrorCode =
   | "chat_reference_invalid"
   | "chat_not_allowed"
   | "bot_not_in_chat"
+  | "clone_files_unsupported"
   | "alias_invalid"
   | "alias_taken"
   | "text_empty"
@@ -147,7 +148,7 @@ export type TelegramBotRefusal = {
 /** Bound and project a refusal crossing the Viewer HTTP/MCP boundary. */
 export function readTelegramBotRefusals(value: unknown): TelegramBotRefusal[] {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, 9).flatMap((row: unknown) => {
+  return value.slice(0, 10).flatMap((row: unknown) => {
     if (!row || typeof row !== "object") return [];
     const r = row as Partial<TelegramBotRefusal>;
     if (!r.bot || typeof r.bot.name !== "string" || !(r.bot.username === null || typeof r.bot.username === "string")
