@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { endRestartGate, restartGateFile } from "./restartGate";
 import { releaseDrain, writeDrain } from "./drain";
 import { launcherControlFile, publishLauncherRequest, type LauncherRecord } from "./launcher";
+import { switchDeadline, SWITCH_OVERRUN } from "../../../bin/launcher-deadline.mjs";
 export interface ApplyIntent {
   requestId: string; target: string; releasePointer?: string; rollbackPointer: string | null; launcherPid: number; launcherIdentity: string | null;
   /** What the launcher, web and the runtime host served when the apply began.
@@ -13,7 +14,7 @@ export interface ApplyIntent {
       a web that fell back are states the product itself creates. */
   rollbackLauncherRevision?: string | null;
   rollbackWebRevision?: string | null; rollbackHostRevision?: string | null; rollbackPackage?: { root: string; version: string };
-  autoGateId?: string; switchedAt?: string; admissionRefused?: boolean; externalRestart?: boolean; trigger: "operator" | "seat" | "auto"; deploymentId?: string; startedAt: string;
+  autoGateId?: string; switchedAt?: string; switchDeadlineAt?: number; switchCompletedAt?: string; switchOverrun?: string; admissionRefused?: boolean; externalRestart?: boolean; trigger: "operator" | "seat" | "auto"; deploymentId?: string; startedAt: string;
   state: "building" | "ready" | "switching" | "done" | "failed"; rolledBack: boolean; detail?: string;
 }
 export function writeAtomic(file: string, value: unknown): void {
@@ -45,7 +46,17 @@ export class ApplyController {
     }
     this.save();
   }
-  patch(patch: Partial<ApplyIntent>): void { if (this.current) { this.current = { ...this.current, ...patch }; this.save(); } }
+  patch(patch: Partial<ApplyIntent>): void {
+    if (!this.current) return;
+    // All Viewer dispatches share this boundary, including external restarts.
+    // A recovered switch keeps the original expiry even if a writer supplies
+    // another switchedAt timestamp.
+    if (patch.state === "switching") {
+      patch = { ...patch, switchedAt: this.current.switchedAt ?? patch.switchedAt ?? new Date().toISOString(),
+        switchDeadlineAt: this.current.switchDeadlineAt ?? switchDeadline({ ...this.current, ...patch }) };
+    }
+    this.current = { ...this.current, ...patch }; this.save();
+  }
   private save(): void { writeAtomic(join(this.directory, "apply.json"), this.current); if (this.current) settleCheckoutDeployment(this.directory, this.current); }
   restoreUntaken(record?: LauncherRecord): void {
     const intent = this.current;
@@ -75,14 +86,27 @@ export class ApplyController {
     }
   }
   observe(record: LauncherRecord, hostHealthy = true, now = Date.now()): "done" | "failed" | null {
-    const intent = this.current;
-    if (!intent || !["ready", "switching", "done", "failed"].includes(intent.state)) return null;
-    let result: { requestId?: string; target?: string; state?: string; detail?: string; previousEntry?: string } | null = null;
+    const initial = this.current;
+    if (!initial || !["ready", "switching", "done", "failed"].includes(initial.state)) return null;
+    let intent: ApplyIntent = initial;
+    let result: { requestId?: string; target?: string; state?: string; detail?: string; previousEntry?: string; switchOverrun?: string; completedAt?: string } | null = null;
     try { result = JSON.parse(readFileSync(`${record.requestFile}.result.json`, "utf8")); } catch { /* no terminal admission result */ }
     const sameLauncher = record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity;
     const trialFile = launcherControlFile(record.requestFile, "trial");
-    let trial: { requestId?: string; target?: string; rollbackPointer?: string | null; state?: string; detail?: string; previousEntry?: string } | null = null;
+    let trial: { requestId?: string; target?: string; rollbackPointer?: string | null; state?: string; detail?: string; previousEntry?: string; switchOverrun?: string } | null = null;
     try { trial = JSON.parse(readFileSync(trialFile, "utf8")); } catch { /* no readable trial */ }
+    if (intent.state === "switching") {
+      const reported = [trial, result].find(value => value?.requestId === intent!.requestId && value.target === intent!.target && value.switchOverrun)?.switchOverrun;
+      const completedAt = Date.parse(intent.switchCompletedAt ?? (result?.requestId === intent.requestId && result.target === intent.target && result.state === "done"
+        ? result.completedAt ?? "" : ""));
+      const overdue = intent.switchedAt && now >= switchDeadline(intent)
+        && !(Number.isFinite(completedAt) && completedAt < switchDeadline(intent));
+      const overrun = intent.switchOverrun ?? reported ?? (overdue ? SWITCH_OVERRUN : undefined);
+      if (overrun && intent.switchOverrun !== overrun) {
+        this.patch({ switchOverrun: overrun, detail: overrun });
+        intent = this.current!;
+      }
+    }
     const coherentRollback = (requirePointer = true): boolean => {
       if (!hostHealthy || (record.launcher.state && record.launcher.state !== "healthy")
         || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy") return false;
@@ -120,7 +144,7 @@ export class ApplyController {
         && record.runtimeHost.state === "healthy" && record.web.revision === intent.target.slice(0, 7)
         && record.runtimeHost.revision === intent.target.slice(0, 7)
         && (!record.launcher.revision || record.launcher.revision === intent.target);
-      if (intent.state === "done" ? targetServing : coherentRollback()) this.releaseAdmission(record, intent);
+      if (intent.state === "done" ? targetServing : coherentRollback() || !!intent.switchOverrun && targetServing) this.releaseAdmission(record, intent);
       return null;
     }
     // A first upgrade may return to a launcher predating the trial protocol.
@@ -132,7 +156,7 @@ export class ApplyController {
       && (record.launcher.requestId == null || record.launcher.requestId === intent.requestId)
       && record.web.state === "healthy" && record.runtimeHost.state === "healthy") {
       if (coherentRollback()) {
-        this.patch({ state: "failed", rolledBack: true, detail: trial.detail ?? "The replacement rolled back to the previous release" });
+        this.patch({ state: "failed", rolledBack: true, detail: intent.switchOverrun ?? trial.detail ?? "The replacement rolled back to the previous release" });
         this.releaseAdmission(record, intent); rmSync(trialFile, { force: true }); return "failed";
       }
     }
@@ -152,7 +176,7 @@ export class ApplyController {
       this.restoreUntaken(record);
       if (!coherentRollback()) return null;
       if (externalUntaken && trial?.requestId === intent.requestId) rmSync(trialFile, { force: true });
-      this.patch({ state: "failed", admissionRefused: true, detail: result?.detail ?? "The launcher did not take the durable update request" });
+      this.patch({ state: "failed", admissionRefused: true, detail: intent.switchOverrun ?? result?.detail ?? "The launcher did not take the durable update request" });
       this.releaseAdmission(record, intent); return "failed";
     }
     const trialProtocol = record.launcher.relaunch === 1 || record.launcher.protocol === "delegatus-launcher-relaunch-v1";
@@ -163,7 +187,7 @@ export class ApplyController {
     const error = record.launcher.error;
     if (error?.kind === "fell-back") {
       if (!coherentRollback()) return null;
-      this.patch({ state: "failed", rolledBack: true, detail: error.detail });
+      this.patch({ state: "failed", rolledBack: true, detail: intent.switchOverrun ?? error.detail });
       this.releaseAdmission(record, intent); return "failed";
     }
     if (error && record.launcher.state === "healthy") {
@@ -171,13 +195,14 @@ export class ApplyController {
       this.restoreUntaken(record);
       if (!coherentRollback()) return null;
       const detail = error.kind === "message" ? error.text : "The launcher refused the replacement";
-      this.patch({ state: "failed", detail });
+      this.patch({ state: "failed", detail: intent.switchOverrun ?? detail });
       this.releaseAdmission(record, intent); return "failed";
     }
     if (!hostHealthy || record.launcher.state !== "healthy" || error || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy"
       || record.launcher.revision && record.launcher.revision !== intent.target
       || record.web.revision !== intent.target.slice(0, 7) || record.runtimeHost.revision !== intent.target.slice(0, 7)) return null;
-    this.patch({ state: "done" }); this.releaseAdmission(record, intent); return "done";
+    const state = intent.switchOverrun ? "failed" : "done";
+    this.patch({ state }); this.releaseAdmission(record, intent); return state;
   }
   private releaseAdmission(record: LauncherRecord, intent: ApplyIntent): void {
     // Consume only this settled request, after coherent serving verification.

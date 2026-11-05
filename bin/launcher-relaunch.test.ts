@@ -196,9 +196,9 @@ async function fixture(equalsPort = false) {
     }
     mock.module("node:child_process", () => ({ ...observed, default: observed }));
   `);
-  const bootstrap = (encoded = plan) => {
+  const bootstrap = (encoded = plan, bootstrapEntry = path.resolve("bin/launcher-relaunch.mjs")) => {
     const preload = ["--preload", diagnosticsPreload, ...(process.platform === "win32" ? [] : ["--preload", path.resolve("bin/__fixtures__/windows-state-paths.preload.ts")])];
-    const child = spawn(process.execPath, ["--bun", ...preload, path.resolve("bin/launcher-relaunch.mjs"), "--terminal", encoded, path.join(candidate, "bin", "cli.mjs"), ...args],
+    const child = spawn(process.execPath, ["--bun", ...preload, bootstrapEntry, "--terminal", encoded, path.join(candidate, "bin", "cli.mjs"), ...args],
       { cwd: base, env: { ...env, LLV_TEST_WINDOWS_STATE_ROOT: root, ...(equalsPort ? { LLV_TEST_PROBE_PORT: String(port) } : {}) }, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
     let error = "", stdout = "";
     child.stderr!.on("data", data => { error = (error + data).slice(-4096); });
@@ -250,6 +250,29 @@ async function fixture(equalsPort = false) {
   };
   return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env, diagnose, diagnosticsDir };
 }
+
+test("terminal load preflight refuses a candidate that ignores TERM within its child timeout", async () => {
+  const f = await fixture();
+  const bootstrapEntry = path.join(f.candidate, "bin/launcher-relaunch.mjs");
+  const entered = path.join(f.diagnosticsDir, "load-entered");
+  writeFileSync(bootstrapEntry, readFileSync(bootstrapEntry, "utf8").replace("timeout: 30000", "timeout: 100"));
+  writeFileSync(path.join(f.candidate, "bin/cli.mjs"), `
+    process.on("SIGTERM", () => {});
+    (await import("node:fs")).writeFileSync(${JSON.stringify(entered)}, String(process.pid));
+    while (true) await Bun.sleep(1000);
+  `);
+  await stop(f.old); await stopRecorded(f.before);
+  const run = f.bootstrap(f.plan, bootstrapEntry);
+  await until(() => existsSync(entered));
+  const preflightPid = Number(readFileSync(entered, "utf8")), identity = readStartIdentity(preflightPid);
+  if (identity) owners.set(preflightPid, identity);
+  await terminalExited(run.child, 5000);
+  expect(run.child.exitCode).toBe(1);
+  const record = f.readRecord()!;
+  expect(record.web.state).toBe("healthy"); expect(record.runtimeHost.state).toBe("healthy");
+  expect(record.web.revision).toBe("a".repeat(7));
+  expect(readFileSync(f.pointer, "utf8")).toBe(f.rollbackPointer);
+}, 15_000);
 
 for (const rollback of [false, true]) test(`Windows request-context terminal entrypoint settles rollback=${rollback}`, async () => {
   const f = await fixture();

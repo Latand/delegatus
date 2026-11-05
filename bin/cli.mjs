@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
+import { boundedWait, STOP_TIMEOUT_MS } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -642,7 +643,12 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     if (tailscaleProcessRef?.current) {
       await stopChild(tailscaleProcessRef.current);
     }
-    await Promise.all([runtimeHostSupervisor.stop(), state.retired]);
+    try {
+      await boundedWait(Promise.all([runtimeHostSupervisor.stop(), state.retired]), 2 * STOP_TIMEOUT_MS, "Viewer shutdown timed out");
+    } catch (error) {
+      console.error(error.message);
+      process.exit(1);
+    }
 
     if (state.sawAddressInUse) {
       process.exit(1);
@@ -1017,37 +1023,45 @@ async function stopChild(processHandle) {
   if (state.spawnError && child.pid === undefined) return;
 
   if (child.exitCode !== null || child.signalCode !== null) {
-    await state.retired;
+    await boundedWait(state.retired, STOP_TIMEOUT_MS, "Viewer retirement timed out");
     return;
   }
 
-  await new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
+  let timeout;
+  let onExit;
+  try {
+    await boundedWait(new Promise((resolve) => {
+      timeout = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, 2_000);
+
+      onExit = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      child.once("exit", onExit);
+
+      if (!child.killed) {
+        child.kill("SIGTERM");
       }
-    }, 2_000);
-
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-
-    if (!child.killed) {
-      child.kill("SIGTERM");
-    }
-  });
+    }), STOP_TIMEOUT_MS, "Launcher child exit was not observed before its deadline");
+  } finally {
+    clearTimeout(timeout);
+    if (onExit) child.removeListener("exit", onExit);
+  }
   /* A Viewer is stopped once its generation is retired. */
-  await state.retired;
+  await boundedWait(state.retired, STOP_TIMEOUT_MS, "Viewer retirement timed out");
 }
 
 /* Stopping the Viewer waits for its generation's retirement (stopChild). */
 async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
-  await Promise.all([
+  await boundedWait(Promise.all([
     serverProcess ? stopChild(serverProcess) : Promise.resolve(),
     tailscaleProcess ? stopChild(tailscaleProcess) : Promise.resolve(),
     runtimeHostSupervisor ? runtimeHostSupervisor.stop() : Promise.resolve(),
-  ]);
+  ]), 2 * STOP_TIMEOUT_MS, "Launcher child shutdown timed out");
 }
 
 /* `serverRef.current` is whichever web process runs at shutdown: a
@@ -1275,6 +1289,7 @@ async function main() {
   }
 
   assertLauncherAvailable(selfUpdate);
+  relaunch.assertStarting();
   if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
     fail(m.portBusy(options.port));
   }
@@ -1303,6 +1318,7 @@ async function main() {
      A packaged install records its children too, and the surface reads the
      record's missing checkout as "updates come from the package manager". */
   await takeOverOrphanHost(selfUpdate, runtimeHostConfig);
+  relaunch.assertStarting();
   const launcherRevision = headRevision(dirname(cliDir)) ?? releaseNow().sha;
   // Adoption and bind checks yielded: verify custody once more before writing.
   assertLauncherAvailable(selfUpdate);
@@ -1351,6 +1367,7 @@ async function main() {
   }
 
   const launchWeb = (release, restarting) => {
+    relaunch.assertStarting();
     const handle = startServer(
       resolveServer(release.dir, options.hostname),
       options,
@@ -1443,7 +1460,7 @@ async function main() {
   delete runtimeHostEnvironment.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY;
   delete process.env.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY;
   serverProcess.state.restarting = false;
-  relaunch.succeeded();
+  await relaunch.succeeded();
   // This start settled the handoff it took. A later relaunch inherits the
   // settings and must not ask for custody that the settlement released.
   delete process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
@@ -1458,7 +1475,7 @@ async function main() {
       }
       if (!recoverWeb) return "shutdown";
       /* A Viewer that crashed is replaced only once its generation is retired. */
-      await serverRef.current?.state.retired;
+      await boundedWait(serverRef.current?.state.retired, STOP_TIMEOUT_MS, "Viewer retirement timed out");
       if (!recoverWeb) return "shutdown";
       const handle = launchWeb(release, true);
       const readiness = createReadinessJournal(selfUpdate.readiness, { revision: release.sha, pid: handle.child.pid });
