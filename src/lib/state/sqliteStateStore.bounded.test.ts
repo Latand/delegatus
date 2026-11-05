@@ -25,7 +25,7 @@ test.each([0, 10_000, 50_000])("active key pages seek past finished history (%s 
   let store: SqliteStateCollection<Row> | undefined;
   try {
     initializeStateCollections(filename, [{ ...options, migrationId: "active-key-v1", loadRecords: () => rows }]);
-    store = new SqliteStateCollection(filename, options);
+    store = new SqliteStateCollection<Row>(filename, options);
     const peer = new Database(filename);
     const query = spyOn(Database.prototype, "query");
     try {
