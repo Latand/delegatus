@@ -153,7 +153,7 @@ function update(row: SendFailureNotice, patch: Partial<SendFailureNotice>): void
   collection(true)!.boundedPatch(2, tx => {
     const current = tx.get(row.operationId);
     if (!current || (current.state !== "pending" && !(current.state === "failed"
-      && (patch.state === "cancelled" || patch.attemptedAt !== undefined || patch.fallbackConversationId !== undefined)))) return;
+      && (patch.state === "cancelled" || patch.attemptedAt !== undefined || patch.fallbackConversationId !== undefined || patch.reason !== undefined)))) return;
     tx.put({ ...current, ...patch });
   });
 }
@@ -205,20 +205,30 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const attempts = (row.attempts ?? 0) + 1;
     const detail = error instanceof Error ? error.message : String(error);
     const terminal = attempts >= 3;
-    let fallbackConversationId: string | null = null;
-    let fallbackReason = "";
-    if (terminal) {
-      try {
-        const seat = fallback(row.senderConversationId, row.targetConversationId);
-        if (seat.kind === "deliver") fallbackConversationId = seat.conversationId;
-      } catch (fallbackError) {
-        const fallbackDetail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-        fallbackReason = `; project seat lookup unavailable: ${fallbackDetail.slice(0, 200)}`;
-      }
-    }
+    const originalFailure = row.reason.match(/; original failure: ([\s\S]*)$/)?.[1] ?? row.reason;
+    const prefix = `Failure notice ${phase} unavailable: ${detail.slice(0, 150)}; original failure: `;
     update(row, { attempts, attemptedAt: new Date().toISOString(),
-      reason: `Failure notice ${phase} unavailable: ${detail.slice(0, 240)}${fallbackReason}; original failure: ${row.reason}`.slice(0, 500),
-      ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId } : {}) });
+      reason: `${prefix}${originalFailure.slice(0, 450 - prefix.length)}`,
+      ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: null } : {}) });
+    if (terminal) resolveFallback(row);
+  };
+  const resolveFallback = (row: SendFailureNotice) => {
+    ports.assertActive();
+    const current = readSendFailureNotice(row.operationId) ?? row;
+    try {
+      const seat = fallback(current.senderConversationId, current.targetConversationId);
+      ports.assertActive();
+      if (seat.kind === "deliver") update(row, { fallbackConversationId: seat.conversationId });
+    } catch (error) {
+      ports.assertActive();
+      const detail = error instanceof Error ? error.message : String(error);
+      const note = `project seat lookup unavailable: ${detail.slice(0, 160)}`;
+      update(row, { reason: `${current.reason.slice(0, 500 - note.length - 2)}; ${note}` });
+    }
+  };
+  const terminalFailure = (row: SendFailureNotice, reason: string, attempts = row.attempts ?? 0) => {
+    update(row, { state: "failed", attempts, reason: reason.slice(0, 500), settledAt: new Date().toISOString(), fallbackConversationId: null });
+    resolveFallback(row);
   };
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
     ports.assertActive();
@@ -234,10 +244,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
         }
       } catch { /* Preserve the terminal alarm while projection is unavailable. */ }
       if (!row.fallbackConversationId) {
-        try {
-          const seat = fallback(row.senderConversationId, row.targetConversationId);
-          if (seat.kind === "deliver") update(row, { fallbackConversationId: seat.conversationId });
-        } catch { /* Keep the durable sender alarm and retry seat resolution later. */ }
+        resolveFallback(row);
       }
       return;
     }
@@ -259,30 +266,34 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     ports.assertActive();
     if (receipt?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
     if (!receipt || receipt.state !== "failed") return;
-    const latest = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId);
+    let latest: SendReceipt | null;
+    try { latest = sendReceiptFor(ports.registry.deliverySnapshotForOperation(row.operationId), row.operationId); }
+    catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (latest?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
-    const recipient = ports.recipient(row.recipientConversationId ?? row.senderConversationId);
+    let recipient: ReturnType<SendFailureNoticePorts["recipient"]>;
+    try { recipient = ports.recipient(row.recipientConversationId ?? row.senderConversationId); }
+    catch (error) { receiptFailure(row, error, "recipient lookup"); return; }
+    ports.assertActive();
     if (recipient.kind !== "deliver") {
-      const seat = fallback(row.senderConversationId, row.targetConversationId);
-      update(row, { state: "failed", reason: `Notice recipient unavailable: ${recipient.reason}; original failure: ${row.reason}`.slice(0, 500),
-        fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null, settledAt: new Date().toISOString() }); return;
+      terminalFailure(row, `Notice recipient unavailable: ${recipient.reason}; original failure: ${row.reason}`); return;
     }
     if (row.recipientConversationId && row.recipientConversationId !== recipient.conversationId) {
       // A new seat cannot receive a second copy of an already admitted notice.
-      const seat = fallback(row.senderConversationId, row.targetConversationId);
-      update(row, { state: "failed", reason: `Notice recipient changed; original failure: ${row.reason}`.slice(0, 500),
-        fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null, settledAt: new Date().toISOString() }); return;
+      terminalFailure(row, `Notice recipient changed; original failure: ${row.reason}`); return;
     }
-    const original = lookupOriginalSend(ports.registry.deliverySnapshotForMessageKey(recipient.conversationId, row.clientMessageId),
-      { conversationId: recipient.conversationId, clientMessageId: row.clientMessageId });
+    let original: ReturnType<typeof lookupOriginalSend>;
+    try {
+      original = lookupOriginalSend(ports.registry.deliverySnapshotForMessageKey(recipient.conversationId, row.clientMessageId),
+        { conversationId: recipient.conversationId, clientMessageId: row.clientMessageId });
+    } catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (original.kind === "found") {
       let answer: SendReceipt | null;
       try { answer = await step(() => ports.receipt(original.operationId)); }
       catch (error) { ports.assertActive(); receiptFailure(row, error); return; }
       ports.assertActive();
       if (answer?.state !== "in-flight" && answer) {
-        const seat = answer.state === "delivered" ? { kind: "skip" as const } : fallback(row.senderConversationId, row.targetConversationId);
-        update(row, { state: answer.state === "delivered" ? "sent" : "failed", fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null, settledAt: new Date().toISOString() });
+        if (answer.state === "delivered") update(row, { state: "sent", settledAt: new Date().toISOString() });
+        else terminalFailure(row, `Original notice operation ${answer.state}; original failure: ${row.reason}`);
       }
       return;
     }
@@ -298,18 +309,18 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
       const attempts = (row.attempts ?? 0) + 1;
       const detail = error instanceof Error ? error.message : String(error);
       const terminal = attempts >= 3;
-      const seat = terminal ? fallback(row.senderConversationId, row.targetConversationId) : { kind: "skip" as const };
       update(row, { attempts, reason: `Failure notice delivery outcome uncertain: ${detail.slice(0, 300)}; original failure: ${row.reason}`.slice(0, 500),
-        ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null } : {}) });
+        ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: null } : {}) });
+      if (terminal) resolveFallback(row);
       return;
     }
     if (!result.ok) {
       const attempts = (row.attempts ?? 0) + 1;
       const permanent = result.status !== undefined && result.status >= 400 && result.status < 500;
       const terminal = permanent || attempts >= 3;
-      const seat = terminal ? fallback(row.senderConversationId, row.targetConversationId) : { kind: "skip" as const };
       update(row, { attempts, reason: `Failure notice ${permanent ? "refused" : "delivery failed"}${result.status ? ` (${result.status})` : ""}: ${(result.error ?? "transport returned ok=false").slice(0, 350)}; original failure: ${row.reason}`.slice(0, 500),
-        ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: seat.kind === "deliver" ? seat.conversationId : null } : {}) });
+        ...(terminal ? { state: "failed" as const, settledAt: new Date().toISOString(), fallbackConversationId: null } : {}) });
+      if (terminal) resolveFallback(row);
       return;
     }
     // Admission is not arrival. The next bounded pass reconciles the stable

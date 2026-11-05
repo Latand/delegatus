@@ -3364,6 +3364,96 @@ test("a permanent notice refusal becomes a durable seat alarm with its transport
   } finally { active.close(); }
 });
 
+test("a later registry projection failure increments and escalates the persisted notice budget", async () => {
+  const active = fixture("notice-late-projection-failure", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "late-projection-sender");
+    const seat = secondConversation(active, "late-projection-seat");
+    const { readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "late-projection-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    const receipt = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    const original = active.journal.operationResult(operationId);
+    const snapshot = active.registry.deliverySnapshotForOperation.bind(active.registry);
+    let receiptRead = false, deliveries = 0;
+    active.registry.deliverySnapshotForOperation = id => {
+      if (receiptRead) throw new Error("late projection unavailable");
+      return snapshot(id);
+    };
+    const ports = { registry: active.registry, assertActive: () => {}, receipt: async () => { receiptRead = true; return receipt; },
+      recipient: () => { throw new Error("projection failure must stop before recipient lookup"); },
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async () => { deliveries++; return { ok: true }; } };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await sweepSendFailureNotices(ports);
+      expect(readSendFailureNotice(operationId)).toMatchObject({ state: attempt === 3 ? "failed" : "pending", attempts: attempt,
+        reason: expect.stringContaining("registry projection unavailable") });
+    }
+    expect(deliveries).toBe(0);
+    expect(sendFailureSignals(sender.conversationId).map(signal => signal.id)).toContain(`send-failed:${operationId}`);
+    expect(active.journal.operationResult(operationId)).toEqual(original);
+  } finally { active.registry.close(); active.close(); }
+});
+
+for (const terminalPath of ["negative acknowledgement", "transport exception", "unavailable recipient"] as const) {
+test(`${terminalPath === "unavailable recipient" ? "an unavailable recipient" : `a ${terminalPath}`} survives seat lookup failure and restart without another delivery`, async () => {
+  const active = fixture(`notice-seat-restart-${terminalPath.replaceAll(" ", "-")}`, { sqlite: true });
+  try {
+    const sender = secondConversation(active, "refusal-restart-sender");
+    const seat = secondConversation(active, "refusal-restart-seat");
+    const { readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: `seat-restart-original-${terminalPath.replaceAll(" ", "-")}`,
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    const receipt = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    const original = active.journal.operationResult(operationId);
+    const noticeKey = readSendFailureNotice(operationId)!.clientMessageId;
+    let deliveries = 0;
+    const failureReason = terminalPath === "unavailable recipient" ? "Notice recipient unavailable: recipient gone"
+      : terminalPath === "transport exception" ? "connection failed before admission" : "permanent refusal";
+    const ports = { registry: active.registry, assertActive: () => {}, receipt: async () => receipt,
+      recipient: () => terminalPath === "unavailable recipient" ? { kind: "skip" as const, reason: "recipient gone" }
+        : { kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath },
+      fallback: () => { throw new Error("seat discovery temporarily unavailable"); },
+      deliver: async (request: { clientMessageId: string }) => {
+        if (request.clientMessageId === noticeKey) deliveries++;
+        if (terminalPath === "transport exception") throw new Error(failureReason);
+        return { ok: false, status: 403, error: failureReason };
+      } };
+    const firstPasses = terminalPath === "transport exception" ? 3 : 1;
+    const expectedAttempts = terminalPath === "unavailable recipient" ? 0 : firstPasses;
+    for (let pass = 0; pass < firstPasses; pass++) await sweepSendFailureNotices(ports);
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: expectedAttempts,
+      fallbackConversationId: null, reason: expect.stringContaining(failureReason) });
+    expect(readSendFailureNotice(operationId)?.reason).toContain("project seat lookup unavailable");
+
+    const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
+    const registryPath = new URL("../agent/registry.ts", import.meta.url).pathname;
+    const child = Bun.spawn([process.execPath, "--eval", `
+      const { AgentRegistry } = await import(${JSON.stringify(registryPath)});
+      const m = await import(${JSON.stringify(modulePath)});
+      const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined,
+        { sqliteMode: "sqlite", sqliteFilename: ${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))} });
+      try {
+        await m.sweepSendFailureNotices({ registry, assertActive: () => {},
+          fallback: () => ({ kind: "deliver", conversationId: ${JSON.stringify(seat.conversationId)} }),
+          recipient: () => { throw new Error("terminal notice retried recipient lookup"); },
+          deliver: async () => { throw new Error("terminal notice was dispatched again"); } });
+        console.log(JSON.stringify(m.readSendFailureNotice(${JSON.stringify(operationId)})));
+      } finally { registry.close(); }
+    `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(exit, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ state: "failed", attempts: expectedAttempts, fallbackConversationId: seat.conversationId,
+      reason: expect.stringContaining(failureReason) });
+    expect(deliveries).toBe(terminalPath === "unavailable recipient" ? 0 : firstPasses);
+    expect(sendFailureSignals(seat.conversationId).map(signal => signal.id)).toContain(`send-failed:${operationId}`);
+    expect(active.journal.operationResult(operationId)).toEqual(original);
+  } finally { active.registry.close(); active.close(); }
+});
+}
+
 test("an unavailable sender routes its terminal notice alarm to the live project seat", async () => {
   const active = fixture("missing-failure-notice-sender");
   try {
