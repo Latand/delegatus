@@ -88,7 +88,12 @@ export function assertLauncherAvailable(paths) {
 }
 export function portFree(port, hostname = "127.0.0.1") {
   return new Promise(resolve => {
-    const server = net.createServer();
+    // A proxy can connect between listen and close. The probe serves no
+    // requests; release its accepted sockets so close cannot await a peer.
+    const server = net.createServer(socket => {
+      socket.on("error", () => {});
+      socket.destroy();
+    });
     server.once("error", () => resolve(false));
     server.listen(port, hostname, () => server.close(() => resolve(true)));
   });
