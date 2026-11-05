@@ -169,14 +169,23 @@ function useProjectRules(project: string | null) {
     if (!project) return;
     const sequence = reads;
     const abort = new AbortController();
+    let reading = false;
     const read = async () => {
+      // A timer must not supersede a slower read before its first answer.
+      if (reading || abort.signal.aborted) return;
+      reading = true;
       const current = ++sequence.current;
+      const request = new AbortController();
+      const cancel = () => request.abort();
+      abort.signal.addEventListener("abort", cancel, { once: true });
+      const timeout = setTimeout(cancel, 60_000);
       try {
-        const response = await fetch(`/api/role-memory?project=${encodeURIComponent(project)}`, { signal: abort.signal, cache: "no-store" });
+        const response = await fetch(`/api/role-memory?project=${encodeURIComponent(project)}`, { signal: request.signal, cache: "no-store" });
         if (!response.ok) throw Error();
         const value = projectRulesOf(await response.json());
         if (current === sequence.current && !abort.signal.aborted) { setStored(value); setFailed(null); }
       } catch { if (current === sequence.current && !abort.signal.aborted) setFailed("read"); }
+      finally { clearTimeout(timeout); abort.signal.removeEventListener("abort", cancel); reading = false; }
     };
     void read();
     const timer = setInterval(() => void read(), 15_000);
