@@ -17,6 +17,8 @@ export type RelayConversation = {
   engine: "claude" | "codex"; sessionId: string | null; accountId: string | null; cwd: string | null;
   turns: number; turnsSinceCompaction: number; createdAt: string; lastTurnAt: string;
   seen: string[]; staticDigest: string | null; lastPromptTokens: number | null; compactions: number;
+  /** Latest accepted owner answer, bound to the native conversation that produced it. */
+  answerWitness?: { conversationId: string; inReplyTo: string; textSha256: string };
   pendingCursor?: { operationId: string; seen: string[]; staticDigest: string };
   state: "idle" | "running" | "broken"; runningRequestId: string | null;
 };
@@ -170,6 +172,9 @@ function rowsFromValue(input: unknown, migrate = false): RelayConversation[] {
     version === 2 && (typeof r.requesterKey !== "string" || !["member", "admin", "owner", "owner-tier"].includes(r.authority) ||
       !Array.isArray(r.anchors) || r.anchors.length > 200 || r.seen.length > 200 ||
       [...r.anchors, ...r.seen].some(id => typeof id !== "string") ||
+      r.answerWitness !== undefined && (!r.answerWitness || typeof r.answerWitness.conversationId !== "string" ||
+        typeof r.answerWitness.inReplyTo !== "string" || typeof r.answerWitness.textSha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(r.answerWitness.textSha256)) ||
       r.pendingCursor !== undefined && (!r.pendingCursor || typeof r.pendingCursor.operationId !== "string" ||
         !Array.isArray(r.pendingCursor.seen) || r.pendingCursor.seen.length > 200 ||
         r.pendingCursor.seen.some(id => typeof id !== "string") || typeof r.pendingCursor.staticDigest !== "string"));
@@ -244,7 +249,7 @@ async function freshAsync(record: RelayConversation) {
   resetConversationFields(record);
 }
 function resetConversationFields(record: RelayConversation) {
-  Object.assign(record, { conversationId: null, sessionId: null, seen: [], staticDigest: null, turnsSinceCompaction: 0, lastPromptTokens: null, state: "idle", runningRequestId: null });
+  Object.assign(record, { conversationId: null, sessionId: null, seen: [], staticDigest: null, answerWitness: undefined, turnsSinceCompaction: 0, lastPromptTokens: null, state: "idle", runningRequestId: null });
 }
 const capIds = (ids: string[]) => [...new Set(ids)].slice(-200);
 function scopedChat(row: RelayConversation, relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest) {

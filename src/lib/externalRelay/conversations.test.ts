@@ -22,7 +22,8 @@ test("a persisted cursor delivers a later history gap once after process restart
   firstRequest.input.conversation = [];
   const record = reserveChainConversation(relay, target, firstRequest, "member")!;
   const first = conversationTurnPrompt(firstRequest, record, "[round]");
-  releaseConversation(record.id, { seen: first.seen, staticDigest: first.digest, sessionId: "fixture-session" });
+  const answerWitness = { conversationId: "conversation_fixture", inReplyTo: "root", textSha256: "a".repeat(64) };
+  releaseConversation(record.id, { seen: first.seen, staticDigest: first.digest, sessionId: "fixture-session", answerWitness });
   const readAfterRestart = () => {
     const result = spawnSync(process.execPath, ["-e", `import { readConversations } from ${JSON.stringify(path.join(import.meta.dir, "conversations.ts"))}; console.log(JSON.stringify(readConversations()));`], {
       env: { ...process.env, LLV_STATE_DIR: root }, encoding: "utf8", timeout: 20_000,
@@ -32,6 +33,7 @@ test("a persisted cursor delivers a later history gap once after process restart
   };
   const resumed = readAfterRestart();
   expect(resumed.seen).toEqual([]);
+  expect(resumed.answerWitness).toEqual(answerWitness);
   const secondRequest = request("next", "root");
   const missing = request("root").input.conversation[0]!;
   secondRequest.input.conversation.unshift(missing);
@@ -65,7 +67,8 @@ test(`${asyncSweep ? "async" : "sync"} chain sweep separates ${state} custody fr
 for (const asyncSweep of [false, true]) test(`${asyncSweep ? "async" : "sync"} quarantine detaches a pending continuation cursor without changing delivery custody`, async () => {
   const first = reserveChainConversation(relay, target, request(), "owner-tier")!;
   const pendingCursor = { operationId: "relay-owner-root", seen: ["unconfirmed"], staticDigest: "pending" };
-  await releaseConversationAsync(first.id, { state: "running", runningRequestId: "root", conversationId: "conversation_old", pendingCursor }, Date.now() + 5000, "root");
+  const answerWitness = { conversationId: "conversation_old", inReplyTo: "root", textSha256: "a".repeat(64) };
+  await releaseConversationAsync(first.id, { state: "running", runningRequestId: "root", conversationId: "conversation_old", pendingCursor, answerWitness }, Date.now() + 5000, "root");
   const run: RunRecord = { requestId: "root", relayId: relay.id, targetId: target.id, leaseId: "fixture", childPid: null, childIdentity: null,
     conversationId: "conversation_old", ownerPid: process.pid, ownerIdentity: "fixture", runDir: root, startedAt: first.createdAt,
     capacityReleased: true, ownerTurn: { clientAttemptId: pendingCursor.operationId, continuation: { operationId: pendingCursor.operationId },
@@ -80,6 +83,7 @@ for (const asyncSweep of [false, true]) test(`${asyncSweep ? "async" : "sync"} q
     await resolveChainConversationAsync(relay, target, request("next", "root"), "owner-tier", Date.now() + 5000);
     const next = await reserveChainConversationAsync(relay, target, request("next", "root"), "owner-tier", Date.now() + 5000);
     expect(next).toMatchObject({ state: "running", runningRequestId: "next", conversationId: null, seen: [], staticDigest: null });
+    expect(next!.answerWitness).toBeUndefined();
     expect(readRunLedger().runs.find(row => row.requestId === "root")).toEqual(run);
   } finally { dropRun("root"); }
 });
@@ -339,11 +343,13 @@ test("reply chains reserve independently and survive a process restart", async (
     conversation: [request.input.conversation[0]!, { ...request.input.conversation[0]!, id: "bot-answer", author: { key: "bot", name: "Bot", self: true }, reply_to: "chain-root" },
       { ...request.input.conversation[0]!, id: "next", reply_to: "bot-answer" }] } };
   expect(api.reserveChainConversation(relay, target, reply, "member")).toBeNull();
-  releaseConversation(first.id);
+  const answerWitness = { conversationId: "conversation_chain", inReplyTo: "chain-root", textSha256: "b".repeat(64) };
+  await api.releaseConversationAsync(first.id, { answerWitness }, Date.now() + 5000, request.request_id);
   const child = Bun.spawn([process.execPath, "-e", `import { readConversations } from "./src/lib/externalRelay/conversations"; console.log(JSON.stringify(readConversations()))`], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const stdout = await new Response(child.stdout).text();
   expect(await child.exited).toBe(0);
   expect(JSON.parse(stdout).find((r: { id: string }) => r.id === first.id).anchors).toContain("chain-root");
+  expect(JSON.parse(stdout).find((r: { id: string }) => r.id === first.id).answerWitness).toEqual(answerWitness);
   expect(api.reserveChainConversation(relay, target, reply, "member")!.id).toBe(first.id);
   releaseConversation(first.id); releaseConversation(other.id);
 });

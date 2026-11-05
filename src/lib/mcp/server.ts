@@ -1,4 +1,5 @@
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
+import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -5171,8 +5172,10 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
          resolver reads the request's identity rather than this process's. */
       const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
       const forwardedDeadline = ((extra as { _meta?: Record<string, unknown> })._meta)?.["delegatus/deadlineAt"];
+      const callBudgetMs = (toolName === "telegram_bot_send_document" || toolName === "telegram_bot_send_media")
+        ? cloneFileCallBudgetMs() ?? 30_000 : 30_000;
       const timeoutMs = typeof forwardedDeadline === "number" && Number.isFinite(forwardedDeadline)
-        ? Math.max(0, Math.min(30_000, forwardedDeadline - Date.now())) : 30_000;
+        ? Math.max(0, Math.min(callBudgetMs, forwardedDeadline - Date.now())) : callBudgetMs;
       const deadline = deadlineSignal(timeoutMs, {
         /* Over stdio a client's cancel reaches `extra.signal`. Over the
            stateless HTTP endpoint it arrives on a later POST, to another

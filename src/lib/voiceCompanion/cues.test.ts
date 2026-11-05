@@ -81,6 +81,16 @@ test("the header sound switch governs the cues: muted plays nothing, and unmutin
   expect(audio.log.oscillators.map((row) => row.hz)).toEqual([CUE_TONES.low, CUE_TONES.high]);
 });
 
+test("retry ticks are softer than the call cues; give-up falls in three tones under 300ms, under the same switch", () => {
+  let enabled = false; const audio = fakeAudio(); const cues = createBrowserCues(audio.factory, () => enabled);
+  cues.tick?.(); cues.giveUp?.(); expect(audio.log.oscillators).toEqual([]);
+  enabled = true; cues.tick?.(); expect(audio.log.oscillators).toHaveLength(1);
+  expect(Math.max(...audio.log.gains)).toBeLessThan(CUE_PEAK_GAIN);
+  cues.giveUp?.(); const notes = audio.log.oscillators.slice(1);
+  expect(notes.map(row => row.hz)).toEqual([990, 825, 660]); expect(notes.at(-1)!.stop! - notes[0].start!).toBeLessThan(0.3);
+  expect(audio.log.contexts).toBe(1);
+});
+
 test("with no switch handed over, the cues read the device's own sound preference", () => {
   const stored = new Map<string, string>([[CUES_ENABLED_KEY, "off"]]);
   configureAudioPrefsStorage({ getItem: (key) => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } });

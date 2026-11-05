@@ -6,7 +6,7 @@ import { validCallSummary, type CallSummary } from "./callMemoryTypes";
 import type { CompanionUsage } from "./contract";
 import { CALL_RETENTION_COUNT, CALL_RETENTION_MS, callEndedAt, safelyClosed } from "./retention";
 
-export type TranscriptKind = "session_start" | "session_end" | "utterance" | "reply" | "delegation" | "tool" | "handoff" | "request" | "report" | "summary";
+export type TranscriptKind = "session_start" | "session_end" | "connection" | "utterance" | "reply" | "delegation" | "tool" | "handoff" | "request" | "report" | "summary";
 /** Page contract. Times are milliseconds from session start; speech also
  * carries the provider's timeline and each fragment's [start, end] pair.
  * Tool arguments and results are cleaned, bounded pretty JSON strings. */

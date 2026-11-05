@@ -261,7 +261,7 @@ test("dims and labels a stale account limits read and omits a missing reset time
 });
 
 test("automatic transcript migration controls stay outside the account panel", () => {
-  const withAuto = render(base({ autoBalance: { enabled: true, thresholdPercent: 25, state: "idle", cooldownUntil: null, lastCheckAt: "2026-07-10T14:32:00.000Z", lastOutcome: null } }));
+  const withAuto = render(base({ accounts: base().accounts.map(a => ({ ...a, spendCredits: true })), autoBalance: { enabled: true, thresholdPercent: 25, state: "idle", cooldownUntil: null, lastCheckAt: "2026-07-10T14:32:00.000Z", lastOutcome: null } }));
   const document = new Window().document;
   document.body.innerHTML = withAuto;
   const switches = [...document.querySelectorAll('[role="switch"]')];
