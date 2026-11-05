@@ -17,7 +17,10 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
   const rootStat = fs.lstatSync(directory, { throwIfNoEntry: false });
   if (!rootStat) return { links: [], directories: [] };
   const rootDevice = rootStat.dev;
-  const links: string[] = [], directories: RepositoryDirectoryVersion[] = []; let visited = 0;
+  const links: string[] = [], directories: RepositoryDirectoryVersion[] = [];
+  const checkBudget = () => {
+    if (performance.now() >= deadline) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+  };
   const readEntries = async (current: string) => {
     const remaining = deadline - performance.now();
     if (remaining <= 0) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
@@ -33,6 +36,7 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
     const before = fs.lstatSync(current);
     if (before.dev !== rootDevice) return;
     const entries = await readEntries(current);
+    checkBudget();
     const after = fs.lstatSync(current, { throwIfNoEntry: false });
     // The entry list and its cache validator must describe the same directory
     // version. A link created after readdir but before lstat would otherwise
@@ -44,7 +48,7 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
     }
     directories.push({ path: current, identity: `${after.dev}:${after.ino}`, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs });
     for (const entry of entries) {
-      if (++visited > 200_000) throw new Error("partial inbound-link inventory");
+      checkBudget();
       const file = path.join(current, entry.name);
       if (entry.isSymbolicLink()) links.push(file);
       else if (entry.isDirectory() && entry.name !== ".git") await visit(file);
@@ -88,7 +92,9 @@ export class RepositoryLinkInventory {
   }
   private now() { return (this.options.now ?? Date.now)(); }
   private directoriesUnchanged(directories: readonly RepositoryDirectoryVersion[]) {
-    return directories.every(directory => {
+    // Both absence paths yield no directory versions. Such a snapshot cannot
+    // prove that a checkout is still absent after it has been restored.
+    return directories.length > 0 && directories.every(directory => {
       const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
       return !!current?.isDirectory() && !current.isSymbolicLink()
         && `${current.dev}:${current.ino}` === directory.identity

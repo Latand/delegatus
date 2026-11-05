@@ -78,7 +78,7 @@ test("a loaded 727-root sweep defers its remaining page without errors or holds"
   } finally { f.store.close(); }
 });
 
-test.each(["budget-run", "budget-inventory"] as const)("%s deferral survives a helper restart with ledger accounting and fairness", async mode => {
+test.each(["budget-run", "budget-inventory", "budget-read"] as const)("%s deferral survives a helper restart with ledger accounting and fairness", async mode => {
   const f = fixture();
   const directories: string[] = [];
   for (const name of ["first", "second"]) {
@@ -96,13 +96,15 @@ test.each(["budget-run", "budget-inventory"] as const)("%s deferral survives a h
     expect(code).toBe(0); expect(stderr).toBe(""); return JSON.parse(stdout);
   };
   try {
+    const removed = mode === "budget-read" ? 0 : 1;
     const deferred = await run(NOW, mode);
-    expect(deferred).toMatchObject({ removed: 1, deferred: 1, errors: 0, held: 0 });
-    expect(deferred.removedBytes).toBeGreaterThan(0);
+    expect(deferred).toMatchObject({ removed, deferred: 2 - removed, errors: 0, held: 0 });
+    if (removed) expect(deferred.removedBytes).toBeGreaterThan(0);
+    else expect(deferred.outcomes.every((row: { reason: string }) => row.reason.includes("time budget"))).toBeTrue();
     expect(deferred.deferredBytes).toBe(deferred.bytes);
-    expect(fs.existsSync(directories[0]!)).toBeFalse(); expect(fs.existsSync(directories[1]!)).toBeTrue();
+    expect(fs.existsSync(directories[0]!)).toBe(!removed); expect(fs.existsSync(directories[1]!)).toBeTrue();
     const resumed = await run(NOW + 120_000, "--default-budget");
-    expect(resumed).toMatchObject({ removed: 1, errors: 0, bytes: 0 });
+    expect(resumed).toMatchObject({ removed: 2 - removed, errors: 0, bytes: 0 });
     expect(resumed.removedBytes).toBeGreaterThan(0);
     expect(fs.readdirSync(f.root).filter(name => name.startsWith("llv-stage-restart-"))).toHaveLength(0);
   } finally {

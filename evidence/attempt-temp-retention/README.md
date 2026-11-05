@@ -145,3 +145,32 @@ The benchmark remains an opt-in case in
 `src/lib/runtime/attemptTempProduction.test.ts` selected by
 `LLV_ATTEMPT_TEMP_BENCHMARK=1`. Its load mode reuses
 `src/lib/runtime/attemptTempRetention.fixture.ts`.
+
+
+## Successor verification
+
+The successor merges current main into the delivery history and addresses the
+two round-four findings. An inventory with no directory versions is re-read
+on reuse, including both the initial absence and disappearance-during-walk
+paths. Checkout walks have no entry-count ceiling; monotonic deadline checks
+bound both directory reads and entry processing. Expiry remains a deferral.
+
+Both retained review probes failed on the merged pre-fix source and passed on
+the earlier base. After the fix, the restored-checkout probe reports one live
+hold with no error, and the large unrelated checkout permits reclamation.
+Committed regressions cover six authority observations from pressure ranking
+through quarantine, with an unchanged-checkout removal control. The filesystem
+suite covers both empty snapshots and a 210,000-file checkout whose nested
+link retains scratch; removing that link permits the real sweep to reclaim it.
+A helper-process case advances monotonic time to expiry during a real directory
+read, verifies zero removals and deferred allocation, exits, then starts a fresh
+helper against the same ledger and reclaims both roots.
+
+Independent production mutations restore empty-snapshot reuse, restore the
+200,000-entry ceiling, and remove the new deadline checks. Each mutation fails
+its named regression. Mutations run only in scratch exports and the final
+source is restored afterwards. Five isolated test-file commands pass under Bun
+1.4.0: filesystem 21, retention 60, production 24, worker 34, and temp sweep 79
+(218 passed; 15 opt-in skips). Commands run directly, one file per command,
+with fresh logs and actual exit statuses retained in pipeline evidence. This
+successor makes no new throughput claim and runs no live retention sweep.

@@ -164,6 +164,66 @@ test("a checkout link created after the first authority inventory keeps its atte
   } finally { observed.mockRestore(); store.close(); }
 });
 
+test.each([0, 1, 2, 3, 4, 5, 6])("a restored checkout holds scratch across authority boundary %i (zero is the removal control)", async boundary => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-restored-checkout-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "restored-lane", task: "Checkout restoration", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "restored-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  const repository = pipeline.worktreeDir!;
+  roots.push(repository, repository + "-previous");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  savePipelines([pipeline]);
+  const directory = path.join(root, "llv-stage-restored"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "data"), "retained payload");
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  store.register({ directory, pipelineId: pipeline.id, launchId: "restored-launch", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  const exists = fs.existsSync;
+  let observations = 0, disappeared = false, restored = false;
+  const existence = spyOn(fs, "existsSync").mockImplementation(file => {
+    const present = exists(file);
+    if (file === repository && ++observations === boundary && present) {
+      disappeared = true; fs.renameSync(repository, repository + "-previous");
+    }
+    return present;
+  });
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const reads = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(async function (this: InstanceType<typeof RepositoryLinkInventory>, repo: string) {
+    try { return await targets.call(this, repo); }
+    finally {
+      if (disappeared && !restored && repo === repository) {
+        restored = true; fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+        fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+      }
+    }
+  });
+  let inventory: InstanceType<typeof RepositoryLinkInventory>;
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 1, capBytes: 0,
+      state: (owner, current) => { inventory = current; return attemptTempState(owner, current); },
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, inventory!),
+      scan: () => ({ ownNamespace: null, processes: [] }) });
+    if (boundary === 0) {
+      expect(report).toMatchObject({ removed: 1, errors: 0 });
+      expect(observations).toBeGreaterThanOrEqual(6);
+      expect(exists(directory)).toBeFalse();
+    } else {
+      expect(disappeared).toBeTrue(); expect(restored).toBeTrue();
+      expect(report).toMatchObject({ removed: 0, held: 1, liveHeld: 1, errors: 0 });
+      expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
+      expect(fs.readlinkSync(path.join(repository, "dependency"))).toBe(directory);
+    }
+  } finally { reads.mockRestore(); existence.mockRestore(); store.close(); }
+});
+
 test("production settlement retires the attempt scratch and config sandbox", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-production-")); roots.push(root);
   const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;

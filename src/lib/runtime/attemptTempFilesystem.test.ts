@@ -156,6 +156,56 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed 
   } finally { fs.chmodSync(blocked, 0o700); }
 });
 
+test.each(["before walk", "during walk"])("an absent checkout snapshot is rechecked after restoration (%s)", async disappearance => {
+  const parent = root(), repository = path.join(parent, "checkout"), directory = path.join(parent, "llv-stage-linked");
+  fs.mkdirSync(directory);
+  if (disappearance === "during walk") fs.mkdirSync(repository);
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    const entries = await readdir(target, options);
+    if (target === repository && disappearance === "during walk") fs.renameSync(repository, repository + "-previous");
+    return entries;
+  });
+  const inventory = new RepositoryLinkInventory({ now: () => 1_000 });
+  try { expect(await inventory.targets(repository)).toEqual([]); }
+  finally { observed.mockRestore(); }
+  fs.mkdirSync(repository);
+  fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+  expect(await inventory.targets(repository)).toContain(directory);
+  expect(inventory.walks).toHaveLength(2);
+});
+
+test.skipIf(process.platform === "win32")("a large unrelated checkout allows reclaim and its nested link still holds scratch", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-large-checkout-"));
+  const repository = path.join(parent, "checkout"), directory = path.join(parent, "llv-stage-settled");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), "retained payload");
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  try {
+    for (let group = 0; group < 21; group++) {
+      await exec("sh", ["-c", 'mkdir "$1" && cd "$1" && seq 0 9999 | xargs touch', "sh", path.join(repository, String(group).padStart(2, "0"))], { timeout: 60_000 });
+    }
+    store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+    store.measure(directory, 4096); store.release(directory);
+    const link = path.join(repository, "20", "dependency"); fs.symlinkSync(directory, link, "dir");
+    const sweep = () => sweepAttemptTemps(store, { now: () => 2, maxRoots: 1, capBytes: 0, state: async () => "closed",
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, inventory),
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 999, namespace: null, stamped: false, paths: [repository] }] }) });
+    // Reuse the full inventory through the real sweep's deletion boundaries.
+    const inventory = new RepositoryLinkInventory();
+    expect(await sweep()).toMatchObject({ removed: 0, held: 1, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
+    expect(inventory.walks).toHaveLength(1);
+    fs.unlinkSync(link); store.defer(directory, 0);
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(inventory.walks).toHaveLength(2);
+  } finally { store.close(); await exec("rm", ["-rf", "--", parent], { timeout: 60_000 }); }
+}, 150_000);
+
 test("a checkout gone since the process snapshot has no inbound links", async () => {
   const inventory = new RepositoryLinkInventory();
   expect(await inventory.targets(path.join(root(), "gone"))).toEqual([]);
