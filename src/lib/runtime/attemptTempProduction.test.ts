@@ -217,7 +217,11 @@ test.each([0, 1, 2, 3, 4, 5, 6, 7])("a restored checkout holds scratch across au
       expect(exists(directory)).toBeFalse();
     } else {
       expect(disappeared).toBeTrue(); expect(restored).toBeTrue();
-      expect(report).toMatchObject({ removed: 0, held: 1, errors: 0 });
+      expect(report.removed).toBe(0);
+      // Absence now refuses the inventory. The earlier presence mismatch
+      // still returns unknown; both paths must preserve the same payload.
+      expect(report.held + report.errors).toBe(1);
+      if (report.errors) expect(report.outcomes[0]!.reason).toContain("ENOENT");
       expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
       expect(fs.readlinkSync(path.join(repository, "dependency"))).toBe(directory);
     }
@@ -236,6 +240,7 @@ test("production settlement retires the attempt scratch and config sandbox", asy
     startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null,
     output: "done", verdict: { status: "pass" }, error: null };
   pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
+  fs.mkdirSync(pipeline.worktreeDir!, { recursive: true });
   savePipelines([pipeline]);
   const access = materializeStructuredHostAccess({ readOnly: false, sandbox: "full" }, { ...process.env }, null, root,
     { pipelineId: pipeline.id, launchId: "temp-launch", retainUntilClose: false });
@@ -331,6 +336,7 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
   pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state, launchId: "state-launch", effectiveRole: role,
     conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
     startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  fs.mkdirSync(pipeline.worktreeDir!, { recursive: true });
   savePipelines([pipeline]);
   const { attemptTempState } = await import("./attemptTempProduction");
   const owner = { directory: path.join(root, "llv-stage-fixture"), pipelineId: pipeline.id, launchId: "state-launch", retainUntilClose: false, createdAt: 1 };
@@ -422,4 +428,53 @@ test.each(process.platform === "win32" ? ["intact", "missing", "operator"] : ["i
       expect(code).not.toBe(0); expect(error).toContain(proof === "operator" ? "StateStartupMutationRefused" : "OperatorStateUnderTestError"); expect(out).toBe("");
     }
   } finally { access.cleanup(); }
+});
+
+
+test.each(["closed", "completed"] as const)("an absent open-lane checkout holds scratch until the lane is %s and its consumer exits", async terminal => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-absent-lane-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "absent-lane", task: "Checkout lifetime", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "absent-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  const repository = pipeline.worktreeDir!; roots.push(repository);
+  savePipelines([pipeline]);
+  const directory = path.join(root, "llv-stage-absent"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  store.register({ directory, pipelineId: pipeline.id, launchId: "absent-launch", retainUntilClose: false, createdAt: 1 });
+  let now = 1000;
+  const processes: ProcessScan["processes"] = [];
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, state: attemptTempState, references,
+    scan: () => ({ ownNamespace: null, processes }) });
+  try {
+    const owner = store.owner(directory)!;
+    expect(await attemptTempState(owner)).toBe("unknown");
+    expect(await sweep()).toMatchObject({ removed: 0, held: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    // Closing a lane releases its own missing-checkout hold. A separate live
+    // consumer still owns its link even after the producer lane closes.
+    fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+    fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+    processes.push({ pid: 42, namespace: null, stamped: false, paths: [repository] });
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    pipeline.state = terminal; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z"; savePipelines([pipeline]);
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    // The next sweep owns a fresh inventory. No vanished consumer entry or
+    // missing terminal checkout survives as a permanent negative-cache hold.
+    processes.length = 0; fs.rmSync(repository, { recursive: true });
+    expect(await attemptTempState(owner, new RepositoryLinkInventory())).toBe("closed");
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { store.close(); }
 });

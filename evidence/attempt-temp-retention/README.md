@@ -28,9 +28,9 @@ Production lane authority also constructed a fresh checkout inventory on every
 recheck, bypassing the sweep inventory. The eight-root regression observes 48
 native checkout walks on the base and one with shared inventory. A rejected
 checkout read remained cached; recovery now evicts it immediately. Diagnostics
-retain stderr, exit code, signal, and killed status. A checkout proven absent
-since a process snapshot has no links to retain. Unreadable existing checkouts
-continue to refuse retirement.
+retain stderr, exit code, signal, and killed status. Unreadable checkouts,
+including absent ones, refuse retirement for that sweep. The final successor
+decision below supersedes the earlier empty-absence behavior.
 
 ## Scheduling and report
 
@@ -150,9 +150,9 @@ The benchmark remains an opt-in case in
 ## Successor verification
 
 The successor merges current main into the delivery history and addresses the
-two round-four findings. An inventory with no directory versions is re-read
-on reuse, including both the initial absence and disappearance-during-walk
-paths. Checkout walks have no entry-count ceiling; monotonic deadline checks
+two round-four findings. That intermediate implementation re-read an inventory
+with no directory versions on reuse. The final successor decision below removes
+those successful empty-absence inventories. Checkout walks have no entry-count ceiling; monotonic deadline checks
 bound both directory reads and entry processing. Expiry remains a deferral.
 
 Both retained review probes failed on the merged pre-fix source and passed on
@@ -174,3 +174,66 @@ source is restored afterwards. Five isolated test-file commands pass under Bun
 (218 passed; 15 opt-in skips). Commands run directly, one file per command,
 with fresh logs and actual exit statuses retained in pipeline evidence. This
 successor makes no new throughput claim and runs no live retention sweep.
+
+
+## Absent checkout decision
+
+A checkout that cannot be read cannot authorize removal. Initial absence and
+absence during traversal both refuse the inventory; rejected reads are evicted
+rather than cached as an empty link list. This removes the empty-success
+branches and the special validity check for empty directory versions. Directory
+identity and timestamp validation remain for readable checkouts: they protect
+against a new nested link appearing after a negative read. Production authority
+also retains an open lane's root when its checkout is absent.
+
+The retained final-boundary probe first reproduced removal of the root with a
+restored link still present. On the final source it stops before the container
+observation, keeps the root, and reports the failed checkout read. Committed
+regressions exercise the three reference observations through quarantine,
+preserve the payload, retry a restored checkout, and reclaim after its link is
+removed. Existing authority-boundary cases now accept either an unknown
+presence observation or an explicit failed read, while requiring the root and
+payload to survive. Fixtures for settled open lanes create their checkouts.
+
+### Missing checkout count and release
+
+Read-only SQLite backups of the attempt registry and pipeline store were taken
+on 2026-11-05 at approximately 04:28 UTC. Filesystem checks found 534 registry
+rows, 508 roots present, and 100 roots associated with absent checkouts of
+closed or completed lanes. Those 100 rows held 72,709,894,144 recorded bytes.
+The byte count comes from the ledger. No open lane had an
+absent checkout, and a read-only process-cwd observation found no live consumer
+inside those absent checkout paths. Thus **zero observed roots are held solely
+by this rule**. These observations establish absence at capture time; future
+restoration remains possible. Aggregate evidence is in `absent-checkout.json`.
+
+The release path is lifecycle based. Closed and completed lanes return closed
+authority before reading their own checkout. Consumer dependencies come only
+from a fresh process scan, and each sweep owns a fresh inventory. After a
+consumer exits, its checkout stops participating. The next eligible page can
+reclaim the root under the existing 32-root page and 60-second retry schedule,
+subject to other evidence, mount and ownership holds. No cached absence or
+failed read survives to pin the root permanently. An open lane with an absent
+checkout remains protected until that checkout is readable or the lane closes;
+a timeout never grants authority over a live consumer or an open lane's links.
+Tests cover both terminal lane states and a real consumer process exiting while
+its checkout link remains.
+
+No schema, ownership writer, retirement journal or published report format
+changes. `attemptTempState` and the live-process reference check consume the
+same inventory. Exceptions propagate through initial eligibility, quarantine
+replay, final eligibility and the container fallback guard; none turn absence
+into deletion permission. The 210,000-file inspection and checkout regressions
+remain. This successor makes no additional throughput claim.
+
+
+Final checks after the main refresh passed under Bun 1.4.0: filesystem 26,
+production 27, retention 60, worker 34, and temp sweep 79, plus the unchanged
+retained probe (227 passed, 15 opt-in skips across six file commands). Eight
+regression assertions and the retained probe fail on the inherited pre-fix
+merged head; the real-consumer exit control already passes there. Six separate
+production mutations fail their selected tests. All commands ran directly,
+one explicit file at a time, with fresh isolation, log and actual exit status.
+`absent-checkout.json` records source hashes, parent/base identities, commands,
+counts and private-log hashes. The local publication gate covers the committed
+source and text; no live sweep ran.

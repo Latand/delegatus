@@ -199,7 +199,7 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed 
   } finally { fs.chmodSync(blocked, 0o700); }
 });
 
-test.each(["before walk", "during walk"])("an absent checkout snapshot is rechecked after restoration (%s)", async disappearance => {
+test.each(["before walk", "during walk"])("an absent checkout refuses inventory and retries after restoration (%s)", async disappearance => {
   const parent = root(), repository = path.join(parent, "checkout"), directory = path.join(parent, "llv-stage-linked");
   fs.mkdirSync(directory);
   if (disappearance === "during walk") fs.mkdirSync(repository);
@@ -213,7 +213,7 @@ test.each(["before walk", "during walk"])("an absent checkout snapshot is rechec
     return entries;
   });
   const inventory = new RepositoryLinkInventory({ now: () => 1_000 });
-  try { expect(await inventory.targets(repository)).toEqual([]); }
+  try { await expect(inventory.targets(repository)).rejects.toThrow(); }
   finally { observed.mockRestore(); }
   fs.mkdirSync(repository);
   fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
@@ -249,9 +249,55 @@ test.skipIf(process.platform === "win32")("a large unrelated checkout allows rec
   } finally { store.close(); await exec("rm", ["-rf", "--", parent], { timeout: 60_000 }); }
 }, 150_000);
 
-test("a checkout gone since the process snapshot has no inbound links", async () => {
+test("an absent checkout is never a successful empty inventory", async () => {
   const inventory = new RepositoryLinkInventory();
-  expect(await inventory.targets(path.join(root(), "gone"))).toEqual([]);
+  const repository = path.join(root(), "gone");
+  await expect(inventory.targets(repository)).rejects.toThrow();
+  await expect(inventory.targets(repository)).rejects.toThrow();
+  expect(inventory.walks).toHaveLength(2);
+});
+
+test.each([1, 2, 3])("an absent consumer checkout keeps scratch at removal observation %i and permits later reclaim", async boundary => {
+  const parent = root(), directory = path.join(parent, "llv-stage-restored-consumer");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(repository, ".git"));
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-producer", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  let now = 1000, reads = 0, containers = 0;
+  let inventory = new RepositoryLinkInventory({ now: () => now });
+  const processes = [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }];
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, capBytes: 0, state: async () => "closed",
+    scan: () => ({ ownNamespace: null, processes }),
+    references: async (original, current, scan) => {
+      if (++reads === boundary) { now += 10001; fs.renameSync(repository, repository + "-previous"); }
+      return attemptReferencesClear(original, current, scan, async () => {
+        containers++;
+        // This is the retained probe's former deletion window. An absent
+        // checkout must stop the observation before this await is reached.
+        if (reads === boundary) {
+          await Promise.resolve();
+          fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(repository, ".git"));
+          fs.symlinkSync(original, path.join(repository, "dependency"), "dir");
+        }
+        return true;
+      }, inventory);
+    } });
+  // Discover the consumer before its cwd disappears, as in the retained probe.
+  expect(inventory.repositoryOf(cwd)).toBe(repository);
+  try {
+    expect(await sweep()).toMatchObject({ removed: 0, errors: 1 });
+    expect(reads).toBe(boundary); expect(containers).toBe(boundary - 1);
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(repository, ".git"));
+    const link = path.join(repository, "dependency"); fs.symlinkSync(directory, link, "dir");
+    now += 60001; inventory = new RepositoryLinkInventory({ now: () => now });
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    fs.unlinkSync(link); now += 60001; inventory = new RepositoryLinkInventory({ now: () => now });
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { store.close(); }
 });
 
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture", "bmp-capture", "bmp-dispatch-capture", "bmp-fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async variant => {
@@ -404,3 +450,42 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
   expect(() => fs.readdirSync(privateRoot)).toThrow();
   expect(await inspectAttemptTree(directory)).toBe(kind === "uv" || kind === "internal");
 }, 60_000);
+
+
+test.skipIf(process.platform !== "linux")("a closed lane's checkout link stops holding scratch when its real consumer exits", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-dead-consumer");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--hold"], {
+    cwd: repository, env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  let now = 1000;
+  // Read only this fixture's PID. The shared machine's process inventory is
+  // outside this test's observations and cannot affect its removal result.
+  const scan = () => {
+    let cwd: string | undefined;
+    try { cwd = fs.readlinkSync(`/proc/${child.pid}/cwd`); } catch { /* Exited consumer. */ }
+    return { ownNamespace: null, processes: cwd ? [{ pid: child.pid, namespace: null, stamped: false, paths: [cwd] }] : [] };
+  };
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, state: async () => "closed", scan,
+    references: (original, current, observed) => attemptReferencesClear(original, current, observed, async () => true) });
+  try {
+    const reader = child.stdout.getReader();
+    const ready = await reader.read(); reader.releaseLock();
+    expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    child.stdin.end(); expect(await child.exited).toBe(0);
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.lstatSync(path.join(repository, "dependency")).isSymbolicLink()).toBeTrue();
+  } finally {
+    child.stdin.end();
+    if (child.exitCode === null) child.kill();
+    await child.exited; store.close();
+  }
+});

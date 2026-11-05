@@ -14,8 +14,9 @@ type RepositoryLinkSnapshot = { lexicalTargets: string[]; directories: Repositor
 
 async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
   const deadline = performance.now() + (timeout ?? 15_000);
-  const rootStat = fs.lstatSync(directory, { throwIfNoEntry: false });
-  if (!rootStat) return { links: [], directories: [] };
+  // An unreadable checkout, including an absent one, proves nothing about
+  // its links. Let the failed read retain this root until a later sweep.
+  const rootStat = fs.lstatSync(directory);
   const rootDevice = rootStat.dev;
   const links: string[] = [], directories: RepositoryDirectoryVersion[] = [];
   const checkBudget = () => {
@@ -56,9 +57,6 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
   };
   try { await visit(directory); }
   catch (error) {
-    // A process snapshot may outlive its checkout. Only proven absence is
-    // clear; permission errors and partial inventories remain refusals.
-    if (!fs.lstatSync(directory, { throwIfNoEntry: false })) return { links: [], directories: [] };
     if (error instanceof AttemptTempBudgetDeferred) throw error;
     throw new Error(attemptTempFailureDetail(error), { cause: error });
   }
@@ -107,9 +105,7 @@ export class RepositoryLinkInventory {
   }
   private now() { return (this.options.now ?? Date.now)(); }
   private directoriesUnchanged(directories: readonly RepositoryDirectoryVersion[]) {
-    // Both absence paths yield no directory versions. Such a snapshot cannot
-    // prove that a checkout is still absent after it has been restored.
-    return directories.length > 0 && directories.every(directory => {
+    return directories.every(directory => {
       const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
       return !!current?.isDirectory() && !current.isSymbolicLink()
         && `${current.dev}:${current.ino}` === directory.identity
