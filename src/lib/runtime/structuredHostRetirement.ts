@@ -1,4 +1,4 @@
-import { recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
+import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
@@ -611,6 +611,9 @@ export interface StructuredHostRetirementReport {
       every refused host is the one to look at: an advertisement nobody named
       refuses every host that carries it, forever (#2137). */
   refusedByFlag: Record<string, number>;
+  /** Proven live identities refused by the live-host predicate. Older reports
+      omit this census; unverified identities are never counted as live. */
+  liveRefused?: { count: number; byClause: Partial<Record<StructuredHostRetirementClause, number>> };
   failed: StructuredHostRetirementFailure[];
   reclaimed: StructuredHostRetirementReclaim;
   /** Optional for reports persisted by earlier releases. */
@@ -660,6 +663,9 @@ export interface StructuredHostRetirementDependencies {
   transcriptStat?: (pathname: string) => Determinable<{ mtimeMs: number } | null>;
   processIdentity?: (pid: number) => Determinable<string>;
   pidAlive?: (pid: number) => Determinable<boolean>;
+  /** Read-only scope observation. No kill/stop or runtime release belongs on
+      the gone path; a loaded or unreadable scope retains its custody. */
+  scopeLoadState?: (scope: AgentScopeIdentity) => Promise<string>;
   reconcileGone?: (entry: RegistryFile["entries"][string]) => Promise<boolean>;
   readCursor?: () => string | null;
   writeCursor?: (afterKey: string | null) => void;
@@ -1188,7 +1194,12 @@ function refuse(
   subject: StructuredHostRetirementSubject,
   verdict: Extract<StructuredHostRetirementVerdict, { retire: false }>,
   changed: boolean,
+  live = false,
 ): void {
+  if (live && report.liveRefused) {
+    report.liveRefused.count++;
+    report.liveRefused.byClause[verdict.clause] = (report.liveRefused.byClause[verdict.clause] ?? 0) + 1;
+  }
   const flags = verdict.clause === "no-active-flags" ? blockingHostActivityFlags(subject.activeFlags) : [];
   for (const flag of flags) report.refusedByFlag[flag] = (report.refusedByFlag[flag] ?? 0) + 1;
   report.refused.push({
@@ -1283,25 +1294,50 @@ export async function runStructuredHostRetirementSweep(
   const publicationState = dependencies.publicationState ?? structuredDeliveryPublicationState;
   const pidAlive = dependencies.pidAlive ?? observedPidAlive;
   const measurePss = dependencies.treePss ?? treePss;
+  const processStatus = (process: ProcessIdentity, alive = pidAlive(process.pid)) => {
+    if (!alive.determined) return "unverified";
+    if (!alive.value) return "dead";
+    const start = readers.processIdentity(process.pid);
+    const boot = readers.bootEpoch();
+    return processIdentityStatus(process, {
+      pidAlive: () => true,
+      processIdentity: () => start.determined ? start.value : null,
+      bootEpoch: () => boot.determined ? boot.value : null,
+    });
+  };
+  const scopeLoadState = dependencies.scopeLoadState
+    ?? ((scope: AgentScopeIdentity) => agentScopeCommand(["show", "--value", "-p", "LoadState", scope.unit]));
   const reconcileGone = dependencies.reconcileGone ?? (async (observed: RegistryFile["entries"][string]) => {
     const registry = agentRegistry();
+    const expected = recordedScopeProcess(observed.structuredHost);
+    const scope = recordedAgentScope(observed.structuredHost);
+    const boot = readers.bootEpoch();
+    if (!expected || processStatus(expected) !== "dead") return false;
+    if (scope) {
+      if (!scope.bootEpoch || !boot.determined) return false;
+      // A previous kernel cannot retain its transient unit. On the same boot,
+      // observe collection without stopping anything, including descendants.
+      if (!differentKernelBoot(scope.bootEpoch, boot.value)
+        && (scope.bootEpoch !== boot.value || await scopeLoadState(scope) !== "not-found")) return false;
+    }
     // Admission waits asynchronously under the registry's deadline, with an origin.
     return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, () => {
       if (publicationState() !== "ready") return false;
       const current = registry.readOnlySnapshot().entries[sessionKeyId(observed.key)];
-      const expected = observed.structuredHost?.process;
-      const process = current?.structuredHost?.process;
-      if (!current || !expected || !process || !sameRecordedProcessIdentity(process, expected)
+      const process = recordedScopeProcess(current?.structuredHost);
+      const currentBoot = readers.bootEpoch();
+      if (scope && (!boot.determined || !currentBoot.determined || currentBoot.value !== boot.value)) return false;
+      if (!current || !process || !sameRecordedProcessIdentity(process, expected)
+        || !sameAgentScope(recordedAgentScope(current.structuredHost), scope)
         || current.claimOwner !== observed.claimOwner || current.claimEpoch !== observed.claimEpoch
         || current.structuredHost?.writerClaimEpoch !== observed.structuredHost?.writerClaimEpoch) return false;
-      const alive = pidAlive(process.pid);
-      if (!alive.determined || alive.value) return false;
+      if (processStatus(process) !== "dead") return false;
       const retained = current.structuredTerminationSurvivors ?? [];
       if (retained.some(identity => processIdentityStatus(identity) !== "dead")) return false;
       return registry.terminateStructuredHost(observed.key, expected, retained, {
         process: expected, claimOwner: observed.claimOwner, claimEpoch: observed.claimEpoch,
         writerClaimEpoch: observed.structuredHost?.writerClaimEpoch ?? null,
-      });
+      }, scope);
     });
   });
 
@@ -1316,6 +1352,7 @@ export async function runStructuredHostRetirementSweep(
     retired: [],
     refused: [],
     refusedByFlag: {},
+    liveRefused: { count: 0, byClause: {} },
     failed: [],
     reclaimed: { rssBytes: 0, swapBytes: 0, processes: 0 },
     gone: [],
@@ -1355,9 +1392,10 @@ export async function runStructuredHostRetirementSweep(
     }
     const process = recordedScopeProcess(entry.structuredHost)!;
     const alive = pidAlive(process.pid);
-    if (alive.determined && !alive.value && !recordedAgentScope(entry.structuredHost)) {
-      // No flush or idle verdict can bring a vanished process back. This path
-      // clears only unscoped custody. A retained scope still needs termination.
+    const identity = processStatus(process, alive);
+    if (identity === "dead") {
+      // Gone identities reconcile before live-work clauses. This path never
+      // enters runtime release, native release or a signal ladder.
       goneCandidates.push(entry);
       continue;
     }
@@ -1368,7 +1406,7 @@ export async function runStructuredHostRetirementSweep(
     }
     const verdict = structuredHostRetirementVerdict(subject, { now: startedAtMs, idleMs });
     if (!verdict.retire) {
-      refuse(report, subject, verdict, false);
+      refuse(report, subject, verdict, false, identity === "alive");
       continue;
     }
     if (qualified.length >= batch) {
@@ -1401,7 +1439,7 @@ export async function runStructuredHostRetirementSweep(
   for (const entry of goneCandidates) {
     const publication = publicationState();
     if (publication !== "ready") { report.standDown = publication; break; }
-    const process = entry.structuredHost!.process!;
+    const process = recordedScopeProcess(entry.structuredHost)!;
     const key = sessionKeyId(entry.key);
     const conversationId = planned.conversationsBySession.get(key)?.id ?? null;
     try {
@@ -1452,7 +1490,7 @@ export async function runStructuredHostRetirementSweep(
     const subject = retirementSubject(fresh, current, readers);
     const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs });
     if (!verdict.retire) {
-      refuse(report, subject, verdict, true);
+      refuse(report, subject, verdict, true, processStatus(subject.process) === "alive");
       continue;
     }
     const hostProcess = subject.process;

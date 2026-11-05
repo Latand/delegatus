@@ -1,0 +1,122 @@
+{
+  "baseCommit": "95ff1dd5e3bc9f9f68edbbf6efd72c8e40701be4",
+  "runtime": "Bun 1.4.0",
+  "sourceSha256": {
+    "src/lib/runtime/structuredHostRetirement.ts": "29077aa5c4b3ebf08da1f374a98fee2ed21b3971b5775144ab8da32119ddd339",
+    "src/lib/runtime/structuredHostRetirement.paging.fixture.ts": "0e288094a6b5380293ef9ab0e92236faa91ae49be49360f924144cc60258b2f4",
+    "src/lib/runtime/structuredHostRetirement.paging.test.ts": "ef5e3a1408249dca75ea04faa19be610e3eff9c77fb6ebf3580055974c7fa1a8",
+    "src/lib/runtime/structuredHostRetirement.test.ts": "ba88b1185c15d49f1bdb16419b73fcd6736b22e78483a02aa641aaf061ab4c21"
+  },
+  "isolation": "Each direct invocation had private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, control URL on closed port 1, and the repository preload owned its children. No live sweep was run.",
+  "initialReadOnlyObservation": {
+    "observedAt": "2026-11-05T03:25:21.125963+00:00",
+    "reportStartedAt": "2026-11-05T03:22:35.248Z",
+    "reportFinishedAt": "2026-11-05T03:22:36.479Z",
+    "evaluated": 512,
+    "refused": 512,
+    "identity": {
+      "absent": 512
+    },
+    "clausesByIdentity": {
+      "absent:events-flushed": 460,
+      "absent:turn-settled": 51,
+      "absent:no-open-operation": 1
+    },
+    "liveIdleRefused": 0,
+    "scopedAbsentFromPreviousKernel": 512
+  },
+  "finalReadOnlyObservation": {
+    "observedAt": "2026-11-05T03:40:26.400378+00:00",
+    "reportStartedAt": "2026-11-05T03:37:35.287Z",
+    "reportFinishedAt": "2026-11-05T03:37:36.071Z",
+    "evaluated": 512,
+    "reportRefused": {
+      "absent": 452,
+      "alive": 60
+    },
+    "reportClausesByIdentity": {
+      "absent:events-flushed": 289,
+      "absent:turn-settled": 67,
+      "absent:no-open-operation": 7,
+      "absent:transcript-idle": 34,
+      "absent:process-identity": 55,
+      "alive:transcript-idle": 46,
+      "alive:turn-settled": 10,
+      "alive:seat-free": 4
+    },
+    "allCandidateIdentities": {
+      "absent": 932,
+      "alive": 62
+    },
+    "liveIdleRefusedInLatestReport": {
+      "transcript-idle": 46,
+      "turn-settled": 2,
+      "seat-free": 4
+    },
+    "allLiveHosts": 62,
+    "allLiveIdleHosts": 53,
+    "liveIdleWithActiveTurn": 0,
+    "liveIdleWithPendingAction": 0,
+    "liveIdleWithRecentTranscript": 53,
+    "liveIdleWithUnreadableTranscript": 0
+  },
+  "observationLimits": "The final report contains 512 rows of 994 retained candidates. It proves 52 live idle refusals; the census found 53 live idle hosts overall. This is pre-deployment observation, not a deployed result.",
+  "checks": [
+    {
+      "variant": "base",
+      "file": "src/lib/runtime/structuredHostRetirement.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.test.ts",
+      "passed": 69,
+      "failed": 5,
+      "exitCode": 1
+    },
+    {
+      "variant": "head",
+      "file": "src/lib/runtime/structuredHostRetirement.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.test.ts",
+      "passed": 74,
+      "failed": 0,
+      "exitCode": 0
+    },
+    {
+      "variant": "base",
+      "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "passed": 19,
+      "failed": 10,
+      "exitCode": 1
+    },
+    {
+      "variant": "head",
+      "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "passed": 29,
+      "failed": 0,
+      "exitCode": 0
+    },
+    {
+      "variant": "mutation: disable gone routing",
+      "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts -t \"gone-scope-old|gone-reused\"",
+      "passed": 0,
+      "failed": 2,
+      "exitCode": 1
+    },
+    {
+      "variant": "mutation: invert event flush comparison",
+      "file": "src/lib/runtime/structuredHostRetirement.paging.test.ts",
+      "command": "bun run test src/lib/runtime/structuredHostRetirement.paging.test.ts -t live-lag",
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 1
+    }
+  ],
+  "lint": {
+    "exitCode": 0
+  },
+  "privacyPublication": {
+    "command": "bun run privacy:check",
+    "exitCode": 0
+  },
+  "selfReview": "No findings. Live predicate unchanged; gone reconciliation has no release or termination call, pins custody after waits, preserves durable history and retains unproven scope/survivor custody."
+}
