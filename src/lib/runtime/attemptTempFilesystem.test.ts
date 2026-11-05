@@ -92,11 +92,14 @@ test("a link created between directory enumeration and metadata capture cannot b
   const repository = path.join(parent, "repository"), cwd = path.join(repository, "work");
   fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
   const link = path.join(cwd, "node_modules");
-  const readdir = fs.promises.readdir.bind(fs.promises);
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
   let injected = false;
-  const observed = spyOn(fs.promises, "readdir").mockImplementation(async (...args: Parameters<typeof readdir>) => {
-    const entries = await readdir(...args);
-    if (!injected && args[0] === cwd) { injected = true; fs.symlinkSync(directory, link, "dir"); }
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    const entries = await readdir(target, options);
+    if (!injected && target === cwd) { injected = true; fs.symlinkSync(directory, link, "dir"); }
     return entries;
   });
   const inventory = new RepositoryLinkInventory();
