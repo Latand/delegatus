@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "bun:test";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
@@ -83,6 +84,59 @@ test("an ordinary launcher start stuck before its children refuses and logs its 
   expect(output).toContain("launcher startup refused");
   expect(output).toContain("startup exceeded");
 }, 10_000);
+
+test("an expired rollback cold start settles its deployment before an ordinary restart", async () => {
+  const fixture = install(), port = await availablePort();
+  const servingRelease = release(fixture, "expired-rollback-serving");
+  const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
+  const directory = path.join(fixture.state, "self-update"), releasePointer = path.join(directory, `release-${installId}.json`);
+  const trialFile = path.join(directory, `trial-${installId}.json`), requestId = "expired-rollback-cold-start";
+  const target = "b".repeat(40), deploymentId = "expired-rollback-deploy";
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(releasePointer, JSON.stringify({ ...servingRelease, checkoutHead: fixture.first }));
+  writeFileSync(path.join(directory, "apply.json"), JSON.stringify({ requestId, target, releasePointer, rollbackPointer: null,
+    state: "switching", rolledBack: false, startedAt: new Date(NOW).toISOString(), switchedAt: new Date(NOW).toISOString(),
+    switchDeadlineAt: 1, launcherPid: 2, launcherIdentity: "fixture-original", deploymentId, trigger: "seat", autoGateId: "owned-gate" }));
+  writeFileSync(path.join(directory, "deployments.json"), JSON.stringify([{ deploymentId, idempotencyKey: requestId,
+    phase: "host-handoff", terminal: false, error: null, revisionNumber: 1 }]));
+  writeFileSync(path.join(directory, "auto-drain.json"), JSON.stringify({ id: requestId, target, persistent: true, until: Number.MAX_SAFE_INTEGER }));
+  writeFileSync(path.join(directory, "auto-admission.json"), JSON.stringify({ id: "foreign-admission", until: Number.MAX_SAFE_INTEGER }));
+  writeFileSync(trialFile, JSON.stringify({ requestId, target, releasePointer, rollbackPointer: null,
+    previousEntry: path.join(fixture.checkout, "bin", "cli.mjs"), state: "rolled-back", rollbackDeadlineAt: 1,
+    switchOverrun: "The launcher switch exceeded its 10 minute deadline" }));
+  // Hold the watchdog beyond the parent assertion so recovery must settle the
+  // persisted expiry before assertStarting can throw.
+  const relaunchPath = path.join(fixture.checkout, "bin", "launcher-relaunch.mjs");
+  const relaunchSource = readFileSync(relaunchPath, "utf8");
+  const heldWatchdog = relaunchSource.replace("Math.max(1, deadline - Date.now())", "60_000");
+  if (heldWatchdog === relaunchSource) throw new Error("Could not hold the launcher expiry watchdog in this fixture");
+  writeFileSync(relaunchPath, heldWatchdog);
+  const preload = path.join(fixture.root, "warm-oom-policy.mjs");
+  writeFileSync(preload, `await import(${JSON.stringify(path.join(fixture.checkout, "bin", "oomPolicy.mjs"))});\n`);
+  const entry = path.join(fixture.checkout, "bin", "cli.mjs");
+  const reexecEnv = { ...fixture.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: fixture.checkout, LLV_LAUNCHER_CHECKOUT: fixture.checkout };
+  const cold = spawn(process.execPath, ["--bun", "--preload", preload, entry, "--no-open", "--port", String(port)],
+    { cwd: fixture.checkout, env: reexecEnv, stdio: ["ignore", "ignore", "pipe"] }); children.add(cold);
+  let coldError = "";
+  cold.stderr!.on("data", bytes => { coldError = (coldError + String(bytes)).slice(-4096); });
+  const exit = await Promise.race([new Promise(resolve => cold.once("exit", resolve)), Bun.sleep(5000).then(() => "unresolved")]);
+  if (exit !== 75) throw new Error(`Expired rollback cold start exited ${String(exit)}: ${coldError}`);
+  expect(new ApplyController(directory).current).toMatchObject({ state: "failed", rolledBack: false });
+  expect(checkoutDeployments(directory)[0]).toMatchObject({ phase: "failed", terminal: true });
+  expect(checkoutDeployments(directory)[0]!.error).toContain("rollback exceeded");
+  expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
+  expect(JSON.parse(readFileSync(path.join(directory, "auto-admission.json"), "utf8")).id).toBe("foreign-admission");
+
+  const ordinary = spawn(process.execPath, ["--bun", entry, "--no-open", "--port", String(port)],
+    { cwd: fixture.checkout, env: reexecEnv, stdio: "ignore" }); children.add(ordinary);
+  const healthy = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.launcher.pid === ordinary.pid && record.launcher.state === "healthy"
+      && record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  }, 8000);
+  expect(await served(port)).toBe(servingRelease.dir);
+  expect(await socketAnswers(healthy.socket)).toBe(true);
+}, 20_000);
 
 test.each([false, true])("a launcher stuck before its children rolls back under the original expiry, cold restart=%s", async coldRestart => {
   const fixture = install();

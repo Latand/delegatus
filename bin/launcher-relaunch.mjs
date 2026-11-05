@@ -512,6 +512,9 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     hasTrial: () => trial !== null && trial.state !== "rolled-back",
     isReplacementStart: () => trial !== null,
     async recoverPending() {
+      if (trial?.state === "rolled-back" && Date.now() >= trial.rollbackDeadlineAt) {
+        return stopAndRefuse("The launcher rollback exceeded its 10 minute deadline");
+      }
       if (trial && trial.state !== "rolled-back" && Date.now() >= trial.switchDeadlineAt) {
         rememberOverrun(SWITCH_OVERRUN);
         return this.failed(SWITCH_OVERRUN);
