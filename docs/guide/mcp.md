@@ -103,6 +103,20 @@ notice and moves nothing. `dismiss_attention` clears a card's "needs you"
 flag until something new comes up, the same as the card's Dismiss; called
 without a target, it reads the project's **Needs you** list.
 
+For a fresh read, use a new `clientRequestId`. The `kinds` filter selects
+sources before gathering. A read shares the caller's deadline and uses a
+3.5-second gathering budget. When a source fails or the budget expires,
+`partial:true` and `omissions` say which sources or evidence were left out.
+`countIsLowerBound:true` means missing sources may add rows; a partial answer
+has no continuation cursor. Read again to obtain a complete panel. Native
+synchronous reads cannot be interrupted mid-call; expiry is checked again
+when they return, before gathering more sources or row evidence.
+
+`seat_tick_settings` keeps its settings and schedule answer when its curation
+panel is unavailable. It returns `partial:true`, `omissions:["curation"]`
+and `curation.status:"unavailable"` with the reason in `runsError`.
+Caller cancellation or expiry of the whole call still refuses that call.
+
 ## Approving an external Claude session
 
 A Claude session started outside Delegatus needs your explicit approval before
