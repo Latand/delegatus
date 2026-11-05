@@ -90,3 +90,73 @@ test("resolved configuration rechecks environment and account authority", () => 
   allowed = false;
   expect(() => selected!.assertCurrent!()).toThrow("account unavailable");
 });
+
+
+const servingCases = [
+  { version: 5, archived: false, fault: "" }, { version: 6, archived: false, fault: "" },
+  { version: 5, archived: true, fault: "" }, { version: 6, archived: true, fault: "" },
+  { version: 5, archived: false, fault: "mixed" }, { version: 5, archived: false, fault: "missing" },
+  { version: 5, archived: false, fault: "future" }, { version: 5, archived: false, fault: "migration" },
+] as const;
+for (const { version, archived, fault } of servingCases) test(`Cloud discovery reads serving format ${version}, archive=${archived}, fault=${fault || "none"} without startup mutation`, async () => {
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const { Database } = await import("bun:sqlite");
+  const { buildPipeline, pipelineStateCollectionSeeds, isStoredPipeline } = await import("../src/lib/pipelines/store");
+  const { initializeStateCollections } = await import("../src/lib/state/sqliteStateStore");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "checks-read-"));
+  const home = path.join(dir, "home"), scratch = path.join(dir, "tmp"), checkout = path.join(dir, "checkout-pipeline-checks-lane");
+  const state = path.join(home, ".config", "delegatus", "state"), filename = path.join(state, "state.sqlite");
+  for (const entry of [state, scratch, checkout]) fs.mkdirSync(entry, { recursive: true });
+  try {
+    const record = buildPipeline({ id: "checks-lane", task: "Check publication", project: "fixture", repoDir: path.join(dir, "checkout"),
+      stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+        effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+      srcPath: null, srcConversationId: null, now: "2026-11-05T00:00:00.000Z" });
+    expect(isStoredPipeline(record)).toBe(true);
+    initializeStateCollections(filename, pipelineStateCollectionSeeds().map((seed, index) => ({ ...seed,
+      schemaVersion: version, compatibleSchemaVersions: undefined, loadRecords: () => index === (archived ? 1 : 0) ? [record] : [] })));
+    const db = new Database(filename);
+    db.exec("DROP INDEX pipeline_repository_resolver_capacity");
+    if (fault === "mixed") db.exec("UPDATE state_collections SET schema_version=6 WHERE collection='pipelines_archive'");
+    if (fault === "missing") db.exec("DELETE FROM state_collections WHERE collection='pipelines_archive'");
+    if (fault === "future") db.exec("UPDATE state_collections SET schema_version=7");
+    if (fault === "migration") db.exec("UPDATE state_collections SET migration_id='unknown' WHERE collection='pipelines'");
+    fs.writeFileSync(path.join(state, "pipelines.json"), "stale invalid mirror");
+    fs.writeFileSync(path.join(state, "pipelines-archive.json"), "stale invalid mirror");
+    const snapshot = () => JSON.stringify({
+      schema: db.query("SELECT name,sql FROM sqlite_master ORDER BY name").all(),
+      markers: db.query("SELECT * FROM state_collections ORDER BY collection").all(),
+      rows: db.query("SELECT * FROM state_rows ORDER BY collection,row_key").all(),
+      changes: db.query("SELECT * FROM state_changes ORDER BY collection,revision,row_key").all(),
+    });
+    const before = snapshot();
+    try {
+      const child = Bun.spawn([process.execPath, "-e", `
+        const { setStateOwnershipPathsForTests } = await import("./src/lib/stateOwnership.ts");
+        setStateOwnershipPathsForTests({ home: process.env.HOME, tempRoots: [process.env.TMPDIR] });
+        const { cloudCheckConfig } = await import("./scripts/cloud-check-config.ts");
+        let refused = false;
+        try {
+          const result = await cloudCheckConfig(process.env.CHECKOUT, "checks-lane", "build");
+          if (result !== null) throw new Error("unconfigured checks changed execution selection");
+        } catch (error) {
+          if (!process.env.CHECK_FAULT || !String(error).includes("complete recognized format five or six pair")) throw error;
+          refused = true;
+        }
+        if (refused !== Boolean(process.env.CHECK_FAULT)) throw new Error("incompatible configuration was accepted");
+        if (!refused && ${version} === 5) {
+          const { findPipelineRecord } = await import("./src/lib/pipelines/store.ts");
+          let blocked = false;
+          try { findPipelineRecord("checks-lane"); }
+          catch (error) { if (error?.name !== "StateStartupMutationRefused") throw error; blocked = true; }
+          if (!blocked) throw new Error("controller startup no longer requires its owner");
+        }
+      `], { cwd: path.resolve(import.meta.dir, ".."), env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"),
+        LLV_STATE_OWNER: "tool", LLV_STATE_DIR: state, LLV_GATE_STATE_DIR: state, TMPDIR: scratch, NODE_ENV: "production", CHECKOUT: checkout, CHECK_FAULT: fault },
+        stdout: "pipe", stderr: "pipe" });
+      const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(code, output + errors).toBe(0);
+      expect(snapshot()).toBe(before);
+    } finally { db.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);

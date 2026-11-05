@@ -30,7 +30,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
@@ -2428,6 +2428,41 @@ export function pipelineRecordReader(pipelineId: string) {
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
+}
+
+/** Publication configuration reads the serving registry before the candidate
+ * is activated. Accept a complete known pair without initializing or upgrading
+ * it; controller access continues through the ordinary format-six store. */
+export function findPipelineRecordForChecks(pipelineId: string): Pipeline | null {
+  const filename = stateDatabaseFile(), seeds = pipelineStateCollectionSeeds();
+  const revisions = readStateCollectionRevisions(filename, seeds.map(seed => seed.collection));
+  if ([...revisions.values()].every(revision => revision === null)) {
+    for (const file of [pipelinesFile(), pipelinesArchiveFile()]) {
+      const raw = parsePipelinesFile(file, true).find(row => registryRecordKey(row) === pipelineId);
+      if (raw !== undefined) {
+        const decoded = decodePipeline(raw);
+        if (!decoded) throw new PipelineStoreError("invalid pipeline check record");
+        return cloneLoadedPipeline(decoded);
+      }
+    }
+    return null;
+  }
+  if (![5, 6].some(schemaVersion => stateCollectionsInitialized(filename,
+    seeds.map(seed => ({ ...seed, schemaVersion, compatibleSchemaVersions: undefined }))))) {
+    throw new PipelineStoreError("pipeline checks require a complete recognized format five or six pair");
+  }
+  for (const seed of seeds) {
+    const collection = new SqliteStateCollection<Pipeline>(filename, {
+      collection: seed.collection, schemaVersion: 5, compatibleSchemaVersions: [6], readOnlyOpen: true,
+      key: pipeline => pipeline.id, decode: value => decodePipeline(value, seed.collection),
+      clone: cloneLoadedPipeline, strictDecode: true, busyMessage: "pipeline check state is busy",
+    });
+    try {
+      const record = collection.get(pipelineId);
+      if (record) return record;
+    } finally { collection.close(); }
+  }
+  return null;
 }
 
 /** Bounded feed for consumers that need task membership changes without loading

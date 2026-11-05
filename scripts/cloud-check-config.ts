@@ -49,13 +49,13 @@ export async function cloudCheckConfig(root: string, laneId?: string, stageId?: 
   // Claim before importing any module that resolves those settings at load.
   if (process.env.LLV_GATE_STATE_DIR) process.env.LLV_STATE_DIR = process.env.LLV_GATE_STATE_DIR;
   await import("../src/lib/state/owner/tool");
-  const [{ findPipelineRecord }, { projectInfoFromCwd }, { codexCloudEnvironmentId, pipelineStageRuntime }, { accountManager }, environments, { githubRepositoryOfRemote }] = await Promise.all([
+  const [{ findPipelineRecordForChecks }, { projectInfoFromCwd }, { codexCloudEnvironmentId, pipelineStageRuntime }, { accountManager }, environments, { githubRepositoryOfRemote }] = await Promise.all([
     import("../src/lib/pipelines/store"), import("../src/lib/scanner/describe"),
     import("../src/lib/projects/settings"), import("../src/lib/accounts/manager"),
     import("../src/lib/projects/codexCloudEnvironments"), import("../src/lib/forge/workLinks"),
   ]);
   return selectCloudCheckConfig(root, laneId, stageId, {
-    lane: findPipelineRecord, project: root => projectInfoFromCwd(root)?.project ?? null,
+    lane: findPipelineRecordForChecks, project: root => projectInfoFromCwd(root)?.project ?? null,
     environment: codexCloudEnvironmentId,
     hasPreparedEnvironment: project => pipelineStageRuntime(project) === "codex-cloud"
       && environments.readCloudEnvironmentBindings(project).bindings.some(row => row.state === "ready" && !!row.environmentId),
