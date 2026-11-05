@@ -184,3 +184,40 @@ test("the bridge refuses a format-six JSON import instead of relabeling it five"
   expect(inspect(root).markers).toEqual([]);
   expect(inspect(root).rows).toEqual([]);
 }));
+
+
+test("an expired final archive payload rolls back receipt backfill", async () => isolated(root => {
+  const future = { ...fixture("archive-budget"), adoptedCreationRequests: [{ key: "budget-key", digest: "budget-digest" }] };
+  seed(root, 5, [fixture("healthy")], [future]);
+  const filename = path.join(root, "state.sqlite");
+  const db = new Database(filename);
+  let payload: string;
+  try {
+    payload = (db.query("SELECT value_json FROM state_rows WHERE collection='pipelines_archive'").get() as { value_json: string }).value_json;
+    db.exec("DROP TABLE pipeline_request_receipts");
+  } finally { db.close(); }
+  const before = inspect(root);
+  const parseDescriptor = Object.getOwnPropertyDescriptor(JSON, "parse")!;
+  const clockDescriptor = Object.getOwnPropertyDescriptor(performance, "now");
+  const parse = JSON.parse;
+  let time = 0, triggered = false, error: unknown;
+  try {
+    Object.defineProperty(performance, "now", { configurable: true, value: () => time });
+    Object.defineProperty(JSON, "parse", { ...parseDescriptor, value: (text: string, ...args: unknown[]) => {
+      const value = Reflect.apply(parse, JSON, [text, ...args]);
+      if (text === payload) { triggered = true; time = 30_001; }
+      return value;
+    } });
+    try { loadPipelines(); } catch (caught) { error = caught; }
+  } finally {
+    Object.defineProperty(JSON, "parse", parseDescriptor);
+    if (clockDescriptor) Object.defineProperty(performance, "now", clockDescriptor);
+    else delete (performance as { now?: unknown }).now;
+  }
+  expect(triggered).toBe(true);
+  expect(String(error)).toContain("pipeline receipt backfill exceeded its startup budget");
+  expect(inspect(root)).toEqual(before);
+  const check = new Database(filename, { readonly: true });
+  try { expect(check.query("SELECT name FROM sqlite_master WHERE name='pipeline_request_receipts'").get()).toBeNull(); }
+  finally { check.close(); }
+}));
