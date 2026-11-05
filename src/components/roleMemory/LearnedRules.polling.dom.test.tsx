@@ -39,7 +39,7 @@ async function withRulesWindow(project: string, check: (controls: {
   globalThis.setInterval = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
     const id = {} as Timer; ownedTimers.add(id);
     intervals.set(id, { delay, run: () => invoke(handler, args) }); return id;
-  }) as typeof setInterval;
+  }) as unknown as typeof setInterval;
   globalThis.clearInterval = ((id: Timer) => { intervals.delete(id); }) as typeof clearInterval;
   globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
     if (delay !== 60000) return Reflect.apply(original.timeout, globalThis, [handler, delay, ...args]);
