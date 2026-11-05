@@ -118,5 +118,14 @@
     "command": "bun run privacy:check",
     "exitCode": 0
   },
-  "selfReview": "No findings. Live predicate unchanged; gone reconciliation has no release or termination call, pins custody after waits, preserves durable history and retains unproven scope/survivor custody."
+  "selfReview": "No findings. Live predicate unchanged; gone reconciliation has no release or termination call, pins custody after waits, preserves durable history and retains unproven scope/survivor custody.",
+  "globalLiveIdlePolicyCensus": {
+    "observedAt": "2026-11-05T03:44:54.943010+00:00",
+    "method": "Read-only identity census and sufficient live-policy blockers; no sweep or runtime call. Refusals are inferred from the unchanged predicate, not post-deployment observations.",
+    "counts": {
+      "liveIdle": 53,
+      "inferredRecencyRefusal": 48,
+      "inferredSeatRefusal": 5
+    }
+  }
 }

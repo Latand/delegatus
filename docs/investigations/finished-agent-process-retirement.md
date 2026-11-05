@@ -342,3 +342,11 @@ identities; one idle host was outside that 512-row report page. All 53 had
 recent transcripts. These counts describe the running installation before
 deployment. This change preserves its live-host clauses; it has not been
 applied to that installation during verification.
+
+A separate read-only policy census at 03:44:54 UTC classified all 53 live idle
+identities using sufficient blockers from the unchanged predicate: 48 had
+recent transcripts without a revoked-seat waiver, and five had unrevoked seat
+standing. Therefore **53 live idle hosts remain refused under this change**
+(inferred from those observed inputs). This global policy count includes hosts
+outside the latest report page. The observed report count above remains 52 at
+its stated time; neither count claims a deployment or a live sweep of the fix.
