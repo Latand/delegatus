@@ -3950,7 +3950,7 @@ async function deployExactSha(
       try {
         capabilities = await control.get("/api/runtime/deployments/capabilities/v1", callContext);
       } catch (error) {
-        await refuseUnfencedAdmission(`durable deployment admission fencing could not be verified; no deployment request was sent (${error instanceof Error ? error.message : String(error)})`,
+        return await refuseUnfencedAdmission(`durable deployment admission fencing could not be verified; no deployment request was sent (${error instanceof Error ? error.message : String(error)})`,
           "deploy_admission_fence_unavailable");
       }
       if (capabilities.capability !== "viewer-deployments" || capabilities.version !== 1

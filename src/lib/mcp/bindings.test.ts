@@ -4896,7 +4896,7 @@ test.each([
   { id: "secure-handoff", button: false },
 ] satisfies import("../selfUpdate/types").InstallAction[])("checkout deploy prerequisite survives the production MCP control response: %j", async (action) => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input, init) => init?.method !== "POST"
+  globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => init?.method !== "POST"
     ? Response.json({ capability: "viewer-deployments", version: 1, admissionFence: true })
     : Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
   try {
