@@ -13,7 +13,18 @@ const { saveTasks } = await import("@/lib/tasks/store");
 const { savePipelines, buildPipeline } = await import("@/lib/pipelines/store");
 const { createCompanionBoardReadPaths } = await import("./readPaths");
 const { CompanionBoardReads } = await import("./boardReads");
+const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+const { conversationCatalogSnapshot } = await import("@/lib/scanner/conversationCatalog");
 const { shutdownTranscriptSearchWorker } = await import("@/lib/search/transcriptSearchWorker");
+// Name resolution consumes the scanner's completed project summaries. Publish
+// the fixture's catalog rows at that same boundary, without starting a scan.
+const catalogDomain = {
+  ...productionDomainDependencies,
+  lastCompletedCatalog: () => {
+    const files = conversationCatalogSnapshot();
+    return { files, projectCatalog: files.map(row => ({ project: row.project, displayName: row.projectName, smt: row.mtime, conversations: 1 })) };
+  },
+};
 afterAll(async () => {
   await shutdownTranscriptSearchWorker();
   fs.rmSync(root, { recursive: true, force: true });
@@ -30,7 +41,7 @@ test("the incident PR query returns both completed lanes and their done task thr
     state: "completed" as const, cursor: null, taskIds: ["incident-task"],
     delivery: { target: { repository: "acme/widgets", remote: "https://github.com/acme/widgets.git", branch: "refs/heads/main", pr: 2800 }, disposition: "owner" as const, publish: "enabled" as const, ownerId: `incident-${name}`, epoch: 1, active: false, journal: [] },
   })));
-  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ domain: catalogDomain }));
   try {
     const common = { project: "Incident", query: "PR 2800", ids: null, cursor: null, limit: 10, refresh: null };
     const pipelines = await reads.call("incident-board", "list_pipelines", { ...common, state: null, includeClosed: true });
@@ -100,7 +111,10 @@ test("the six voice reads use task/pipeline persistence, liveness projection, an
     now: () => now, probe: { now: () => now, pidAlive: () => true, processIdentity: () => "fixture-process" },
     listFiles: async () => [{ path: transcriptPath, project: "project-a", title: "Export reviewer", engine: "claude", root: "claude-projects", kind: "session",
       conversationId: "conversation_fixture", mtime: now / 1_000, size: fs.statSync(transcriptPath).size, activity: "live" } as FileEntry],
-    describeTranscript: async () => null,
+    describeTranscript: async filename => filename === transcriptPath ? {
+      path: transcriptPath, project: "project-a", title: "Export reviewer", engine: "claude",
+      conversationId: "conversation_fixture", mtimeMs: now, sizeBytes: fs.statSync(transcriptPath).size, activity: "live", activityReason: null,
+    } : null,
     registrySnapshot: () => ({ entries: { fixture: entry }, conversations: {} } as unknown as RegistryFile),
     pipelines: () => [], transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now }),
   };
@@ -242,7 +256,7 @@ test("project names resolve from the real catalog and ambiguity never widens a v
   const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
   const catalog = (project:string,projectName:string) => ({path:path.join(root,`${project}.jsonl`),root:"claude-projects" as const,name:"fixture",project,projectName,title:"Fixture",firstPrompt:"",engine:"claude" as const,kind:"session",fmt:"claude" as const,mtime:0,size:0});
   replaceConversationCatalog([catalog("project-a","Alpha"),catalog("project-b","Beta")]);
-  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ domain: catalogDomain }));
   expect(reads.resolveProject("project-a","Beta")).toBe("project-b");
   expect(reads.resolveProject(null,"Alpha")).toBe("project-a");
   expect(()=>reads.resolveProject(null)).toThrow("PROJECT_REQUIRED");
@@ -314,8 +328,15 @@ test("activity pages retain every observed agent and disclose pending evidence w
   let pending = false;
   const liveness: AgentLivenessSources = {
     now: () => now, probe: { now: () => now, pidAlive: () => true, processIdentity: () => "fixture-process" },
-    listFiles: async () => files, describeTranscript: async () => null,
-    selectInventory: async request => ({ ...selectConversationEntries(files, request), generation: 1, cacheStatus: pending ? "stale" : "hit", freshScan: false, selectionMs: 0 }),
+    listFiles: async () => files, describeTranscript: async filename => {
+      const file = files.find(file => file.path === filename);
+      return file ? { path: file.path, project: file.project, title: file.title!, engine: "claude", conversationId: file.conversationId!,
+        mtimeMs: file.mtime * 1_000, sizeBytes: file.size, activity: file.activity ?? null, activityReason: null } : null;
+    },
+    selectInventory: async request => {
+      await request.prepareProjectMatches?.({ files, projectCatalog: [] });
+      return { ...selectConversationEntries(files, request), generation: 1, cacheStatus: pending ? "stale" : "hit", freshScan: false, selectionMs: 0 };
+    },
     registrySnapshot: () => ({ entries, conversations: {} } as unknown as RegistryFile), pipelines: () => [],
     transcriptEvidence: async () => pending ? null : { turn: "busy", lastRecordTs: now },
   };

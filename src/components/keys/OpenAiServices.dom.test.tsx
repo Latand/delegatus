@@ -255,7 +255,7 @@ async function removeOpenAiKey(host: HTMLElement) {
   await settle();
 }
 
-for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] as const) test(`${lang} ${size}: the six features list under the OpenAI row and name what serves each now; saving a key moves none`, async () => {
+for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] as const) test(`${lang} ${size}: the six features list under the OpenAI row and name what serves each now; unsaved Rules follows the key and the other choices stay`, async () => {
   setLocale(lang);
   serve();
   const opened: string[] = [];
@@ -267,9 +267,9 @@ for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] a
   expect(host.querySelector("[data-openai-services-codex]")).toBeNull();
   await saveOpenAiKey(host);
   expect(host.querySelector("[data-keys-row='openai']")!.getAttribute("data-keys-source")).toBe("file");
-  expect(listed(host)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenRouter", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
+  expect(listed(host)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenAI", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
   expect(words(host.querySelector("[data-openai-services-codex]"))).toBe(say(lang, "openaiServices.codex"));
-  /* No feature was moved: the choices document holds no OpenAI opt-in. */
+  /* Rules uses key routing until chosen explicitly (#3611); no opt-in was saved. */
   expect(JSON.parse(fs.readFileSync(configFilePath("openai-services.json"), "utf8")).openai).toEqual({});
   await click(host.querySelector("[data-openai-service='dictation']"));
   expect(opened).toEqual(["dictation"]);
@@ -298,7 +298,7 @@ test("pick OpenAI, remove the key, save it again: the list, the page and the pol
   }
   await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); });
   await settle();
-  expect(listed(keys)).toEqual(["asks: OpenAI", "memory: OpenRouter", "rules: OpenRouter", "dictation: OpenAI", "read: ElevenLabs", "voice: OpenAI"]);
+  expect(listed(keys)).toEqual(["asks: OpenAI", "memory: OpenRouter", "rules: OpenAI", "dictation: OpenAI", "read: ElevenLabs", "voice: OpenAI"]);
 
   await removeOpenAiKey(keys);
   expect(keys.querySelector("[data-keys-row='openai']")!.getAttribute("data-keys-source")).toBe("missing");
@@ -325,7 +325,7 @@ test("pick OpenAI, remove the key, save it again: the list, the page and the pol
   expect(asked).toEqual([{ key: "openai" }]);
 
   await saveOpenAiKey(keys);
-  expect(listed(keys)).toEqual(["asks: OpenAI", "memory: OpenRouter", "rules: OpenRouter", "dictation: OpenAI", "read: ElevenLabs", "voice: OpenAI"]);
+  expect(listed(keys)).toEqual(["asks: OpenAI", "memory: OpenRouter", "rules: OpenAI", "dictation: OpenAI", "read: ElevenLabs", "voice: OpenAI"]);
   expect(resolveService("voice").effective).toBe("api");
 });
 
@@ -542,18 +542,25 @@ test("on every feature page a held choice can be let go: the provider serving it
   serve();
   const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
   await saveOpenAiKey(keys);
-  for (const feature of SERVICE_FEATURES) await click(radio(await mount(<OpenAiFeaturePage feature={feature} />), openaiOf(feature)));
+  for (const feature of SERVICE_FEATURES) {
+    const page = await mount(<OpenAiFeaturePage feature={feature} />);
+    // Rules already uses OpenAI by key routing; first choose its other provider
+    // so choosing OpenAI records an explicit preference, like every other row.
+    if (feature === "rules") await click(radio(page, "openrouter"));
+    await click(radio(page, openaiOf(feature)));
+  }
   await removeOpenAiKey(keys);
   expect(listed(keys).every((row) => row.endsWith("!"))).toBe(true);
 
   for (const feature of SERVICE_FEATURES) {
     const page = await mount(<OpenAiFeaturePage feature={feature} />);
     const previous = fallbacks[feature];
-    expect(words(page.querySelector("[data-openai-feature-now]"))).toBe(`Now ${fallbackNames[feature]}`);
-    expect(radio(page, previous).checked).toBe(true);
+    // Explicit Rules choices hold their provider when its key is absent.
+    expect(words(page.querySelector("[data-openai-feature-now]"))).toBe(`Now ${feature === "rules" ? "OpenAI" : fallbackNames[feature]}`);
+    expect(radio(page, feature === "rules" ? "openai" : previous).checked).toBe(true);
     expect(page.querySelector("[data-openai-option-reason='held']")).not.toBeNull();
     const puts = calls.filter((call) => call.method === "PUT").length;
-    /* The provider already serving it is the one pressed: that is the decision to stay, so it goes to the server. */
+    /* Keep the fallback explicitly; Rules changes away from its held OpenAI choice. */
     await click(radio(page, previous));
     expect(calls.filter((call) => call.method === "PUT").slice(puts).map((call) => call.body)).toEqual([{ feature, provider: previous }]);
     expect(resolveService(feature)).toMatchObject({ requested: previous, effective: previous, held: false });

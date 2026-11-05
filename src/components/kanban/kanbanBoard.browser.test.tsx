@@ -27483,8 +27483,8 @@ describe("floating voice companion", () => {
             controls: node.querySelectorAll("input, button, select").length,
             demoWords: /demo|демо/iu.test(node.textContent ?? ""),
           }));
-          /* The switch, the two choices, «Open Keys», the cap and the call-memory row's two controls (the count read 6 on main before the call-memory row came). */
-          expect(choices, `${label}: the switch, the choice with the API chosen, the way to the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 7, demoWords: false });
+          /* Enable, backend radios, key and cap, memory controls, two device selects and Telegram timers. */
+          expect(choices, `${label}: the switch, the choice with the API chosen, the way to the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 10, demoWords: false });
           const dialog = await page.evaluate(() => {
             const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
@@ -27530,8 +27530,8 @@ describe("floating voice companion", () => {
             controls: node.querySelectorAll("input, button, select").length,
             keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
           }));
-          /* The switch, the two choices and the call-memory row's two controls (3 on main before that row came). */
-          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 5, keyWords: false });
+          /* Enable, backend radios, memory controls, two device selects and Telegram timers. */
+          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 8, keyWords: false });
           const codexDialog = await page.evaluate(() => {
             const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;

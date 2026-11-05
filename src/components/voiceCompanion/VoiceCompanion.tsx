@@ -842,9 +842,18 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const nodes = [...stack.querySelectorAll<HTMLElement>(":scope > [data-floater]")];
     const arrived = (node: HTMLElement) => (node.dataset.arrival ? Number(node.dataset.arrival) : null);
     const before = positions.current;
-    /* An element never gives back height it had: one that shrank would pull the older ones toward the character. */
+    const currentContents = new Map(floaters.map(floater => [floater.key, floater]));
+    /* Speech keeps its height. A request whose stage changed releases the
+       room its confirmation controls occupied, so its result can still fit. */
     for (const node of nodes) {
-      const was = before.get(node.dataset.floater!);
+      const key = node.dataset.floater!;
+      const was = before.get(key);
+      const previous = contents.current.get(key);
+      const current = currentContents.get(key);
+      if (previous?.kind === "delegation" && current?.kind === "delegation" && previous.delegation.stage !== current.delegation.stage) {
+        node.style.minHeight = "";
+        continue;
+      }
       if (was && node.offsetHeight < was.height) node.style.minHeight = `${was.height}px`;
     }
     /* Fit: the stack keeps to the lane, less the room a leaving element drifts into and the room kept at
@@ -861,7 +870,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     let excess = nodes.reduce((sum, node) => sum + node.offsetHeight, 0) + Math.max(0, nodes.length - 1) * 8 - room;
     let sent = 0;
     const waits = nodes.findIndex((node) => node.dataset.awaiting !== undefined);
-    const reported = (node: HTMLElement) => node.dataset.kind === "answer" || node.dataset.kind === "report";
+    // A request's result gets the same reading time as a report. The speech
+    // following a send or withdrawal must not immediately evict that result.
+    const reported = (node: HTMLElement) => node.dataset.kind === "answer" || node.dataset.kind === "report" || node.dataset.kind === "delegation";
     const holds = waits !== -1 ? waits : nodes.findLastIndex(reported);
     const operatorArrives = holds !== -1 && nodes.slice(holds + 1).some((node) => node.dataset.speaker === "operator" && !before.has(node.dataset.floater!));
     for (const node of nodes.slice(0, holds === -1 ? -1 : holds)) {
@@ -871,7 +882,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       sent = Math.max(sent, arrived(node) ?? 0);
     }
     if (excess > 0 && holds !== -1) {
-      const unseen = nodes.slice(holds + 1).filter((node) => !before.has(node.dataset.floater!)).map((node) => node.dataset.floater!);
+      const requestResult = waits === -1 && nodes[holds]!.dataset.kind === "delegation";
+      const unseen = nodes.slice(holds + 1).filter((node) => !before.has(node.dataset.floater!) || requestResult && node.dataset.speaker === "companion").map((node) => node.dataset.floater!);
       if (unseen.length) { setWithheld((current) => new Set([...current, ...unseen])); return; }
       if (waits === -1) {
         for (const node of nodes.slice(0, -1)) {
@@ -884,7 +896,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     }
     /* An element that went from the middle (the session dropped it) takes the older ones along. */
     const here = new Set(nodes.map((node) => node.dataset.floater!));
-    for (const [key, was] of before) if (!here.has(key) && !dismissed.has(key) && !capped.has(key) && was.arrival !== null && nodes.some((node) => (arrived(node) ?? Number.POSITIVE_INFINITY) < was.arrival!)) sent = Math.max(sent, was.arrival);
+    for (const [key, was] of before) if (!here.has(key) && !withheld.has(key) && !dismissed.has(key) && !capped.has(key) && was.arrival !== null && nodes.some((node) => (arrived(node) ?? Number.POSITIVE_INFINITY) < was.arrival!)) sent = Math.max(sent, was.arrival);
     /* Settled before paint: the pass that follows plays the departure. */
     if (sent > gate) { setGate(sent); return; }
     const up = shownLane.direction === "up";
