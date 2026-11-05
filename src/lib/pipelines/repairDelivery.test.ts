@@ -128,3 +128,21 @@ test("an unreserved repair expires at its original cutoff across a process resta
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("unknown legacy delivery history becomes bounded failure at the original deadline", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "repair-unknown-history-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const conversation = registry.ensureForkedConversation("codex", path.join(root, "legacy.jsonl"), null, emptyLaunchProfile({ cwd: root }));
+  registry.deliveryAdmissionForKey = (() => ({ outcome: "unknown", reason: "legacy delivery history is unavailable" })) as typeof registry.deliveryAdmissionForKey;
+  try {
+    const result = await stageRepairDelivery(registry, conversation.id, "legacy-repair", DEADLINE,
+      { now: () => DEADLINE, client: null, progress: null });
+    expect(result).toEqual({ operationId: null, state: "failed", safeToReplace: false });
+    registry.deliveryAdmissionForKey = (() => ({ outcome: "admitted", operationId: "unreadable-operation",
+      deliveryId: "unreadable-delivery", state: "delivery-uncertain" })) as typeof registry.deliveryAdmissionForKey;
+    expect(await stageRepairDelivery(registry, conversation.id, "legacy-repair", DEADLINE,
+      { now: () => DEADLINE, client: null, progress: null })).toEqual({
+      operationId: "unreadable-operation", state: "failed", safeToReplace: false,
+    });
+  } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -5727,15 +5727,12 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const conversationId = worker.conversationId;
   const proveGone = confirmHostGone ? ports.publicationRepairProducerGone : undefined;
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
-  const interrupted = proveGone ? null
-    : await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
+  const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
   const hostGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
-  // The targeted native read supplies activity evidence for this producer.
-  // Legacy ports retain their existing interruption and activity witnesses.
-  const active = proveGone ? hostGone === true ? false : null
-    : await ports.conversationAgentActive(conversationId).catch(() => null);
-  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle", dead: interrupted === "dead", hostGone };
+  const active = hostGone === true ? false : await ports.conversationAgentActive(conversationId).catch(() => null);
+  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle",
+    dead: interrupted === "dead" || hostGone === true, hostGone };
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
@@ -5775,6 +5772,7 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   if (!worker.conversationId) return abandon("the producer has no conversation.");
   const { active, durable } = evidence;
   const bounded = !passedStageCustodyPark(pipeline, attempt);
+  if (ports.conversationDeliveryOutstanding?.(worker.conversationId)) return refusal;
   if (active === true) return refusal;
   if (active === false && (repair || bounded)) return abandon("the producer is gone or idle.");
   const background = liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(now));
@@ -16955,7 +16953,8 @@ export async function patchPipeline(
         const refusal = decisionAnswerActorRefusal(snapshot, actor, req.clientRequestId);
         if (refusal) return refusal;
       }
-      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports);
+      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports,
+        req.action === "retry-stage");
     }
   }
 
@@ -17656,8 +17655,8 @@ export async function patchPipeline(
         // repair needs a new identity, with the accepted commits and current
         // stage definition retained. Never reset the checkout to the base.
         const unreachable = repair && repair.outcome?.status === "rejected"
-          && (decisionProducerEvidence?.dead === true
-            || delivery?.state === "failed" && (delivery.safeToReplace || decisionProducerEvidence?.active === false)
+          && (decisionProducerEvidence?.dead === true || decisionProducerEvidence?.hostGone === true
+            || delivery?.state === "failed" && delivery.safeToReplace
             || delivery?.state === "unreserved" && delivery.safeToReplace && !repair.requestedAt
               && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS);
         if (stage.kind === "run" && unreachable) {

@@ -89,6 +89,8 @@ function fixture({ emptyAccepted = false } = {}) {
     now: () => new Date(wall).toISOString(), scheduleTick: () => {},
     durableTurnEvidence: async () => turn, conversationDeliveryOutstanding: () => false,
     conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false,
+    stageRepairDelivery: async (_conversationId: string, _clientMessageId: string, deadline: number) => ({ operationId: null,
+      state: wall >= deadline ? "failed" as const : "unavailable" as const, safeToReplace: false }),
     getFlow: () => null, worktreePresent: () => true,
     spawnAgent: async () => { throw new Error("this fixture cannot launch a real agent"); },
     resumeSeveredTurn: async (input: { text: string; clientMessageId: string; conversationId: string }) => {
@@ -149,7 +151,7 @@ test.each(["declined", "deadline", "second refusal"])("an unrepairable publicati
     // The first line keeps the cause and the action a person takes.
     expect(detail.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "privacy" phase');
     expect(detail).toContain("PRIVACY GATE: FAIL: fixture content");
-    expect(detail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "did not finish" : "privacy");
+    expect(detail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "delivery unknown failed" : "privacy");
     await h.tick();
     expect(h.requests).toHaveLength(1);
     expect(h.pushes()).toBe(kind === "second refusal" ? 2 : 1);
@@ -295,7 +297,7 @@ test("a refusal of an accepted head that changes no files retries three times an
   } finally { h.cleanup(); }
 });
 
-test.each(["unreserved", "failed", "gone", "running", "busy", "changed"] as const)("retry-stage preserves the accepted head and replaces an unreachable producer: %s", async shape => {
+test.each(["unreserved", "failed", "gone", "unavailable", "completed-gone", "running", "busy", "changed", "conflict"] as const)("retry-stage preserves the accepted head and replaces an unreachable producer: %s", async shape => {
   const h = fixture();
   try {
     fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: eslint' >&2\necho 'src/work.ts:1: repair required' >&2\nexit 1\n", { mode: 0o700 });
@@ -312,9 +314,10 @@ test.each(["unreserved", "failed", "gone", "running", "busy", "changed"] as cons
     const restarted = spawnSync(process.execPath, ["-e", `
       const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine");
       const ports = { ...defaultPipelinePorts(), now: () => "2026-10-11T04:23:00.000Z",
-        conversationAgentActive: async () => ${shape === "running" ? "true" : shape === "gone" ? "false" : "null"},
-        conversationTurnInterrupted: async () => ${shape === "gone" ? JSON.stringify("dead") : "null"},
-        conversationDeliveryOutstanding: () => false,
+        conversationAgentActive: async () => ${shape === "running" ? "true" : ["gone", "unavailable", "completed-gone", "conflict"].includes(shape) ? "false" : "null"},
+        publicationRepairProducerGone: async () => ${shape === "completed-gone" ? "true" : "null"},
+        conversationTurnInterrupted: async () => ${["gone", "unavailable"].includes(shape) ? JSON.stringify("dead") : "null"},
+        conversationDeliveryOutstanding: () => ${shape === "conflict"},
         durableTurnEvidence: async () => ({ turn: "${shape === "busy" ? "busy" : "terminal"}",
           lastRecordAt: Date.parse("${shape === "busy" ? "2026-10-11T04:23:00.000Z" : "2026-10-11T04:01:00.000Z"}"),
           message: { text: "accepted", ts: Date.parse("2026-10-11T04:01:00.000Z") } }),
@@ -323,15 +326,15 @@ test.each(["unreserved", "failed", "gone", "running", "busy", "changed"] as cons
           const lane = findPipelineRecord(${JSON.stringify(h.lane.id)});
           lane.runs[0].attempts[0].startedAt = "2026-10-11T04:00:01.000Z";
           savePipelines([lane]);` : ""}
-          return { operationId: ${shape === "failed" ? JSON.stringify("failed-repair") : "null"},
-            state: "${shape === "failed" ? "failed" : shape === "gone" ? "unavailable" : "unreserved"}", safeToReplace: true };
+          return { operationId: ${["failed", "conflict"].includes(shape) ? JSON.stringify("failed-repair") : "null"},
+            state: "${["failed", "conflict"].includes(shape) ? "failed" : ["gone", "unavailable"].includes(shape) ? "unavailable" : "unreserved"}", safeToReplace: ${shape !== "conflict"} };
         },
       };
       console.log(JSON.stringify(await patchPipeline(${JSON.stringify(h.lane.id)}, { action: "retry-stage" }, ports)));
     `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 30_000 });
     expect(restarted.status, restarted.stderr).toBe(0);
     const answer = JSON.parse(restarted.stdout);
-    if (shape === "running" || shape === "busy" || shape === "changed") {
+    if (shape === "running" || shape === "busy" || shape === "changed" || shape === "conflict") {
       expect(answer.error).toContain("may still be running");
       expect(h.current().cursor?.state).toBe("committing");
       return;
@@ -351,6 +354,7 @@ test.each(["unreserved", "failed", "gone", "running", "busy", "changed"] as cons
     expect(h.pushes()).toBe(1);
     let spawnedPrompt = "";
     const spawnPorts: PipelinePorts = { ...h.ports, engineReadiness: undefined, resolveProjectSpawn: undefined,
+      cpuPressureHold: () => null,
       structuredDeliveryPublication: () => "ready",
       spawnAgent: async (input, onReserved) => {
         spawnedPrompt = input.prompt;
