@@ -61,6 +61,7 @@ export interface NativeCodexRuntime<Host = CodexAppServerHost> {
   artifactPath: string;
   registry: AgentRegistry;
   journal: RuntimeJournal;
+  socketPath: string;
   host(): Host;
   /** Every JSON-RPC request the Viewer made to the CLI, by method. */
   rpc: Array<{ method: string; params: Record<string, unknown> }>;
@@ -98,15 +99,15 @@ function newestUserContent(body: Record<string, unknown>): { images: string[]; t
  * that owns it would, so the published session names that claim. Context
  * injection freezes it at admission and refuses a session without one. */
 export function startNativeCodexRuntime(
-  directory: string, binary: string, options: { engine: "claude"; writerClaimOwner?: string },
+  directory: string, binary: string, options: { engine: "claude"; writerClaimOwner?: string; settlementSweepMs?: number; holdClaude?: boolean },
 ): Promise<NativeCodexRuntime<ClaudeStreamBrokerHost>>;
 export function startNativeCodexRuntime(
-  directory: string, binary: string, options?: { engine?: "codex"; writerClaimOwner?: string },
+  directory: string, binary: string, options?: { engine?: "codex"; writerClaimOwner?: string; settlementSweepMs?: number },
 ): Promise<NativeCodexRuntime>;
 export async function startNativeCodexRuntime(
   directory: string,
   binary: string,
-  options: { writerClaimOwner?: string; engine?: "codex" | "claude" } = {},
+  options: { writerClaimOwner?: string; settlementSweepMs?: number; engine?: "codex" | "claude"; holdClaude?: boolean } = {},
 ): Promise<NativeCodexRuntime<CodexAppServerHost | ClaudeStreamBrokerHost>> {
   isolateComposerPayloadRuntime(directory);
   const engine = options.engine ?? "codex";
@@ -121,6 +122,7 @@ export async function startNativeCodexRuntime(
 
   const requests: ProviderRequest[] = [];
   const open: ServerResponse[] = [];
+  const claudeAnswers = new Map<ServerResponse, string>();
   const provider = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -129,19 +131,25 @@ export async function startNativeCodexRuntime(
       let body: Record<string, unknown> = {};
       try { body = JSON.parse(raw.toString("utf8")) as Record<string, unknown>; } catch { /* recorded as empty */ }
       if (engine === "claude") {
-        requests.push({ index: requests.length, bytes: raw.length, images: [], texts: [] });
+        const messages = Array.isArray(body.messages) ? body.messages as Array<Record<string, unknown>> : [];
+        const last = messages.filter(message => message.role === "user").at(-1);
+        const content = Array.isArray(last?.content) ? last.content as Array<Record<string, unknown>> : [];
+        requests.push({ index: requests.length, bytes: raw.length, images: [],
+          texts: content.flatMap(part => part.type === "text" && typeof part.text === "string" ? [part.text] : []) });
         const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
         const message = { id: `msg_fixture_${requests.length}`, type: "message", role: "assistant", model: "fixture-model",
           content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
         response.writeHead(200, { "Content-Type": "text/event-stream" });
-        response.end([
+        const answer = [
           event("message_start", { type: "message_start", message }),
           event("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
           event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Fixture answer" } }),
           event("content_block_stop", { type: "content_block_stop", index: 0 }),
           event("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }),
           event("message_stop", { type: "message_stop" }),
-        ].join(""));
+        ].join("");
+        if (options.holdClaude) { claudeAnswers.set(response, answer); open.push(response); }
+        else response.end(answer);
         return;
       }
       requests.push({ index: requests.length, bytes: raw.length, ...newestUserContent(body) });
@@ -174,6 +182,9 @@ plugins = false
   const completeNext = (): boolean => {
     const response = open.shift();
     if (!response) return false;
+    if (engine === "claude") {
+      response.end(claudeAnswers.get(response)); claudeAnswers.delete(response); return true;
+    }
     completed += 1;
     const id = `fixture-answer-${completed}`;
     const output = { id, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Fixture answer", annotations: [] }] };
@@ -285,6 +296,7 @@ plugins = false
   await bindStructuredDeliveryQueue([{ key, host }], {
     registry,
     client,
+    settlementSweepMs: options.settlementSweepMs,
     recover: async () => ({ target: null, path: artifactPath, conversationId: conversation.id, spawned: false }),
   });
 
@@ -331,6 +343,7 @@ plugins = false
     artifactPath,
     registry,
     journal,
+    socketPath,
     host: () => host,
     rpc,
     provider: { requests, open: () => open.length, completeNext },

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { rejectCrossOrigin, rejectForeignHost } from "@/lib/sameOrigin";
+import { configuredPublicOrigin, publicOriginForRequest } from "@/lib/publicOrigin";
 
 import { MEMBER_REQUIRED_CODE, type TeamPublicInfo } from "./contract";
 import { TeamError, type Device, type SignedIn } from "./members";
@@ -79,11 +80,16 @@ export function respondSignedIn(req: NextRequest, signedIn: SignedIn, extra: Rec
 }
 
 export function relyingParty(req: NextRequest): RelyingParty | null {
+  if (rejectForeignHost(req)) return null;
+  const publicOrigin = publicOriginForRequest(req);
+  if (publicOrigin) return relyingPartyFor(publicOrigin.host, true);
   return relyingPartyFor(req.headers.get("host"), requestIsHttps(req));
 }
 
 /** The origin a link should carry: the one this request arrived on. */
 export function requestOrigin(req: NextRequest): string {
+  const publicOrigin = publicOriginForRequest(req);
+  if (publicOrigin) return publicOrigin.origin;
   const host = req.headers.get("host") ?? req.nextUrl.host;
   return `${requestIsHttps(req) ? "https" : "http"}://${host}`;
 }
@@ -130,6 +136,8 @@ export function requestHostName(req: NextRequest): string {
 
 /** A configured HTTPS name to suggest when this request's address cannot use passkeys. */
 export function passkeyAddress(): string | null {
+  const publicOrigin = configuredPublicOrigin();
+  if (publicOrigin) return publicOrigin.origin;
   const configured = process.env.LLV_TS_URL;
   if (!configured) return null;
   try {

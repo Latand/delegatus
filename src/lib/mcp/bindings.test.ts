@@ -3786,7 +3786,7 @@ test("send_message reports acceptance as unsettled, and message_receipt answers 
   /* #1131: the answer says acceptance, and says that acceptance is not the end
      of the story. A caller that read `queued` as terminal is what cost forty
      idle minutes. */
-  expect(accepted).toMatchObject({ operationId, outcome: "queued", settled: false });
+  expect(accepted).toMatchObject({ operationId, outcome: "queued", settled: false, deliveryConfirmed: false });
 
   const reservation = registry.holdDelivery(
     conversation.id,
