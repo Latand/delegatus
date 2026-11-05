@@ -1,0 +1,255 @@
+import { afterEach, expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import * as timers from "node:timers/promises";
+import { Database } from "bun:sqlite";
+import { OperationLease, OperationLeaseExpiredError } from "@/lib/operationLease";
+import { roleMemoryCollection, storedLessonRevision } from "./roleStore";
+import { withoutStoredLessonsAsync, withCurrentRoleMemory, renderReportAsync, scrubIssueReportAsync, refreshCurationKnownValuesAsync } from "./privacy";
+import { PrivacyWorkError, privacyFailureOf } from "./privacyFailure";
+import { PRIVACY_RETRY_WINDOW_MS, privacyWorkTimeoutMs } from "./privacyRetry";
+import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
+
+const privateText = "Keep silver orchard evidence private until the owning operation completes";
+let generation = 0;
+const root = process.env.LLV_STATE_DIR!;
+function store() {
+  process.env.LLV_STATE_DIR = path.join(root, `retry-${++generation}`);
+  roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({
+    kind: "rule", id: "r_privacy_retry", scope: "machine", rule: privateText, why: "", state: "active", hints: [],
+    source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+    createdAt: "2026-11-05T00:00:00Z", changedAt: "2026-11-05T00:00:00Z",
+  }));
+}
+afterEach(async () => { await shutdownTaskPageWorker(); process.env.LLV_STATE_DIR = root; });
+
+test("separate module copies share the caller cutoff and validate carried diagnostics", async () => {
+  store();
+  const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "privacy-module-copy-"));
+  fs.copyFileSync(path.join(import.meta.dir, "privacyFailure.ts"), path.join(directory, "privacyFailure.ts"));
+  fs.writeFileSync(path.join(directory, "privacyRetry.ts"), fs.readFileSync(path.join(import.meta.dir, "privacyRetry.ts"), "utf8")
+    .replace('"@/lib/operationLease"', JSON.stringify(path.join(import.meta.dir, "../operationLease.ts"))));
+  const other = await import(path.join(directory, "privacyRetry.ts")) as typeof import("./privacyRetry");
+  const diagnostics = await import(path.join(directory, "privacyFailure.ts")) as typeof import("./privacyFailure");
+  let clock = 0, calls = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async ms => { clock += Number(ms); });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(await withCurrentRoleMemory(async () => {
+      clock = 179_000;
+      return other.withPrivacyRetry(async () => other.privacyWorkTimeoutMs());
+    })).toBe(1_000);
+    clock = 0;
+    expect(await withCurrentRoleMemory(async () => {
+      if (++calls === 1) throw new diagnostics.PrivacyWorkError("store-busy");
+      return withoutStoredLessonsAsync(privateText);
+    })).toBe("[learned rule]");
+    expect(calls).toBe(2);
+    expect(privacyFailureOf({ cause: { failure: privateText } })).toBe("worker-unavailable");
+  } finally { now.mockRestore(); pause.mockRestore(); log.mockRestore(); }
+});
+
+test.each(["SQLITE_BUSY", "ETIMEDOUT"])("nested privacy preparation recovers after two minutes: %s", async code => {
+  store();
+  let clock = 0, calls = 0, delivered = false;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async ms => {
+    expect(delivered).toBe(false);
+    clock += Number(ms);
+  });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const real = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+    if (++calls < 3) { clock += 60_000; throw Object.assign(new Error(privateText), { code }); }
+    return real.call(this, request);
+  });
+  try {
+    const result = await withCurrentRoleMemory(async () => ({ text: await withoutStoredLessonsAsync(privateText) }));
+    delivered = true;
+    expect(result).toEqual({ text: "[learned rule]" });
+    expect(calls).toBe(3);
+    expect(clock).toBe(123_000);
+    expect(log.mock.calls.flat().join("\n")).toContain(code === "SQLITE_BUSY" ? "store-busy" : "worker-timeout");
+    expect(log.mock.calls.flat().join("\n")).toContain("retrying before dispatch");
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});
+
+test("a busy initial revision read retains its category and rechecks the store before filtering", async () => {
+  store();
+  let clock = 0, reads = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async ms => { clock += Number(ms); });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const stat = fs.statSync;
+  const read = spyOn(fs, "statSync").mockImplementation((...args: Parameters<typeof fs.statSync>) => {
+    if (String(args[0]) === path.join(process.env.LLV_STATE_DIR!, "state.sqlite") && ++reads === 1) {
+      throw Object.assign(new Error(privateText), { code: "SQLITE_BUSY" });
+    }
+    return Reflect.apply(stat, fs, args);
+  });
+  try {
+    expect(await withoutStoredLessonsAsync(privateText)).toBe("[learned rule]");
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.flat().join("\n")).toContain("store-busy");
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+  } finally { read.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});
+
+test("a revision retry keeps the cause of the failed privacy pass in the log", async () => {
+  store();
+  let calls = 0;
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const real = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+    if (++calls === 1) {
+      const held = roleMemoryCollection()!;
+      const prior = held.get("r:r_privacy_retry")!;
+      held.boundedPatch(1, tx => tx.put({ ...prior, changedAt: "2026-11-05T00:01:00Z" } as typeof prior));
+      throw Object.assign(new Error(privateText), { code: "ETIMEDOUT" });
+    }
+    return real.call(this, request);
+  });
+  try {
+    expect(await withoutStoredLessonsAsync(privateText)).toBe("[learned rule]");
+    expect(calls).toBe(2);
+    expect(log.mock.calls.flat().join("\n")).toContain("worker-timeout");
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+  } finally { worker.mockRestore(); log.mockRestore(); }
+});
+
+test("one cutoff bounds nested retries, caps worker time and rejects a late success", async () => {
+  store();
+  let clock = 0, calls = 0;
+  const budgets: number[] = [];
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async ms => { clock += Number(ms); });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async () => {
+    calls++;
+    if (calls > 4) throw new Error("fixture detected an unbounded retry");
+    budgets.push(privacyWorkTimeoutMs());
+    clock += privacyWorkTimeoutMs();
+    throw new PrivacyWorkError("worker-timeout");
+  });
+  try {
+    await expect(withCurrentRoleMemory(() => withoutStoredLessonsAsync(privateText))).rejects.toMatchObject({
+      code: "LESSON_PRIVACY_UNAVAILABLE", message: expect.stringContaining("worker-timeout; retry window exhausted after 180 seconds"),
+    });
+    expect(clock).toBe(PRIVACY_RETRY_WINDOW_MS);
+    expect(calls).toBe(3);
+    expect(budgets).toEqual([60_000, 60_000, 57_000]);
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+    clock = 0;
+    worker.mockImplementation(async () => { clock = PRIVACY_RETRY_WINDOW_MS; return { privacyRevision: storedLessonRevision(), value: "late unchecked value" }; });
+    await expect(withoutStoredLessonsAsync(privateText)).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE" });
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});
+
+test("a restarted process safely starts a fresh preparation window", async () => {
+  store();
+  const directory = process.env.LLV_STATE_DIR!;
+  for (const mode of ["interrupted", "exhausted"]) {
+    const child = Bun.spawn([process.execPath, "test", import.meta.path, "-t", "^restart privacy preparation child$"], {
+      env: { ...process.env, LLV_PRIVACY_RESTART_STATE: directory, LLV_PRIVACY_RESTART_MODE: mode },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [exit, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(exit, out + err).toBe(0);
+    expect(err).toContain("1 pass");
+  }
+});
+
+test.skipIf(!process.env.LLV_PRIVACY_RESTART_STATE)("restart privacy preparation child", async () => {
+  process.env.LLV_STATE_DIR = process.env.LLV_PRIVACY_RESTART_STATE!;
+  const lease = new OperationLease();
+  let clock = 0, calls = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async ms => {
+    if (process.env.LLV_PRIVACY_RESTART_MODE === "interrupted") lease.expire();
+    clock += Number(ms);
+  });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async () => {
+    calls++;
+    clock += privacyWorkTimeoutMs();
+    throw new PrivacyWorkError("worker-timeout");
+  });
+  try {
+    const result = lease.run(() => withoutStoredLessonsAsync(privateText));
+    if (process.env.LLV_PRIVACY_RESTART_MODE === "interrupted") {
+      await expect(result).rejects.toBeInstanceOf(OperationLeaseExpiredError);
+      expect(calls).toBe(1);
+    } else {
+      await expect(result).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE", message: expect.stringContaining("retry window exhausted") });
+      expect(calls).toBe(3);
+      expect(clock).toBe(180_000);
+    }
+    expect(roleMemoryCollection()!.get("r:r_privacy_retry")).toMatchObject({ rule: privateText });
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});
+
+test.each(["filter", "report", "issue", "curation"])("permanent errors stay decisive and secret-free: %s", async kind => {
+  store();
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async () => { throw new Error("permanent failure was retried"); });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockRejectedValue(Object.assign(new Error(privateText), { code: "EACCES" }));
+  const deny = { accounts: [], people: [], local: [], projects: [] };
+  try {
+    const call = kind === "filter" ? () => withoutStoredLessonsAsync(privateText)
+      : kind === "report" ? () => renderReportAsync({ class: "status", name: "Delegatus", at: new Date("2026-11-05T00:00:00Z"), locale: "en", timeZone: "UTC", summary: privateText, sections: {}, deny })
+      : kind === "issue" ? () => scrubIssueReportAsync({ title: privateText, body: privateText }, deny) : refreshCurationKnownValuesAsync;
+    const error = await call().catch(error => error);
+    expect(error).toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE", message: expect.stringContaining("access-denied") });
+    expect(String(error)).not.toContain(privateText);
+    expect(log.mock.calls.flat().join("\n")).toContain("access-denied");
+    expect(log.mock.calls.flat().join("\n")).toContain("refusing; nothing was sent");
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+    expect(worker).toHaveBeenCalledTimes(1);
+    expect(pause).not.toHaveBeenCalled();
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); }
+});
+
+test("lease revocation during backoff prevents another read or result", async () => {
+  store();
+  const lease = new OperationLease();
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async () => { lease.expire(); });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockRejectedValue(new PrivacyWorkError("store-busy"));
+  try {
+    await expect(lease.run(() => withoutStoredLessonsAsync(privateText))).rejects.toBeInstanceOf(OperationLeaseExpiredError);
+    expect(worker).toHaveBeenCalledTimes(1);
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); }
+});
+
+test.each(["store-busy", privateText])("worker error frames retain only allowlisted diagnostics: %s", async failure => {
+  store();
+  const fixture = path.join(process.env.TMPDIR!, `failure-worker-${generation}.ts`);
+  fs.writeFileSync(fixture, `import readline from "node:readline";
+for await (const line of readline.createInterface({input:process.stdin})) {
+ const {id}=JSON.parse(line); process.stdout.write(JSON.stringify({id,error:"LESSON_PRIVACY_UNAVAILABLE",failure:${JSON.stringify(failure)}})+"\\n");
+}`);
+  const worker = new TaskPageWorker({ launch: { executable: process.execPath, workerPath: fixture } });
+  try {
+    const error = await worker.privacy({ kind: "filter", value: privateText }).catch(error => error);
+    expect(privacyFailureOf(error)).toBe(failure === privateText ? "worker-unavailable" : "store-busy");
+    expect(String(error)).not.toContain(privateText);
+  } finally { await worker.shutdown(); }
+});
+
+test("the real worker carries a corrupt stored row's category without the row", async () => {
+  store();
+  const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key = 'r:r_privacy_retry'")
+    .run(JSON.stringify({ kind: "rule", id: 7, rule: privateText }));
+  database.close();
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const error = await withoutStoredLessonsAsync(privateText).catch(error => error);
+    expect(error).toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE", message: expect.stringContaining("store-corrupt") });
+    expect(String(error)).not.toContain(privateText);
+    expect(log.mock.calls.flat().join("\n")).toContain("store-corrupt");
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+  } finally { log.mockRestore(); }
+});

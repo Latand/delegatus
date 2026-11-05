@@ -131,8 +131,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   try {
     const pending = Array.from({ length: 16 }, () => worker.privacy({ kind: "filter", value: lesson }));
     const outcomes = Promise.allSettled(pending);
-    await expect(worker.privacy({ kind: "filter", value: lesson })).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE" });
-    expect((await outcomes).every(result => result.status === "rejected")).toBe(true);
+    await expect(worker.privacy({ kind: "filter", value: lesson })).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE", failure: "worker-queue-full" });
+    const failed = await outcomes;
+    expect(failed.every(result => result.status === "rejected")).toBe(true);
+    for (const result of failed) if (result.status === "rejected") expect(result.reason).toMatchObject({ failure: "worker-timeout" });
   } finally { await worker.shutdown(); }
   store([lesson]);
   expect(await withoutStoredLessonsAsync(lesson)).toBe("[learned rule]");
@@ -214,7 +216,7 @@ test.each(["lease-abort", "lease-abort-with-worker-error", "worker-failure"] as 
         expect(error).toBeInstanceOf(OperationLeaseExpiredError);
         expect(error).toBe(current.abort.signal.reason);
       } else await expect(result).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE",
-        message: "role memory could not be read or filtered; nothing was sent" });
+        message: "role memory could not be read or filtered; worker-unavailable; nothing was sent" });
       expect(worker).toHaveBeenCalled();
     }
   } finally { worker.mockRestore(); }
