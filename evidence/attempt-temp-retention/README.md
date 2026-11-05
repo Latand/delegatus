@@ -207,6 +207,15 @@ inside those absent checkout paths. Thus **zero observed roots are held solely
 by this rule**. These observations establish absence at capture time; future
 restoration remains possible. Aggregate evidence is in `absent-checkout.json`.
 
+A follow-up read-only snapshot on 2026-11-05 at 08:41 UTC counted 643 registry
+rows and 617 present roots. It found 101 roots with an absent checkout, all
+belonging to closed or completed lanes, with 73,613,594,624 recorded bytes
+(about 73.6 GB). There were no open-lane absent checkouts or live process cwd
+under those paths, so the number held solely because a checkout is gone for
+good remains **zero**. The increase from the earlier row and root totals does
+not change that absent-checkout cohort or its allocation. The follow-up
+snapshot hashes and counts are in `absent-checkout.json`.
+
 The release path is lifecycle based. Closed and completed lanes return closed
 authority before reading their own checkout. Consumer dependencies come only
 from a fresh process scan, and each sweep owns a fresh inventory. After a
@@ -218,6 +227,10 @@ checkout remains protected until that checkout is readable or the lane closes;
 a timeout never grants authority over a live consumer or an open lane's links.
 Tests cover both terminal lane states and a real consumer process exiting while
 its checkout link remains.
+
+Closing a lane removes its checkout-presence hold. After a consumer exits, the
+next fresh process scan drops its cwd dependency, and a later eligible sweep may
+reclaim the root once the remaining guards pass.
 
 No schema, ownership writer, retirement journal or published report format
 changes. `attemptTempState` and the live-process reference check consume the

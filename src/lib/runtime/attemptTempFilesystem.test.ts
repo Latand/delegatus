@@ -101,10 +101,13 @@ test.each(["absent", "unreadable", "restored"] as const)("the final removal chec
   let changed = false;
   let containerObservations = 0;
   const oldRepository = `${repository}-old`;
-  const readdir = fs.promises.readdir.bind(fs.promises);
-  const denied = change === "unreadable" ? spyOn(fs.promises, "readdir").mockImplementation(async (target, options) => {
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  const denied = change === "unreadable" ? spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
     if (changed && path.resolve(String(target)) === repository) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    return readdir(target, options as never);
+    return readdir(target, options);
   }) : undefined;
   const mutate = () => {
     changed = true;

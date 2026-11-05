@@ -43,6 +43,26 @@
       "state.sqlite": "ad068e839fd936331278d8a5826316130018dbc84d2cd270e3f3271a49189541"
     }
   },
+  "followupReadOnlyObservation": {
+    "capturedAt": "2026-11-05T08:41:45.573580658+02:00",
+    "sourceHead": "74b6df5228911b531e8d986c3f771e9461019f00",
+    "method": "Read-only SQLite backups of the attempt registry and pipeline state; read-only filesystem existence and process cwd checks; no sweep or removal",
+    "counts": {
+      "registry": 643,
+      "rootAbsent": 26,
+      "rootPresent": 617,
+      "absentCheckout.terminal": 101,
+      "noPipeline": 259
+    },
+    "registeredBytes": {
+      "terminal": 73613594624
+    },
+    "rootsHeldSolelyByAbsentCheckoutRule": 0,
+    "snapshotSha256": {
+      "attempt-temp.sqlite": "1ccecd580eda6bb44abad047dd2bf3626e31c4cd1fe7efcdd84de0ad7ea99659",
+      "state.sqlite": "bfa23fc1872edf3044b8ef264f26d898443af55e6815cad387f55effed914152"
+    }
+  },
   "checks": [
     {
       "log": "final-filesystem.log",
