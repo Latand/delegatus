@@ -107,7 +107,7 @@ test("gone rows are reconciled by the real registry without termination and stay
   expect(third.report.progress.afterKey).toBeNull();
 });
 
-for (const scenario of ["gone-replaced", "gone-survivor", "gone-revived", "gone-unbound", "gone-failure"]) {
+for (const scenario of ["gone-replaced", "gone-survivor", "gone-revived", "gone-unbound", "gone-failure", "gone-claim", "gone-owner", "gone-writer", "gone-start", "gone-boot", "gone-unknown-after-admission"]) {
   test(`${scenario} rechecks after writer admission and preserves the refusal reason without signals`, async () => {
     const result = await sweep(root(), scenario);
     expect(result.terminated).toEqual([]);
@@ -135,4 +135,60 @@ for (const [document, reason] of [
   expect(stderr).toContain(reason!);
   expect(stdout).not.toContain('"terminated"');
   expect(fs.existsSync(path.join(directory, "host-retirement-report.json"))).toBe(false);
+});
+
+
+for (const scenario of ["gone-scope-old", "gone-scope-current", "gone-exit", "gone-reused"]) {
+  test(`${scenario} reconciles before live clauses, preserves history and stays gone after process restart`, async () => {
+    const directory = root();
+    const first = await sweep(directory, scenario);
+    expect(first.report.gone).toHaveLength(6);
+    expect(first.report.retired).toEqual([]);
+    expect(first.report.refused).toEqual([]);
+    expect(first.attempted).toEqual([]);
+    expect(first.remaining).toEqual([]);
+    expect(first.historyIntact).toBe(true);
+    if (scenario === "gone-scope-old" && process.platform === "linux" || scenario === "gone-reused") expect(first.scopeReads).toEqual([]);
+    const second = await sweep(directory, scenario);
+    expect(second.report.evaluated).toBe(0);
+    expect(second.attempted).toEqual([]);
+    expect(second.historyIntact).toBe(true);
+  });
+}
+
+for (const scenario of ["live-lag", "identity-unknown"]) {
+  test(`${scenario} keeps every live clause and never reconciles or terminates`, async () => {
+    const result = await sweep(root(), scenario);
+    expect(result.report.gone).toEqual([]);
+    expect(result.attempted).toEqual([]);
+    expect(result.remaining).toHaveLength(6);
+    expect(result.report.liveRefused).toEqual(scenario === "live-lag"
+      ? { count: 6, byClause: { "events-flushed": 4, "turn-settled": 1, "no-active-flags": 1 } }
+      : { count: 0, byClause: {} });
+    expect(result.report.refused.map((row: { clause: string }) => row.clause)).toEqual([
+      "events-flushed", "turn-settled", "events-flushed", "no-active-flags", "events-flushed", "events-flushed",
+    ]);
+  });
+}
+
+for (const scenario of ["gone-scope-live", "gone-scope-unknown", "gone-scope-changed", "gone-scope-boot-changed"]) {
+  test(`${scenario} preserves unproven or replaced scope custody without termination`, async () => {
+    const result = await sweep(root(), scenario);
+    expect(result.attempted).toEqual([]);
+    expect(result.report.failed.length).toBeGreaterThan(0);
+    expect(result.remaining.length).toBeGreaterThan(0);
+    expect(result.historyIntact).toBe(true);
+  });
+}
+
+
+test("a scoped host that disappears during memory measurement reconciles without entering termination", async () => {
+  const result = await sweep(root(), "gone-after-measurement");
+  expect(result.report.gone).toHaveLength(3);
+  expect(result.report.retired).toEqual([]);
+  expect(result.report.failed).toEqual([]);
+  expect(result.report.refused.map((row: { clause: string }) => row.clause)).toEqual(["turn-settled", "seat-free", "no-active-flags"]);
+  expect(result.attempted).toEqual([]);
+  expect(result.remaining).toHaveLength(3);
+  expect(result.historyIntact).toBe(true);
 });
