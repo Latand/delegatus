@@ -9,7 +9,7 @@ import { checkpointFlowRollbackMirrorForDemotion, loadFlows, saveFlows, withFlow
 import type { Flow } from "@/lib/flows/types";
 import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import { buildPipeline, loadArchivedPipelines, loadPipelines } from "@/lib/pipelines/store";
+import { buildPipeline, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import type { PipelineStage } from "@/lib/pipelines/types";
 import { buildWorkflow, loadWorkflows, normalizeTemplate } from "@/lib/workflows/store";
 import {
@@ -1090,8 +1090,8 @@ test("first boot imports every store once and folds in the pipeline archive", ()
     const filename = path.join(sandbox, "state.sqlite");
     initializeStateCollections(filename, [
       { collection: "flows", schemaVersion: 3, migrationId: "flows-json-v1", loadRecords: () => [], key: () => "" },
-      { collection: "pipelines", schemaVersion: 5, migrationId: "pipelines-json-v1", loadRecords: () => [], key: () => "" },
-      { collection: "pipelines_archive", schemaVersion: 5, migrationId: "pipelines-archive-json-v1", loadRecords: () => [], key: () => "" },
+      { collection: "pipelines", schemaVersion: PIPELINES_SCHEMA_VERSION, migrationId: "pipelines-json-v1", loadRecords: () => [], key: () => "" },
+      { collection: "pipelines_archive", schemaVersion: PIPELINES_SCHEMA_VERSION, migrationId: "pipelines-archive-json-v1", loadRecords: () => [], key: () => "" },
       { collection: "workflows", schemaVersion: 1, migrationId: "workflows-json-v1", loadRecords: () => [], key: () => "" },
     ]);
     const db = new Database(filename, { strict: true });
