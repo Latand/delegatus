@@ -6,7 +6,7 @@ import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projec
 import { effectiveCurationSetting, readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { projectView, projectViewAsync, roleMemoryCollection } from "./roleStore";
 import { otherProjectRoleRules, roleViewVersion } from "./roleViewSource";
-import { claimPass, curationStatus, curationView, patchPass, readPass } from "./curation/store";
+import { curationCollection, claimPass, curationStatus, curationView, patchPass, readPass } from "./curation/store";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { readCuration } from "./curation/read";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
@@ -174,6 +174,26 @@ test("a refused cooperative refresh cannot publish a curation summary for its st
   expect(next.curation).toMatchObject({ newLessons: 1 });
   const status = curationStatus(PROJECT, NOW + 2);
   expect(status).toMatchObject({ active: true, due: true, newLessons: 1 });
+});
+
+test("an unrelated project's commit during a cooperative view preserves the requested view", async () => {
+  const memory = seed();
+  memory.boundedPatch(2, tx => {
+    const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+    tx.put({ ...held, history: Array.from({ length: 32 }, (_, index) => ({
+      revision: index + 1, at: AT, by: "operator" as const, added: [], merged: [], archived: [],
+    })) });
+  });
+  const expected = projectView(PROJECT, NOW);
+  (globalThis as typeof globalThis & { __llvProjectViews?: Map<string, unknown> }).__llvProjectViews?.clear();
+  const write = new Promise<void>(resolve => setImmediate(() => {
+    memory.boundedPatch(1, tx => tx.put({ kind: "scope", scope: "role:independent-project:reviewer",
+      revision: 1, active: [], history: [] }));
+    resolve();
+  }));
+  const pending = projectViewAsync(PROJECT, NOW);
+  await expect(pending).resolves.toEqual(expected);
+  await write;
 });
 
 test("settings, kill switch and project succession invalidate warmed answers", () => {
@@ -348,4 +368,29 @@ test("reopening the shared reader cannot reuse a token from before a peer commit
     process.env.LLV_STATE_DIR = primary;
     fs.rmSync(secondary, { recursive: true, force: true });
   }
+});
+
+
+test.each(["ancestor", "active"])("a newly inserted foreign %s invalidates a view that observed it absent", async relation => {
+  const missing = "r_missing_dependency";
+  const memory = seed([rule(undefined, SCOPE, relation === "ancestor" ? { versions: [missing] } : {})]);
+  if (relation === "active") memory.boundedPatch(2, tx => {
+    const row = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+    tx.put({ ...row, active: [...row.active, missing] });
+  });
+  curationCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "machine", current: null, budgetSweepCompletedAt: AT }));
+  const get = memory.get.bind(memory);
+  let inserted = false;
+  const observed = spyOn(memory, "get").mockImplementation(key => {
+    const value = get(key);
+    if (key === `r:${missing}` && !inserted) {
+      inserted = true;
+      memory.boundedPatch(1, tx => tx.put(rule(missing, "role:elsewhere:builder", { state: "archived" })));
+    }
+    return value;
+  });
+  try {
+    await expect(projectViewAsync(PROJECT, NOW)).rejects.toBeInstanceOf(StateSnapshotChangedError);
+    expect(inserted).toBe(true);
+  } finally { observed.mockRestore(); }
 });

@@ -93,7 +93,13 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set<string>();
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|hooks|publication|transport)|-tests)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+  }
+  if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
+    for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
+  }
+  if (changedFiles.includes("scripts/local-gate-tests.ts") && env.tests.includes("scripts/local-gate.checkpoints.test.ts")) {
+    touched.add("scripts/local-gate.checkpoints.test.ts");
   }
   for (const file of files.filter(isTest)) touched.add(file);
   for (const file of files.filter(lintable)) {

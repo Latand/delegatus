@@ -70,6 +70,13 @@ export interface FirstDispatchEvidence {
   readonly firstDispatch: true;
 }
 
+/** Local observations only; callbacks never cross the engine protocol. */
+export type DeliveryTimingMark = "queue-kick" | "host-send" | "codex-prepare"
+  | "codex-confirmed-read" | "codex-confirmed" | "codex-input-ready" | "codex-rpc-start"
+  | "codex-rpc-end" | "claude-prepare-start" | "claude-prepare-end"
+  | "claude-write-start" | "claude-write-end" | "echo-received" | "echo-attached";
+export type DeliveryTimingObserver = (mark: DeliveryTimingMark) => void;
+
 export interface NormalizedQueueEntry {
   parts?: InboxBatchPart[];
   id: string;
@@ -124,7 +131,7 @@ export type RuntimeEvent =
     /** Explicit identity from the Codex user-message notification; projection fallbacks supply none. */
     codexItemIdentity?: { threadId: string; turnId: string };
     /** Raw live user-echo observation, retained through event replay. */
-    deliveryEcho?: { operationId: string; at: string; memberOperationIds?: string[] };
+    deliveryEcho?: { operationId: string; at: string; attachedAt?: string; memberOperationIds?: string[] };
     /** Original native activity observation time; null for history whose time needs transcript evidence. */
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
@@ -212,7 +219,7 @@ export interface EngineHost {
       Absent keeps the replacement: the running turn is interrupted first. */
   readonly sendWaitsForRunningTurn?: boolean;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
-  send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt>;
+  send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */
   steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<RuntimeSteerOutcome>;
   interrupt(turnRef: string): Promise<void>;

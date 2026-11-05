@@ -2,7 +2,7 @@ import { effectiveCurationSetting, type EffectiveSeatTickSettings } from "@/lib/
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { roleMemoryEnabled } from "../settings";
-import { curationPanelRuns, curationPanelDataCooperatively, curationStatus, type CuratorPass } from "./store";
+import { curationPanelRuns, curationPanelRunMetadata, curationPanelDataCooperatively, curationStatus, type CuratorPass } from "./store";
 
 type Run = Pick<CuratorPass, "id" | "state" | "claimedAt" | "endedAt" | "conversationId" | "counts" | "failure">;
 const summary = ({ id, state, claimedAt, endedAt, conversationId, counts, failure }: CuratorPass): Run =>
@@ -36,7 +36,7 @@ export async function curationAnswerCooperatively(project: string, settings: Eff
     return answer(project, settings, () => { if ("error" in data) throw data.error; return data.status!; }, () => data.runs);
   } catch (error) {
     signal?.throwIfAborted();
-    return answer(project, settings, () => { throw error; }, () => ({ live: null, last: null }));
+    return answer(project, settings, () => { throw error; }, () => curationPanelRunMetadata(project));
   }
 }
 export type CurationAnswer = ReturnType<typeof curationAnswer>;

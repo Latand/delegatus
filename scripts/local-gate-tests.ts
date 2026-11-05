@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
-import { cacheDirectory, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
+import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
@@ -259,7 +259,7 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 
 interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
-async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
+async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
@@ -287,6 +287,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const fd = openSync(log, "w");
     let result: Bun.Subprocess;
     let exitCode: number;
+    let cleanupConfirmed = false;
     try {
       result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         // Keep the independent five-second cleanup allowance, measured as
@@ -311,6 +312,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       if ((exitCode === 0) !== (parsed.failures.length === 0)) {
         throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
       }
+      // Portable cleanup is best effort and can miss detached descendants.
+      // Its result remains observable but cannot certify later file reuse.
+      cleanupConfirmed = process.platform === "linux" && exitCode === 0
+        && !output.includes("portable cleanup") && !survivors;
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
@@ -323,6 +328,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
     options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
+    options.onFile?.(results[index]!, cleanupConfirmed);
   }
   }));
   const rejected = workers.find(worker => worker.status === "rejected");
@@ -367,6 +373,42 @@ function isBaselineRecord(value: unknown): value is BaselineRecord {
     && typeof run.elapsedMs === "number" && Number.isFinite(run.elapsedMs);
 }
 
+/** Only a complete, nonempty passing file with confirmed owned cleanup can
+ * become a checkpoint. Diagnostics, timeouts and filtered retries stay fresh. */
+function isGreenHeadFile(value: unknown): value is TestRun {
+  if (!value || typeof value !== "object") return false;
+  const run = value as TestRun;
+  return Array.isArray(run.failures) && run.failures.length === 0
+    && Array.isArray(run.completed) && run.completed.length === 1 && typeof run.completed[0] === "string"
+    && Array.isArray(run.passed) && run.passed.length > 0 && run.passed.every(site => site && site.kind === "test"
+      && site.file === run.completed[0] && typeof site.suite === "string" && typeof site.name === "string"
+      && (site.occurrence === undefined || Number.isSafeInteger(site.occurrence) && site.occurrence >= 0))
+    && typeof run.elapsedMs === "number" && Number.isFinite(run.elapsedMs) && run.elapsedMs >= 0;
+}
+
+/** The comparator preserves caller variables beyond the publication wrapper's
+ * allowlist. Bind those values with the baseline environment identity, plus
+ * identity/privacy/network values that a direct comparator call still passes. */
+function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
+  const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), Object.entries(env)
+    .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
+}
+
+/** Check the boundary of this invocation before reading or sealing receipts.
+ * Portable work keeps its normal fresh execution, even after a service run. */
+function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
+  if (process.platform !== "linux") return;
+  const systemctl = Bun.which("systemctl", { PATH: env.PATH ?? "" });
+  const runner = Bun.which("systemd-run", { PATH: env.PATH ?? "" });
+  if (!systemctl || !runner) return;
+  try {
+    if (spawnSync(systemctl, ["--user", "show-environment"], { env, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
+    return fingerprint([systemctl, fileFingerprint(systemctl), runner, fileFingerprint(runner),
+      env.XDG_RUNTIME_DIR ?? null, env.DBUS_SESSION_BUS_ADDRESS ?? null]);
+  } catch { return; }
+}
+
 export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
   const started = performance.now();
   const sandbox = recordGateSandbox(mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-")));
@@ -382,6 +424,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   };
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
+  let sealHeadSamples: (() => void) | undefined;
   try {
     const base = git("rev-parse", "--verify", `${baseRef}^{commit}`).trim();
     const headCommit = git("rev-parse", "--verify", "HEAD^{commit}").trim();
@@ -390,7 +433,40 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
-    const head = await runFiles(root, files, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS });
+    // A single file already gets whole-step reuse after passing; partial
+    // checkpoints cannot help it, so avoid another input traversal there.
+    const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(inherited) : undefined;
+    const environmentKey = headEnvironmentKey(inherited);
+    const inputs = cleanupIdentity ? gateInputSnapshot(root, base,
+      [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], inherited) : undefined;
+    const initial = inputs?.snapshot();
+    const headCache = initial ? new GateCache<TestRun>(cacheDirectory(root, "head-files"), isGreenHeadFile, 24 * 60 * 60_000) : undefined;
+    const headKey = (file: string) => fingerprint([3, initial?.key, environmentKey, cleanupIdentity, files, budgets, file]);
+    const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
+    for (const file of files) {
+      const cached = headCache?.read(headKey(file));
+      if (cached?.completed[0] === file) {
+        reused.push(cached);
+        log(`touched-tests: reused complete green head file ${file}; identical source, selection, toolchain and environment`);
+      } else pending.push(file);
+    }
+    // Compare inputs only at the invocation boundaries, never once per file.
+    // The caller still gets the aggregate failure, but completed files survive
+    // that failure for a retry of exactly the same inputs. A killed supervisor
+    // or failed cleanup cannot seal a checkpoint.
+    sealHeadSamples = () => {
+      if (!initial || !headCache) return;
+      if (serviceCleanupIdentity(inherited) !== cleanupIdentity || headEnvironmentKey(inherited) !== environmentKey
+        || inputs?.snapshot()?.key !== initial.key) {
+        if (reused.length) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
+        return;
+      }
+      for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run);
+    };
+    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
+      onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
+    const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
+      completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
     if (!head.failures.length) {
       logTiming();
@@ -505,7 +581,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     logTiming();
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
-  } finally { budget.close(); releaseGateSandbox(sandbox); }
+  } finally { budget.close(); releaseGateSandbox(sandbox); sealHeadSamples?.(); }
 }
 
 if (import.meta.main) {

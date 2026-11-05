@@ -15349,6 +15349,10 @@ export async function createPipelineFromRequest(
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
+  // Interactive callers can acknowledge the existing durable creation queue
+  // when a writer is busy. Share one admission deadline with the earlier
+  // validation/preflight work, leaving time for the acknowledgement to render.
+  const admissionDeadline = options.queueWhenBusy ? performance.now() + 500 : undefined;
   assertWorkspaceExecution();
   if (options.conversationSource !== undefined && !isPipelineConversationSource(options.conversationSource)) {
     return { error: "invalid conversation source", status: 400 };
@@ -15606,7 +15610,7 @@ export async function createPipelineFromRequest(
     let created: Pipeline;
     let replayed = false;
     try {
-      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf,
+      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf, admissionDeadline,
         assertAuthority: () => {
           assertWorkspaceExecution(project);
           if (workspace && !workspacePrincipalAllows(workspace, project)) throw new Error("workspace access denied");
