@@ -9,8 +9,10 @@ import { repoDirForProject, viewerOwnProjectKeys, type SeatTickSources } from "@
 import { createTask } from "@/lib/tasks/commands";
 import { loadTasksByIds, mutateTasksFile } from "@/lib/tasks/store";
 import { pipelineDeliveryLookup } from "@/lib/pipelines/store";
+import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
+import { isReleasePublishStage } from "@/lib/pipelines/releaseTagPolicy";
 import { createPipelineFromRequest } from "@/lib/pipelines/engine";
-import type { CreatePipelineRequest } from "@/lib/pipelines/types";
+import type { CreatePipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import { MAX_STAGE_PROMPT_LENGTH } from "@/lib/pipelines/limits";
 import { productionReleaseController, releaseRequestDigest, ReleaseValidationRefusal, type ReleasePorts } from "./run";
 import { releaseCut, type ReleaseChange, type ReleaseDeployment } from "./policy";
@@ -160,6 +162,21 @@ export async function createReleasePipeline(request: CreatePipelineRequest, key:
   throw new Error(result.error ?? "release pipeline refused");
 }
 export function releaseControllerForSources(sources: SeatTickSources) {
+  // Use the merge queue's delivery proof for both handoff and in-flight checks.
+  // The original preparation can retain a cancelled merge after ownership moves.
+  const lanes = () => {
+    const current = sources.pipelines();
+    let all: readonly Pipeline[] | undefined;
+    let owners: ReturnType<typeof indexMergeSuccessors> | undefined;
+    const retained = () => all ??= [...current, ...sources.archivedPipelines()];
+    const resolve = (lane: Pipeline): Pipeline => {
+      if (lane.state !== "completed" || !lane.delivery || lane.delivery.active) return lane;
+      const successor = mergeSuccessor(lane, owners ??= indexMergeSuccessors(retained()));
+      return successor && canonicalOrchestratorProject(successor.project) === canonicalOrchestratorProject(lane.project)
+        ? successor : lane;
+    };
+    return { current, find: (id: string) => current.find(lane => lane.id === id) ?? retained().find(lane => lane.id === id), resolve };
+  };
   const ports: ReleasePorts = {
     now: sources.now, settings: project => sources.settings(project).release,
     observe: async (project, frozenCut) => {
@@ -187,11 +204,18 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const pkg = JSON.parse(await git("show", "origin/main:package.json"));
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
+      const snapshot = lanes();
       return { repoDir, src, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
         tickEnabled: effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled,
         mergeEnabled: mergeOnReviewEnabled(project),
-        live: sources.pipelines().some(p => canonicalOrchestratorProject(p.project) === project && p.state !== "closed"
-          && !(p.state === "completed" && p.merge?.state === "merged") && /^(Release\s+(Delegatus|\d)|Реліз\s)/i.test(p.task)),
+        live: snapshot.current.some(p => {
+          if (canonicalOrchestratorProject(p.project) !== project || p.state === "closed"
+            || !/^(Release\s+(Delegatus|\d)|Реліз\s)/i.test(p.task)) return false;
+          const lane = snapshot.resolve(p);
+          const published = !lane.stages.some(stage => stage.id === "prepare")
+            && lane.stages.some(stage => isReleasePublishStage(stage));
+          return !(lane.state === "completed" && (lane.merge?.state === "merged" || published));
+        }),
         mainVersion: pkg.version, lastTag: { name, version, at }, registryHasTag,
         checks: await requiredReleaseChecks(repo, [main, ...(cut ? [cut.revision] : [])]), hold: null,
         draining: !!activeDrain(), deploying: ledger?.state === "ok" && !!ledger.value[0] && !ledger.value[0].terminal,
@@ -220,7 +244,9 @@ export function releaseControllerForSources(sources: SeatTickSources) {
     create: createReleasePipeline,
     lookup: key => pipelineDeliveryLookup({ requestKey: key })?.id ?? null,
     pipeline: id => {
-      const lane = [...sources.pipelines(), ...sources.archivedPipelines()].find(p => p.id === id);
+      const snapshot = lanes();
+      const saved = snapshot.find(id);
+      const lane = saved ? snapshot.resolve(saved) : null;
       return lane ? { state: lane.state, merged: lane.merge?.state === "merged",
         mergeCommit: lane.merge?.mergeCommit, pr: lane.merge?.prNumber,
         declined: !!lane.decisionAnswers?.some(a => a.stageId === "publish" && /не випускати|decline|do not release/i.test(a.answer)) } : null;
