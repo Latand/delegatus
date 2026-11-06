@@ -1,7 +1,7 @@
 type ResumeCheck = (conversationId: string) => Promise<void>;
 type ResumeSignal = { check?: ResumeCheck; pending: Map<string, Promise<void>> };
 const globals = globalThis as typeof globalThis & { __llvResumedSeatSignal?: ResumeSignal };
-const signal = globals.__llvResumedSeatSignal ??= { pending: new Map() };
+const signal: ResumeSignal = globals.__llvResumedSeatSignal ??= { pending: new Map<string, Promise<void>>() };
 
 /** The running controller owns this port; engine routes import no controller graph. */
 export function bindResumedSeatTick(check: ResumeCheck | null): void {

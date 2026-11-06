@@ -537,10 +537,10 @@ export async function resumeConversation(
   const rejected = supersededRejection(registry, known);
   if (rejected) return rejected;
   const recover = overrides.recover ?? recoverDeadStructuredConversation;
-  const bridged = (recovered: { spawned: boolean }): DeliveryOutcome => ({
+  const bridged = (recovered: NonNullable<Awaited<ReturnType<typeof recover>>>): DeliveryOutcome => ({
     ok: true,
     target: null,
-    outcome: "resumed",
+    outcome: recovered.hold ? "held" : "resumed",
     spawned: recovered.spawned,
     structured: true,
   });
