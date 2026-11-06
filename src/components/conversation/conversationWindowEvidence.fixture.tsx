@@ -1659,6 +1659,7 @@ function ConsumedDeliveryFixture() {
   const [chipSlot, setChipSlot] = useState<HTMLElement | null>(null);
   const [receiptsOpen, setReceiptsOpen] = useState(false);
   const [receiptsDrawn, setReceiptsDrawn] = useState(false);
+  const [receiptsFirstRowSpace, setReceiptsFirstRowSpace] = useState<number | null>(null);
   const staged = useRef(false);
   const addFiles = composer.attachments.addFiles;
   useEffect(() => {
@@ -1687,7 +1688,17 @@ function ConsumedDeliveryFixture() {
       </div>
       {/* The pane's composer box and its bound before the box is measured:
           the transcript keeps 60% of the column, a phone's box at most 38dvh. */}
-      <form className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+      <form
+        /* A Send pressed with the draft's image staged in Context mode: the
+           production composer answers it with this refusal line (the DOM case
+           drives the real path; this stage shows where the line is drawn). */
+        onSubmit={(event) => {
+          event.preventDefault();
+          composer.setStatus({ kind: "err", text: t("composer.context.imagesBlockedQueue", {
+            toggle: t("composer.context.toggle"), queue: t("queue.queueMessage"),
+          }) });
+        }}
+        className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
         isMobile ? "max-h-[min(38dvh,20rem)] py-1.5" : "max-h-[40%] py-2"}`}>
       <ComposerBar
         composer={composer}
@@ -1711,9 +1722,11 @@ function ConsumedDeliveryFixture() {
         queuePanel={<NativeQueuePanel view={view} unresolved={[]} error={null} thread={{ model: null, effort: null }}
           cardId="conversation_consumed" mintKey={() => "consumed-edit"} submit={async () => ({ ok: true })} onRefresh={() => {}} t={t} />}
         receiptsHidden={!receiptsDrawn}
+        receiptsMinHeight={receiptsOpen ? receiptsFirstRowSpace : null}
         receipts={<RuntimeComposerReceipts receipts={[unknown("unknown-send"), consumed]}
           onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}}
-          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn} />}
+          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn}
+          onFirstRowSpace={setReceiptsFirstRowSpace} />}
       />
       </form>
       <button type="button" data-prove-consumed className="sr-only" onClick={() => setProven(true)}>Prove</button>

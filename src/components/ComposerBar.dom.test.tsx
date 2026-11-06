@@ -527,6 +527,51 @@ test("desktop blocked-send recovery keeps its compact control and invokes recove
   flushSync(() => root.unmount());
 });
 
+function ReceiptsHarness({ minHeight, hidden = false, refuse = false }: { minHeight?: number | null; hidden?: boolean; refuse?: boolean }) {
+  const composer = useComposer({ initialText: () => "", persistText: () => {}, submit: () => {} });
+  const refused = refuse ? { ...composer, status: { kind: "err" as const, text: "Refused for a reason" } } : composer;
+  return <ComposerBar
+    composer={refused}
+    placeholder="Prompt"
+    textareaAriaLabel="Prompt"
+    imageAriaLabel="Add images"
+    leftSlot={null}
+    sendLabelIdle="Send"
+    sendLabelRecording="Stop"
+    sendIdleClassName="bg-accent"
+    receipts={<span>receipt rows</span>}
+    receiptsHidden={hidden}
+    receiptsMinHeight={minHeight}
+    sendDisabledReason={refuse ? "Not now" : undefined}
+  />;
+}
+
+test("the open receipts list keeps the height its first row asked for; closed or unasked it keeps the region's equal share", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const wrapper = () => host.querySelector<HTMLElement>('[data-testid="composer-receipts"]')!;
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} />));
+  expect(wrapper().style.minHeight).toBe("142px");
+  /* Only that surface asks: every other child of the region still yields. */
+  expect(host.querySelector('[data-testid="composer-accessories"]')!.className).toContain("[&>*]:min-h-0");
+  flushSync(() => root.render(<ReceiptsHarness minHeight={null} />));
+  expect(wrapper().style.minHeight).toBe("");
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} hidden />));
+  expect(wrapper().style.minHeight).toBe("");
+  flushSync(() => root.unmount());
+});
+
+test("a refusal and a blocked-send reason never shrink out of the bounded form", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<ReceiptsHarness refuse />));
+  expect(host.querySelector('[data-testid="composer-status"]')!.className).toContain("shrink-0");
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')!.className).toContain("shrink-0");
+  flushSync(() => root.unmount());
+});
+
 test("Send options has a visible keyboard and pointer opener without submitting", () => {
   let selected = 0;
   function MenuHarness() {

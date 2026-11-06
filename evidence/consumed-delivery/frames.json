@@ -3,9 +3,11 @@
   "readings": {
     "desktop-1440-en-light": {
       "beforeRest": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -26,8 +28,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -37,9 +39,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -56,12 +75,12 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -71,9 +90,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -92,7 +113,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -102,14 +123,31 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
-          "height": 337,
-          "share": 0.395
+          "height": 341,
+          "share": 0.4
         },
         "transcriptWhole": true,
         "images": 1,
@@ -123,7 +161,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 341,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": true,
         "notices": [
@@ -135,9 +229,11 @@
     },
     "desktop-1440-en-dark": {
       "beforeRest": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -154,12 +250,12 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -169,9 +265,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -192,8 +305,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -203,9 +316,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -224,7 +339,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -234,14 +349,31 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
-          "height": 337,
-          "share": 0.395
+          "height": 341,
+          "share": 0.4
         },
         "transcriptWhole": true,
         "images": 1,
@@ -255,7 +387,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 341,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": true,
         "notices": [
@@ -267,9 +455,11 @@
     },
     "desktop-1440-uk-light": {
       "beforeRest": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -290,8 +480,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -301,9 +491,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -324,8 +531,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -335,9 +542,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -356,7 +565,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -366,14 +575,31 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
-          "height": 337,
-          "share": 0.395
+          "height": 341,
+          "share": 0.4
         },
         "transcriptWhole": true,
         "images": 1,
@@ -387,7 +613,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 341,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": true,
         "notices": [
@@ -399,9 +681,11 @@
     },
     "desktop-1440-uk-dark": {
       "beforeRest": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -418,12 +702,12 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -433,9 +717,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -456,8 +757,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -467,9 +768,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -488,7 +791,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -498,14 +801,31 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
-          "height": 337,
-          "share": 0.395
+          "height": 341,
+          "share": 0.4
         },
         "transcriptWhole": true,
         "images": 1,
@@ -519,7 +839,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 341,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": true,
         "notices": [
@@ -531,9 +907,11 @@
     },
     "pane-900-en-light": {
       "beforeRest": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -554,8 +932,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -565,9 +943,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -588,8 +983,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -599,9 +994,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -620,7 +1017,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -630,9 +1027,26 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -644,16 +1058,72 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": true,
+        "rowsWhole": false,
         "notice": null,
         "count": "1 message",
         "cards": [
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 301,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
+        ],
+        "cardsWhole": false,
         "notices": [
           "Delivery unconfirmed"
         ],
@@ -663,9 +1133,11 @@
     },
     "pane-900-en-dark": {
       "beforeRest": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -686,8 +1158,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -697,9 +1169,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -720,8 +1209,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -731,9 +1220,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -752,7 +1243,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -762,9 +1253,26 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -776,16 +1284,72 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": true,
+        "rowsWhole": false,
         "notice": null,
         "count": "1 message",
         "cards": [
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 301,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
+        ],
+        "cardsWhole": false,
         "notices": [
           "Delivery unconfirmed"
         ],
@@ -795,9 +1359,11 @@
     },
     "pane-900-uk-light": {
       "beforeRest": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -818,8 +1384,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -829,9 +1395,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -852,8 +1435,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -863,9 +1446,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -884,7 +1469,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -894,9 +1479,26 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -908,16 +1510,72 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": true,
+        "rowsWhole": false,
         "notice": null,
         "count": "1 повідомлення",
         "cards": [
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 301,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
         "notices": [
           "Доставку не підтверджено"
         ],
@@ -927,9 +1585,11 @@
     },
     "pane-900-uk-dark": {
       "beforeRest": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -950,8 +1610,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -961,9 +1621,26 @@
         "overflowX": 0
       },
       "before": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -984,8 +1661,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -995,9 +1672,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1016,7 +1695,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1026,9 +1705,26 @@
         "overflowX": 0
       },
       "after": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": true,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "chip",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1040,16 +1736,72 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": true,
+        "rowsWhole": false,
         "notice": null,
         "count": "1 повідомлення",
         "cards": [
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 15,
+        "scrollHeight": 15,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 301,
+          "share": 0.4
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
         "notices": [
           "Доставку не підтверджено"
         ],
@@ -1059,9 +1811,11 @@
     },
     "phone-390-en-light": {
       "beforeRest": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1082,8 +1836,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1094,8 +1848,25 @@
       },
       "before": {
         "chip": null,
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1116,8 +1887,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1127,9 +1898,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "chip",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1148,7 +1921,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1159,8 +1932,25 @@
       },
       "after": {
         "chip": null,
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1179,7 +1969,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 30,
+        "scrollHeight": 30,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": null,
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1191,9 +2037,11 @@
     },
     "phone-390-en-dark": {
       "beforeRest": {
-        "chip": "Not delivered: 2",
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chip": "Unconfirmed: 2",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1214,8 +2062,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1226,8 +2074,25 @@
       },
       "before": {
         "chip": null,
-        "chipAria": "Messages not delivered: 2. Show them",
+        "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1248,8 +2113,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1259,9 +2124,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Not delivered: 1",
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chip": "Unconfirmed: 1",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": null,
+        "active": "chip",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1280,7 +2147,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1291,8 +2158,25 @@
       },
       "after": {
         "chip": null,
-        "chipAria": "Messages not delivered: 1. Show them",
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1311,7 +2195,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 30,
+        "scrollHeight": 30,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": null,
+        "chipAria": "Messages with unconfirmed delivery: 1. Show them",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Delivery unconfirmed",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Retry",
+              "whole": true
+            },
+            {
+              "label": "Discard",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1323,9 +2263,11 @@
     },
     "phone-390-uk-light": {
       "beforeRest": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1346,8 +2288,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1358,8 +2300,25 @@
       },
       "before": {
         "chip": null,
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1380,8 +2339,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1391,9 +2350,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "chip",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1412,7 +2373,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1423,8 +2384,25 @@
       },
       "after": {
         "chip": null,
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1443,7 +2421,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 45,
+        "scrollHeight": 45,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": null,
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1455,9 +2489,11 @@
     },
     "phone-390-uk-dark": {
       "beforeRest": {
-        "chip": "Не доставлено: 2",
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "body",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1478,8 +2514,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1490,8 +2526,25 @@
       },
       "before": {
         "chip": null,
-        "chipAria": "Не доставлено повідомлень: 2. Показати їх",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "consumed-tick",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1512,8 +2565,8 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1523,9 +2576,11 @@
         "overflowX": 0
       },
       "afterRest": {
-        "chip": "Не доставлено: 1",
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": null,
+        "active": "chip",
         "listOpen": false,
         "listShown": false,
         "box": {
@@ -1544,7 +2599,7 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [
@@ -1555,8 +2610,25 @@
       },
       "after": {
         "chip": null,
-        "chipAria": "Не доставлено повідомлень: 1. Показати їх",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "list",
         "listOpen": true,
         "listShown": true,
         "box": {
@@ -1575,7 +2647,63 @@
           "unknown-send"
         ],
         "cardText": [
-          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
+        "whole": true,
+        "clientHeight": 45,
+        "scrollHeight": 45,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": null,
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "first": {
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
         "cardsWhole": false,
         "notices": [

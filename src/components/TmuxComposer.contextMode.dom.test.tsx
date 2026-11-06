@@ -55,6 +55,7 @@ Object.assign(globalThis, {
   sessionStorage: dom.sessionStorage,
   File: dom.File,
   URL: dom.URL,
+  FileReader: dom.FileReader,
 });
 let mobile = false;
 (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
@@ -449,6 +450,108 @@ test("Alt+Enter still hands the draft to Codex's own queue in context mode", asy
   await settle(() => press(textarea(host), "Enter", { altKey: true }));
   await settle(() => {});
   expect(queueWrites).toHaveLength(1);
+  expect(injections).toEqual([]);
+  root.unmount();
+});
+
+/** A picture pasted into the field, the way the operator stages one. */
+async function pasteImage(host: HTMLElement, tag = "shot"): Promise<void> {
+  const field = textarea(host);
+  const propsKey = Object.keys(field).find((candidate) => candidate.startsWith("__reactProps$"))!;
+  const props = (field as unknown as Record<string, { onPaste(event: unknown): void }>)[propsKey]!;
+  const bytes = new TextEncoder().encode(`png-${tag}`);
+  await settle(() => props.onPaste({
+    clipboardData: { items: [{ type: "image/png", getAsFile: () => new File([bytes], `${tag}.png`, { type: "image/png" }) }] },
+    preventDefault() {},
+  }));
+  for (let attempt = 0; attempt < 50 && host.querySelectorAll("img").length < 1; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  await settle(() => {});
+}
+
+const refusal = (host: HTMLElement) => host.querySelector<HTMLElement>('[data-testid="composer-status"]');
+
+test("Send in context mode with a staged picture names the Context toggle and the Codex queue, keeps the draft and the picture, and posts nothing", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    turn = "running";
+    const { host, root } = await mount();
+    try {
+      await type(host, "look at this");
+      await pasteImage(host);
+      const staged = host.querySelectorAll("img").length;
+      expect(staged).toBeGreaterThan(0);
+      expect(host.querySelector<HTMLButtonElement>("button[type=submit]")!.disabled).toBe(false);
+      await clickSend(host);
+      await settle(() => {});
+      /* The refusal points at the controls that DO carry the picture: the
+         Context toggle by its own label and the queue by the label of its menu
+         entry — never at Send, which is the control that refused. */
+      const line = refusal(host)!;
+      expect(line.textContent).toBe(translate(locale, "composer.context.imagesBlockedQueue", {
+        toggle: translate(locale, "composer.context.toggle"),
+        queue: translate(locale, "queue.queueMessage"),
+      }));
+      expect(line.getAttribute("role")).toBe("status");
+      expect(line.className).toContain("shrink-0");
+      expect(injections).toEqual([]);
+      expect(sends).toEqual([]);
+      expect(queueWrites).toEqual([]);
+      expect(textarea(host).value).toBe("look at this");
+      expect(host.querySelectorAll("img").length).toBe(staged);
+    } finally {
+      root.unmount();
+      document.body.replaceChildren();
+    }
+  }
+});
+
+test("a host with no native queue gets the refusal without the queue route", async () => {
+  turn = "running";
+  nativeQueueCapable = false;
+  const { host, root } = await mount();
+  await type(host, "look at this");
+  await pasteImage(host);
+  await clickSend(host);
+  await settle(() => {});
+  expect(refusal(host)!.textContent).toBe(translate("en", "composer.context.imagesBlocked", { toggle: translate("en", "composer.context.toggle") }));
+  expect(refusal(host)!.textContent).not.toContain(translate("en", "queue.queueMessage"));
+  expect(injections).toEqual([]);
+  root.unmount();
+});
+
+test("after the refusal, Context off sends the picture as an ordinary message and Alt+Enter queues it", async () => {
+  turn = "running";
+  const { host, root } = await mount();
+  await type(host, "look at this");
+  await pasteImage(host);
+  await clickSend(host);
+  await settle(() => {});
+  expect(refusal(host)).not.toBeNull();
+  /* Alt+Enter keeps its queue path with the picture while Context is on. */
+  await settle(() => press(textarea(host), "Enter", { altKey: true }));
+  for (let attempt = 0; attempt < 100 && queueWrites.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await settle(() => {});
+  expect(queueWrites).toHaveLength(1);
+  expect(JSON.stringify(queueWrites[0])).toContain("png");
+  expect(injections).toEqual([]);
+  root.unmount();
+});
+
+test("after the refusal, turning Context off sends the picture with an ordinary Enter", async () => {
+  turn = "running";
+  const { host, root } = await mount();
+  await type(host, "look at this");
+  await pasteImage(host);
+  await clickSend(host);
+  await settle(() => {});
+  await settle(() => toggle(host)!.click());
+  await settle(() => press(textarea(host), "Enter"));
+  for (let attempt = 0; attempt < 100 && sends.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await settle(() => {});
+  expect(sends).toHaveLength(1);
+  expect(JSON.stringify(sends[0]?.images ?? [])).toContain("png");
   expect(injections).toEqual([]);
   root.unmount();
 });
