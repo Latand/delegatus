@@ -2,6 +2,327 @@ import { expect, test } from "bun:test";
 import http from "node:http";
 import { startClaudeProviderRelay } from "./claudeProviderRelay";
 
+const frame = (body: unknown) => `data: ${JSON.stringify(body)}\n\n`;
+const start = frame({ type: "message_start", message: { id: "msg_fixture", type: "message" } });
+const stop = frame({ type: "message_stop" });
+const blockStart = (type = "text", index = 0) => frame({ type: "content_block_start", index,
+  content_block: { type, ...(type === "text" ? { text: "" } : type === "tool_use" ? { id: "tool_fixture", name: "fixture", input: {} } : { thinking: "", signature: "" }) } });
+const blockStop = frame({ type: "content_block_stop", index: 0 });
+const delta = (value: string, field = "text") => frame({ type: "content_block_delta", index: 0,
+  delta: { type: field === "partial_json" ? "input_json_delta" : `${field}_delta`, [field]: value } });
+const events = (output: string) => output.split("\n\n").flatMap(value => {
+  const data = value.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+  return data ? [JSON.parse(data)] : [];
+});
+const content = (output: string, field = "text") => events(output).map(item => item.delta?.[field] ?? "").join("");
+
+test("a paused downstream bounds upstream consumption and resumes on drain", async () => {
+  const count = 512, size = 64 * 1024;
+  let sent = 0;
+  const upstream = http.createServer((request, response) => {
+    request.resume(); response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(start + blockStart());
+    const pump = () => {
+      while (!response.destroyed && sent < count) {
+        sent++;
+        if (!response.write(delta("z".repeat(size)))) { response.once("drain", pump); return; }
+      }
+      if (!response.destroyed) response.end(blockStop + stop);
+    };
+    pump();
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  if (!address || typeof address === "string") throw new Error("No fixture port");
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "abcdefgh", headers: {}, sessionId: "fixture" });
+  let client: http.IncomingMessage | undefined;
+  try {
+    client = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const request = http.request(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } }, resolve);
+      request.once("error", reject); request.end();
+    });
+    client.pause();
+    let held = sent, stable = 0;
+    for (let observation = 0; observation < 50 && stable < 3; observation++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      stable = sent === held ? stable + 1 : 0;
+      held = sent;
+    }
+    expect(stable).toBe(3);
+    expect(held).toBeGreaterThan(0); expect(held).toBeLessThan(count);
+    let received = 0;
+    client.on("data", chunk => { received += chunk.length; });
+    const finished = new Promise<void>((resolve, reject) => { client!.once("end", resolve); client!.once("error", reject); });
+    client.resume(); await finished;
+    expect(sent).toBe(count); expect(received).toBeGreaterThan(count * size);
+    console.info(JSON.stringify({ workloadBytes: count * size, heldUpstreamFrames: held, completedFrames: sent, peakProcessRssKiB: process.resourceUsage().maxRSS }));
+  } finally { client?.destroy(); relay.close(); upstream.closeAllConnections(); upstream.close(); }
+});
+
+test("UTF-8 network boundaries and multi-line SSE preserve content and metadata", async () => {
+  const bytes = Buffer.from(start + blockStart() + 'id: fixture\n: comment\nevent: content_block_delta\ndata: {"type":"content_block_delta",\ndata: "index":0,"delta":{"type":"text_delta","text":"Привіт 😀"}}\n\n' + blockStop + stop);
+  const upstream = http.createServer((request, response) => {
+    request.resume(); response.writeHead(200, { "content-type": "text/event-stream" });
+    let index = 0;
+    const next = () => { if (response.destroyed) return; if (index === bytes.length) { response.end(); return; } response.write(bytes.subarray(index, ++index)); setImmediate(next); };
+    next();
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  if (!address || typeof address === "string") throw new Error("No fixture port");
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "abcdefgh", headers: {}, sessionId: "fixture" });
+  try {
+    const output = await (await fetch(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } })).text();
+    expect(content(output)).toBe("Привіт 😀");
+    expect(output).toContain("id: fixture\n: comment\nevent: content_block_delta\n");
+  } finally { relay.close(); upstream.closeAllConnections(); upstream.close(); }
+});
+
+test("HTTP status, bounded diagnostics and retry information survive without secrets", async () => {
+  const token = "abcdefgh";
+  let status = 401, body = "", retry = "", contentType = "application/json";
+  const foreign: string[] = [];
+  const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { foreign.push(request.url); return new Response("unexpected"); } });
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(body, { status, headers: {
+    "content-type": contentType, "retry-after": retry, location: `http://127.0.0.1:${target.port}`, "x-private": token,
+  } }) });
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers: {}, sessionId: "fixture" });
+  const send = () => fetch(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+  try {
+    for (const code of [401, 403, 429, 500, 503, 302]) {
+      status = code; body = JSON.stringify({ error: { message: `action required ${token}` } }); retry = code === 429 ? "12" : "Wed, 21 Oct 2026 07:28:00 GMT";
+      const response = await send();
+      expect(response.status).toBe(code === 302 ? 502 : code);
+      expect(response.headers.get("retry-after")).toBe(retry);
+      expect(response.headers.has("x-private")).toBe(false);
+      expect(await response.json()).toEqual({ error: { type: code === 401 || code === 403 ? "authentication_error" : code === 429 ? "rate_limit_error" : "provider_error", message: "action required [redacted]" } });
+    }
+    expect(foreign).toEqual([]);
+    status = 429; retry = token;
+    body = JSON.stringify({ error: { message: "z".repeat(2040) + token } });
+    let response = await send();
+    expect(response.headers.has("retry-after")).toBe(false);
+    let answer = await response.json() as { error: { message: string } };
+    expect(answer.error.message.length).toBe(2048); expect(answer.error.message).not.toContain(token);
+    for (const value of ["invalid " + token, JSON.stringify({ error: { message: token.repeat(9000) } })]) {
+      body = value; response = await send(); answer = await response.json() as typeof answer;
+      expect(answer.error.message).toBe(value.startsWith("invalid") ? "Provider request failed: invalid diagnostic" : "Provider request failed: oversized diagnostic");
+    }
+    contentType = "text/html"; body = token;
+    expect((await (await send()).json()).error.message).toBe("Provider request failed: non-JSON diagnostic");
+  } finally { relay.close(); upstream.stop(); target.stop(); }
+});
+
+for (const mode of ["headers", "delta", "shutdown"] as const) test(`downstream ${mode} cancels its owned upstream`, async () => {
+  let closed!: () => void;
+  const ended = new Promise<void>(resolve => { closed = resolve; });
+  let release!: () => void;
+  const upstream = http.createServer((request, response) => {
+    request.resume(); response.once("close", closed);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(start + (mode === "headers" ? "" : blockStart() + delta("first content")));
+    release = () => response.end(blockStop + stop);
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  if (!address || typeof address === "string") throw new Error("No fixture port");
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "abcdefgh", headers: {}, sessionId: "fixture" });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = await fetch(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    const reader = response.body!.getReader();
+    await reader.read();
+    if (mode === "shutdown") relay.close(); else await reader.cancel();
+    await Promise.race([ended, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("upstream stayed open")), 1000); })]);
+    release();
+  } finally { clearTimeout(timeout); relay.close(); upstream.closeAllConnections(); upstream.close(); }
+});
+
+test("connection refusal and partial transport failure stay observable", async () => {
+  const upstream = http.createServer((request, response) => {
+    request.resume(); response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(start + blockStart() + delta("safe"));
+    setImmediate(() => response.destroy());
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  if (!address || typeof address === "string") throw new Error("No fixture port");
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "abcdefgh", headers: {}, sessionId: "fixture" });
+  const send = async () => (await fetch(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } }));
+  try {
+    await expect(send().then(response => response.text())).rejects.toThrow();
+    upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+    const response = await send();
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.message).toBe("Provider connection failed");
+  } finally { relay.close(); upstream.closeAllConnections(); upstream.close(); }
+});
+
+async function streamFixture(run: (send: (body: string, path?: string) => Promise<string>) => Promise<void>, token = "abcdefgh", headers: Record<string, string> = {}) {
+  let body = "";
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(body, { headers: { "content-type": "text/event-stream" } }) });
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers, sessionId: "fixture" });
+  try {
+    await run(async (value, path = "/v1/messages") => {
+      body = value;
+      const response = await fetch(relay.baseUrl + path, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+      if (!response.ok) throw new Error("Relay refused the response");
+      return response.text();
+    });
+  } finally { relay.close(); upstream.stop(); }
+}
+
+test("every text and tool escape split preserves safe spelling and redacts reflected credentials", async () => {
+  const token = "abcd/efg";
+  const escaped = [...token].map(char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+  await streamFixture(async send => {
+    for (const secret of [token, token.replaceAll("/", "\\/"), escaped]) {
+      for (let split = 1; split < secret.length; split++) {
+        const output = await send(start + blockStart() + delta(`safe 😀 ${secret.slice(0, split)}`) + delta(`${secret.slice(split)} end`) + blockStop + stop);
+        expect(content(output)).toBe("safe 😀 [redacted] end");
+        expect(output).not.toContain(token);
+      }
+    }
+    for (const spelling of [token, token.replaceAll("/", "\\/"), escaped, JSON.stringify(escaped).slice(1, -1)]) {
+      const json = `{"${spelling}":"${spelling}","safe":"literal \\u0041 \\/ 😀","n":12.50e+2}`;
+      for (let split = 1; split < json.length; split++) {
+        const output = await send(start + blockStart("tool_use") + delta(json.slice(0, split), "partial_json") + delta(json.slice(split), "partial_json") + blockStop + stop);
+        const reconstructed = content(output, "partial_json");
+        expect(JSON.parse(reconstructed)).toEqual({ "[redacted]": "[redacted]", safe: "literal A / 😀", n: 1250 });
+        expect(reconstructed).toContain('"safe":"literal \\u0041 \\/ 😀","n":12.50e+2');
+        expect(output).not.toContain(token);
+      }
+    }
+  }, token);
+});
+
+test("overlapping secret prefixes, markers, numeric tool values and JSON-escaped quotes", async () => {
+  await streamFixture(async send => {
+    expect(content(await send(start + blockStart() + delta("abcdefgh") + delta("ij tail") + blockStop + stop))).toBe("[redacted] tail");
+  }, "abcdefgh", { "x-feature": "abcdefghij" });
+  await streamFixture(async send => {
+    const output = await send(start + blockStart() + delta("reda") + delta("cted") + blockStop + stop);
+    expect(content(output)).toBe("[withheld]");
+  }, "redacted");
+  await streamFixture(async send => {
+    const json = '{"value":12345678,"safe":1}';
+    for (let split = 1; split < json.length; split++) {
+      expect(JSON.parse(content(await send(start + blockStart("tool_use") + delta(json.slice(0, split), "partial_json") + delta(json.slice(split), "partial_json") + blockStop + stop), "partial_json")))
+        .toEqual({ value: "[redacted]", safe: 1 });
+    }
+  }, "12345678");
+  await streamFixture(async send => {
+    const wire = start + blockStart("tool_use") + delta('{"n":123456789123456789,"safe":9007199254740993}', "partial_json") + blockStop + stop;
+    expect(content(await send(wire), "partial_json")).toBe('{"n":"[redacted]","safe":9007199254740993}');
+  }, "123456789123456789");
+  const token = 'abcd"efgh';
+  await streamFixture(async send => {
+    const escaped = JSON.stringify(token).slice(1, -1);
+    for (let split = 1; split < escaped.length; split++) {
+      expect(content(await send(start + blockStart() + delta(escaped.slice(0, split)) + delta(escaped.slice(split)) + blockStop + stop))).toBe("[redacted]");
+    }
+  }, token);
+});
+
+test("thinking, signature and non-content events retain order and unsafe signatures fail", async () => {
+  await streamFixture(async send => {
+    const output = await send(start + blockStart("thinking") + delta("abc", "thinking")
+      + frame({ type: "ping", detail: "keep" }) + delta("safe signature", "signature") + delta("defgh end", "thinking") + blockStop + stop);
+    expect(content(output, "thinking")).toBe("[redacted] end");
+    expect(content(output, "signature")).toBe("safe signature");
+    const types = events(output).map(item => item.delta?.type ?? item.type);
+    expect(types.indexOf("ping")).toBeLessThan(types.indexOf("signature_delta"));
+    expect(types.indexOf("signature_delta")).toBeLessThan(types.lastIndexOf("thinking_delta"));
+    await expect(send(start + blockStart("thinking") + delta("abcd", "signature") + delta("efgh", "signature") + blockStop + stop)).rejects.toThrow();
+  });
+});
+
+test("in-band provider errors release sanitized diagnostics after unresolved content", async () => {
+  await streamFixture(async send => {
+    const output = await send(start + blockStart() + delta("abc")
+      + frame({ type: "error", error: { type: "overloaded_error", message: "retry abcdefgh" } }));
+    expect(events(output).at(-1)).toEqual({ type: "error", error: { type: "overloaded_error", message: "retry [redacted]" } });
+    expect(output).not.toContain("abcdefgh");
+    expect(output).not.toContain("message_stop");
+  });
+});
+
+test("credentials containing literal escape spelling remain protected", async () => {
+  const token = "\\u0061bcdefgh";
+  await streamFixture(async send => {
+    for (let split = 1; split < token.length; split++) {
+      expect(content(await send(start + blockStart() + delta(token.slice(0, split)) + delta(token.slice(split)) + blockStop + stop))).toBe("[redacted]");
+    }
+  }, token);
+});
+
+test("blocks larger than the old total cap stream, while malformed and individually oversized inputs fail", async () => {
+  await streamFixture(async send => {
+    const part = "z".repeat(64 * 1024);
+    const output = await send(start + blockStart() + Array.from({ length: 129 }, () => delta(part)).join("") + blockStop + stop);
+    expect(content(output).length).toBe(part.length * 129);
+    const malformed = [
+      start, start + blockStart(), start + blockStart() + delta("safe") + blockStop,
+      start + blockStart("tool_use") + delta('{"value":', "partial_json") + blockStop + stop,
+      start + blockStart("tool_use") + delta('{"value":1,}', "partial_json") + blockStop + stop,
+      start + blockStart("tool_use") + delta('{"value":"\\q"}', "partial_json") + blockStop + stop,
+      start + Array.from({ length: 65 }, (_, index) => blockStart("text", index)).join(""),
+      start + blockStart() + delta("abc") + Array.from({ length: 65 }, () => frame({ type: "ping" })).join(""),
+      start + blockStart() + delta("abc") + Array.from({ length: 5 }, () => frame({ type: "ping", padding: "z".repeat(2 * 1024 * 1024) })).join(""),
+      start + blockStart("tool_use") + delta('{"n":1', "partial_json") + Array.from({ length: 9 }, () => delta("0".repeat(1024 * 1024), "partial_json")).join(""),
+      start + blockStart() + delta("z".repeat(8 * 1024 * 1024)),
+      ": " + "z".repeat(8 * 1024 * 1024) + "\n\n",
+      Array.from({ length: 130 }, () => ": " + part + "\n").join("") + "\n",
+      "data: {}\n",
+    ];
+    for (const [index, wire] of malformed.entries()) {
+      let refused = false;
+      try { await send(wire); } catch { refused = true; }
+      expect({ index, refused }).toEqual({ index, refused: true });
+    }
+    expect(await send('data: {"message":"generic"}\n\n', "/v1/events")).toContain("generic");
+    expect(content(await send(start + blockStart() + delta("recovered") + blockStop + stop))).toBe("recovered");
+  });
+});
+
+test("ordinary content reaches the consumer before block stop", async () => {
+  let written = 0;
+  let stopped = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const frame = (body: unknown) => `data: ${JSON.stringify(body)}\n\n`;
+  const upstream = http.createServer((request, response) => {
+    request.resume();
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(frame({ type: "message_start", message: { type: "message" } }));
+    response.write(frame({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }));
+    written = performance.now();
+    response.write(frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ordinary first delta" } }));
+    timer = setTimeout(() => {
+      stopped = performance.now();
+      response.end(frame({ type: "content_block_stop", index: 0 }) + frame({ type: "message_stop" }));
+    }, 250);
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  if (!address || typeof address === "string") throw new Error("Missing fixture port");
+  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "opaque-provider-8427", headers: {}, sessionId: "fixture" });
+  try {
+    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    let received = "";
+    let first = 0;
+    for await (const chunk of response.body!) {
+      received += new TextDecoder().decode(chunk);
+      if (!first && received.includes("ordinary first delta")) first = performance.now();
+    }
+    console.info(JSON.stringify({ written, first, stopped, deltaMs: first - written, ...(first ? {} : { received }) }));
+    expect(first).toBeGreaterThan(written);
+    expect(first).toBeLessThan(stopped);
+  } finally {
+    clearTimeout(timer);
+    relay.close(); upstream.closeAllConnections(); upstream.close();
+  }
+});
+
 test("provider relay authenticates only its child and scrubs split credential echoes", async () => {
   const token = "opaque-provider-token-8427";
   const headerValue = "opaque-header-value-8427";
@@ -11,9 +332,9 @@ test("provider relay authenticates only its child and scrubs split credential ec
       session: request.headers.get("x-opencode-session"), agent: request.headers.get("user-agent") });
     const body = new ReadableStream({
       async start(controller) {
-        controller.enqueue(new TextEncoder().encode(`event: message\ndata: {"message":"denied ${token.slice(0, 10)}`));
+        controller.enqueue(new TextEncoder().encode(`event: message_start\ndata: {"type":"message_start","message":"denied ${token.slice(0, 10)}`));
         await Bun.sleep(10);
-        controller.enqueue(new TextEncoder().encode(`${token.slice(10)} ${headerValue} ordinary text"}\n\n`));
+        controller.enqueue(new TextEncoder().encode(`${token.slice(10)} ${headerValue} ordinary text"}\n\ndata: {"type":"message_stop"}\n\n`));
         controller.close();
       },
     });
@@ -74,10 +395,11 @@ test("provider relay redacts credentials split across text and tool-input deltas
     expect(output).not.toContain(token);
     expect(output).not.toContain(header);
     const events = output.trim().split("\n\n").map((frame) => JSON.parse(frame.split("\n").find((line) => line.startsWith("data: "))!.slice(6)));
-    expect(events.map((item) => item.type)).toEqual(["message_start", "content_block_start", "content_block_delta", "content_block_stop",
-      "content_block_start", "content_block_delta", "content_block_stop", "message_stop"]);
-    expect(events[2].delta.text).toBe("before [redacted] after");
-    expect(JSON.parse(events[5].delta.partial_json)).toEqual({ value: "[redacted]" });
+    expect(events.filter(item => item.type !== "content_block_delta").map(item => item.type)).toEqual([
+      "message_start", "content_block_start", "content_block_stop", "content_block_start", "content_block_stop", "message_stop",
+    ]);
+    expect(events.filter(item => item.delta?.type === "text_delta").map(item => item.delta.text).join("")).toBe("before [redacted] after");
+    expect(JSON.parse(events.filter(item => item.delta?.type === "input_json_delta").map(item => item.delta.partial_json).join(""))).toEqual({ value: "[redacted]" });
   } finally { relay.close(); upstream.stop(); }
 });
 
@@ -91,7 +413,7 @@ test("provider relay checks initial block text together with later deltas", asyn
   ].join(""), { headers: { "content-type": "text/event-stream" } }) });
   const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers: {}, sessionId: "fixture" });
   try {
-    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    const response = await fetch(`${relay.baseUrl}/v1/events`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
     const frames = (await response.text()).trim().split("\n\n");
     const events = frames.map((value) => JSON.parse(value.split("\n").find((line) => line.startsWith("data: "))!.slice(6)));
     expect(events[0].content_block.text).toBe("");
@@ -111,7 +433,7 @@ test("provider relay preserves thinking and signature deltas in one block", asyn
   ].join(""), { headers: { "content-type": "text/event-stream" } }) });
   const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers: {}, sessionId: "fixture" });
   try {
-    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    const response = await fetch(`${relay.baseUrl}/v1/events`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
     const frames = (await response.text()).trim().split("\n\n");
     const events = frames.map((value) => JSON.parse(value.split("\n").find((line) => line.startsWith("data: "))!.slice(6)));
     expect(events.map((item) => item.type)).toEqual(["content_block_start", "content_block_delta", "content_block_delta", "content_block_stop"]);
@@ -133,7 +455,7 @@ test("provider error prose and headers are withheld before Claude can persist th
     const body = await response.text();
     expect(response.status).toBe(401);
     expect(body).not.toContain(token);
-    expect(body).toContain("Provider request failed");
+    expect(JSON.parse(body).error.message).toBe("denied [redacted]");
     expect(response.headers.has("x-provider-debug")).toBe(false);
   } finally { relay.close(); upstream.stop(); }
 });
@@ -213,10 +535,10 @@ test("malformed provider SSE closes its connection without stopping the relay", 
   const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token: "opaque-provider-8427",
     headers: {}, sessionId: "fixture" });
   try {
-    await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } })
+    await fetch(`${relay.baseUrl}/v1/events`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } })
       .then((response) => response.text()).catch(() => "");
     malformed = false;
-    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
+    const response = await fetch(`${relay.baseUrl}/v1/events`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
     expect(await response.text()).toContain("ok");
   } finally { relay.close(); upstream.stop(); }
 });
