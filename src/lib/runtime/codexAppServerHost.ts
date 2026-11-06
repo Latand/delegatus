@@ -2560,6 +2560,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (request.expectedTurnId !== undefined && request.expectedTurnId !== this.activeTurnId) {
       throw new StructuredInjectError("stale-turn", "refused");
     }
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     /* Read once, before the write, so the placement reported afterwards is the
        one the request was actually issued against rather than whatever the turn
        axis drifted to while the insertion was being observed. */
@@ -2590,6 +2593,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     // The metadata write above yielded; the caller's seat, account and drain
     // authority must still hold at the native write boundary.
     authorizeDispatch?.();
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     try {
       await this.rpc("thread/inject_items", { threadId: this.identity.threadId, items });
     } catch (error) {

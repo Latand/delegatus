@@ -2698,6 +2698,21 @@ export class StructuredDeliveryQueue {
         this.retrySoon();
         return "stop";
       }
+      if (effect.kind === "send" && effect.policy === "context-or-queue"
+        && error instanceof StructuredSendRefusedError && reason === "stale-turn") {
+        // A turn can start during native metadata publication. Nothing was
+        // written by this attempt; reconsider context versus wake under its key.
+        const current = await this.readStatus(effect.operationId);
+        if (!current.readable || !current.value) { this.retrySoon(); return "stop"; }
+        if (context.priorDeliveryUnverified || current.value.deliveryUnverified === true) {
+          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+          return "next";
+        }
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+        this.noteWait(effect, "awaiting-turn", { wake: "retry", detail: "the turn changed before the hand-over" });
+        this.retrySoon();
+        return "stop";
+      }
       if (error instanceof StructuredSendRefusedError || error instanceof NativeQueueProtocolRefusal) {
         if (context.steerOrQueue && context.steersIntoTurn) {
           this.refusedSteerTurns.set(effect.operationId, context.activeTurnRef);

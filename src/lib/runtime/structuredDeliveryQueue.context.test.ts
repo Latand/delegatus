@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { parseRuntimeCommand } from "./commands";
-import { StructuredDispatchDeferredError, StructuredInjectError, type HostState } from "./engineHost";
+import { StructuredDispatchDeferredError, StructuredInjectError, StructuredSendRefusedError, type HostState } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
 
@@ -71,6 +71,31 @@ test("an idle context notification starts one ordinary wake", async () => {
     expect(r.ledger.writes.map(entry => entry.id)).toEqual(["op-context"]);
     expect(r.ledger.injections).toEqual([]);
     expect(r.receipt().status).toBe("delivered");
+    expect(r.interrupts()).toBe(0);
+  } finally { r.journal.close(); }
+});
+
+test.each(["fresh", "unknown", "revoked", "transport"] as const)("idle wake pre-write refusal preserves the %s outcome", async scenario => {
+  const r = rig(false);
+  try {
+    if (scenario === "unknown") {
+      r.journal.transitionOperation("op-context", "delivering");
+      r.journal.transitionOperation("op-context", "queued", { deliveryUnverified: true });
+      expect(r.receipt().deliveryUnverified).toBe(true);
+    }
+    r.host.send = async () => {
+      r.state.status = "active";
+      r.state.activeTurnRef = "turn-context";
+      if (scenario === "transport") throw new Error("stale-turn");
+      throw new StructuredSendRefusedError(scenario === "revoked" ? "authority revoked" : "stale-turn");
+    };
+    const queue = r.queue();
+    await queue.drain();
+    expect(r.receipt().status).toBe(scenario === "fresh" ? "queued" : scenario === "revoked" ? "failed" : "uncertain");
+    expect(r.journal.executeOperation(r.command).replayed).toBe(true);
+    await queue.drain();
+    expect(r.ledger.injections).toHaveLength(scenario === "fresh" ? 1 : 0);
+    expect(r.ledger.writes).toEqual([]);
     expect(r.interrupts()).toBe(0);
   } finally { r.journal.close(); }
 });
