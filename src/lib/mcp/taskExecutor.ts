@@ -25,6 +25,13 @@ type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http
 type ExecutorWireReply = Omit<ExecutorReply, "http"> & { http?: Omit<ExecutorHttpResponse, "body"> };
 type Pending = { tool: string; claim: string; bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
+type ReplyFailureSource = "reply" | "output-ended" | "output-error";
+// Only real system codes may leave this boundary; error.code is caller data.
+const STREAM_ERRNOS = new Set(["EPIPE", "ECONNRESET", "ECONNABORTED", "ENOTCONN", "EBADF", "EIO", "EINVAL", "ENOSPC", "ENOMEM", "EAGAIN", "EWOULDBLOCK", "ETIMEDOUT"]);
+function streamFailureClass(kind: string, error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return `${kind}${typeof code === "string" && STREAM_ERRNOS.has(code) ? `:${code}` : ""}`;
+}
 
 /** HTTP bodies cross the pipe as bytes. Only their small header is decoded on
  * the Viewer; a slow network consumer pauses the pipe. Cancelled bodies drain
@@ -39,14 +46,14 @@ export class TaskExecutorReplies {
   private continuation?: ReturnType<typeof setImmediate>;
 
   constructor(private source: Readable, private reply: (value: ExecutorReply) => void,
-    private complete: (id: number) => void, private failed: (error: Error) => void) {
+    private complete: (id: number) => void, private failed: (error: Error, source: ReplyFailureSource) => void) {
     source.on("data", (chunk: Buffer) => withViewerOperation("mcp.tasks.executor", () => {
       if (this.closed) return;
       this.source.pause();
       try { this.accept(chunk); }
-      catch (error) { this.close(error as Error); failed(error as Error); }
+      catch (error) { this.close(error as Error); failed(error as Error, "reply"); }
     }));
-    source.on("error", error => { this.close(error); failed(error); });
+    source.on("error", error => { this.close(error); failed(error, "output-error"); });
     source.once("end", () => {
       this.ended = true;
       this.defer();
@@ -64,11 +71,15 @@ export class TaskExecutorReplies {
       this.continuation = undefined;
       if (this.closed) return;
       const queued = this.queued; this.queued = undefined;
+      let failureSource: ReplyFailureSource = "reply";
       try {
         if (queued) this.accept(queued);
-        else if (this.ended) throw new Error("task executor output ended");
+        else if (this.ended) {
+          failureSource = "output-ended";
+          throw new Error("task executor output ended");
+        }
         else this.source.resume();
-      } catch (error) { this.close(error as Error); this.failed(error as Error); }
+      } catch (error) { this.close(error as Error); this.failed(error as Error, failureSource); }
     }));
   }
 
@@ -250,7 +261,7 @@ export class McpTaskExecutor {
           clearTimeout(this.idle);
           const child = this.child ?? this.start();
           dispatched = child;
-          leasedHelperInput(child).write(frame, error => { if (error) this.retire(child); });
+          leasedHelperInput(child).write(frame, error => { if (error) this.retire(child, `stopped (${streamFailureClass("input-write-failed", error)})`); });
         }).catch(error => { finish(error); pending.dispose(); });
       });
     });
@@ -293,18 +304,20 @@ export class McpTaskExecutor {
       if (id === 0) return;
       this.pending.get(id)?.dispose();
       if (!this.pending.size && !this.workerManagesIdle) {
-        this.idle = setTimeout(() => this.retire(child), this.runtime.idleMs ?? 60_000);
+        this.idle = setTimeout(() => this.retire(child, "stopped (viewer-idle)"), this.runtime.idleMs ?? 60_000);
         this.idle.unref();
       }
-    }, () => this.retire(child));
-    leasedHelperInput(child).on("error", () => this.retire(child));
+    }, (error, source) => this.retire(child, `stopped (${source === "reply"
+      ? error instanceof SyntaxError ? "reply-unparseable" : "reply-invalid"
+      : source === "output-error" ? streamFailureClass(source, error) : source})`));
+    leasedHelperInput(child).on("error", error => this.retire(child, `stopped (${streamFailureClass("input-error", error)})`));
     child.once("error", () => this.retire(child, "could not start"));
     child.once("close", (code, signal) => this.retire(child, `exited (${signal ?? code})`));
     unrefLeasedHelper(child);
     return child;
   }
 
-  private retire(child: ChildProcess, reason = "stopped"): void {
+  private retire(child: ChildProcess, reason: string): void {
     if (this.child !== child) return;
     logMcpLifecycle("task-executor-retire", { childPid: child.pid, childRole: "mcp-task-guardian",
       workerPid: this.channel ? decodeTaskChannel(this.channel)?.identity.pid : undefined,
@@ -332,7 +345,7 @@ export class McpTaskExecutor {
         leasedHelperInput(child).end();
         const cancelDrainDeadline = this.schedule(() => this.retire(child, "drain deadline exceeded"), this.runtime.drainMs ?? 35_000);
         try { await closed; } finally { cancelDrainDeadline(); }
-      } else if (child) this.retire(child);
+      } else if (child) this.retire(child, "stopped (closed-after-exit)");
       await this.closing;
     })();
     this.draining = drain;

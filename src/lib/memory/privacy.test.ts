@@ -6,7 +6,7 @@ import path from "node:path";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-worker-"));
 process.env.LLV_STATE_DIR = path.join(root, "initial");
-const { roleMemoryCollection, storedLessonTexts, withoutStoredLessonsIn } = await import("./roleStore");
+const { recordLessonRequest, roleMemoryCollection, storedLessonRevision, storedLessonTexts, withoutStoredLessonsIn } = await import("./roleStore");
 const { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } = await import("./privacy");
 const { TaskPageWorker, shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
 const { renderReport } = await import("@/lib/bridge/reportRender");
@@ -54,6 +54,10 @@ test("stage text, nested records, bridge reports and issue hints retain exact by
   expect(JSON.stringify(await withoutStoredLessonsAsync(value))).toBe(JSON.stringify(withoutStoredLessonsIn(value)));
   const count = compileCount();
   expect(count).toBeGreaterThan(0);
+  const revision = storedLessonRevision();
+  recordLessonRequest({ project: "fixture", pipelineId: "unrelated", stageId: "build", attempt: 1,
+    roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
+  expect(storedLessonRevision()).toBe(revision);
   const input = report();
   const expected = renderReport({ ...input, deny: { ...deny, lessons: storedLessonTexts() } });
   expect(JSON.stringify(await renderReportAsync(input))).toBe(JSON.stringify(expected));

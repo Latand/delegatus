@@ -2502,12 +2502,13 @@ export function structuredDeliveryLastError(conversationId: string): string | nu
 }
 
 type UnpublishedLaunchHost = StructuredDeliveryHost & { registry: AgentRegistry; release: () => Promise<void> };
+type UnpublishedLaunchRelease = { host: EngineHost; promise: Promise<boolean> };
 const unpublishedStore = process as typeof process & {
   __llvUnpublishedLaunchHosts?: Map<string, UnpublishedLaunchHost>;
-  __llvUnpublishedLaunchReleases?: Map<string, Promise<boolean>>;
+  __llvUnpublishedLaunchReleases?: Map<string, UnpublishedLaunchRelease>;
 };
 const unpublishedLaunchHosts = unpublishedStore.__llvUnpublishedLaunchHosts ??= new Map<string, UnpublishedLaunchHost>();
-const unpublishedLaunchReleases = unpublishedStore.__llvUnpublishedLaunchReleases ??= new Map<string, Promise<boolean>>();
+const unpublishedLaunchReleases = unpublishedStore.__llvUnpublishedLaunchReleases ??= new Map<string, UnpublishedLaunchRelease>();
 
 /** Lifecycle ownership only: an unpublished host must be releasable across
  * controller succession, but cannot resolve as a first-message destination. */
@@ -2556,11 +2557,15 @@ export async function republishStructuredDeliveryHost(key: SessionKey): Promise<
   return await state.republishActiveHost?.(key) ?? false;
 }
 
-export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<boolean> {
+export async function releaseStructuredDeliveryHost(key: SessionKey, expectedHost?: EngineHost): Promise<boolean> {
   const id = sessionKeyId(key);
+  // Startup may finish after another adapter has taken this key. Both release
+  // paths claim their host synchronously before awaiting; retain a successor.
   const inFlight = unpublishedLaunchReleases.get(id);
-  if (inFlight) return inFlight;
-  const pending = unpublishedLaunchHosts.get(id);
+  if (inFlight && (!expectedHost || inFlight.host === expectedHost)) return inFlight.promise;
+  const unpublished = unpublishedLaunchHosts.get(id);
+  const pending = !expectedHost || unpublished?.host === expectedHost ? unpublished : undefined;
+  if (expectedHost && !pending && state.activeHosts?.get(id) !== expectedHost) return false;
   if (!pending) return await state.releaseActiveHost?.(key) ?? false;
   // Claim before awaiting. Pending lifecycle release does not depend on the
   // runtime projection whose outage prevented publication in the first place.
@@ -2576,9 +2581,10 @@ export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<bo
       throw error;
     }
   });
-  unpublishedLaunchReleases.set(id, release);
+  const releasing = { host: pending.host, promise: release };
+  unpublishedLaunchReleases.set(id, releasing);
   try { return await release; }
-  finally { if (unpublishedLaunchReleases.get(id) === release) unpublishedLaunchReleases.delete(id); }
+  finally { if (unpublishedLaunchReleases.get(id) === releasing) unpublishedLaunchReleases.delete(id); }
 }
 
 export interface DemotionInterruptionOptions {

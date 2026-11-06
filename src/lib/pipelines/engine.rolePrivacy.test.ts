@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { create, harness, tickPipelines, loadPipelines, savePipelines, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, accountManager } from "./engine.fixture";
 import { RoleMemoryChanged } from "@/lib/memory/privacy";
-import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
+import { ROLE_MEMORY_CHANGED_MESSAGE, recordLessonRequest, roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { sharedLinkState } from "@/lib/links/runtimeState";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -758,7 +758,7 @@ test.each([
 }, 30_000);
 
 
-test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as const)("admission rechecks privacy and activation before dispatch: %s", async mode => {
+test.each(["reclassify", "file-reclassify", "request", "churn", "corrupt", "pause"] as const)("admission rechecks privacy and activation before dispatch: %s", async mode => {
   savePipelines([]);
   write(oldRule);
   const h = harness();
@@ -807,18 +807,23 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
       ++reservations;
       if (reservations < 2) return;
       if (mode === "pause") throw new Error("activation superseded in fixture");
+      if (mode === "request") recordLessonRequest({ project: "fixture", pipelineId: "unrelated-reservation", stageId: "build", attempt: reservations,
+        roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
       if (mode === "churn") write(`${newRule} revision ${reservations}`);
       if ((mode === "reclassify" || mode === "file-reclassify") && reservations === 2) write(newRule);
       if (mode === "corrupt") {
         roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: 7, rule: newRule } as never));
       }
     }, preparePrompt);
-    if (mode === "reclassify" || mode === "file-reclassify") {
+    if (mode === "reclassify" || mode === "file-reclassify" || mode === "request") {
       await launch;
-      expect(reservations).toBe(3);
+      expect(reservations).toBe(mode === "request" ? 2 : 3);
       expect(sent).toHaveLength(1);
-      expect(sent[0]).not.toContain(newRule);
-      expect(sent[0]).toContain("[learned rule]");
+      if (mode === "request") expect(sent[0]).toContain(newRule);
+      else {
+        expect(sent[0]).not.toContain(newRule);
+        expect(sent[0]).toContain("[learned rule]");
+      }
       if (mode === "file-reclassify") {
         const file = sent[0]!.match(/Full (?:stage prompt|specification) file: (.+)\n/)?.[1];
         expect(file).toBeDefined();
@@ -864,7 +869,7 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
   }
 }, 30_000);
 
-test.each([false, true] as const)("the real structured spawn refreshes role memory after runtime admission (file-backed=%s)", async fileBacked => {
+test.each([false, true].flatMap(fileBacked => ["rule", "request", "none"].map(kind => ({ fileBacked, kind }))))("the real structured spawn refreshes role memory after runtime admission (file-backed=$fileBacked, change=$kind)", async ({ fileBacked, kind }) => {
   savePipelines([]);
   write(oldRule);
   const h = harness();
@@ -885,6 +890,13 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
   fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
   await tickPipelines([], h.ports);
   const input = h.spawnInputs[0]!;
+  const preparedRevision = roleMemoryRevisionToken();
+  let requestAttempt = 0;
+  const change = (text: string) => {
+    if (kind === "rule") write(text);
+    if (kind === "request") recordLessonRequest({ project: "fixture", pipelineId: "unrelated", stageId: "build", attempt: ++requestAttempt,
+      roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
+  };
   input.cwd = path.join(process.env.LLV_STATE_DIR!, `late-dispatch-cwd-${fileBacked}`);
   fs.mkdirSync(input.cwd, { recursive: true });
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `late-dispatch-registry-${fileBacked}.json`));
@@ -899,12 +911,16 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
     transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
   }});
   const runtime = spyOn(clientModule, "runtimeHostClient").mockReturnValue({
-    command: async () => { write(newRule); return undefined; },
+    command: async () => { change(newRule); return undefined; },
     transitionOperation: async () => undefined,
   } as never);
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
   const sent: string[] = [];
   let handedToHost = false;
+  const filter = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(function(this: TaskPageWorker, request) {
+    return filter.call(this, request);
+  });
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async launch => await realSpawn(launch, {
     startHost: async () => ({ identity: { threadId: fixtureThreadId, path: path.join(input.cwd, "session.jsonl") },
       health: async () => ({ status: "idle", sessionKey: fixtureThreadId, endpoint: "fixture", pid: process.pid,
@@ -915,12 +931,13 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
     publishHost: async () => async () => {},
     deliverFirst: async delivered => {
       sent.push(delivered.prompt);
-      expect(delivered.prompt).not.toContain(newRule);
-      write(`${newRule} changed while first delivery was held`);
+      if (kind === "rule") expect(delivered.prompt).not.toContain(newRule);
+      else expect(delivered.prompt).toContain(newRule);
+      change(`${newRule} changed while first delivery was held`);
       let refused = false;
       try { await delivered.authorize?.(); }
       catch (error) { refused = error instanceof Error && error.message.includes("Role-memory privacy changed"); }
-      expect(refused).toBe(true);
+      expect(refused).toBe(kind === "rule");
       if (!refused) handedToHost = true;
       return "held";
     },
@@ -930,17 +947,23 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
   try {
     await defaultPipelinePorts().spawnAgent(input, () => {}, preparePrompt);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).not.toContain(newRule);
-    expect(sent[0]).toContain("[learned rule]");
+    if (kind === "rule") {
+      expect(sent[0]).not.toContain(newRule);
+      expect(sent[0]).toContain("[learned rule]");
+    } else expect(roleMemoryRevisionToken()).toBe(preparedRevision);
     const file = sent[0]!.match(/Full (?:stage prompt|specification) file: (.+)\n/)?.[1];
     expect(Boolean(file)).toBe(fileBacked);
     if (file) {
       const fullPrompt = fs.readFileSync(file, "utf8");
-      expect(fullPrompt).not.toContain(newRule);
-      expect(fullPrompt).toContain("[learned rule]");
+      if (kind === "rule") {
+        expect(fullPrompt).not.toContain(newRule);
+        expect(fullPrompt).toContain("[learned rule]");
+      } else expect(fullPrompt).toContain(newRule);
     }
-    expect(handedToHost).toBe(false);
+    expect(handedToHost).toBe(kind !== "rule");
+    if (kind !== "rule") expect(worker).toHaveBeenCalledTimes(2);
   } finally {
+    worker.mockRestore();
     resolve.mockRestore(); runtime.mockRestore(); guard.mockRestore(); spawn.mockRestore(); setAgentRegistryForTests(null);
   }
 }, 30_000);
