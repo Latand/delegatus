@@ -85,7 +85,7 @@ for (const engine of ["claude", "codex"] as const) {
   const f = fixture(engine); let canonical = 0;
   try {
    await applyConversationAction(f.request, { ...f.deps,
-    dispatchStructuredControl: async () => { f.wakes.push(f.value.id); return { status: 200, body: { ok: true, structured: true, target: f.value.id, outcome: "resumed" } }; },
+    dispatchStructuredControl: async () => { f.wakes.push(f.value.id); return { status: 200, body: { ok: true, structured: true, target: f.value.id, outcome: "resumed", spawned: false } }; },
     resumeConversation: async () => { canonical++; return { ok: true, target: null, outcome: "resumed" }; } });
    await new Promise<void>(resolve => setImmediate(resolve));
    expect(canonical).toBe(0); expect(f.wakes).toEqual([f.value.id]);
