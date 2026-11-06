@@ -1761,6 +1761,60 @@ test.skipIf(process.platform === "win32").each(["current", "previous", "missing-
   }
 });
 
+test.skipIf(process.platform === "win32").each(["current", "rotated", "paused"] as const)("startup keeps an adopted idle seat through final reconciliation only while designated (%s)", async scenario => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retain-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = ["22222222", "4444", "0444", "0444", "444444444444"].join("-");
+  const key = { engine: "codex" as const, sessionId };
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  const identity = captureProcessIdentity(process.pid)!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, pendingAttention: [] } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
+  let released = false;
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: `codex-unix:${socket}`, pid: process.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fake-v1",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {}, release: async () => { released = true; } });
+  try {
+    const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => seats,
+      schedule: () => ({ unref() {} }),
+      adopt: async (received, _options, _env, shouldAdopt = () => true) => {
+        expect(shouldAdopt(received.readOnlySnapshot().entries[`codex:${sessionId}`]!)).toBe(true);
+        return [{ key, host: host as never }];
+      },
+      adoptClaude: async () => {
+        if (scenario === "rotated") seats = [activeSeat("seat-retain", 2, "conversation_successor", artifactPath)];
+        if (scenario === "paused") seats = [];
+        return [];
+      },
+    });
+    expect(released).toBe(scenario !== "current");
+    expect(adopted.some(item => item.key.sessionId === sessionId)).toBe(scenario === "current");
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("terminal");
+    expect(ledger.writes).toEqual([]);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 /** One Viewer whose passes and scheduled re-probes a restart cut case drives
     itself: the rows each pass would adopt, and the probes it scheduled. */
 function restartCutStartup(registry: AgentRegistry, directory: string, extra: Partial<StructuredStartupDependencies> = {}) {

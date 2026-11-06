@@ -172,6 +172,7 @@ function retainedStartupHostIsCurrent(
   snapshot: RegistryFile,
   item: AdoptedStructuredHost,
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
+  seats: readonly OrchestratorSeat[] = [],
 ): boolean {
   const key = sessionKeyId(item.key);
   const entry = snapshot.entries[key];
@@ -179,9 +180,14 @@ function retainedStartupHostIsCurrent(
   const conversation = registryConversationsForEntryKey(snapshot, key).find((candidate) =>
     candidate.engine === item.key.engine
       && candidate.generations.at(-1)?.id === item.key.sessionId);
+  // A surviving current seat is adopted without a restart obligation. Its
+  // terminal turn must remain hosted through every later reconciliation.
+  const currentIdleSeat = conversation && item.key.engine === "codex"
+    && seats.some(seat => seat.state === "active"
+      && resolveConversationAlias(snapshot, seat.conversationId as ViewerConversationId) === conversation.id);
   return Boolean(conversation
     && !conversation.supersededBy
-    && (conversation.turn.state !== "terminal" || retainedTerminalHostKeys.has(key)));
+    && (conversation.turn.state !== "terminal" || retainedTerminalHostKeys.has(key) || currentIdleSeat));
 }
 
 async function revalidateRetainedStartupHosts(
@@ -189,12 +195,13 @@ async function revalidateRetainedStartupHosts(
   retained: readonly AdoptedStructuredHost[],
   prepared: RegistryFile | undefined = undefined,
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
+  currentSeats: () => readonly OrchestratorSeat[] = () => [],
 ): Promise<AdoptedStructuredHost[]> {
   const current: AdoptedStructuredHost[] = [];
   await forEachStartupBatch(retained, async (item) => {
     const snapshot = prepared ?? startupHostSnapshot(registry, item.key);
     if (!startupHostInScope(registry, sessionKeyId(item.key))
-      || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys)) current.push(item);
+      || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys, currentSeats())) current.push(item);
     else {
       await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, () => item.host.release());
       await flushStructuredHostPersistence(item.host);
@@ -2553,7 +2560,7 @@ async function adoptStructuredHostsPass(
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
     const retained = retainAdoptedHosts(startupPasses.get(registry)?.ready ?? [], startupPasses.get(registry)?.retained ?? []);
     let nextAdoptedHosts = retained.length ? await revalidateRetainedStartupHosts(
-      registry, retained, undefined, retainedRecoveryHostKeys(),
+      registry, retained, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
     ) : [];
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     /* Off the loop (rule c); refused, it is skipped this pass and the next
@@ -2910,6 +2917,7 @@ async function adoptStructuredHostsPass(
       nextAdoptedHosts,
       undefined,
       retainedRecoveryHostKeys(),
+      orchestratorSeats,
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
@@ -2996,6 +3004,7 @@ async function adoptStructuredHostsPass(
       nextAdoptedHosts,
       publicationSnapshot,
       retainedRecoveryHostKeys(),
+      orchestratorSeats,
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const finalShouldAdopt = await structuredStartupAdoptionFilter(
