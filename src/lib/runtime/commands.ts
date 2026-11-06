@@ -200,8 +200,11 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
       throw new Error("role-memory revision is invalid");
     }
     const policy = body.policy === undefined ? undefined : body.policy;
-    if (policy !== undefined && policy !== "queue" && policy !== "steer-if-active" && policy !== "steer-or-queue" && policy !== "interrupt-active") {
+    if (policy !== undefined && policy !== "queue" && policy !== "context-or-queue" && policy !== "steer-if-active" && policy !== "steer-or-queue" && policy !== "interrupt-active") {
       throw new Error("policy is invalid");
+    }
+    if (policy === "context-or-queue" && (kind !== "send" || turnId !== undefined || imageRefs.length || body.runtime !== undefined)) {
+      throw new Error("context-or-queue requires an unfenced text send without runtime overrides");
     }
     if (policy === "steer-or-queue" && turnId !== undefined && (kind !== "send" || turnId !== null)) {
       throw new Error("steer-or-queue accepts only a null next-turn fence on send");
