@@ -868,7 +868,7 @@ async function cleanupWorktrees() {
     import("@/lib/pipelines/store"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/agent/registry"),
   ]);
   return {
-    conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
+    conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().worktreeProtectionSnapshot()),
     worktrees: loadPipelinesForList().map(pipeline => pipeline.worktreeDir).filter((dir): dir is string => !!dir),
     currentWorktrees: () => loadPipelinesForList().map(pipeline => pipeline.worktreeDir).filter((dir): dir is string => !!dir),
     accountedWorktrees: (readWorktreeSweepReport()?.kept ?? []).map(row => row.path),

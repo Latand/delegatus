@@ -88,3 +88,21 @@ test("legacy missing delivery state and corrupt image reservations keep the esta
     expect(expected.heldDeliveries.corrupt).toBeUndefined();
   } finally { peer.close(); }
 });
+
+test("a repaired malformed row can be read again through the same protection store", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "worktree-protection-repair-")); roots.push(root);
+  const dataset = buildRegistryPerformanceDataset(root, scaledRegistryPerformanceShape(0.002));
+  const store = new SqliteAgentRegistryStore(dataset.filename, {
+    initialSnapshot: () => { throw new Error("already imported"); }, normalize: normalizeRegistry,
+  }); stores.push(store);
+  const peer = new Database(dataset.filename);
+  try {
+    const original = peer.query<{ row_key: string; value_json: string }, []>(
+      "SELECT row_key,value_json FROM registry_rows WHERE collection='entries' ORDER BY row_order LIMIT 1").get()!;
+    peer.query("UPDATE registry_rows SET value_json='null' WHERE collection='entries' AND row_key=?").run(original.row_key);
+    expect(() => store.worktreeProtectionSnapshot()).toThrow();
+    peer.query("UPDATE registry_rows SET value_json=? WHERE collection='entries' AND row_key=?").run(original.value_json, original.row_key);
+    expect(store.worktreeProtectionSnapshot()).toEqual(worktreeProtection(store.readOnlySnapshot().file));
+    expect(store.worktreeProtectionSnapshot().entries[original.row_key]).toBeDefined();
+  } finally { peer.close(); }
+});

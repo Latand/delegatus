@@ -1709,11 +1709,16 @@ export class SqliteAgentRegistryStore {
             `SELECT row_key,value_json,row_order FROM ${this.recordsSource}
               WHERE collection='heldDeliveries' AND json_extract(value_json,'$.state') IS ?`).join(" UNION ALL ") + " ORDER BY row_order"
           : `SELECT row_key,value_json FROM ${this.recordsSource} WHERE collection=? ORDER BY row_order`;
-        const cursor = this.db.query<{ row_key: string; value_json: string }, (string | null)[]>(sql)
-          .iterate(...(collection === "heldDeliveries" ? ["held", "assigned", "delivery-uncertain", null] : [collection]));
+        // This read owns its statement. An interrupted iterator must not leave
+        // a cached Bun statement unusable after the peer repairs the row.
+        const statement = this.db.prepare<{ row_key: string; value_json: string }, (string | null)[]>(sql);
         this.onRowPayloadRead?.(collection, 0);
         try {
-          for (const row of cursor) {
+          const cursor = statement.iterate(...(collection === "heldDeliveries" ? ["held", "assigned", "delivery-uncertain", null] : [collection]));
+          for (;;) {
+            const next = cursor.next();
+            if (next.done) break;
+            const row = next.value;
             this.onRowPayloadRead?.(collection, 1);
             this.onRowPayloadParse?.(collection, 1);
             const value = parseSqliteJson(row.value_json, this.db);
@@ -1725,7 +1730,7 @@ export class SqliteAgentRegistryStore {
               if (delivery) result.heldDeliveries[row.row_key] = delivery;
             }
           }
-        } finally { cursor.return?.(); }
+        } finally { statement.finalize(); }
       }
       if (!admitted) this.db.exec("COMMIT");
       return result;
