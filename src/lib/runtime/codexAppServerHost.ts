@@ -3489,7 +3489,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           this.viewerMcpDenials.add(key);
           if (this.viewerMcpDenials.size > 32) this.viewerMcpDenials.delete(this.viewerMcpDenials.values().next().value!);
         }
-        const next = observation ? structuredClone(observation) : { seq: event.seq, observedAt: new Date().toISOString(), denied: [], unverified: false };
+        const next: ViewerMcpObservation = observation ? structuredClone(observation) : { seq: event.seq, observedAt: new Date().toISOString(), denied: [], unverified: false };
         next.seq = event.seq;
         next.observedAt = new Date().toISOString();
         if (!tool || (!next.denied.some(entry => entry.tool === tool) && next.denied.length >= 32)) next.unverified = true;
