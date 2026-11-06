@@ -9,7 +9,7 @@ import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
-import { formatQuotaAsOf, formatResetClock, formatResetEta } from "./rateLimit";
+import { formatCheckedClock, formatQuotaAsOf, formatResetClock } from "./rateLimit";
 
 /** An archive under an invented home, composed so the `~` fold is exercised
     without a home path written out in a published source. */
@@ -118,12 +118,12 @@ test.each(["en", "uk"] as const)("Claude and Codex account rows show their own s
       mounted.push(view);
       const block = view.host.querySelector('[data-account-limits="window-fixture"]')!;
       for (const [key, reset] of [["session", sessionReset], ["weekly", weeklyReset], ...(engine === "claude" ? [["tier:opus", tierReset] as const] : [])] as const) {
-        expect(block.querySelector(`[data-limit-row="${key}"]`)?.textContent).toContain(translate(locale, "limits.reset", {
-          eta: formatResetEta(reset, now), at: formatResetClock(reset, now),
-        }));
+        expect(block.querySelector(`[data-limit-row="${key}"]`)?.textContent).toContain(formatResetClock(reset, now));
       }
-      expect(block.textContent).toContain(translate(locale, "accounts.limitsChecked"));
-      expect(block.querySelectorAll('[data-account-refresh-limits]')).toHaveLength(1);
+      // The check time and Refresh are in the open row, once.
+      openRow(view.host, "window-fixture");
+      expect(view.host.textContent).toContain(translate(locale, "accounts.limitsChecked"));
+      expect(view.host.querySelectorAll('[data-account-refresh-limits]')).toHaveLength(1);
     }
   } finally { setLocale(previous); }
 });
@@ -161,8 +161,10 @@ test.each(["en", "uk"] as const)("desktop panel marks and leads with the reset-a
     const rows = [...view.host.querySelectorAll("[data-account-row]")];
     expect(rows.map((row) => row.getAttribute("data-account-row"))).toEqual(["b", "a"]);
     expect(rows[0]?.getAttribute("data-account-next-chosen")).toBe("true");
-    expect(rows[0]?.textContent).toContain(translate(locale, "accounts.nextForUnpinned"));
-    expect(rows[1]?.querySelector("button")?.getAttribute("aria-current")).toBe("true");
+    // The note is the status popover's: a press or focus on the dot opens it.
+    flushSync(() => { (rows[0]?.querySelector("[data-account-status]") as HTMLButtonElement).click(); });
+    expect(document.body.querySelector('[data-account-status-popover="b"]')?.textContent).toContain(translate(locale, "accounts.nextForUnpinned"));
+    expect(rows[1]?.querySelector("[data-account-toggle]")?.getAttribute("aria-current")).toBe("true");
   } finally { setLocale(previous); }
 });
 
@@ -172,11 +174,13 @@ test("provider account controls render on the account row without exposing its t
     active: "provider",
   }));
   mounted.push(view);
-  const editor = view.host.querySelector('[data-claude-provider-editor="provider"]') as HTMLElement;
-  expect(editor).not.toBeNull();
   expect(view.host.textContent).toContain("Provider limits unknown");
   expect(view.host.textContent).not.toContain("Authorization code");
-  flushSync(() => dispatch(editor.querySelector("button")!, new dom.MouseEvent("click", { bubbles: true })));
+  expect(view.host.querySelector('[data-claude-provider-editor="provider"]')).toBeNull();
+  openRow(view.host, "provider");
+  flushSync(() => dispatch(view.host.querySelector('[data-account-provider-edit="provider"]')!, new dom.MouseEvent("click", { bubbles: true })));
+  const editor = view.host.querySelector('[data-claude-provider-editor="provider"]') as HTMLElement;
+  expect(editor).not.toBeNull();
   expect((editor.querySelector('input[aria-label="Provider token"]') as HTMLInputElement).type).toBe("password");
   expect((editor.querySelector('input[aria-label="Default model ID"]') as HTMLInputElement).value).toBe("large");
   expect(editor.innerHTML).not.toContain("local-provider-fixture-token");
@@ -189,15 +193,19 @@ test("desktop provider credential damage shows repair without OAuth sign-in", as
     login: null, provider }], active: "provider" }));
   mounted.push(view);
   const row = view.host.querySelector('[data-account-row="provider"]') as HTMLElement;
-  expect(row.textContent).toContain("Provider credential error");
+  expect(row.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Provider: Provider credential error");
+  openRow(view.host, "provider");
   expect(row.textContent).toContain("Edit provider");
   expect(row.textContent).not.toContain("Needs sign-in");
   expect(row.textContent).not.toContain("Not logged in");
-  expect((row.querySelector("button") as HTMLButtonElement).disabled).toBe(true);
+  // Repair is the provider form; there is no OAuth sign-in and nothing to make default.
+  expect(row.querySelector("[data-account-signin-start]")).toBeNull();
+  expect(row.querySelector("[data-account-make-default]")).toBeNull();
+  expect(row.querySelector("[data-account-default-mark]")).toBeNull();
   await view.rerender(state(login(), { accounts: [{ id: "provider", label: "Provider", kind: "managed",
     authPresent: true, authHealth: "unknown", loginPending: false, loginState: "authenticated", deviceAuth: null,
     login: null, provider }], active: "provider" }));
-  expect((row.querySelector("button") as HTMLButtonElement).disabled).toBe(false);
+  expect(row.querySelector("[data-account-default-mark]")).not.toBeNull();
 });
 
 test("keyboard Submit code restores focus to the Claude sign-in row after it enters verifying", async () => {
@@ -229,7 +237,11 @@ test("keyboard Submit code restores focus to the Claude sign-in row after it ent
 });
 
 const managedAcc = { id: "acc", label: "Acc", kind: "managed" as const, authPresent: true, loginPending: false, loginState: "authenticated" as const, deviceAuth: null, login: null };
+/** A note starts a line: the reading's age is capitalised there. */
+const asOfNote = (observedAt: number) => { const text = formatQuotaAsOf(observedAt)!; return text.charAt(0).toUpperCase() + text.slice(1); };
 const buttonNamed = (host: HTMLElement, text: string) => [...host.querySelectorAll("button")].find((button) => button.textContent === text);
+/** A press on a row's name opens it in place. */
+const openRow = (host: HTMLElement, id: string) => flushSync(() => { host.querySelector<HTMLButtonElement>(`[data-account-toggle="${id}"]`)!.click(); });
 
 test("removing a managed account arms on the first click and only removes on an explicit confirm", async () => {
   let removed: string | null = null;
@@ -239,6 +251,7 @@ test("removing a managed account arms on the first click and only removes on an 
   });
   const view = await mount(initial);
   mounted.push(view);
+  openRow(view.host, "acc");
   flushSync(() => { buttonNamed(view.host, "Remove")!.click(); });
   expect(removed).toBeNull();
   const armed = view.host.querySelector('[data-account-remove-armed="acc"]')!;
@@ -258,6 +271,7 @@ test("canceling an armed removal backs out without removing the account", async 
   });
   const view = await mount(initial);
   mounted.push(view);
+  openRow(view.host, "acc");
   flushSync(() => { buttonNamed(view.host, "Remove")!.click(); });
   flushSync(() => { buttonNamed(view.host, "Cancel")!.click(); });
 
@@ -275,6 +289,7 @@ test("Escape disarms an armed removal without closing the panel, and the arm tim
   flushSync(() => { root.render(<AccountsPanel state={initial} onClose={() => { closed += 1; }} />); });
   mounted.push({ unmount: async () => { flushSync(() => { root.unmount(); }); host.remove(); } });
 
+  openRow(host, "acc");
   flushSync(() => { buttonNamed(host, "Remove")!.click(); });
   const confirm = buttonNamed(host.querySelector("[data-account-remove-armed]") as HTMLElement, "Remove")!;
   flushSync(() => { dispatch(confirm, new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
@@ -304,6 +319,7 @@ test("a removal in flight dims its row and says Removing…", async () => {
   const row = view.host.querySelector('[data-account-row="acc"]')!;
   expect(row.getAttribute("aria-busy")).toBe("true");
   expect(row.className).toContain("opacity-60");
+  openRow(view.host, "acc");
   expect(row.textContent).toContain("Removing…");
   expect(buttonNamed(view.host, "Remove")).toBeUndefined();
 });
@@ -504,7 +520,7 @@ test("clicking Sign in on a signed-out legacy Main starts an in-place login reco
   expect(retried as unknown as string).toBe("default");
 });
 
-test("signed-out and pending account rows cannot be selected", async () => {
+test("signed-out and pending account rows offer no Make default", async () => {
   const initial = state(login(), {
     accounts: [
       { id: "signed-out", label: "Signed out", kind: "managed", authPresent: false, loginPending: false, loginState: "idle", deviceAuth: null, login: null },
@@ -514,31 +530,72 @@ test("signed-out and pending account rows cannot be selected", async () => {
   });
   const view = await mount(initial);
   mounted.push(view);
-  const signedOut = [...view.host.querySelectorAll("button")].find((button) => button.textContent?.includes("Signed out"))!;
-  const pending = [...view.host.querySelectorAll("button")].find((button) => button.textContent?.includes("Pending"))!;
-
-  expect(signedOut.disabled).toBeTrue();
-  expect(pending.disabled).toBeTrue();
+  openRow(view.host, "signed-out");
+  openRow(view.host, "pending");
+  expect(view.host.querySelector("[data-account-make-default]")).toBeNull();
+  expect(view.host.querySelector('[data-account-toggle="signed-out"]')?.hasAttribute("disabled")).toBe(false);
 });
 
-test("an account row directly selects the account", async () => {
-  let selected: string | null = null;
-  const initial = state(login({ phase: "authenticated" }), {
+test("a press on a row opens it and selects nothing; Make default selects, and the row leads with focus on its toggle", async () => {
+  const selected: string[] = [];
+  const accounts = [
+    { id: "main", label: "Main", kind: "legacy" as const, authPresent: true, loginPending: false, loginState: "authenticated" as const, deviceAuth: null, login: null },
+    { id: "work", label: "Work", kind: "managed" as const, authPresent: true, loginPending: false, loginState: "authenticated" as const, deviceAuth: null, login: null },
+  ];
+  const select = async (id: string) => { selected.push(id); return true; };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts, active: "main", select }));
+  mounted.push(view);
+  const work = () => view.host.querySelector<HTMLButtonElement>('[data-account-toggle="work"]')!;
+
+  expect(work().getAttribute("aria-expanded")).toBe("false");
+  flushSync(() => { work().click(); });
+  await Promise.resolve();
+  expect(work().getAttribute("aria-expanded")).toBe("true");
+  expect(selected).toEqual([]);
+  expect(view.host.querySelector('[data-account-toggle="main"]')?.getAttribute("aria-current")).toBe("true");
+
+  // Opening another row closes this one.
+  openRow(view.host, "main");
+  expect(work().getAttribute("aria-expanded")).toBe("false");
+  expect(view.host.querySelector('[data-account-toggle="main"]')?.getAttribute("aria-expanded")).toBe("true");
+  expect(view.host.querySelector('[data-account-make-default="main"]')).toBeNull();
+  openRow(view.host, "work");
+
+  const make = view.host.querySelector<HTMLButtonElement>('[data-account-make-default="work"]')!;
+  expect(make.getAttribute("aria-label")).toBe("Make Work the default account");
+  flushSync(() => { make.click(); });
+  await Promise.resolve();
+  expect(selected).toEqual(["work"]);
+  expect(view.host.textContent).not.toContain("Migrate all");
+
+  // The store answers: Work is the default, leads the list, and focus is on its toggle.
+  await view.rerender(state(login({ phase: "authenticated" }), { accounts, active: "work", select }));
+  expect([...view.host.querySelectorAll("[data-account-row]")].map((row) => row.getAttribute("data-account-row"))).toEqual(["work", "main"]);
+  expect(work().getAttribute("aria-current")).toBe("true");
+  expect(document.activeElement).toBe(work());
+  expect(view.host.querySelector('[data-account-make-default="work"]')).toBeNull();
+});
+
+test("the chevron is not a second keyboard stop, and the dot, toggle and default control are separately named", async () => {
+  const view = await mount(state(login({ phase: "authenticated" }), {
     accounts: [
-      { id: "main", label: "Main", kind: "legacy", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, login: null },
-      { id: "work", label: "Work", kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, login: null },
+      { id: "main", label: "Main", kind: "legacy", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null, login: null },
+      { id: "work", label: "Work", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null, login: null },
     ],
     active: "main",
-    select: async (id) => { selected = id; return true; },
-  });
-  const view = await mount(initial);
+  }));
   mounted.push(view);
-  const work = [...view.host.querySelectorAll("button")].find((button) => button.textContent?.includes("Work"))!;
-
-  flushSync(() => { work.click(); });
-  await Promise.resolve();
-  expect(selected as unknown as string).toBe("work");
-  expect(view.host.textContent).not.toContain("Migrate all");
+  openRow(view.host, "work");
+  const row = view.host.querySelector('[data-account-row="work"]')!;
+  const chevron = row.querySelector<HTMLButtonElement>("[data-account-chevron]")!;
+  expect(chevron.tabIndex).toBe(-1);
+  expect(chevron.getAttribute("aria-hidden")).toBe("true");
+  expect(row.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Work: Authenticated");
+  expect(row.querySelector("[data-account-toggle]")?.textContent).toBe("Work");
+  expect(row.querySelector("[data-account-make-default]")?.textContent).toBe("Make default");
+  // The chevron still opens and closes the row for a pointer.
+  flushSync(() => { chevron.click(); });
+  expect(row.querySelector("[data-account-toggle]")?.getAttribute("aria-expanded")).toBe("false");
 });
 
 test("a switch mutation renders a clear live operation status", async () => {
@@ -584,6 +641,7 @@ test("each authenticated account row exposes a one-click tmux agent launch", asy
   });
   const view = await mount(initial);
   mounted.push(view);
+  openRow(view.host, "acc");
   const launch = view.host.querySelector<HTMLButtonElement>('button[aria-label="Copy the agent command for Acc"]')!;
   expect(launch).not.toBeNull();
   expect(launch.disabled).toBe(false);
@@ -602,10 +660,10 @@ test("the tmux launch stands down for signed-out and pending accounts", async ()
   });
   const view = await mount(initial);
   mounted.push(view);
-  const out = view.host.querySelector<HTMLButtonElement>('button[aria-label="Copy the agent command for Out"]')!;
-  const pending = view.host.querySelector<HTMLButtonElement>('button[aria-label="Copy the agent command for Pending"]')!;
-  expect(out.disabled).toBe(true);
-  expect(pending.disabled).toBe(true);
+  openRow(view.host, "out");
+  openRow(view.host, "pending");
+  expect(view.host.querySelector('button[aria-label="Copy the agent command for Out"]')).toBeNull();
+  expect(view.host.querySelector('button[aria-label="Copy the agent command for Pending"]')).toBeNull();
 });
 
 test("a switch-failure notice shows the server's real error text beside Retry", async () => {
@@ -633,9 +691,9 @@ test("quota windows render as labeled meters with remaining capacity", async () 
   expect(detail.textContent).toContain("Week");
   expect(detail.textContent).toContain("67%");
   expect(detail.textContent).toContain("20%");
-  const activeRow = view.host.querySelector('button[aria-current="true"]')!;
-  expect(activeRow.textContent).toContain("20%");
-  expect(activeRow.textContent).not.toContain("54%");
+  // Each percentage once: no summary figure repeats a window's.
+  expect(view.host.querySelector('[data-account-row="acc"]')!.textContent!.match(/20%/g)).toHaveLength(1);
+  expect(view.host.querySelector('[data-account-row="acc"]')!.textContent).not.toContain("54%");
 });
 
 test("an aged account quota snapshot renders a visible as-of hint", async () => {
@@ -653,7 +711,7 @@ test("an aged account quota snapshot renders a visible as-of hint", async () => 
   const view = await mount(initial);
   mounted.push(view);
 
-  expect(view.host.querySelector('[aria-label="Quota windows for Acc"]')?.textContent).toContain("as of");
+  expect(view.host.querySelector('[data-account-row="acc"]')?.textContent).toContain("As of");
 });
 
 test("a header-opened panel ages quota hints and reset ETAs while it remains mounted", async () => {
@@ -683,16 +741,16 @@ test("a header-opened panel ages quota hints and reset ETAs while it remains mou
         },
       }],
     }), "header");
-    const detail = () => view!.host.querySelector('[aria-label="Quota windows for Acc"]')!;
+    const detail = () => view!.host.querySelector('[data-account-row="acc"]')!;
 
-    expect(detail().textContent).not.toContain("as of");
-    expect(detail().textContent).toContain(formatResetEta(resetsAt, now));
+    expect(detail().textContent).not.toContain("As of");
+    expect(detail().textContent).toContain(formatResetClock(resetsAt, now));
 
     setSystemTime(new Date((now + 2 * 60) * 1000));
     flushSync(() => tick!());
 
-    expect(detail().textContent).toContain(formatQuotaAsOf(observedAt)!);
-    expect(detail().textContent).toContain(formatResetEta(resetsAt, now + 2 * 60));
+    expect(detail().textContent).toContain(asOfNote(observedAt));
+    expect(detail().textContent).toContain(formatResetClock(resetsAt, now + 2 * 60));
   } finally {
     await view?.unmount();
     globalThis.setInterval = realSetInterval;
@@ -700,7 +758,7 @@ test("a header-opened panel ages quota hints and reset ETAs while it remains mou
   }
 });
 
-test("distinct stale quota windows retain their own as-of hints", async () => {
+test("stale windows read once: the row names the oldest reading, not one hint per window", async () => {
   const sessionObservedAt = Date.parse("2020-01-01T09:00:00.000Z") / 1000;
   const weeklyObservedAt = Date.parse("2020-01-01T09:10:00.000Z") / 1000;
   const initial = state(login({ phase: "authenticated" }), {
@@ -716,11 +774,11 @@ test("distinct stale quota windows retain their own as-of hints", async () => {
   });
   const view = await mount(initial);
   mounted.push(view);
-  const detail = view.host.querySelector('[aria-label="Quota windows for Acc"]')!;
+  const row = view.host.querySelector('[data-account-row="acc"]')!;
 
-  expect(detail.textContent).toContain(formatQuotaAsOf(sessionObservedAt)!);
-  expect(detail.textContent).toContain(formatQuotaAsOf(weeklyObservedAt)!);
-  expect(detail.textContent?.match(/as of/g)).toHaveLength(2);
+  expect(row.textContent).toContain(asOfNote(sessionObservedAt));
+  expect(row.textContent).not.toContain(asOfNote(weeklyObservedAt));
+  expect(row.textContent?.match(/As of/g)).toHaveLength(1);
 });
 
 test("stale quota windows without timestamps retain a visible last-known label", async () => {
@@ -738,7 +796,7 @@ test("stale quota windows without timestamps retain a visible last-known label",
   const view = await mount(initial);
   mounted.push(view);
 
-  expect(view.host.querySelector('[aria-label="Quota windows for Acc"]')?.textContent).toContain("Last known values");
+  expect(view.host.querySelector('[data-account-row="acc"]')?.textContent).toContain("Last known values");
 });
 
 // ── Issues #1418 / #1373 — the two card actions fire on click, no confirm ─────
@@ -759,6 +817,7 @@ test("Refresh re-reads that account's limits on click, with no confirmation step
     refreshLimits: async (id) => { refreshed.push(id); return true; },
   }));
   mounted.push(view);
+  openRow(view.host, "account-a");
   const refresh = view.host.querySelector<HTMLButtonElement>('button[data-account-refresh-limits="account-a"]')!;
   expect(refresh.disabled).toBeFalse();
   flushSync(() => { refresh.click(); });
@@ -776,7 +835,7 @@ test("Use one reset fires on the first click and the card shows the new window o
   });
   const view = await mount(initial);
   mounted.push(view);
-  const block = () => view.host.querySelector('[data-account-limits="account-a"]')!;
+  const block = () => view.host.querySelector('[data-account-row="account-a"]')!;
   expect(block().textContent).toContain("0%");
   expect(block().textContent).toContain("1 reset available");
   const use = view.host.querySelector<HTMLButtonElement>('button[data-account-use-reset="account-a"]')!;
@@ -797,9 +856,11 @@ test("Use one reset fires on the first click and the card shows the new window o
     useResetCredit: initial.useResetCredit,
   }));
   expect(block().textContent).toContain("100%");
-  expect(block().textContent).toContain("No resets available");
   expect(block().textContent).not.toContain("rate-limited");
-  expect(view.host.querySelector<HTMLButtonElement>('button[data-account-use-reset="account-a"]')!.disabled).toBeTrue();
+  // With no reset left the line is gone from the row; the open row says so.
+  expect(view.host.querySelector('button[data-account-use-reset="account-a"]')).toBeNull();
+  openRow(view.host, "account-a");
+  expect(block().textContent).toContain("No resets available");
 });
 
 test("an action in flight marks its button busy and holds the other action until it settles (#1418)", async () => {
@@ -809,6 +870,7 @@ test("an action in flight marks its button busy and holds the other action until
     limitsBusy: { accountId: "account-a", operation: "resetCredit" },
   }));
   mounted.push(view);
+  openRow(view.host, "account-a");
   const use = view.host.querySelector<HTMLButtonElement>('button[data-account-use-reset="account-a"]')!;
   const refresh = view.host.querySelector<HTMLButtonElement>('button[data-account-refresh-limits="account-a"]')!;
   expect(use.getAttribute("aria-busy")).toBe("true");
@@ -824,6 +886,7 @@ test("Main arms and confirms through the same remove control, saying its folder 
   let removed: string | null = null;
   const view = await mount(state(login({ phase: "authenticated" }), { accounts: [mainAcc, managedAcc], active: "acc", remove: async (id) => { removed = id; return true; } }));
   mounted.push(view);
+  openRow(view.host, "default");
   flushSync(() => { (view.host.querySelector('[data-account-remove="default"]') as HTMLButtonElement).click(); });
   const armed = view.host.querySelector('[data-account-remove-armed="default"]')!;
   expect(armed.textContent).toContain("Remove Main from Delegatus? Nothing in its own folder is deleted");
@@ -841,13 +904,13 @@ test("a live-session refusal names each conversation as a link that opens it", a
   };
   const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc], removal: { kind: "refused", refusal } }));
   mounted.push(view);
-  const links = [...view.host.querySelectorAll("[data-account-refusal-sessions] a")] as HTMLAnchorElement[];
+  const links = [...view.host.querySelectorAll("a[data-account-refusal-session]")] as HTMLAnchorElement[];
   expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
     ["Fix the login form", "#c=conversation_one"],
     ["rollout-two.jsonl", "#f=%2Fsessions%2F2026%2F10%2Frollout-two.jsonl"],
   ]);
-  expect(view.host.querySelector("[data-account-refusal-sessions]")!.textContent).toContain("Open each one to stop it or move it to another account");
-  expect(view.host.querySelector("[data-account-refusal-sessions]")!.textContent).toContain("and 2 more");
+  expect(view.host.querySelector("[data-account-refusal]")!.textContent).toContain("Open each one to stop it or move it to another account");
+  expect(view.host.querySelector("[data-account-refusal]")!.textContent).toContain("and 2 more");
 });
 
 test("Main's summary says its files stay in place and offers Show again", async () => {
@@ -926,7 +989,7 @@ test("a hidden Main is shown again from account setup after the summary is close
   const reloaded = createEngineAccountsStore("claude", { fetcher });
   await reloaded.refresh();
   await view.rerender(reloaded);
-  expect(view.host.querySelector('[data-account-remove="default"]')).toBeNull();
+  expect(view.host.querySelector('[data-account-row="default"]')).toBeNull();
   const offer = view.host.querySelector('[data-account-restore="default"]') as HTMLButtonElement;
   expect(offer.textContent).toBe("Show Main again");
   const restoreSettled = mutationSettled(reloaded);
@@ -936,6 +999,8 @@ test("a hidden Main is shown again from account setup after the summary is close
 
   expect(calls).toContain('POST /api/accounts/claude {"action":"restore","id":"default"}');
   expect(hidden).toBeFalse();
+  expect(view.host.querySelector('[data-account-row="default"]')).not.toBeNull();
+  openRow(view.host, "default");
   expect(view.host.querySelector('[data-account-remove="default"]')).not.toBeNull();
   expect(view.host.querySelector("[data-account-hidden-offer]")).toBeNull();
 });
@@ -960,14 +1025,14 @@ test("a watched retry clears an old login error and shows live limits without a 
     const view = await mount(store);
     mounted.push(view);
     // A sign-in in flight shows no result of the attempt before it.
-    expect(view.host.textContent).toContain("signing in…");
+    expect(view.host.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Main: signing in…");
     expect(view.host.textContent).not.toContain("Auth error");
     expect(view.host.textContent).not.toContain("no data yet");
     phase = "authenticated";
     await store.refresh();
     await view.rerender(store);
     const row = view.host.querySelector('[data-account-row="default"]')!;
-    expect(row.textContent).toContain("Authenticated");
+    expect(row.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Main: Authenticated");
     expect(row.querySelectorAll("[data-limit-row]").length).toBe(2);
     expect(row.querySelector('[role="alert"]')).toBeNull();
     expect([...row.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Retry")).toBe(false);
@@ -1012,14 +1077,16 @@ test("a held provider save closes the editor and shows the new name at once, and
     return new Response(JSON.stringify({ error: "The provider URL must use https" }), { status: 400, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const editor = () => view!.host.querySelector('[data-claude-provider-editor="provider"]') as HTMLElement;
-  const field = (label: string) => editor().querySelector(`input[aria-label="${label}"]`) as HTMLInputElement | null;
+  // A closed editor draws nothing on the row.
+  const field = (label: string) => (editor()?.querySelector(`input[aria-label="${label}"]`) ?? null) as HTMLInputElement | null;
   const type = (input: HTMLInputElement, value: string) => {
     const key = Object.keys(input).find((name) => name.startsWith("__reactProps$"))!;
     flushSync(() => (input as unknown as Record<string, { onChange(event: unknown): void }>)[key]!.onChange({ target: { value } }));
   };
   const button = (text: string) => [...editor().querySelectorAll("button")].find((candidate) => candidate.textContent === text)!;
   try {
-    flushSync(() => dispatch(button("Edit provider"), new dom.MouseEvent("click", { bubbles: true })));
+    openRow(view!.host, "provider");
+    flushSync(() => dispatch(view!.host.querySelector('[data-account-provider-edit="provider"]')!, new dom.MouseEvent("click", { bubbles: true })));
     type(field("Display name")!, "Gateway");
     type(field("Provider token")!, "typed-fixture-value");
     flushSync(() => dispatch(button("Save provider"), new dom.MouseEvent("click", { bubbles: true })));
@@ -1047,4 +1114,115 @@ test("a held provider save closes the editor and shows the new name at once, and
   } finally {
     globalThis.fetch = saved;
   }
+});
+
+test("a row with credits shows a whole balance, each percentage once and its name once", async () => {
+  const resetsAt = Math.floor(Date.now() / 1000) + 3 * 86_400;
+  const view = await mount(state(login({ phase: "authenticated" }), {
+    engine: "codex",
+    accounts: [{
+      id: "spare", label: "Spare", kind: "managed", authPresent: true, authHealth: "authenticated", plan: "pro", loginPending: false, loginState: "authenticated", deviceAuth: null, login: null,
+      limits: { freshness: "fresh", session: { usedPercent: 97, resetsAt: null, windowMinutes: 300 }, weekly: { usedPercent: 40, resetsAt, windowMinutes: 10_080 }, checkedAt: new Date().toISOString() },
+      paidCredits: { balance: "49695.719750", checkedAt: new Date().toISOString() }, spendCredits: false,
+    }],
+    active: "spare",
+  }));
+  mounted.push(view);
+  const row = view.host.querySelector('[data-account-row="spare"]')!;
+  const text = row.textContent!;
+  expect(text).toContain("49,696");
+  expect(text).not.toContain("719");
+  expect(text.match(/3%/g)).toHaveLength(1);
+  expect(text.match(/60%/g)).toHaveLength(1);
+  expect(text.match(/Spare/g)).toHaveLength(1);
+  // The balance's read time shows only when it differs from the check time.
+  expect(text).not.toContain("read ");
+  openRow(view.host, "spare");
+  expect(row.textContent!.match(/Spare/g)).toHaveLength(1);
+  // What spending does while on is the open row's line, and only while the switch is on.
+  expect(row.textContent).not.toContain("keeps working on credits");
+});
+
+// ── The row's lifecycle: closing, sign-in ending, one statement of the reading ─────
+
+test("closing a row disarms its removal, by its toggle and by opening another row", async () => {
+  const removed: string[] = [];
+  const other = { ...managedAcc, id: "other", label: "Other" };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc, other], active: "other", remove: async (id) => { removed.push(id); return true; } }));
+  mounted.push(view);
+  const armedOf = (id: string) => view.host.querySelector(`[data-account-remove-armed="${id}"]`);
+  const arm = (id: string) => {
+    openRow(view.host, id);
+    flushSync(() => { view.host.querySelector<HTMLButtonElement>(`[data-account-remove="${id}"]`)!.click(); });
+    expect(armedOf(id)).not.toBeNull();
+  };
+  arm("acc");
+  openRow(view.host, "acc");
+  expect(view.host.querySelector('[data-account-toggle="acc"]')!.getAttribute("aria-expanded")).toBe("false");
+  expect(armedOf("acc")).toBeNull();
+  arm("acc");
+  openRow(view.host, "other");
+  expect(armedOf("acc")).toBeNull();
+  expect(view.host.querySelector('[data-account-toggle="other"]')!.getAttribute("aria-expanded")).toBe("true");
+  expect(removed).toEqual([]);
+});
+
+/** A Codex account that is signed out, as the list names it. */
+const signedOutCodex = { id: "old", label: "Old", kind: "managed" as const, authPresent: false, authHealth: "signed_out" as const, loginPending: false, loginState: "idle" as const, deviceAuth: null, login: null };
+
+async function signInPressed(accounts: Array<typeof signedOutCodex | typeof managedAcc>) {
+  const saved = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    return Response.json({ account: { id: "old" }, deviceAuth: { url: "https://example.invalid/device", code: "QXWT-7KPL" } });
+  }) as typeof fetch;
+  try {
+    const initial = state(login(), { engine: "codex", accounts, active: "old" });
+    const view = await mount(initial);
+    mounted.push(view);
+    flushSync(() => { view.host.querySelector<HTMLButtonElement>('[data-account-signin-start="old"]')!.click(); });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return { view, initial };
+  } finally { globalThis.fetch = saved; }
+}
+
+test("a device sign-in line shows between the press and the next read, and ends when that read says authenticated", async () => {
+  const { view, initial } = await signInPressed([signedOutCodex]);
+  const line = () => view.host.querySelector('[data-account-signin="old"]');
+  expect(line()?.textContent).toContain("QXWT-7KPL");
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex, authPresent: true, authHealth: "authenticated", loginState: "authenticated" }] });
+  expect(line()).toBeNull();
+  // A later read does not bring a finished sign-in's code back.
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex, loginPending: true, loginState: "pending" }] });
+  expect(line()).toBeNull();
+});
+
+test("a device sign-in line ends when the next read shows the account signed out with no pending login, and stays while it is pending", async () => {
+  const { view, initial } = await signInPressed([signedOutCodex]);
+  const line = () => view.host.querySelector('[data-account-signin="old"]');
+  expect(line()).not.toBeNull();
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex, loginPending: true, loginState: "pending" }] });
+  expect(line()?.textContent).toContain("QXWT-7KPL");
+  await view.rerender({ ...initial, accounts: [{ ...signedOutCodex }] });
+  expect(line()).toBeNull();
+});
+
+test("an opened row with a stale reading says when it was read once, on the Refresh line; the closed row keeps its note", async () => {
+  const observedAt = Date.parse("2020-01-01T09:00:00.000Z") / 1000;
+  const view = await mount(state(login({ phase: "authenticated" }), {
+    accounts: [{
+      ...managedAcc,
+      limits: { freshness: "stale", session: null, weekly: { usedPercent: 33, resetsAt: null, windowMinutes: 10_080, observedAt }, checkedAt: "2020-01-01T09:00:00.000Z" },
+    }],
+  }));
+  mounted.push(view);
+  const row = view.host.querySelector('[data-account-row="acc"]')!;
+  const note = () => row.querySelector('[data-account-note="stale"]');
+  expect(note()?.textContent).toBe(asOfNote(observedAt));
+  openRow(view.host, "acc");
+  expect(note()).toBeNull();
+  const clock = formatCheckedClock(new Date(observedAt * 1000).toISOString());
+  expect(row.textContent!.split(clock)).toHaveLength(2);
+  openRow(view.host, "acc");
+  expect(note()?.textContent).toBe(asOfNote(observedAt));
 });

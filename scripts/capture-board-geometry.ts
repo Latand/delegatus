@@ -1194,7 +1194,9 @@ async function captureOnboarding(): Promise<void> {
               must(geometry.overflow <= 1 && geometry.fields.every((field) => field.width >= 44 && (viewport.phone ? field.height >= 44 : field.height >= 24) && field.left >= 0 && field.right <= viewport.width + 1), `${tag}: provider controls overflow or collapse: ${JSON.stringify(geometry)}`);
               await page.locator(`${selector} button`).first().click();
               const edit = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="provider-fixture"]';
-              await page.locator(`${edit} button`).first().click();
+              /* The provider's form opens from the row's own Edit provider, in the opened row. */
+              await page.locator('[data-onboarding-accounts="claude"] [data-account-toggle="provider-fixture"]').click();
+              await page.locator('[data-onboarding-accounts="claude"] [data-account-provider-edit="provider-fixture"]').click();
               await guideForm(edit, "engines-provider-edit");
               const editGeometry = await page.locator(edit).evaluate((node) => ({
                 fields: [...node.querySelectorAll("input,button")].map((field) => {
@@ -1250,7 +1252,8 @@ async function captureOnboarding(): Promise<void> {
               await accountShot("accounts-provider-add", accountNew);
               await page.locator(`${accountRoot} ${accountNew} > button`).click();
               const accountEdit = '[data-claude-provider-editor="provider-fixture"]';
-              await page.locator(`${accountRoot} ${accountEdit} > button`).click();
+              await page.locator(`${accountRoot} [data-account-toggle="provider-fixture"]`).click();
+              await page.locator(`${accountRoot} [data-account-provider-edit="provider-fixture"]`).click();
               await accountShot("accounts-provider-edit", accountEdit);
               report[tag] = frames;
               await context.close();
@@ -3370,7 +3373,13 @@ async function accountRemovalMain(): Promise<void> {
         },
       };
     };
-    const rowIdOf = (page: Page, label: string) => page.evaluate((name: string) => [...document.querySelectorAll("[data-account-row]")].find((row) => row.querySelector("button[aria-current], button")?.textContent?.includes(name))?.getAttribute("data-account-row") ?? null, label);
+    const rowIdOf = (page: Page, label: string) => page.evaluate((name: string) => [...document.querySelectorAll("[data-account-row]")].find((row) => row.querySelector("[data-account-name]")?.textContent?.includes(name))?.getAttribute("data-account-row") ?? null, label);
+    /* Remove sits in the opened row: a press on the row's name opens it (and closes the one that was open). */
+    const openRow = async (page: Page, id: string) => {
+      const toggle = page.locator(`[data-account-toggle="${id}"]`);
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+      await page.waitForSelector(`[data-account-row="${id}"] [data-account-remove], [data-account-row="${id}"] [data-account-remove-armed]`);
+    };
     const openPanel = async (page: Page) => {
       await page.click("[data-bar-more]");
       await page.waitForSelector("[data-bar-more-menu]");
@@ -3420,6 +3429,7 @@ async function accountRemovalMain(): Promise<void> {
       if (!idB || !idC) { await context.close(); continue; }
       const readings: Record<string, RemovalReading> = {};
       const arm = async (id: string) => {
+        await openRow(page, id);
         await page.click(`[data-account-remove="${id}"]`);
         await page.waitForSelector(`[data-account-remove-armed="${id}"]`);
       };
@@ -3466,7 +3476,7 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForTimeout(300);
       readings.liveWork = await page.evaluate(readRemoval, `[data-account-refusal="${idB}"]`);
       check(tag, "live work", readings.liveWork, { text: [lang === "uk" ? "і ще 4" : "and 4 more", liveWork[0]!.title!] });
-      const liveLinks = await page.evaluate((id: string) => [...document.querySelectorAll(`[data-account-refusal="${id}"] [data-account-refusal-sessions] a[href]`)].map((link) => link.getAttribute("href")), idB);
+      const liveLinks = await page.evaluate((id: string) => [...document.querySelectorAll(`[data-account-refusal="${id}"] a[data-account-refusal-session]`)].map((link) => link.getAttribute("href")), idB);
       must(liveLinks.length === 3 && liveLinks[0] === "#c=conversation_capture_onboarding" && liveLinks[2]!.startsWith("#f="), `${tag} live work: the links are ${JSON.stringify(liveLinks)}`);
       await shoot(page, `${tag}-live-work`);
 
@@ -3489,6 +3499,14 @@ async function accountRemovalMain(): Promise<void> {
           await page.mouse.click(r.x, r.y);
         };
         stub.answer(answer);
+        /* Opening the row moves the list: it is opened first and scrolled to the bottom again. */
+        await openRow(page, idC);
+        await page.evaluate((id: string) => {
+          let area = document.querySelector(`[data-account-row="${id}"]`)!.parentElement;
+          while (area && !/(auto|scroll)/.test(getComputedStyle(area).overflowY)) area = area.parentElement;
+          if (area) area.scrollTop = area.scrollHeight;
+        }, idC);
+        await page.waitForTimeout(200);
         await clickPainted(`[data-account-remove="${idC}"]`);
         await page.waitForSelector(`[data-account-remove-armed="${idC}"]`);
         await clickPainted(`[data-account-remove-confirm="${idC}"]`);
@@ -3579,7 +3597,7 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForSelector('[data-account-row="default"]');
       await page.waitForTimeout(300);
       must(await page.evaluate(() => document.querySelector("[data-account-hidden-offer]") === null), `${tag} Main shown again: the offer stays up`);
-      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"] button');
+      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"] [data-account-toggle]');
       check(tag, "Main shown again", readings.mainRestored, { text: ["Main"] });
       await shoot(page, `${tag}-main-restored`);
 
@@ -3679,6 +3697,7 @@ async function accountRemovalMain(): Promise<void> {
               ? hiddenMainAnswer
               : { status: 200, body: { removed: { id }, cleanupPending: true, moved: { archive: inventedArchive(id), files: 1284, bytes: 2_100_000_000 }, conversationsRewritten: 37, pinsCleared: 2, deliveriesDropped: 1, migrationsSettled: 1 } });
         const release = stub.holdNext();
+        await openRow(page, id);
         await page.click(`[data-account-remove="${id}"]`);
         await page.click(`[data-account-remove-confirm="${id}"]`);
         await page.setViewportSize({ width: 390, height: 844 });
@@ -3694,7 +3713,7 @@ async function accountRemovalMain(): Promise<void> {
         const reading = await page.evaluate(readRemoval, selector);
         check(tag, kind, reading, { phone: true, ...(kind === "live" ? { text: [liveWork[0]!.title!] } : kind === "hidden" ? { text: ["~/.claude"] } : {}) });
         if (kind === "live") {
-          const links = await page.evaluate((account: string) => document.querySelectorAll(`[data-account-refusal="${account}"] [data-account-refusal-sessions] a[href]`).length, id);
+          const links = await page.evaluate((account: string) => document.querySelectorAll(`[data-account-refusal="${account}"] a[data-account-refusal-session]`).length, id);
           must(links === 3, `${tag}: ${links} live-work links`);
         }
         if (kind === "hidden") must(await page.evaluate(() => document.querySelector('[data-mobile2-accounts-engine="claude"] [data-mobile2-account="default"]') === null), `${tag}: Claude Main is still listed`);
@@ -3936,7 +3955,7 @@ async function claudeLoginMain(): Promise<void> {
         const panel = card?.closest('[role="dialog"]') ?? card?.closest("[data-mobile2-accounts]");
         const footer = document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${card?.getAttribute("data-account-row") ?? card?.getAttribute("data-mobile2-account")}"]`);
         const box = (element: Element | null | undefined) => { const r = element?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; };
-        return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
+        return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", statusLabel: card?.querySelector("[data-account-status]")?.getAttribute("aria-label") ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
           limitRows: card?.querySelectorAll("[data-limit-row]").length ?? 0,
           rowFit: [...(card?.querySelectorAll("[data-limit-row]") ?? [])].map((row) => {
             const label = row.querySelector("dt");
@@ -3956,7 +3975,7 @@ async function claudeLoginMain(): Promise<void> {
       }, { selector: cardSelector, retryText: translate(lang, "accounts.retry") });
       await page.locator(cardSelector).scrollIntoViewIfNeeded();
       const before = await measureCard();
-      must(!before.text.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying still shows the old auth error`);
+      must(!before.text.includes(translate(lang, "accounts.auth.error")) && !before.statusLabel.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying still shows the old auth error`);
       must(!before.text.includes(translate(lang, "limits.noDataYet")), `${tag}: verifying still says no data next to a running verification`);
       must(before.text.includes(translate(lang, "accounts.claudeLogin.verifying")), `${tag}: verifying line absent`);
       await shoot("verifying");
@@ -3969,8 +3988,9 @@ async function claudeLoginMain(): Promise<void> {
       const after = await measureCard();
       must(after.limitRows === 2 && !after.retry, `${tag}: success did not replace Retry with both windows`);
       must(!after.text.includes(translate(lang, "limits.noDataYet")), `${tag}: success still says no data`);
-      must(!after.text.includes(translate(lang, "accounts.auth.error")), `${tag}: success still carries auth error`);
-      must(after.text.includes(translate(lang, phone ? "accounts.active" : "accounts.auth.authenticated")), `${tag}: success badge absent`);
+      must(!after.text.includes(translate(lang, "accounts.auth.error")) && !after.statusLabel.includes(translate(lang, "accounts.auth.error")), `${tag}: success still carries auth error`);
+      /* The state is the status dot's name, and the default account carries its word. */
+      must(after.statusLabel.includes(translate(lang, "accounts.auth.authenticated")), `${tag}: success status absent (${after.statusLabel})`);
       must(polls - readsBeforeSuccess >= 1 && successfulReads >= 1, `${tag}: success arrived without an accounts poll`);
       if (!phone) must(limitsReads > limitsBeforeSuccess, `${tag}: footer did not re-read limits at success`);
       must(!phone || after.weeklyFigures === 1, `${tag}: the weekly figure is stated ${after.weeklyFigures} times on the card`);

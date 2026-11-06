@@ -9,20 +9,19 @@ import { getLocale, setLocale, translate } from "@/lib/i18n";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
-import { MobileAccountsBody, mobileAccountCorner, mobileAccountState, ProjectAwareMobileAccountsBody } from "./AccountsPanel";
+import { MobileAccountsBody, mobileAccountState, ProjectAwareMobileAccountsBody } from "./AccountsPanel";
 import { createReceiptStore, type ReceiptStore } from "./mobile/MobileReceipt";
-import { formatResetClock, formatResetEta } from "./rateLimit";
+import { formatResetClock } from "./rateLimit";
 
 /*
  * The Accounts & limits screen on the phone (issue #1439, lane 9;
- * docs/design/mobile-v2/README.md §4.8): the active account as a card with its
- * windows and the actions that act ON THE TAP, the other authenticated
- * accounts as quiet rows that switch future launches, a row that is not signed
- * in that opens the device sign-in and stays inactive, and the add row last.
+ * docs/design/mobile-v2/README.md §4.8): the same row as the desktop dialog,
+ * every window on the row, a press that opens the row and selects nothing,
+ * Make default as its own control inside it (with the Switch back receipt),
+ * a row that is not signed in with Sign in on its head, and the add row last.
  *
- * The two numbers the design fixes are asserted here because both used to mean
- * the opposite: every meter fills with what REMAINS, coloured by what remains,
- * and the card's corner names the window its number belongs to (§5, P2-4).
+ * The number the design fixes is asserted here because it used to mean the
+ * opposite: every bar fills with what REMAINS, coloured by what remains (§5, P2-4).
  */
 
 /** An archive under an invented home, composed so the `~` fold is exercised
@@ -128,11 +127,12 @@ test("phone provider credential damage shows repair and never offers sign-in", a
   const row = view.host.querySelector('[data-mobile2-account="cl-provider"]') as HTMLElement;
   expect(mobileAccountState(damaged, damaged.id)).toBe("error");
   expect(row.getAttribute("data-mobile2-account-state")).toBe("error");
-  expect(row.textContent).toContain("Provider credential error");
+  expect(row.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Provider: Provider credential error");
+  await open(view.host, "cl-provider");
   expect(row.textContent).toContain("Edit provider");
   expect(row.textContent).not.toContain("Needs sign-in");
   expect(row.textContent).not.toContain("Not logged in");
-  expect(row.querySelector('[data-mobile2-account-signin="cl-provider"]')).toBeNull();
+  expect(row.querySelector("[data-account-signin-start]")).toBeNull();
   const repaired = { ...damaged, authPresent: true, authHealth: "unknown" as const };
   await view.rerender([engineState("claude", [repaired], repaired.id)]);
   expect(view.host.querySelector('[data-mobile2-account="cl-provider"]')?.getAttribute("data-mobile2-account-state")).toBe("active");
@@ -201,13 +201,15 @@ async function mount(engines: EngineAccountsState[], receipts: ReceiptStore = cr
 test("phone next choice follows refreshed quota selection while the project stays mounted", async () => {
   let selected = "b";
   let reads = 0;
-  let otherCalls = 0;
+  const otherCalls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (String(input).startsWith("/api/account-project-bindings")) {
       reads += 1;
       return Response.json({ engines: { claude: { nextChosenAccountId: selected } } });
     }
-    otherCalls += 1;
+    /* The screen also reads the install transfer's checklist rows; none here, and not the call under test. */
+    if (String(input).startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    otherCalls.push(String(input));
     return new Response(null, { status: 500 });
   }) as typeof fetch;
   const a = account({ id: "a", label: "Account A", limits: { freshness: "fresh", session: null, weekly: windowWeek(30, NOW + DAY * 2) } });
@@ -216,7 +218,13 @@ test("phone next choice follows refreshed quota selection while the project stay
   const view = await mount([initial], createReceiptStore(), undefined, "project-p");
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
-  expect(view.host.querySelector('[data-mobile2-account="b"]')?.textContent).toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+  const noteOf = async (id: string) => {
+    await click(view.host.querySelector(`[data-mobile2-account="${id}"] [data-account-status]`));
+    const note = document.body.querySelector(`[data-account-status-popover="${id}"]`)?.textContent ?? "";
+    await click(view.host.querySelector(`[data-mobile2-account="${id}"] [data-account-status]`));
+    return note;
+  };
+  expect(await noteOf("b")).toContain(translate(getLocale(), "accounts.nextForUnpinned"));
 
   selected = "a";
   await view.rerender([engineState("claude", [
@@ -226,8 +234,8 @@ test("phone next choice follows refreshed quota selection while the project stay
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect(reads).toBe(2);
   expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["a", "b"]);
-  expect(view.host.querySelector('[data-mobile2-account="a"]')?.textContent).toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
-  expect(view.host.querySelector('[data-mobile2-account="b"]')?.textContent).not.toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+  expect(await noteOf("a")).toContain(translate(getLocale(), "accounts.nextForUnpinned"));
+  expect(await noteOf("b")).not.toContain(translate(getLocale(), "accounts.nextForUnpinned"));
 
   selected = "b";
   await view.rerender([engineState("claude", [
@@ -237,13 +245,15 @@ test("phone next choice follows refreshed quota selection while the project stay
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect(reads).toBe(3);
   expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
-  expect(otherCalls).toBe(0);
+  expect(otherCalls).toEqual([]);
 });
 
 const click = async (element: Element | null) => {
   expect(element).toBeTruthy();
   await act(async () => (element as HTMLElement).click());
 };
+/** A press on a row's name opens it in place. */
+const open = (host: HTMLElement, id: string) => click(host.querySelector(`[data-account-toggle="${id}"]`));
 
 test.each(["en", "uk"] as const)("phone reset rows show Claude beside Codex in %s", async (locale) => {
   const previous = getLocale();
@@ -261,9 +271,7 @@ test.each(["en", "uk"] as const)("phone reset rows show Claude beside Codex in %
     const view = await mount(engines);
     for (const engine of ["claude", "codex"] as const) {
       const block = view.host.querySelector(`[data-account-limits="${engine}-windows"]`)!;
-      expect(block.querySelector('[data-limit-row="weekly"]')?.textContent).toContain(translate(locale, "limits.reset", {
-        eta: formatResetEta(reset, NOW), at: formatResetClock(reset, NOW),
-      }));
+      expect(block.querySelector('[data-limit-row="weekly"]')?.textContent).toContain(formatResetClock(reset, NOW));
       if (engine === "claude") expect(block.querySelector('[data-limit-row="tier:opus"]')?.textContent).toContain(formatResetClock(reset + DAY, NOW));
     }
   } finally { setLocale(previous); }
@@ -297,7 +305,8 @@ test.each(["en", "uk"] as const)("phone panel marks and leads with the reset-awa
     const view = await mount([engineState("claude", [a, b], "a")], createReceiptStore(), { claude: selectedId });
     const rows = [...view.host.querySelectorAll('[data-mobile2-account]')];
     expect(rows.map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
-    expect(rows[0]?.textContent).toContain(translate(locale, "accounts.nextForUnpinnedShort"));
+    await click(rows[0]!.querySelector("[data-account-status]"));
+    expect(document.body.querySelector('[data-account-status-popover="b"]')?.textContent).toContain(translate(locale, "accounts.nextForUnpinned"));
     expect(rows[0]?.getAttribute("data-mobile2-account-state")).toBe("ready");
     expect(rows[1]?.getAttribute("data-mobile2-account-state")).toBe("active");
   } finally { setLocale(previous); }
@@ -305,47 +314,37 @@ test.each(["en", "uk"] as const)("phone panel marks and leads with the reset-awa
 
 const text = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 
-test("every meter on the active card fills with what remains, and the corner names its weekly window", async () => {
+test("every bar on the default row fills with what remains, coloured by what remains, and no percentage is said twice", async () => {
   const { host } = await mount([engineState("claude", [claudeMain, claudeLab], "cl-main")]);
 
   const card = host.querySelector('[data-mobile2-account="cl-main"]')!;
   expect(card.getAttribute("data-mobile2-account-state")).toBe("active");
 
-  const meters = [...card.querySelectorAll('[data-limit-row] [role="meter"]')];
+  const fills = [...card.querySelectorAll<HTMLElement>("[data-limit-row] [data-meter-fill]")];
   // 28 / 92 / 29 percent used ⇒ 72 / 8 / 71 percent left, in the design's order.
-  expect(meters.map((meter) => meter.getAttribute("aria-valuenow"))).toEqual(["72", "8", "71"]);
-  expect(meters.map((meter) => (meter.firstElementChild as HTMLElement).style.width)).toEqual(["72%", "8%", "71%"]);
-  // Coloured by what remains: the nearly spent week is danger, the rest accent.
-  expect(meters.map((meter) => meter.getAttribute("data-mobile2-meter-tone"))).toEqual(["accent", "danger", "accent"]);
-  expect(text(card.querySelector('[data-limit-row="session"]'))).toContain("72% left");
-  expect(text(card.querySelector('[data-limit-row="weekly"]'))).toContain("8% left");
-  expect(text(card.querySelector('[data-limit-row="tier:opus"]'))).toContain("71% left");
+  expect(fills.map((fill) => fill.getAttribute("data-meter-fill"))).toEqual(["72", "8", "71"]);
+  // Coloured by what remains: the nearly spent week is danger, the rest the engine's tint.
+  expect(fills.map((fill) => fill.getAttribute("data-meter-tone"))).toEqual(["engine", "danger", "engine"]);
+  expect(text(card.querySelector('[data-limit-row="session"]'))).toContain("72%");
+  expect(text(card.querySelector('[data-limit-row="weekly"]'))).toContain("8%");
+  expect(text(card.querySelector('[data-limit-row="tier:opus"]'))).toContain("71%");
+  expect(card.querySelector('[data-limit-row="weekly"] [data-limit-number]')?.getAttribute("aria-label")).toBe("8% left of the Week window");
 
-  // The card lists its windows, so its header carries no second weekly figure;
-  // the collapsed card below keeps the corner, where it is the only figure.
+  // The row lists its windows and has no summary figure beside them, and the
+  // caption says once what the numbers mean.
   expect(card.querySelector("[data-mobile2-account-corner]")).toBeNull();
-  expect(text(card).match(/8% left/g)).toHaveLength(1);
-  const quietCorner = host.querySelector('[data-mobile2-account="cl-lab"] [data-mobile2-account-corner]')!;
-  expect(quietCorner.getAttribute("data-mobile2-account-window")).toBe("Week");
-  expect(text(quietCorner)).toBe("64% leftWeek");
-  expect(quietCorner.getAttribute("aria-label")).toBe("64% left of the Week window");
-  // The number the corner shows is the weekly window's headroom, never the
-  // first window's and never what was used.
-  expect(mobileAccountCorner({ session: null, weekly: null, tiers: [], plan: null }, (key: string) => key)).toBeNull();
+  expect(text(card).match(/8%/g)).toHaveLength(1);
+  expect(text(host.querySelector("[data-accounts-caption]"))).toBe("% left · reset");
+  // The other row carries its windows too, so a closed row says everything at a glance.
+  expect(text(host.querySelector('[data-mobile2-account="cl-lab"] [data-limit-row="weekly"]'))).toContain("64%");
 });
 
-test("the corner names the week even when the 5-hour window is tighter, and says so when there is no week", async () => {
-  // The operator's reading: 77 % of the week left, 36 % of the 5-hour window.
-  const both = account({ id: "cl-both", label: "Both", plan: "max", limits: { freshness: "fresh", session: window5h(64, NOW + 2 * HOUR), weekly: windowWeek(23, NOW + 3 * DAY), plan: "max", capturedAt: NOW - 60, checkedAt: new Date((NOW - 60) * 1000).toISOString() } } as Partial<AccountOption> & { id: string; label: string });
+test("a row with only a 5-hour window lists just that window", async () => {
   const fiveHourOnly = account({ id: "cl-5h", label: "Five", plan: "max", limits: { freshness: "fresh", session: window5h(64, NOW + 2 * HOUR), weekly: null, plan: "max", capturedAt: NOW - 60, checkedAt: new Date((NOW - 60) * 1000).toISOString() } } as Partial<AccountOption> & { id: string; label: string });
-  const { host } = await mount([engineState("claude", [both, fiveHourOnly], "cl-both")]);
+  const { host } = await mount([engineState("claude", [fiveHourOnly], "cl-5h")]);
 
-  // The active card names the week once, in its rows; its header repeats nothing.
-  expect(host.querySelector('[data-mobile2-account="cl-both"] [data-mobile2-account-corner]')).toBeNull();
-  expect(text(host.querySelector('[data-mobile2-account="cl-both"] [data-limit-row="weekly"]'))).toContain("77% left");
-  const bare = host.querySelector('[data-mobile2-account="cl-5h"] [data-mobile2-account-corner]')!;
-  expect(text(bare)).toBe("no weekly data");
-  expect(text(bare)).not.toContain("36");
+  expect([...host.querySelectorAll("[data-limit-row]")].map((row) => row.getAttribute("data-limit-row"))).toEqual(["session"]);
+  expect(text(host.querySelector('[data-limit-row="session"]'))).toContain("36%");
 });
 
 test("a sign-in being verified shows no result of the attempt before it, and a failed one keeps its error", async () => {
@@ -357,7 +356,7 @@ test("a sign-in being verified shows no result of the attempt before it, and a f
 
   const pending = host.querySelector('[data-mobile2-account="cl-verify"]')!;
   expect(pending.getAttribute("data-mobile2-account-state")).toBe("pending");
-  expect(text(pending)).toContain("signing in");
+  expect(pending.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Verify: signing in…");
   expect(text(pending)).toContain("Verifying…");
   expect(text(pending)).not.toContain("Auth error");
   expect(text(pending)).not.toContain("no data yet");
@@ -366,18 +365,23 @@ test("a sign-in being verified shows no result of the attempt before it, and a f
   expect(text(failedCard)).toContain("Sign-in timed out.");
 });
 
-test("the quiet row of an authenticated account switches future launches on the tap, and the receipt carries Switch back", async () => {
+test("a tap on a row opens it and switches nothing; Make default switches future launches, and the receipt carries Switch back", async () => {
   const selected: string[] = [];
   const state = engineState("claude", [claudeMain, claudeLab], "cl-main", {
     select: async (id: string) => { selected.push(id); return true; },
   });
   const { host, receipts } = await mount([state]);
 
-  const row = host.querySelector('[data-mobile2-account-switch="cl-lab"]');
-  expect(row?.getAttribute("aria-label")).toBe("Use Lab for future launches");
-  expect(text(host.querySelector('[data-mobile2-account="cl-lab"]'))).toContain("ready");
+  const toggle = host.querySelector('[data-account-toggle="cl-lab"]');
+  expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+  await click(toggle);
+  expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+  expect(selected).toEqual([]);
+  expect(receipts.getState()).toBeNull();
 
-  await click(row);
+  const make = host.querySelector('[data-account-make-default="cl-lab"]');
+  expect(make?.getAttribute("aria-label")).toBe("Make Lab the default account");
+  await click(make);
 
   // One tap, no confirmation step, one selection.
   expect(selected).toEqual(["cl-lab"]);
@@ -388,6 +392,24 @@ test("the quiet row of an authenticated account switches future launches on the 
 
   await act(async () => receipt.inverse!.run());
   expect(selected).toEqual(["cl-lab", "cl-main"]);
+});
+
+test("an opened phone row carries Copy CLI and Remove, and the removal keeps its two steps", async () => {
+  const removed: string[] = [];
+  const copied: string[] = [];
+  const { host } = await mount([engineState("claude", [claudeMain, claudeLab], "cl-main", {
+    remove: async (id: string) => { removed.push(id); return true; },
+    copyTerminalCommand: async (id: string) => { copied.push(id); return true; },
+  })]);
+  await open(host, "cl-lab");
+  const target = (selector: string) => host.querySelector<HTMLElement>(`[data-mobile2-account="cl-lab"] ${selector}`);
+  expect(target('[data-account-copy-cli="cl-lab"]')?.className).toContain("min-h-11");
+  await click(target('[data-account-copy-cli="cl-lab"]'));
+  expect(copied).toEqual(["cl-lab"]);
+  await click(target('[data-account-remove="cl-lab"]'));
+  expect(removed).toEqual([]);
+  await click(target('[data-account-remove-confirm="cl-lab"]'));
+  expect(removed).toEqual(["cl-lab"]);
 });
 
 test("Refresh and Use one reset act on the tap and answer with a receipt; the reset is offered only where a credit exists", async () => {
@@ -408,6 +430,8 @@ test("Refresh and Use one reset act on the tap and answer with a receipt; the re
   expect(reset.disabled).toBe(false);
   expect(text(host.querySelector('[data-account-reset-credits="cx-main"]'))).toContain("1 reset available");
 
+  // Refresh lives in the opened row.
+  await open(host, "cl-main");
   await click(host.querySelector('[data-account-refresh-limits="cl-main"]'));
   expect(refreshed).toEqual(["cl-main"]);
   expect(receipts.getState()?.text).toBe("Limits re-read for Main");
@@ -417,12 +441,13 @@ test("Refresh and Use one reset act on the tap and answer with a receipt; the re
   expect(receipts.getState()?.text).toBe("Reset used on Main");
 });
 
-test("a Codex card with no reset credit still shows Refresh, with the reset control disabled", async () => {
+test("a Codex row with no reset credit offers Refresh in the opened row and says there is no reset to use", async () => {
   const spent = account({ ...codexMain, resetCredits: { availableCount: 0, expiresAt: null } } as Partial<AccountOption> & { id: string; label: string });
   const { host } = await mount([engineState("codex", [spent], "cx-main")]);
 
+  expect(host.querySelector('[data-account-use-reset="cx-main"]')).toBeNull();
+  await open(host, "cx-main");
   expect((host.querySelector('[data-account-refresh-limits="cx-main"]') as HTMLButtonElement).disabled).toBe(false);
-  expect((host.querySelector('[data-account-use-reset="cx-main"]') as HTMLButtonElement).disabled).toBe(true);
   expect(text(host.querySelector('[data-account-reset-credits="cx-main"]'))).toContain("No resets available");
 });
 
@@ -442,9 +467,9 @@ test("a Codex row that is not signed in opens the device sign-in, shows its code
     });
     const { host, receipts } = await mount([state]);
 
-    const row = host.querySelector('[data-mobile2-account-signin="cx-spare"]')!;
-    expect(text(row)).toContain("needs sign-in");
-    expect(text(row)).toContain("sign in");
+    const row = host.querySelector('[data-account-signin-start="cx-spare"]')!;
+    expect(host.querySelector('[data-mobile2-account="cx-spare"] [data-account-status]')?.getAttribute("aria-label")).toBe("Spare: Signed out");
+    expect(text(row)).toBe("Sign in");
     // The row is a sign-in, never a switch: nothing here can make it active.
     expect(host.querySelector('[data-mobile2-account-switch="cx-spare"]')).toBeNull();
 
@@ -454,7 +479,7 @@ test("a Codex row that is not signed in opens the device sign-in, shows its code
     expect(selected).toEqual([]);
     expect(host.querySelector('[data-mobile2-account="cx-spare"]')?.getAttribute("data-mobile2-account-state")).toBe("needsSignIn");
     expect(host.querySelector('[data-mobile2-account="cx-main"]')?.getAttribute("data-mobile2-account-state")).toBe("active");
-    const challenge = host.querySelector("[data-mobile2-account-device-signin]")!;
+    const challenge = host.querySelector('[data-account-signin="cx-spare"]')!;
     expect(challenge.querySelector("a")?.getAttribute("href")).toBe("https://example.invalid/device");
     expect(text(challenge)).toContain("ABCD-EFGH");
     expect(receipts.getState()?.text).toBe("Device sign-in opened for Spare — it becomes active once signed in");
@@ -475,15 +500,15 @@ test("#2166: Codex Main signs in directly, with no label and no second account, 
   try {
     const main = account({ id: "default", label: "Main", kind: "legacy", authPresent: false, authHealth: "signed_out" } as Partial<AccountOption> & { id: string; label: string });
     const { host } = await mount([engineState("codex", [main], "default")]);
-    const row = host.querySelector('[data-mobile2-account-signin="default"]')!;
-    expect(text(row)).toContain("sign in");
+    const row = host.querySelector('[data-account-signin-start="default"]')!;
+    expect(text(row)).toBe("Sign in");
     await click(row);
     expect(calls).toEqual([{ url: "/api/accounts/codex", body: { action: "retry", id: "default" } }]);
-    const challenge = host.querySelector("[data-mobile2-account-device-signin]")!;
+    const challenge = host.querySelector('[data-account-signin="default"]')!;
     expect(text(challenge)).toContain("WXYZ-1234");
-    await click(host.querySelector('[data-mobile2-account-signin-cancel="default"]'));
+    await click(host.querySelector('[data-account-signin-cancel="default"]'));
     expect(calls.at(-1)).toEqual({ url: "/api/accounts/codex", body: { action: "cancel", id: "default" } });
-    expect(host.querySelector("[data-mobile2-account-device-signin]")).toBeNull();
+    expect(host.querySelector('[data-account-signin="default"]')).toBeNull();
     /* Nothing asked for a label: the add row stays closed. */
     expect(host.querySelector("[data-mobile2-account-add-form]")).toBeNull();
   } finally {
@@ -500,7 +525,7 @@ test("a Claude row that is not signed in restarts its login in place and stays i
   });
   const { host, receipts } = await mount([state]);
 
-  await click(host.querySelector('[data-mobile2-account-signin="cl-second"]'));
+  await click(host.querySelector('[data-account-signin-start="cl-second"]'));
 
   expect(retried).toEqual(["cl-second"]);
   expect(selected).toEqual([]);
@@ -513,8 +538,8 @@ test("a signed-out account is never the active card, even while the registry sti
 
   expect(mobileAccountState(claudeSecond, "cl-second")).toBe("needsSignIn");
   expect(host.querySelector('[data-mobile2-account="cl-second"]')?.getAttribute("data-mobile2-account-state")).toBe("needsSignIn");
-  expect(host.querySelector("[data-account-limits]")).toBeNull();
-  expect(host.querySelector('[data-mobile2-account-signin="cl-second"]')).toBeTruthy();
+  expect(host.querySelector('[data-mobile2-account="cl-second"] [data-account-limits]')).toBeNull();
+  expect(host.querySelector('[data-account-signin-start="cl-second"]')).toBeTruthy();
 });
 
 test("the screen is one section per engine — the active card first, the add row last", async () => {
@@ -532,9 +557,9 @@ test("the screen is one section per engine — the active card first, the add ro
   expect(add).toBeTruthy();
   expect(text(add)).toContain("Add a Claude account");
   expect(claude.lastElementChild?.getAttribute("data-claude-provider-editor")).toBe("new");
-  expect(text(claude.querySelector('[data-mobile2-account="cl-main"]'))).toContain("Max plan");
-  // A quiet row keeps its own reading line: plan and when it was last checked.
-  expect(text(claude.querySelector('[data-mobile2-account="cl-lab"]'))).toContain("checked");
+  // The plan is the status popover's.
+  await click(claude.querySelector('[data-mobile2-account="cl-main"] [data-account-status]'));
+  expect(document.body.querySelector('[data-account-status-popover="cl-main"]')?.textContent).toContain("Max plan");
 });
 
 test("an account with no reading says so instead of drawing an empty meter", async () => {
@@ -543,7 +568,9 @@ test("an account with no reading says so instead of drawing an empty meter", asy
 
   expect(host.querySelector('[data-mobile2-account="cl-bare"] [role="meter"]')).toBeNull();
   expect(host.querySelector("[data-mobile2-account-corner]")).toBeNull();
-  expect(text(host.querySelector("[data-account-limits]"))).toContain("no reading yet");
+  expect(host.querySelector("[data-account-limits]")).toBeNull();
+  await open(host, "cl-bare");
+  expect(text(host.querySelector('[data-mobile2-account="cl-bare"]'))).toContain(translate(getLocale(), "limits.noDataYet"));
 });
 
 test("the account a badge steered here (#229) is ringed on the screen it lands on", async () => {
@@ -567,8 +594,8 @@ test("a refusal sits inside the refused account's card with a 44 px close (#1857
   expect(text(block)).toContain("An agent is still running on Lab.");
   expect(host.querySelector('[data-mobile2-account="cl-main"] [data-account-refusal]')).toBeNull();
   const close = block!.querySelector('button[aria-label="Close this message"]')!;
-  expect(close.className).toContain("h-11 w-11");
-  expect(close.className).not.toContain("sm:h-5");
+  expect(close.className).toContain("min-h-11");
+  expect(close.className).not.toContain("min-h-6");
 });
 
 test("the removal summary is the first element of its engine section on the phone (#1857)", async () => {
@@ -602,4 +629,27 @@ test("a hidden Main is offered back under the add row on the phone", async () =>
   expect(button.className).toContain("min-h-[44px]");
   await act(async () => button.click());
   expect(restored).toEqual(["default"]);
+});
+
+test("the phone's device sign-in line shows until the next read says the account is authenticated or signed out", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    return Response.json({ account: { id: "cx-spare" }, deviceAuth: { url: "https://example.invalid/device", code: "ABCD-EFGH" } });
+  }) as typeof fetch;
+  const view = await mount([engineState("codex", [codexMain, codexSpare], "cx-main")]);
+  const line = () => view.host.querySelector('[data-account-signin="cx-spare"]');
+  const pressed = async () => {
+    await click(view.host.querySelector('[data-account-signin-start="cx-spare"]'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  };
+  await pressed();
+  expect(text(line())).toContain("ABCD-EFGH");
+  await view.rerender([engineState("codex", [codexMain, { ...codexSpare, authPresent: true, authHealth: "authenticated" }], "cx-main")]);
+  expect(line()).toBeNull();
+  // Signed out again with no pending login: pressed anew, then a read that leaves it so.
+  await view.rerender([engineState("codex", [codexMain, codexSpare], "cx-main")]);
+  await pressed();
+  expect(line()).not.toBeNull();
+  await view.rerender([engineState("codex", [codexMain, { ...codexSpare }], "cx-main")]);
+  expect(line()).toBeNull();
 });
