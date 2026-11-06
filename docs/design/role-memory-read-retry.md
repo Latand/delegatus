@@ -109,11 +109,11 @@ and whether 180 seconds is then always enough is not claimed.
 
 **Definition.** For an initialized collection, `storedLessonRevision()`
 returns the database file identity (device and inode), the collection's
-generation (`imported_at` of its `state_collections` row), the largest
-`row_revision` among rule rows (keys from `r:` up to, but excluding, `r;`) and
-the number of rule rows. An absent collection keeps returning the empty
-string, the affirmative empty store that lets `runPrivacyWork` skip the worker.
-The value is opaque; it need not contain the state path.
+`imported_at` generation and its durable rule-change counter. The counter
+lives in `role_memory_privacy_revision`, independently of rule rows and the
+pruned change journal. An absent collection keeps returning the empty string,
+the affirmative empty store that lets `runPrivacyWork` skip the worker. The
+value is opaque; it need not contain the state path.
 
 **Why rule rows.** Every text the filter withholds comes from a rule row:
 active, archived, merged and rewritten versions (`versionedRule` keeps the
@@ -130,49 +130,42 @@ filtered. More importantly, a content digest can repeat: a rule rewritten and
 then reverted returns to an earlier digest. The worker and the parent each
 compare two reads of the revision around their work. With a repeating value, a
 worker that matched with the intermediate rules could return a result under
-the repeated value. The rule-row fingerprint is monotonic: every insert or
-update stores the collection's next revision in `row_revision`, which no
-earlier state had; a physical delete lowers the count; a re-import rewrites
-every row with a new revision; a recreated collection (`reimportExisting`) has
-a new `imported_at`. Two states with the same fingerprint therefore hold the
-same rule rows, unless the file is edited outside the store's writers. Every
-process (Viewer bundles, the privacy worker, MCP servers) derives the same
-value from the same committed state, so values stay comparable across the
-worker boundary and across restarts.
+the repeated value. The rule-change counter advances in SQLite triggers on
+every insert, update or physical delete of a rule row. Imports, re-imports, collection
+replacement and all collection write APIs pass through those triggers. The
+counter survives the removal of every rule and change-journal pruning;
+transaction rollback rolls it back with the write. Request and scope rows do
+not advance it. Every process derives the same value from committed state,
+including after restarting its reader or worker.
 
-**Computation, proportional to what changed.**
+A maximum revision and count over surviving rule rows can repeat after an
+insert/delete cycle. Retaining a separate counter also covers a temporary rule
+inserted and deleted in the same transaction. The state schema's existing
+startup authority installs the table and triggers for retained databases and
+repairs missing objects. An unreadable counter refuses privacy work. The
+counter table has one row and no collection foreign key, so a cascading
+collection deletion cannot reset it. An integer overflow refuses the write.
 
-1. Keep today's physical fast path: file identity from `fs.statSync` plus
+**Computation, independent of retained history size.**
+
+1. Keep the physical fast path: file identity from `fs.statSync` plus
    `stateDatabaseSignature`. If neither changed, return the cached value with
    no SQL. This keeps the existing fault-injection surface of the retry tests.
 2. Otherwise, in one synchronous read transaction on a dedicated read-only
-   connection: read `revision`, `change_floor` and `imported_at` of the
-   collection. If identity, generation and revision match the cached ones,
-   return the cached value.
-3. If the revision advanced, the cached revision is not below `change_floor`
-   and identity and generation are unchanged, probe `state_changes` for any
-   `r:` key in (cached, current] with `LIMIT 1` using the existing
-   `(collection, revision)` index. No hit: the value is unchanged; record the
-   new collection revision.
-4. Otherwise, run `MAX(row_revision), COUNT(*)` over the `r:` range of the
-   primary key.
-5. End the transaction before returning. It is never held across an await.
+   connection, read the collection generation and the singleton rule-change
+   counter. Before the first rule write, the absent counter row means zero.
+3. End the transaction before returning. It is never held across an await.
 
-The connection lives in `src/lib/memory/roleViewSource.ts`, which already owns
-read-only `role_memory` connections and the change-log reader pattern. It
-must be a new slot, never shared with a cooperative history cursor, whose open
-snapshot could hide a peer's commit (the reason the curation version reader
-already has its own slot). It runs the same `busy_timeout = 0`,
+The connection lives in `src/lib/memory/roleViewSource.ts`. Its dedicated slot
+keeps it separate from a cooperative history cursor whose open snapshot could
+hide a peer's commit. It uses the same `busy_timeout = 0`,
 `openCurrentDatabase` reopening and attribution wrapper as its siblings, with
-its own attribution label. Read errors go through `unreadableRoleMemory` as
-today: an allowlisted category, fail closed.
+its own attribution label. Read errors go through `unreadableRoleMemory`:
+an allowlisted category, fail closed.
 
-Cost: a write to another collection costs one metadata read, as today. A
-`role_memory` write costs one indexed probe bounded by the changes since the
-last read (the change log keeps 1,024 revisions; beyond that the aggregate
-runs). A rule write or a cold start costs one aggregate over the rule rows'
-records. The investigation counted about 7,400 rule rows. That aggregate's
-cost on the production store is unmeasured.
+A changed database costs two singleton metadata reads. Rule writes add a
+transactional counter update. These operation counts describe the mechanism;
+production latency and resource gains remain unmeasured.
 
 **Consumers.** Every reader of the value was checked; each uses it only to
 mean "the rules the filter reads have not changed": the matcher cache and its
@@ -372,7 +365,8 @@ safe store diagnostic; they gain no sleeping or automatic replay.
 | `pipelines/git.ts`, `git/agentPublicationIdentity.ts` | Publication and agent-launch environments carry the known-value file path; an unreadable store refuses publication or leaves a missing file that refuses the agent's own push. |
 | `scripts/measure-privacy.ts` | Local measurement reads stored texts, then exercises either synchronous filtering or the async entry. |
 | `memory/roleStore.ts` | Rule-row revision (section 1), revision tokens, matcher compilation/completeness, stored texts/patterns and publication known-value refresh. Sync publication and linked-board consumers still fail closed. |
-| `memory/roleViewSource.ts` | Owns the dedicated read-only connection for the rule-row revision, next to the existing view, curation and profile readers. Reads metadata, change rows and rule-row revisions; never row texts. |
+| `memory/roleViewSource.ts` | Owns the dedicated read-only connection for the rule-row revision, next to the existing view, curation and profile readers. Reads the collection generation and durable privacy counter; never row texts. |
+| `state/sqliteStateStore.ts` | Installs the singleton privacy counter and three rule-row triggers through the existing fenced schema transaction. Every writer inherits transactional revision updates. |
 
 ## Byte-ceiling omissions
 
@@ -418,7 +412,10 @@ real implementation:
    scope-only write. Rewrite then revert gives a third, different value. After
    more than 1,024 request-only writes (past the change floor), a rule write
    is still detected. The worker process and the parent report the same value
-   for the same state.
+   for the same state. Insert/delete cycles, including a peer transaction,
+   remain distinct after journal pruning and process restarts. Rolled-back
+   writes preserve the committed revision; startup upgrades and partial-schema
+   repair retain filtering for existing rules.
 2. **Request-only writes cost nothing.** A request-only write at each await
    of a stage launch causes no recompile, no recomposition and no extra worker
    call compared with a run without the write. The awaits are: the first

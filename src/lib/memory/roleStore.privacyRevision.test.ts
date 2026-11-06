@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { deleteRule, leaveLessons, leaveSeatLessons, recordLessonRequest, restoreRule, revertRule, roleMemoryCollection, storedLessonRevision, withoutStoredLessons } from "./roleStore";
+import { withCurrentRoleMemory, withoutStoredLessonsAsync } from "./privacy";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { importStateCollection, initializeStateCollections, reimportStateCollection } from "@/lib/state/sqliteStateStore";
 import { memoryProblemSignals } from "./roleProblems";
@@ -124,4 +126,136 @@ test("privacy revision sees a write while a cooperative history cursor holds its
     deleteRule(id, IMPORT_AT);
     expect(storedLessonRevision()).not.toBe(before);
   } finally { await reading; }
+});
+
+const fixtureRule = (id: string, rule: string) => ({ kind: "rule" as const, id, scope: "machine", rule, why: "", hints: [], state: "active" as const, source, createdAt: IMPORT_AT, changedAt: IMPORT_AT });
+async function coldRevision() {
+  const child = Bun.spawn([process.execPath, "-e", 'import { storedLessonRevision } from "./src/lib/memory/roleStore"; process.stdout.write(storedLessonRevision());'], {
+    env: process.env, stdout: "pipe", stderr: "pipe",
+  });
+  const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, errors }).toEqual({ code: 0, errors: "" });
+  return output;
+}
+
+test("a temporary rule insertion and physical deletion cannot restore an earlier approval revision", async () => {
+  const held = roleMemoryCollection(true)!;
+  held.boundedPatch(1, tx => tx.put(fixtureRule("r_initial", text)));
+  const before = storedLessonRevision();
+  held.boundedPatch(1, tx => tx.put(fixtureRule("r_temporary", "Check the retained revision before approving the next dispatch")));
+  const during = storedLessonRevision();
+  expect(during).not.toBe(before);
+  expect(await coldRevision()).toBe(during);
+  held.boundedPatch(1, tx => tx.delete("r:r_temporary"));
+  expect(storedLessonRevision()).not.toBe(before);
+  expect(storedLessonRevision()).not.toBe(during);
+  expect(await coldRevision()).toBe(storedLessonRevision());
+});
+
+test("the real worker result must be rebuilt after an insertion/deletion cycle", async () => {
+  const held = roleMemoryCollection(true)!;
+  held.boundedPatch(1, tx => tx.put(fixtureRule("r_initial", text)));
+  const transient = "Check the retained revision before approving the next dispatch";
+  let requests = 0;
+  const real = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+    const first = ++requests === 1;
+    if (first) held.boundedPatch(1, tx => tx.put(fixtureRule("r_temporary", transient)));
+    try { return await real.call(this, request); }
+    finally { if (first) held.boundedPatch(1, tx => tx.delete("r:r_temporary")); }
+  });
+  try {
+    const output = await withCurrentRoleMemory(() => withoutStoredLessonsAsync(transient));
+    expect(output).toBe(transient);
+    expect(requests).toBeGreaterThan(1);
+  } finally { worker.mockRestore(); }
+});
+
+test("the privacy clock survives a peer insertion/deletion cycle, journal pruning and process restarts", async () => {
+  add();
+  const before = storedLessonRevision();
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { roleMemoryCollection, recordLessonRequest } from "./src/lib/memory/roleStore";
+    const collection = roleMemoryCollection();
+    const rule = collection.snapshot().find(row => row.kind === "rule");
+    collection.boundedPatch(2, tx => { tx.put({ ...rule, id: "r_temporary" }); tx.delete("r:r_temporary"); });
+    for (let attempt = 0; attempt < 1035; attempt++) recordLessonRequest({
+      project: "fixture", pipelineId: "pruning-fixture", stageId: "build", attempt, roleId: "builder",
+      conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z",
+    });
+  `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, output, errors }).toEqual({ code: 0, output: "", errors: "" });
+  const db = new Database(roleMemoryCollection()!.filename, { readonly: true });
+  try {
+    expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM state_changes WHERE collection='role_memory' AND row_key='r:r_temporary'").get()!.count).toBe(0);
+  } finally { db.close(); }
+  const after = storedLessonRevision();
+  expect(after).not.toBe(before);
+  expect(await coldRevision()).toBe(after);
+  recordLessonRequest({ project: "fixture", pipelineId: "after-restart", stageId: "build", attempt: 1,
+    roleId: "builder", conversationId: "conversation_fixture", at: IMPORT_AT });
+  expect(storedLessonRevision()).toBe(after);
+  expect(await coldRevision()).toBe(after);
+});
+
+test("rolled back rule writes leave the committed privacy revision unchanged", async () => {
+  const id = add();
+  const collection = roleMemoryCollection()!;
+  const before = storedLessonRevision();
+  expect(() => collection.boundedPatch(2, tx => {
+    tx.delete(`r:${id}`);
+    tx.put(fixtureRule("r_rollback", text + " Read its revision."));
+    throw Error("fixture transaction refused");
+  })).toThrow("fixture transaction refused");
+  expect(storedLessonRevision()).toBe(before);
+  expect(await coldRevision()).toBe(before);
+  expect(collection.get(`r:${id}`)).not.toBeNull();
+  expect(collection.get("r:r_rollback")).toBeNull();
+});
+
+test("privacy clock values remain exact beyond JavaScript integers and overflow refuses the whole write", async () => {
+  const id = add();
+  const collection = roleMemoryCollection()!;
+  const original = collection.get(`r:${id}`)!;
+  if (original.kind !== "rule") throw Error("rule missing");
+  const db = new Database(collection.filename);
+  try {
+    db.exec("UPDATE role_memory_privacy_revision SET revision=9007199254740992");
+    const before = storedLessonRevision();
+    collection.boundedPatch(1, tx => tx.put({ ...original, why: why + " Read its revision." }));
+    const first = storedLessonRevision();
+    collection.boundedPatch(1, tx => tx.put(original));
+    const second = storedLessonRevision();
+    expect(new Set([before, first, second]).size).toBe(3);
+    expect(await coldRevision()).toBe(second);
+    db.exec("UPDATE role_memory_privacy_revision SET revision=9223372036854775807");
+    const maximum = storedLessonRevision();
+    expect(() => collection.boundedPatch(1, tx => tx.put({ ...original, why: "Refuse an overflowing revision." }))).toThrow();
+    expect(storedLessonRevision()).toBe(maximum);
+    expect(collection.get(`r:${id}`)).toEqual(original);
+    expect(await coldRevision()).toBe(maximum);
+  } finally { db.close(); }
+});
+
+test("startup installs the privacy clock for retained rules and repairs a missing trigger", async () => {
+  const id = add();
+  const collection = roleMemoryCollection()!;
+  const db = new Database(collection.filename);
+  try {
+    for (const kind of ["insert", "update", "delete"]) db.exec(`DROP TRIGGER role_memory_privacy_${kind}`);
+    db.exec("DROP TABLE role_memory_privacy_revision");
+    expect(() => storedLessonRevision()).toThrow("role memory could not be read");
+    await coldRevision();
+    expect(withoutStoredLessons(text)).toBe("[learned rule].");
+    const before = storedLessonRevision();
+    collection.boundedPatch(1, tx => tx.delete(`r:${id}`));
+    expect(storedLessonRevision()).not.toBe(before);
+    db.exec("DROP TRIGGER role_memory_privacy_insert");
+    await coldRevision();
+    const empty = storedLessonRevision();
+    collection.boundedPatch(1, tx => tx.put(fixtureRule("r_after_upgrade", text)));
+    expect(storedLessonRevision()).not.toBe(empty);
+    expect(await coldRevision()).toBe(storedLessonRevision());
+  } finally { db.close(); }
 });

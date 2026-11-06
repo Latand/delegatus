@@ -17,7 +17,6 @@ const owner = globalThis as typeof globalThis & {
   __llvRoleViewReader?: { file: string; db: Database; generation: number };
   __llvProfileBasisReader?: { file: string; db: Database; generation: number };
   __llvPrivacyRevisionReader?: { file: string; db: Database; generation: number };
-  __llvPrivacyRuleVersion?: { file: string; identity: string; generation: string; revision: number; value: string };
   __llvRoleViewGeneration?: number;
   __llvCurationRules?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: CurationRuleInput | null; bytes: number }> };
@@ -51,26 +50,12 @@ export function privacyRuleRevision(): string {
   const db = reader("__llvPrivacyRevisionReader");
   db.exec("BEGIN");
   try {
-    const meta = db.query<{ revision: number; change_floor: number; imported_at: string }, []>(
-      "SELECT revision, change_floor, imported_at FROM state_collections WHERE collection='role_memory'").get();
+    const meta = db.query<{ imported_at: string }, []>(
+      "SELECT imported_at FROM state_collections WHERE collection='role_memory'").get();
     if (!meta) return "";
-    const cached = owner.__llvPrivacyRuleVersion;
-    const sameGeneration = cached?.file === file && cached.identity === identity && cached.generation === meta.imported_at;
-    let value: string;
-    if (sameGeneration && (cached.revision === meta.revision || cached.revision < meta.revision
-      && cached.revision >= meta.change_floor && !db.query<{ row_key: string }, [number, number]>(`
-        SELECT row_key FROM state_changes WHERE collection='role_memory' AND revision>? AND revision<=?
-          AND row_key >= 'r:' AND row_key < 'r;' LIMIT 1
-      `).get(cached.revision, meta.revision))) value = cached.value;
-    else {
-      const rows = db.query<{ latest: number | null; count: number }, []>(`
-        SELECT MAX(row_revision) AS latest, COUNT(*) AS count FROM state_rows
-        WHERE collection='role_memory' AND row_key >= 'r:' AND row_key < 'r;'
-      `).get()!;
-      value = JSON.stringify([identity, meta.imported_at, rows.latest, rows.count]);
-    }
-    owner.__llvPrivacyRuleVersion = { file, identity, generation: meta.imported_at, revision: meta.revision, value };
-    return value;
+    const clock = db.query<{ revision: string }, []>(
+      "SELECT CAST(revision AS TEXT) AS revision FROM role_memory_privacy_revision WHERE singleton=1").get();
+    return JSON.stringify([identity, meta.imported_at, clock?.revision ?? "0"]);
   } finally { db.exec("ROLLBACK"); }
 }
 
