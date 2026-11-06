@@ -562,6 +562,25 @@ test("startup cleanup for a prior adapter leaves its successor registered", asyn
   } finally { await close(); }
 });
 
+test("an unpublished predecessor cannot redirect current adapter cleanup", async () => {
+  const { registry, directory, client, close } = fixture("unpublished-predecessor");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const { key } = seedConversation(registry, directory, "unpublished-predecessor-session");
+  const prior = releaseCountingHost();
+  const successor = releaseCountingHost();
+  const { retainUnpublishedStructuredLaunchHost } = await import("./structuredDeliveryController");
+  const forget = retainUnpublishedStructuredLaunchHost({ key, host: prior.host, registry, release: () => prior.host.release() });
+  try {
+    await publishStructuredDeliveryHost({ key, host: successor.host });
+    expect(await releaseStructuredDeliveryHost(key, successor.host)).toBe(true);
+    expect(successor.releases.count).toBe(1);
+    expect(prior.releases.count).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(await releaseStructuredDeliveryHost(key, prior.host)).toBe(true);
+    expect(prior.releases.count).toBe(1);
+  } finally { forget(); await close(); }
+});
+
 test("a carried-over host released mid-registration is released once and stays gone (#1191)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-release");
   await bindStructuredDeliveryQueue([], { registry, client });

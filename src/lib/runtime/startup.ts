@@ -198,21 +198,31 @@ async function revalidateRetainedStartupHosts(
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
   currentSeats: () => readonly OrchestratorSeat[] = () => [],
 ): Promise<AdoptedStructuredHost[]> {
-  const current: AdoptedStructuredHost[] = [];
-  await forEachStartupBatch(retained, async (item) => {
-    const snapshot = prepared ?? startupHostSnapshot(registry, item.key);
-    if (!startupHostInScope(registry, sessionKeyId(item.key))
-      || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys, currentSeats())) current.push(item);
-    else {
+  let remaining = [...retained];
+  let preparedSnapshot = prepared;
+  for (;;) {
+    const current: AdoptedStructuredHost[] = [];
+    const retired: AdoptedStructuredHost[] = [];
+    for (const item of remaining) {
+      const snapshot = preparedSnapshot ?? startupHostSnapshot(registry, item.key);
+      if (!startupHostInScope(registry, sessionKeyId(item.key))
+        || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys, currentSeats())) current.push(item);
+      else retired.push(item);
+    }
+    // Return a fresh set without a cleanup await after its retention checks.
+    // Each cleanup pass removes at least one candidate, bounding rechecks.
+    if (retired.length === 0) return current;
+    await forEachStartupBatch(retired, async item => {
       await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
         if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
           await item.host.release();
           await flushStructuredHostPersistence(item.host);
         }
       });
-    }
-  });
-  return current;
+    });
+    remaining = current;
+    preparedSnapshot = undefined;
+  }
 }
 
 const RUNTIME_EFFECT_PAGE_SIZE = 100;

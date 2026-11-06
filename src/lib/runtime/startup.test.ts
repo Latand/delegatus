@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -1770,7 +1771,7 @@ test.skipIf(process.platform === "win32").each(["current", "rotated", "paused", 
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const sessionId = ["22222222", "4444", "0444", "0444", "444444444444"].join("-");
+  const sessionId = randomUUID();
   const key = { engine: "codex" as const, sessionId };
   const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
     sessionId, status: "idle", turn: "terminal",
@@ -1837,6 +1838,168 @@ test.skipIf(process.platform === "win32").each(["current", "rotated", "paused", 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test.skipIf(process.platform === "win32")("startup rechecks retained seats after another host release", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retain-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = randomUUID();
+  const key = { engine: "codex" as const, sessionId };
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  const identity = captureProcessIdentity(process.pid)!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, pendingAttention: [] } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
+  const secondId = randomUUID();
+  const second = addStructuredRestartConversation(registry, directory, {sessionId: secondId, status: "idle", turn: "terminal", transcriptRecords: [{type:"event_msg", timestamp:new Date().toISOString(),payload:{type:"task_complete",turn_id:"turn"}}]});
+  const secondEntry = registry.readOnlySnapshot().entries[`codex:${secondId}`]!;
+  registry.upsert({...secondEntry,structuredHost:{...secondEntry.structuredHost!,endpoint:`codex-unix:${socket}`,process:identity,pendingAttention:[]}});
+  seats.push(activeSeat("second-seat", 1, second.conversation.id, second.artifactPath));
+  let secondReleased = false;
+  const secondHost = Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), {status:"idle",sessionKey:secondId,endpoint:`codex-unix:${socket}`,pid:process.pid,processStartIdentity:identity.startIdentity,eventCursor:0,protocolVersion:"fake-v1",activeTurnRef:null,pendingAttention:[],activeFlags:[],account:null}), {onStateChange:()=>()=>{},setWriterFence:()=>{},release:async()=>{secondReleased=true;await Promise.resolve();seats=[];}});
+  const opened: string[] = [];
+  let released = false;
+  let mutationObserved = false;
+  const oldHealth = FakeEngineHost.prototype.health;
+  const phaseFor = "recovering pending spawns";
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: `codex-unix:${socket}`, pid: process.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fake-v1",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {}, setWriterFence: () => {}, release: async () => { released = true; },
+    health: async function() {
+      const result = await oldHealth.call(this);
+      return result;
+    } });
+  try {
+    const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => seats,
+      assertActive: () => {
+        if (opened.length > 0 && !mutationObserved && structuredStartupStatus().phase === phaseFor) {
+          seats = seats.filter(row => row.conversationId === conversation.id); mutationObserved = true;
+        }
+      },
+      schedule: () => ({ unref() {} }),
+      resolveCodexOwner: () => null,
+      adoptCodexHost: async (nativeId, options) => {
+        opened.push(nativeId);
+        expect([sessionId,secondId]).toContain(nativeId);
+        expect(options.socketOwner?.endpoint).toBe(`codex-unix:${socket}`);
+        return (nativeId === sessionId ? host : secondHost) as never;
+      },
+      adoptClaude: async () => {
+        return [];
+      },
+    });
+    expect(opened).toHaveLength(2);
+    expect(secondReleased).toBe(true);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(released).toBe(true);
+    expect(adopted.some(item => item.key.sessionId === sessionId)).toBe(false);
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("terminal");
+    expect(ledger.writes).toEqual([]);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test.skipIf(process.platform === "win32")("startup retirement cannot reuse another adapter release", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retain-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = randomUUID();
+  const key = { engine: "codex" as const, sessionId };
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  const identity = captureProcessIdentity(process.pid)!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, pendingAttention: [] } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
+  const opened: string[] = [];
+  let released = false;
+  let mutationObserved = false;
+  const oldHealth = FakeEngineHost.prototype.health;
+  const phaseFor = "recovering pending spawns";
+  const olderReleaseGate = Promise.withResolvers<void>();
+  const releases = await import("./structuredDeliveryController");
+  const olderHost = new FakeEngineHost(createFakeDeliveryLedger());
+  let olderRelease: Promise<boolean> | undefined;
+  let forgetOlder: (() => void) | undefined;
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: `codex-unix:${socket}`, pid: process.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fake-v1",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {}, setWriterFence: () => {}, release: async () => { released = true; },
+    health: async function() {
+      const result = await oldHealth.call(this);
+      return result;
+    } });
+  try {
+    const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => {
+        if (olderRelease) queueMicrotask(() => olderReleaseGate.resolve());
+        return seats;
+      },
+      assertActive: () => {
+        if (opened.length > 0 && !mutationObserved && structuredStartupStatus().phase === phaseFor) {
+          seats = []; mutationObserved = true;
+          forgetOlder = releases.retainUnpublishedStructuredLaunchHost({key, host: olderHost, registry, release: async () => { await olderReleaseGate.promise; }});
+          olderRelease = releases.releaseStructuredDeliveryHost(key, olderHost);
+        }
+      },
+      schedule: () => ({ unref() {} }),
+      resolveCodexOwner: () => null,
+      adoptCodexHost: async (nativeId, options) => {
+        opened.push(nativeId);
+        expect(nativeId).toBe(sessionId);
+        expect(options.socketOwner?.endpoint).toBe(`codex-unix:${socket}`);
+        return host as never;
+      },
+      adoptClaude: async () => {
+        return [];
+      },
+    });
+    expect(opened).toHaveLength(1);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(released).toBe(true);
+    expect(adopted.some(item => item.key.sessionId === sessionId)).toBe(false);
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("terminal");
+    expect(ledger.writes).toEqual([]);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    olderReleaseGate.resolve(); await olderRelease; forgetOlder?.();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
 
 /** One Viewer whose passes and scheduled re-probes a restart cut case drives
     itself: the rows each pass would adopt, and the probes it scheduled. */
