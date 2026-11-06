@@ -32,7 +32,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskFilesFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -17858,7 +17858,7 @@ describe("a task's album: every picture its agents made, one click from the card
                 /* The foot keeps one line: every visible child shares the album button's line. */
                 footLines: new Set([...foot.children].filter((child) => child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map((child) => { const rect = child.getBoundingClientRect(); return Math.round((rect.top + rect.bottom) / 2); })).size,
                 exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
-                buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
+                buttonsOnBoard: [...document.querySelectorAll("[data-album-button]")].filter((button) => /\d/.test(button.textContent ?? "")).length,
               };
             });
             readings[`${label}-card`] = cardReading;
@@ -17867,7 +17867,7 @@ describe("a task's album: every picture its agents made, one click from the card
             if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
             if (cardReading.footLines !== 1) failures.push(`${label}: the card foot wraps onto ${cardReading.footLines} lines`);
             if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
-            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
+            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons with a picture count on the board, expected the two tasks with pictures`);
 
             await button.click();
             await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
@@ -17977,6 +17977,24 @@ describe("a task's album: every picture its agents made, one click from the card
     fs.writeFileSync("evidence/task-album/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
+
+  /* docs/design/task-file-preview.md §11.5: the Files view and the preview it opens, over a real
+     repository the driver builds, at 1440 and 820 here and at 390 below, in both languages and themes.
+     Frames go to TASK_FILES_PNG_DIR (default `.artifacts/task-files/`). */
+  for (const phone of [false, true]) {
+    browserTest(`the task's Files view and the preview it opens, on ${phone ? "the phone" : "the desktop"}, in both languages and themes`, async () => {
+      const out = path.resolve(process.env.TASK_FILES_PNG_DIR ?? ".artifacts/task-files", phone ? "phone" : "desktop");
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.mkdirSync(out, { recursive: true });
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try {
+        const result = await captureTaskFilesFrames(browser, out, phone);
+        expect(result.failures).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    }, 1_800_000);
+  }
 });
 
 describe("optimistic UI fix line: refusals and older pages say so in place", () => {

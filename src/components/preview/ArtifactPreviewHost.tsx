@@ -24,15 +24,16 @@ import {
   artifactMetaUrl,
   failureFromStatus,
   formatBytes,
+  withDownload,
   type ArtifactFailure,
   type ArtifactMeta,
 } from "./artifactResource";
 import { frameSource, HtmlPane, MarkdownPane } from "./DocumentPanes";
 import { ImagePane } from "./ImagePane";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
-import { onArtifactPreview } from "./previewBus";
+import { onArtifactPreview, type ArtifactPreviewSource } from "./previewBus";
 import { TextPane } from "./TextPane";
-import { above } from "@/components/layers";
+import { above, LAYER } from "@/components/layers";
 
 /* pdf.js is megabytes; its chunk must not exist on the network until the first
    PDF preview actually opens. */
@@ -87,6 +88,11 @@ interface OpenRequest {
   /** The file the link names: resolved where the link was rendered, or read
       from `path` for the `#a=` entry. */
   target: FileLinkTarget;
+  /** Where the bytes are read from when it is not a local path (a task's
+      committed file); absent, the sheet reads `/api/artifact`. */
+  source?: ArtifactPreviewSource;
+  /** `overlay`: painted above the modal dialog that opened it. */
+  layer?: "overlay";
   /** Bumps on every open so re-opening the same path restarts its load. */
   nonce: number;
   /** The open came from the `#a=` URL fragment (issue #884), not a clicked
@@ -164,6 +170,10 @@ export function ArtifactPreviewHost({ mobile }: { mobile: boolean }) {
         setOpen((previous) => ({
           path: request.path,
           target: request.target ?? previewTarget(request.path),
+          ...(request.source ? { source: request.source } : {}),
+          /* A link clicked inside the open document names no layer: the sheet
+             keeps the one it has. */
+          ...(request.layer ?? previous?.layer ? { layer: request.layer ?? previous?.layer } : {}),
           nonce: (previous?.nonce ?? 0) + 1,
         }));
       }),
@@ -262,7 +272,7 @@ function PreviewSheet({
     const settle = (meta: ArtifactMeta | null, failure: ArtifactFailure | null) => {
       if (!controller.signal.aborted) setLoaded({ request: open, meta, failure });
     };
-    void fetch(artifactMetaUrl(open.target.path), { signal: controller.signal })
+    void fetch(open.source?.metaUrl ?? artifactMetaUrl(open.target.path), { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) {
           settle(null, failureFromStatus(response.status));
@@ -308,6 +318,9 @@ function PreviewSheet({
   );
 
   const target = open.target;
+  /* The bytes' address: a committed file's own route, else `/api/artifact`. */
+  const contentUrl = open.source?.contentUrl ?? artifactContentUrl(target.path);
+  const layerZ = open.layer === "overlay" ? LAYER.overlay : above("reader");
   const doc = documentKind(target.path);
   const name = meta?.name ?? artifactBasename(target.path);
   const kind = meta?.kind ?? classifyArtifact(target.path)?.kind ?? null;
@@ -347,13 +360,13 @@ function PreviewSheet({
       {t("preview.loading")}
     </div>
   ) : meta.kind === "text" && doc === "markdown" ? (
-    <MarkdownPane key={`${open.nonce}`} path={target.path} meta={meta} anchor={target.anchor} line={target.line} mobile={mobile} onFailure={onPaneFailure} />
+    <MarkdownPane key={`${open.nonce}`} path={target.path} meta={meta} anchor={target.anchor} line={target.line} mobile={mobile} onFailure={onPaneFailure} contentUrl={contentUrl} />
   ) : meta.kind === "text" && doc === "html" && meta.frame ? (
     <HtmlPane key={`${open.nonce}`} path={target.path} meta={{ ...meta, frame: meta.frame }} anchor={target.anchor} line={target.line} mobile={mobile} onFailure={onPaneFailure} />
   ) : meta.kind === "text" ? (
-    <TextPane key={`${open.nonce}`} path={target.path} meta={meta} line={target.line} mobile={mobile} onFailure={onPaneFailure} />
+    <TextPane key={`${open.nonce}`} path={target.path} meta={meta} line={target.line} mobile={mobile} onFailure={onPaneFailure} contentUrl={contentUrl} />
   ) : meta.kind === "image" ? (
-    <ImagePane key={`${open.nonce}`} path={target.path} meta={meta} mobile={mobile} onFailure={onPaneFailure} />
+    <ImagePane key={`${open.nonce}`} path={target.path} meta={meta} mobile={mobile} onFailure={onPaneFailure} contentUrl={contentUrl} />
   ) : (
     <Suspense
       fallback={
@@ -362,7 +375,7 @@ function PreviewSheet({
         </div>
       }
     >
-      <PdfPane key={`${open.nonce}`} path={target.path} etag={meta.etag} mobile={mobile} onFailure={onPaneFailure} />
+      <PdfPane key={`${open.nonce}`} path={target.path} etag={meta.etag} mobile={mobile} onFailure={onPaneFailure} contentUrl={contentUrl} />
     </Suspense>
   );
 
@@ -385,10 +398,10 @@ function PreviewSheet({
       /* `max()/min()` in CSS so the viewport term stays live without a resize
          listener; the inset term re-renders with the dock beside it. */
       style={mobile
-        ? { zIndex: above("reader") }
+        ? { zIndex: layerZ }
         : hosted
-          ? { zIndex: above("reader"), width: `${hostedWidth}px` }
-          : { zIndex: above("reader"), width: `max(${MIN_WIDTH}px, min(${width}px, calc(100vw - ${MIN_CONVERSATION + inset}px)))` }}
+          ? { zIndex: layerZ, width: `${hostedWidth}px` }
+          : { zIndex: layerZ, width: `max(${MIN_WIDTH}px, min(${width}px, calc(100vw - ${MIN_CONVERSATION + inset}px)))` }}
     >
       {mobile ? null : (
         <div
@@ -408,14 +421,15 @@ function PreviewSheet({
           <div className="truncate text-[13px] font-bold text-primary" title={name}>
             {name}
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-muted">
-            <span>{kindLabel(t, kind, doc)}</span>
-            {meta ? <span aria-hidden>·</span> : null}
-            {meta ? <span>{formatBytes(meta.size)}</span> : null}
+          {/* Each fact stays whole; the line wraps between facts, and a separator ends the fact before it. */}
+          <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted">
+            <span className="whitespace-nowrap">{kindLabel(t, kind, doc)}{meta ? <span aria-hidden> ·</span> : null}</span>
+            {meta ? <span className="whitespace-nowrap">{formatBytes(meta.size)}{meta.revision ? <span aria-hidden> ·</span> : null}</span> : null}
+            {meta?.revision ? <span className="whitespace-nowrap font-mono" title={meta.revision.head}>{t("preview.revision", { sha: meta.revision.head.slice(0, 7) })}</span> : null}
           </div>
         </div>
         <a
-          href={artifactContentUrl(target.path, { download: true })}
+          href={open.source ? withDownload(open.source.contentUrl) : artifactContentUrl(target.path, { download: true })}
           download={name}
           aria-label={t("preview.download")}
           title={t("preview.download")}
@@ -425,7 +439,7 @@ function PreviewSheet({
         </a>
         <a
           /* An HTML report opens as a page (in its sandbox), not as source text. */
-          href={meta?.frame ? frameSource(meta.frame, target.anchor) : artifactContentUrl(target.path)}
+          href={meta?.frame ? frameSource(meta.frame, target.anchor) : contentUrl}
           data-preview-open-external
           target="_blank"
           rel="noreferrer"

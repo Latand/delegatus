@@ -1,6 +1,6 @@
 "use client";
 
-import { Images } from "lucide-react";
+import { FileText, Images } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -21,6 +21,7 @@ import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
 import { albumOpened } from "./albumSummaries";
+import { TaskFiles } from "./TaskFiles";
 
 /**
  * A task's album: every picture its agents looked at, were handed or named,
@@ -38,8 +39,15 @@ export interface TaskAlbumProps {
   pipelines: readonly Pipeline[];
   /** Loaded conversations, to name one by its title. */
   files: readonly FileEntry[];
+  /** The task has lanes whose committed files can be listed: the dialog gets
+      a Files view beside Images. Without it the dialog is the image album alone. */
+  filesAvailable?: boolean;
+  /** The view the dialog opens on. Images load only once that view is shown. */
+  initialView?: AlbumView;
   onClose: () => void;
 }
+
+export type AlbumView = "images" | "files";
 
 interface Group {
   source: AlbumSource;
@@ -82,7 +90,30 @@ function itemName(t: TFunction, item: AlbumItem): string {
 
 const exactTime = (ts: number) => new Date(ts).toLocaleString();
 
-export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbumProps) {
+/** Images or Files, in the preview's own toggle style. */
+function ViewToggle({ view, onView, phone }: { view: AlbumView; onView: (view: AlbumView) => void; phone: boolean }) {
+  const { t } = useLocale();
+  const item = (value: AlbumView, label: string) => (
+    <button
+      type="button"
+      aria-pressed={view === value}
+      data-album-view={value}
+      onClick={() => onView(value)}
+      className={`${phone ? "h-11 flex-1 px-4" : "h-7 px-2.5"} text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${view === value ? "bg-accent/15 text-accent" : "bg-canvas text-muted hover:text-primary"}`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label={t("album.viewAria")} className={`inline-flex shrink-0 overflow-hidden rounded-[8px] border border-border ${phone ? "w-full" : ""}`}>
+      {item("images", t("album.title"))}
+      <span aria-hidden className="w-px bg-border" />
+      {item("files", t("files.title"))}
+    </div>
+  );
+}
+
+export function TaskAlbum({ taskId, title, pipelines, files, filesAvailable = false, initialView = "images", onClose }: TaskAlbumProps) {
   const { t } = useLocale();
   const phone = useIsMobile();
   const [items, setItems] = useState<AlbumItem[]>([]);
@@ -93,6 +124,16 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
      which doubles as Retry, until the next press (audit F1). */
   const [moreFailed, setMoreFailed] = useState(false);
   const [open, setOpen] = useState<GalleryImage | null>(null);
+  const [view, setView] = useState<AlbumView>(filesAvailable ? initialView : "images");
+  /* Each view loads when it is first shown: a dialog opened on Files marks no
+     picture seen, and one opened on Images reads no file list. */
+  const [filesShown, setFilesShown] = useState(filesAvailable && initialView === "files");
+  const [imagesShown, setImagesShown] = useState(!filesAvailable || initialView === "images");
+  const showView = useCallback((next: AlbumView) => {
+    setView(next);
+    if (next === "files") setFilesShown(true);
+    else setImagesShown(true);
+  }, []);
   const marked = useRef(false);
   /* The mark the album found when it opened (null: never opened). Every
      later read is judged against it, so the album's own mark moving
@@ -148,8 +189,8 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
   }, [endpoint, taskId]);
 
   useEffect(() => {
-    void load(null);
-  }, [load]);
+    if (imagesShown) void load(null);
+  }, [imagesShown, load]);
 
   /* A cold task is indexed over several reads: ask again while the Viewer
      says it is still reading, keeping as many pictures as are shown. */
@@ -217,17 +258,18 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div role="dialog" aria-modal="true" aria-label={t("album.dialogAria", { title })} className={`flex min-h-0 flex-col overflow-hidden bg-card ${frame}`}>
+      <div role="dialog" aria-modal="true" aria-label={t(filesAvailable ? "album.dialogAriaFiles" : "album.dialogAria", { title })} className={`flex min-h-0 flex-col overflow-hidden bg-card ${frame}`}>
         <header className={`flex shrink-0 items-center gap-2 border-b border-border px-4 ${phone ? "min-h-14 pt-[env(safe-area-inset-top)]" : "py-3"}`}>
-          <Images className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+          {view === "files" ? <FileText className="h-4 w-4 shrink-0 text-accent" aria-hidden /> : <Images className="h-4 w-4 shrink-0 text-accent" aria-hidden />}
           <div className="min-w-0 flex-1">
-            <h2 className="m-0 truncate text-body font-bold text-primary">{t("album.title")}</h2>
+            <h2 className="m-0 truncate text-body font-bold text-primary">{view === "files" ? t("files.title") : t("album.title")}</h2>
             <p className="m-0 truncate text-label text-muted">
-              <span className="tabular-nums">{t("album.count", { count: total })}</span>
-              <span> · {title}</span>
+              {view === "files" ? null : <><span className="tabular-nums">{t("album.count", { count: total })}</span><span> · </span></>}
+              <span>{title}</span>
             </p>
           </div>
-          {newCount ? (
+          {filesAvailable && !phone ? <ViewToggle view={view} onView={showView} phone={false} /> : null}
+          {newCount && view === "images" ? (
             <button
               type="button"
               data-album-new-count={newCount}
@@ -250,8 +292,18 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
             <X className="h-4 w-4" aria-hidden />
           </button>
         </header>
+        {filesAvailable && phone ? (
+          <div className="shrink-0 border-b border-border px-3 py-2">
+            <ViewToggle view={view} onView={showView} phone />
+          </div>
+        ) : null}
 
-        <div ref={body} data-album-body="" className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${phone ? "px-3 pb-[max(16px,env(safe-area-inset-bottom))] pt-3" : "px-4 py-4"}`}>
+        {filesShown ? (
+          <div data-album-files-body="" hidden={view !== "files"} className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${phone ? "px-3 pb-[max(16px,env(safe-area-inset-bottom))] pt-3" : "px-4 py-4"}`}>
+            <TaskFiles taskId={taskId} pipelines={pipelines} />
+          </div>
+        ) : null}
+        <div ref={body} hidden={view !== "images"} data-album-body="" className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${phone ? "px-3 pb-[max(16px,env(safe-area-inset-bottom))] pt-3" : "px-4 py-4"}`}>
           {failed && !items.length ? (
             <div role="alert" className="flex flex-col items-start gap-2 rounded-control border border-danger/45 bg-danger-soft px-3 py-2 text-label font-semibold text-danger">
               {t("album.failed")}
