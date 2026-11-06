@@ -92,3 +92,26 @@ for (const engine of ["claude", "codex"] as const) {
   } finally { f.close(); }
  });
 }
+
+for (const engine of ["claude", "codex"] as const) test("structured " + engine + " held recovery does not request a tick", async () => {
+ const f = fixture(engine);
+ try {
+  const key = { engine, sessionId: f.value.generations.at(-1)!.id };
+  f.registry.upsert({ key, artifactPath: f.transcript, cwd: f.directory, accountId: "fixture-account",
+   launchProfile: emptyLaunchProfile({ cwd: f.directory }), status: "idle", host: null,
+   claimEpoch: 4, claimOwner: "structured-host:parked", pendingAction: null,
+   structuredHost: { kind: engine === "claude" ? "claude-broker" : "codex-app-server",
+    endpoint: "stdio:parked", process: captureProcessIdentity(process.pid), eventCursor: 11,
+    protocolVersion: "v2", writerClaimEpoch: 4, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const result = await dispatchStructuredControl({ path: f.transcript, conversationId: f.value.id, action: "resume" }, {
+   registry: f.registry, enabled: () => true, client: null, hostProcessAlive: () => false,
+   onResumed: id => { f.wakes.push(id); },
+   recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: null,
+    transport: () => "structured", park: () => ({ reason: "quota_exhausted", accountId: "fixture-account",
+     until: new Date(Date.now() + 60000).toISOString(), resetKnown: true }) }),
+  });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(result?.body).toMatchObject({ outcome: "held" });
+  expect(f.wakes).toEqual([]);
+ } finally { f.close(); }
+});

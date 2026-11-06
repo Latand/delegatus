@@ -2631,7 +2631,12 @@ export async function reconcileResumedSeatTick(conversationId: string, dependenc
 export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}, requestedProjects?: readonly string[]): Promise<SeatTickRunRecord[]> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
-  if (!await (dependencies.ownsTraffic ?? releaseOwnsTraffic)()) {
+  const generation = tickHost.__llvSeatTickGeneration;
+  const ownsTraffic = await (dependencies.ownsTraffic ?? releaseOwnsTraffic)();
+  // Admission may outlive this clock. Its continuation may neither start work
+  // after stop nor withdraw a replacement clock on a stale refusal.
+  if (generation !== tickHost.__llvSeatTickGeneration) return [];
+  if (!ownsTraffic) {
     const refusal = "this release no longer owns viewer traffic, so the seats belong to the promoted one";
     console.error(`[seat tick] refused: ${refusal}`);
     try {
