@@ -1,4 +1,4 @@
-import { persistProjectAliases } from "@/lib/projects/aliases";
+import { persistProjectAliases, projectAliasKeys } from "@/lib/projects/aliases";
 import { currentRecoverySeat } from "@/lib/orchestrator/seats";
 import { pipelineAdmissionIdentity } from "@/lib/pipelines/creationAdmission";
 import * as sqliteReads from "@/lib/sqliteReadAttribution";
@@ -72,11 +72,12 @@ async function fixture(git = false) {
   const [transport, peer] = InMemoryTransport.createLinkedPair(); await Promise.all([client.connect(transport), server.connect(peer)]);
   cleanup.push(async () => { await client.close(); await server.close(); });
   const read = async (args: Record<string, unknown> = {}) => (await client.callTool({ name: "list_unknown_launch_claims", arguments: args })).structuredContent as Record<string, unknown>;
-  function claim(number: number, foreign = false) {
+  function claim(number: number, foreign = false, claimProject?: string) {
     const owner = recoveryCaller(domain, true, false);
     const key = `fixture-claim-${number}`;
-    const binding: McpRequestBinding = { version: 1, toolName: "spawn_agent", clientRequestId: key, caller: owner,
-      target: { project: foreign ? "foreign-project" : project, identity: root }, downstreamKey: `fixture-downstream-${number}`,
+    const projectKey = foreign ? "foreign-project" : claimProject ?? project;
+    const binding: McpRequestBinding = { version: 1, toolName: "spawn_agent", clientRequestId: key, caller: { ...owner, project: projectKey },
+      target: { project: projectKey, identity: root }, downstreamKey: `fixture-downstream-${number}`,
       owner: { pid: process.pid, startIdentity: null }, claimedAt: "2020-01-01T00:01:00Z",
       launchAdmission: { version: 1, settleAfter: Date.parse("2030-01-01T00:03:00Z"), envelopeDigest: "a".repeat(64), adaptations: {}, registryIdentity: null } };
     store.claim(`spawn_agent:${key}`, "b".repeat(64), "durable", binding);
@@ -227,6 +228,33 @@ test("the recovery authority cache refreshes when project aliases change without
   expect(fs.readFileSync(file)).toEqual(bytes);
   expect(currentRecoverySeat(target)).toEqual(before);
   expect(currentRecoverySeat(f.project)).toEqual(before);
+});
+
+test("unknown launch reads include late claims in 64, 65 and 72 key project families", async () => {
+  for (const count of [64, 65, 72]) {
+    const f = await fixture();
+    const aliases = Array.from({ length: count - 1 }, (_, index) => ({
+      source: `repo-launch-family-${count}-${index}`,
+      target: f.project,
+      displayName: "Launch family fixture",
+    }));
+    expect(persistProjectAliases(aliases)).toBe(true);
+    const family = projectAliasKeys(f.project);
+    expect(family).toHaveLength(count);
+    const lateProject = family.at(-1)!;
+    f.claim(count, false, lateProject);
+
+    const recheck = SqliteMcpReceiptStore.prototype.launchClaimStillOpen;
+    const observed = spyOn(SqliteMcpReceiptStore.prototype, "launchClaimStillOpen").mockImplementation(function (this: SqliteMcpReceiptStore, ...args) {
+      expect(args[0]).toContain(lateProject);
+      return recheck.apply(this, args);
+    });
+    try {
+      const page = await f.read({ limit: 1 });
+      expect(page).toMatchObject({ ok: true, items: [{ clientRequestId: `fixture-claim-${count}` }] });
+      expect(page.scanned).toBeLessThanOrEqual(100);
+    } finally { observed.mockRestore(); }
+  }
 });
 
 test("launch claims written under a predecessor project key remain visible after succession", async () => {
