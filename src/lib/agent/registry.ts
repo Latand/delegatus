@@ -6216,6 +6216,14 @@ export class AgentRegistry {
     return this.sqliteStore?.snapshotTitleConversations(conversationIds) ?? [];
   }
 
+  launchAdmissionIdentity(): string | null {
+    return this.sqliteMode === "sqlite" ? this.sqliteStore!.launchAdmissionIdentity() : null;
+  }
+
+  retainedSpawnAdmission(clientAttemptId: string): SpawnReceipt | null {
+    return this.sqliteMode === "sqlite" ? this.sqliteStore!.retainedSpawnAdmission(clientAttemptId) : null;
+  }
+
   spawnReceiptForClientAttempt(clientAttemptId: string): SpawnReceipt | null {
     return this.readKeyed(file => {
       const receipt = registryRowsMatching(file,"receipts","clientAttemptId",clientAttemptId)[0];

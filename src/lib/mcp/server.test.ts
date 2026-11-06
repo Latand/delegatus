@@ -19,6 +19,7 @@ import {
   TOOL_INPUT_SCHEMAS,
   FileMcpReceiptStore,
   MemoryMcpReceiptStore,
+  McpUnadmittedRefusal,
   McpToolTimingAggregate,
   SqliteMcpReceiptStore,
   openAsyncMcpReceiptStore,
@@ -347,7 +348,7 @@ describe("MCP tool service", () => {
 
       const migrated = new Database(sqlitePath, { readonly: true, strict: true });
       const columns = migrated.query<{ name: string }, []>("PRAGMA table_info(mcp_receipts)").all().map((column) => column.name);
-      expect(columns).toEqual(["sequence", "receipt_key", "digest", "retention", "result_json", "storage_bytes", "claimed_at", "binding_json", "stage", "recovery_result_json"]);
+      expect(columns).toEqual(["sequence", "receipt_key", "digest", "retention", "result_json", "storage_bytes", "claimed_at", "binding_json", "stage", "recovery_result_json", "launch_project", "launch_target", "launch_owner", "launch_tool", "launch_downstream", "launch_due", "launch_open", "launch_admitted", "launch_failure_code", "launch_next_attempt", "launch_indexed"]);
       expect(migrated.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM mcp_receipts").get()?.count).toBe(schema.name === "absent" ? 0 : 1);
       migrated.close();
     }
@@ -1936,6 +1937,7 @@ describe("MCP tool service", () => {
         "grant_agent_browser_access",
         "voice_tools",
         "spawn_agent",
+        "list_unknown_launch_claims",
         "send_message",
         "message_receipt",
         "create_task",
@@ -2002,7 +2004,7 @@ describe("MCP tool service", () => {
         "github_app_connect",
       ]);
       expect(listed.tools.map(tool => tool.name)).not.toContain("suggest_replies");
-      const optionalReadKeys = new Set(["codex_cloud_environment", "relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
+      const optionalReadKeys = new Set(["list_unknown_launch_claims", "codex_cloud_environment", "relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -3327,6 +3329,103 @@ test("a native session switch during receipt lookup claims and dispatches nothin
   expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
   expect(harness.bindingCalls).toHaveLength(0); expect(harness.recoverCalls).toHaveLength(0);
   expect(await lookup(`send_message:${SEND.clientRequestId}`)).toBeNull();
+});
+
+for (const seam of ["binding", "lookup", "claim", "dispatch", "settle"] as const) {
+  test(`launch caller replacement at ${seam} refuses effects and disclosure without native proof`, async () => {
+    const store: McpRecoveryReceiptStore = new MemoryMcpReceiptStore();
+    const harness = recoveryHarness(OWNER, store);
+    let effects = 0;
+    harness.bindingImpl = async (_args, context) => {
+      context?.assertCaller?.();
+      effects++;
+      return { launchId: "launch_reserved", conversationId: "conversation_reserved", state: "completed" };
+    };
+    if (seam === "binding") harness.onBind = () => { harness.caller = OTHER; };
+    if (seam === "lookup") {
+      const lookup = store.lookup.bind(store);
+      store.lookup = async (...args) => { const row = await lookup(...args); harness.caller = OTHER; return row; };
+    }
+    if (seam === "claim") {
+      const claim = store.claim.bind(store);
+      store.claim = async (...args) => { harness.caller = OTHER; return claim(...args); };
+    }
+    if (seam === "dispatch") {
+      const dispatch = store.markDispatching.bind(store);
+      store.markDispatching = async (...args) => { harness.caller = OTHER; return dispatch(...args); };
+    }
+    if (seam === "settle") {
+      const settle = store.settle.bind(store);
+      store.settle = async (...args) => { harness.caller = OTHER; return settle(...args); };
+    }
+    const answer = await harness.service.callTool("spawn_agent", { ...SPAWN, ...(seam === "lookup" ? { recoveryOnly: true } : {}) });
+    expect(answer).toMatchObject({ ok: false, code: "caller_unidentified" });
+    expect(JSON.stringify(answer)).not.toContain("launch_reserved");
+    expect(effects).toBe(seam === "settle" ? 1 : 0);
+    const row = await store.lookup(`spawn_agent:${SPAWN.clientRequestId}`);
+    if (seam === "claim" || seam === "binding") expect(row).toBeNull();
+    if (seam === "settle") expect(row?.result).toBeNull();
+  });
+}
+
+for (const backend of ["memory", "file", "sqlite"] as const) {
+  for (const seam of ["dispatch", "settle", "fence", "release"] as const) test(`launch authority rechecks inside ${backend} ${seam} mutation`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-launch-authority-")); scratch.push(directory);
+    const store: McpRecoveryReceiptStore = backend === "memory" ? new MemoryMcpReceiptStore() : backend === "file"
+      ? new FileMcpReceiptStore(path.join(directory, "receipts.json")) : new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
+    const harness = recoveryHarness(OWNER, store);
+    if (seam === "fence") {
+      const binding: McpRequestBinding = { version: 1, toolName: "spawn_agent", clientRequestId: SPAWN.clientRequestId,
+        caller: OWNER, target: { project: "proj-a", identity: SPAWN.cwd }, downstreamKey: "bounded-original",
+        claimedAt: "2020-01-01T00:00:00Z", owner: { pid: 0, startIdentity: null } };
+      await store.claim(`spawn_agent:${SPAWN.clientRequestId}`, requestDigest("spawn_agent", SPAWN), "durable", binding);
+      const fence = store.fenceUndispatched.bind(store);
+      store.fenceUndispatched = async (...args) => { harness.caller = OTHER; return fence(...args); };
+    } else if (seam === "dispatch") {
+      const dispatch = store.markDispatching.bind(store);
+      store.markDispatching = async (...args) => { harness.caller = OTHER; return dispatch(...args); };
+    } else if (seam === "release") {
+      harness.bindingImpl = async () => { throw new McpUnadmittedRefusal("fixture before admission"); };
+      const release = store.release!.bind(store);
+      store.release = async (...args) => { harness.caller = OTHER; return release(...args); };
+    } else {
+      const settle = store.settle.bind(store);
+      store.settle = async (...args) => { harness.caller = OTHER; return settle(...args); };
+    }
+    try {
+      const result = await harness.service.callTool("spawn_agent", { ...SPAWN, ...(seam === "fence" ? { recoveryOnly: true } : {}) });
+      expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
+      const record = await store.lookup(`spawn_agent:${SPAWN.clientRequestId}`);
+      expect(record?.result).toBeNull();
+      expect(record?.stage).toBe(seam === "dispatch" || seam === "fence" ? "claimed" : "dispatching");
+    } finally { if (store instanceof SqliteMcpReceiptStore) store.close(); }
+  });
+}
+
+test("a live claimed launch closes exactly at its persisted admission cutoff and survives restart", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-admission-cutoff-")); scratch.push(directory);
+  const filename = path.join(directory, "receipts.sqlite");
+  let store = new SqliteMcpReceiptStore(filename);
+  const cutoff = Date.parse("2030-01-01T00:02:00Z");
+  const key = `spawn_agent:${SPAWN.clientRequestId}`;
+  const binding: McpRequestBinding = { version: 1, toolName: "spawn_agent", clientRequestId: SPAWN.clientRequestId,
+    caller: OWNER, target: { project: "proj-a", identity: SPAWN.cwd }, downstreamKey: "bounded-original",
+    claimedAt: "2030-01-01T00:00:00Z", owner: { pid: process.pid, startIdentity: null },
+    launchAdmission: { version: 1, settleAfter: cutoff, envelopeDigest: "a".repeat(64), adaptations: {}, registryIdentity: null } };
+  const digest = requestDigest("spawn_agent", SPAWN);
+  store.claim(key, digest, "durable", binding);
+  store.close(); store = new SqliteMcpReceiptStore(filename);
+  const clock = spyOn(Date, "now").mockReturnValue(cutoff - 1);
+  try {
+    const harness = recoveryHarness(OWNER, store);
+    expect(await harness.service.callTool("spawn_agent", { ...SPAWN, recoveryOnly: true })).toMatchObject({ details: { outcome: "unknown" } });
+    clock.mockReturnValue(cutoff);
+    expect(await harness.service.callTool("spawn_agent", { ...SPAWN, recoveryOnly: true })).toMatchObject({ details: { outcome: "not-executed" } });
+    expect(store.markDispatching(key, digest, binding)).toBe(false);
+    clock.mockReturnValue(cutoff + 1);
+    expect(await harness.service.callTool("spawn_agent", { ...SPAWN, recoveryOnly: true })).toMatchObject({ details: { outcome: "not-executed" } });
+    expect(harness.bindingCalls).toHaveLength(0);
+  } finally { clock.mockRestore(); store.close(); }
 });
 
 test("native session evidence is revalidated before fresh claim after async binding", async () => {

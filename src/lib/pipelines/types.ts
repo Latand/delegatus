@@ -1224,7 +1224,7 @@ export type Pipeline = {
   publicationAdmission?: { id: string; sha: string; fence: string; state: "pending" | "settled"; error?: string };
   /** Per-head publication recovery survives a takeover and a new stage attempt. */
   publicationRecovery?: Record<string, PipelinePublicationRecovery>;
-  creationRequest?: { key: string; digest: string };
+  creationRequest?: { key: string; digest: string; admissionProtocol?: 1; admissionBinding?: import("@/lib/mcp/server").McpRequestBinding };
   id: string;
   task: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */

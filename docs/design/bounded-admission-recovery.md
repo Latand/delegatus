@@ -4,7 +4,7 @@ Accepted task title, reaffirmed in the design brief on 2026-11-05 (2026-11-06 lo
 
 # Bounded admission recovery
 
-Status: design complete; product implementation and acceptance remain outstanding. Source inspected: `2e0c507d24db6b3110e446c73aacce91f23cff8f`, tree `e51e7c7d701ecc0688813d8fe98c0058fbc928e7`. This document changes no live claim or request key.
+Status: implementation prepared for independent review. The original design inspected source `2e0c507d24db6b3110e446c73aacce91f23cff8f`, tree `e51e7c7d701ecc0688813d8fe98c0058fbc928e7`. The observations and source citations below describe that baseline. No live claim or request key has been changed.
 
 ## Caller flow and required outcome
 
@@ -157,13 +157,13 @@ Run each explicit file in its own DIRECT owned gate runner from a fresh source e
 
 Extend existing tests first: `src/lib/mcp/stdio.integration.test.ts`, `spawnRecovery.integration.test.ts`, `server.test.ts`, `callerResolution.test.ts`, `pageCursors.integration.test.ts`, `workspaceFence.test.ts`, `src/lib/agent/spawnAdmission.test.ts`, `src/lib/pipelines/engine.creation.test.ts`, and the direct account-store tests for narrowed fence access. Add cases only to files the implementation actually touches; execute only those explicit files. Production schema changes also require the minimum-SQLite test. Record query plans and counted visits/decodes for the read, including a fully excluded dataset.
 
-Implementation finishes with the normal privacy, type, changed-file lint and touched-test checks on the final source/head, followed by the required three review rounds for this risk class. This design stage ran the isolated recurrence probe and document checks only. It makes no claim that product acceptance, type verification or publication has passed.
+Implementation finishes with the normal privacy, type, changed-file lint and touched-test checks on the final source/head, followed by the required three review rounds for this risk class. The original design stage ran the isolated recurrence probe and document checks only.
 
 ## Source gaps and implementation stops
 
 The historical generic 403 body and request-to-guard correlation were not retained. The exact research original therefore remains unknown; there is no supported authorization to repeat or settle it here. Recovering that live incident depends on an already-retained authoritative request/dispatch record or a separately accepted repair for claimless history. Preserve the current blocker until that evidence exists. A new admission protocol can prevent future recorded claims from sticking without proving the fate of this older request.
 
-The isolated probe establishes the spawn admission recurrence and valid recovery, not the complete successor race or pipeline queue behavior. The acceptance cases above remain required implementation work. Availability of the receiving native-generation reference and every final creation writer must be demonstrated with the real builders before their slice can pass. If the receiving route cannot verify that reference using existing admission evidence, stop that native launch slice; copying relay code or weakening identity is outside this design.
+At design acceptance, the isolated probe established the spawn admission recurrence and valid recovery. The receiving native-generation reference, successor races and pipeline continuations still required implementation proofs. The receiving route must verify that reference using existing admission evidence; copying relay code or weakening identity is outside this design.
 
 The shared `origin/main` reference advanced during this stage to `fd63c39cef2d015c87b11031e2a5240bf8384a71`. Its added change concerns memory-profile reads and components; it changes none of the claim, dispatch, recovery, seat or queue boundaries cited here. The assigned source stayed at the captured revision. Source citations refer to that revision.
 
@@ -175,6 +175,24 @@ The shared `origin/main` reference advanced during this stage to `fd63c39cef2d01
 - Sweeping other projects' history or resolving their live claims from this task.
 - Lifetime wall-clock promises through unavailable storage, arbitrary backlog or suspended processes; latency claims await the isolated final measurements.
 - A claimless-history closure based on absence alone. Historical ownership and an enforceable effect barrier are prerequisites for a separate design.
+
+## Implementation for review
+
+New eligible claims freeze a two-minute admission cutoff, the original downstream digest and server-derived caller references. Prompt-derived role defaults are retained as selectors into the original input. The binding contains no duplicate prompt, specification, image or arbitrary role-parameter payload. Existing logical request digests and downstream keys remain unchanged.
+
+`src/lib/mcp/launchAdmission.ts` resolves these bindings at `/api/spawn/admission`. The route consumes the existing reservation fence and passes a synchronous caller check through reservation and deferred writer authorization. A previous release without this receiver cannot consume a guarded request. The registry's existing archive retains the first MCP reservation in the reservation transaction, so losing the current receipt cannot turn a past admission into a negative answer.
+
+`src/lib/pipelines/creationAdmission.ts` records immutable admission witnesses and negative fences in `state.sqlite`. SQL guards also reject an older writer that attempts to insert a fenced key. New queued creations use the `.admission` suffix; an older drain that enumerates `.json` cannot execute them. Current queue writers and drains check the original caller under the account-before-pipeline lock order. Recovery releases only the negative claim's matching, unused proactive reservation.
+
+`src/lib/mcp/admissionRecovery.ts` runs under serving-release authority, with a five-second pass budget and at most fifty scalar candidates. Its cursor and retry state survive process restarts. Legacy claims without an enforcing downstream protocol retain their existing uncertainty.
+
+`list_unknown_launch_claims` is an MCP-only read. It derives the project and seat from current authority, returns at most fifty items and 24 KiB, and spends at most one hundred candidate and verification visits. It reads scalar receipt metadata without decoding receipt payloads. Suppressed and concurrently settled rows advance the cursor. Receipt preparation, caller/generation changes and cursor expiry never widen the read into a full-store fallback.
+
+Launch recovery uses the existing revisioned seat projection. It follows proven lineage beyond thirty-two rotations, supports native-to-managed succession, and refuses a revoked designation or reuse of the same conversation under another recorded epoch. Original, recovery and cached-result paths pin current authority; receipt mutations recheck it inside their actual writer. Call-local checks survive the public service and SDK awaits and run synchronously before response serialization, including current workspace grants. The seat projection is keyed by its file revision and the durable alias sources; unchanged reads reuse its current designation without rereading retained seat history.
+
+The production-boundary recurrence is in `src/lib/mcp/stdio.integration.test.ts`. The captured source exits with failure on `unknown` instead of the required negative result and then records one late reservation and writer. The repaired path retains the original key, commits the fence and releases the old dispatcher with zero effects. Adjacent cases cover the receiving native identity, deferred writer, succession, unsupported receiver and maximum-size multibyte envelope. The queue/read proofs are in `src/lib/mcp/unknownLaunchClaims.test.ts`; bounded reconciliation restarts are in `src/lib/mcp/admissionRecovery.test.ts`. Exact commands, source exports, logs and actual exits remain in private stage evidence.
+
+The generic research 403 and the fate of its claimless original remain unresolved. This implementation changes no live claim and makes no performance-gain claim. Publication and the three required review rounds remain subsequent pipeline stages. Existing failures in the full stdio, spawn-recovery, registry-archive, busy-admission and spawn-route files were also reproduced on the captured source; their logs retain the matching assertions and diagnostics. Focused acceptance cases, receipt-store guards, creation, minimum SQLite, type and lint checks are recorded separately.
 
 ## Requirement check
 

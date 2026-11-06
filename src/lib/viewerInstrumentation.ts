@@ -85,6 +85,7 @@ export interface HotStateCutoverBoundary {
 }
 
 interface CurrentReleaseControllerLoaders {
+  loadLaunchAdmissionRecovery?: () => Promise<{ startLaunchAdmissionRecovery: () => void }>;
   loadFlowPipelineController: () => Promise<{ startFlowPipelineController: () => void }>;
   /** Optional for the same reason as the loaders below. The stale role
       mapping pass (docs/design/model-sizing-tiers.md §5). */
@@ -368,6 +369,8 @@ export async function initializeHotStateStoresAtStartup(
   flows.loadFlows();
   pipelines.loadPipelines();
   pipelines.loadArchivedPipelinesForList();
+  const { pipelineAdmissionIdentity } = await import("@/lib/pipelines/creationAdmission");
+  if (!pipelineAdmissionIdentity(true)) throw new Error("pipeline admission schema is not prepared");
   workflows.loadWorkflows();
   // Requests consume the persisted narrow projections from their first call.
   const { readHistoryProjection } = await import("@/lib/state/historyProjection");
@@ -415,6 +418,7 @@ export async function startCurrentReleaseControllers(
     loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
+    loadLaunchAdmissionRecovery: () => import("@/lib/mcp/admissionRecovery"),
   },
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
@@ -440,6 +444,8 @@ export async function startCurrentReleaseControllers(
   }
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
   startFlowPipelineController();
+  try { (await loaders.loadLaunchAdmissionRecovery?.())?.startLaunchAdmissionRecovery(); }
+  catch { console.error("[mcp admission recovery] controller unavailable"); }
   try { (await loaders.loadCloudEnvironmentController?.())?.startCloudEnvironmentController(); }
   catch { console.error("[cloud environments] preparation controller unavailable"); }
   /* The shared Telegram connector dies with the viewer container it is a child

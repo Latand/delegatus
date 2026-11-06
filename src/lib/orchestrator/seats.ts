@@ -11,6 +11,8 @@ import path from "node:path";
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasResolver } from "@/lib/projects/aliases";
+import { projectStoreSignature } from "@/lib/projects/persistence";
+import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 import type { IdentityWavePathRekey } from "@/lib/agent/identityWaveMigration";
 import type { BoardTask } from "@/lib/tasks/types";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -228,11 +230,15 @@ interface RecipientAuthorityRecord {
   project?: string;
   revokedAt?: string;
 }
+type RecoverySeat = Readonly<Pick<OrchestratorSeat, "conversationId" | "seatEpoch" | "predecessorConversationId" | "state">>;
 interface RecipientAuthorityIndex {
   activeConversations: Set<string>;
   currentSeats: Map<string, string | null>;
   records: Map<string, RecipientAuthorityRecord>;
   revocationCount: number;
+  recoveryPredecessors: Map<string, OrchestratorRevocation[]>;
+  recoveryProjects: Map<string, Set<string>>;
+  recoverySeats: Map<string, RecoverySeat>;
 }
 interface RecipientAuthorityCache {
   files: Map<string, { revision: string; file: OrchestratorSeatFile | null }>;
@@ -1531,6 +1537,85 @@ export function orchestratorRevocations(): OrchestratorRevocation[] {
   return readOrchestratorSeatFile().revocations;
 }
 
+const recoveryIndexes = new Map<string, RecipientAuthorityIndex>();
+function recoveryAliasRevision(): string {
+  return `${projectStoreSignature("project-aliases.json")}\0${readStateCollectionRevision(statePath("state.sqlite"), "worktree_recovery")}`;
+}
+function recoveryIndex(): RecipientAuthorityIndex | null {
+  const filePath = seatsFile();
+  const revision = seatFileRevisionSync(filePath);
+  if (!revision) return null;
+  const aliases = recoveryAliasRevision();
+  const key = `${recipientAuthorityIndexKey(filePath, revision)}\0${aliases}`;
+  const held = recoveryIndexes.get(key);
+  if (held) return held;
+  const file = readOrchestratorSeatFileOrNull();
+  if (!file || seatFileRevisionSync(filePath) !== revision || recoveryAliasRevision() !== aliases) return null;
+  const index = recipientAuthorityIndexIn(file);
+  rememberBounded(recoveryIndexes, key, index);
+  return index;
+}
+
+/** Exact current designation from the revisioned authority projection. */
+export function currentRecoverySeat(project: string): RecoverySeat | null {
+  return recoveryIndex()?.recoverySeats.get(canonicalProject(project)) ?? null;
+}
+
+export function recoverySeatCurrent(project: string, conversationId: string, epoch: number): boolean {
+  const index = recoveryIndex();
+  const active = index?.recoverySeats.get(canonicalProject(project));
+  const facts = index?.records.get(conversationId);
+  return !!index && active?.state === "active" && active.conversationId === conversationId && active.seatEpoch === epoch
+    && index.recoveryProjects.get(conversationId)?.size === 1 && (facts?.revokedSeatEpoch ?? 0) < epoch;
+}
+
+/** Bounded backwards traversal owned by the existing revisioned projection. */
+export function recoverySeatSegment(project: string, current: string, epoch: number, from = current, limit = 100, startingEpoch?: number) {
+  const index = recoveryIndex();
+  const active = index?.recoverySeats.get(canonicalProject(project));
+  if (!index || active?.conversationId !== current || active.seatEpoch !== epoch) return null;
+  const rows: OrchestratorRevocation[] = [];
+  const seen = new Set<string>([from]);
+  let cursor = from;
+  let upperEpoch = startingEpoch ?? (from === current ? epoch : Infinity);
+  for (let visits = 0; visits < Math.min(100, limit); visits++) {
+    const edges = index.recoveryPredecessors.get(`${project}\0${cursor}`) ?? [];
+    if (!edges.length) return { rows, next: null };
+    if (edges.length !== 1) return null;
+    const edge = edges[0]!;
+    if (seen.has(edge.conversationId) || edge.seatEpoch >= upperEpoch || !edge.activatedAt
+      || !Number.isFinite(Date.parse(edge.activatedAt)) || !Number.isFinite(Date.parse(edge.revokedAt))
+      || Date.parse(edge.activatedAt) > Date.parse(edge.revokedAt)
+      || (cursor === current && active.predecessorConversationId !== edge.conversationId)) return null;
+    seen.add(edge.conversationId);
+    rows.push(edge);
+    cursor = edge.conversationId;
+    upperEpoch = edge.seatEpoch;
+  }
+  return { rows, next: cursor };
+}
+
+/** A claim belongs to the designation interval and the exact forward chain. */
+export function seatMayRecoverLaunch(project: string, current: string, epoch: number, owner: string,
+  claimedAt: string, ownerEpoch?: number): boolean {
+  const seen = new Set<string>();
+  let from: string | null = current;
+  let upperEpoch = epoch;
+  while (from && !seen.has(from)) {
+    seen.add(from);
+    const segment = recoverySeatSegment(project, current, epoch, from, 100, upperEpoch);
+    if (!segment) return false;
+    for (const edge of segment.rows) if (edge.conversationId === owner) {
+      const time = Date.parse(claimedAt);
+      return Number.isFinite(time) && time >= Date.parse(edge.activatedAt!) && time <= Date.parse(edge.revokedAt)
+        && (ownerEpoch === undefined || ownerEpoch === edge.seatEpoch);
+    }
+    from = segment.next;
+    upperEpoch = segment.rows.at(-1)?.seatEpoch ?? upperEpoch;
+  }
+  return false;
+}
+
 /**
  * Conversations whose orchestrator authority has been revoked, or null when the
  * durable store could not be established.
@@ -1764,6 +1849,17 @@ function recipientAuthorityIndexIn(
   file: OrchestratorSeatFile,
 ): RecipientAuthorityIndex {
   const authority = new Map<string, RecipientAuthorityRecord>();
+  const recoveryPredecessors = new Map<string, OrchestratorRevocation[]>();
+  const recoveryProjects = new Map<string, Set<string>>();
+  for (const seat of Object.values(file.seats)) if (seat.conversationId && seat.state === "active") {
+    const projects = recoveryProjects.get(seat.conversationId) ?? new Set<string>();
+    projects.add(seat.project); recoveryProjects.set(seat.conversationId, projects);
+  }
+  for (const row of file.revocations) {
+    if (!row.successorConversationId) continue;
+    const key = `${row.project}\0${row.successorConversationId}`;
+    recoveryPredecessors.set(key, [...(recoveryPredecessors.get(key) ?? []), row]);
+  }
   const recordFor = (conversationId: string): RecipientAuthorityRecord => {
     let record = authority.get(conversationId);
     if (!record) {
@@ -1793,7 +1889,16 @@ function recipientAuthorityIndexIn(
     delete record.successorConversationId;
     if (successor) record.successorConversationId = successor;
   }
-  return { activeConversations: new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!)), records: authority, currentSeats: new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId])), revocationCount: file.revocations.length };
+  return { recoverySeats: recoverySeatsIn(file), recoveryProjects, recoveryPredecessors, activeConversations: new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!)), records: authority, currentSeats: new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId])), revocationCount: file.revocations.length };
+}
+
+function recoverySeatsIn(file: OrchestratorSeatFile): Map<string, RecoverySeat> {
+  const rows = new Map<string, RecoverySeat>();
+  for (const seat of Object.values(file.seats)) if (seat.state === "active" && seat.conversationId) {
+    rows.set(seat.project, Object.freeze({ conversationId: seat.conversationId, seatEpoch: seat.seatEpoch,
+      predecessorConversationId: seat.predecessorConversationId, state: seat.state }));
+  }
+  return rows;
 }
 
 function updateRecipientAuthorityIndexAfterWrite(
@@ -1824,6 +1929,10 @@ function updateRecipientAuthorityIndexAfterWrite(
 
   for (let order = index.revocationCount; order < file.revocations.length; order++) {
     const revocation = file.revocations[order]!;
+    if (revocation.successorConversationId) {
+      const key = `${revocation.project}\0${revocation.successorConversationId}`;
+      index.recoveryPredecessors.set(key, [...(index.recoveryPredecessors.get(key) ?? []), revocation]);
+    }
     let record = index.records.get(revocation.conversationId);
     if (!record) {
       record = { activeSeatEpoch: activeEpochs.get(revocation.conversationId) ?? 0,
@@ -1838,6 +1947,12 @@ function updateRecipientAuthorityIndexAfterWrite(
     record.revokedAt = revocation.revokedAt;
     delete record.successorConversationId;
     if (successor) record.successorConversationId = successor;
+  }
+  index.recoverySeats = recoverySeatsIn(file);
+  index.recoveryProjects = new Map();
+  for (const seat of Object.values(file.seats)) if (seat.conversationId && seat.state === "active") {
+    const projects = index.recoveryProjects.get(seat.conversationId) ?? new Set<string>();
+    projects.add(seat.project); index.recoveryProjects.set(seat.conversationId, projects);
   }
   index.activeConversations = new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!));
   index.currentSeats = new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId]));

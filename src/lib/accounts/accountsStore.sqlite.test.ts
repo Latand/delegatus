@@ -5,7 +5,8 @@ import { Database } from "bun:sqlite";
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
-import { readStateCollectionRows, readStateImport } from "@/lib/state/sqliteStateStore";
+import { readStateCollectionRows, readStateImport, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { readAccountSpawnFence, mutateAccountSpawnFence } from "./accountsStore";
 
 import {
   accountsCollectionRevision,
@@ -54,6 +55,24 @@ function sandbox(): string {
 function seed(directory: string, name: AccountSourceName, body: unknown): void {
   fs.writeFileSync(accountSourcePath(name, directory), `${JSON.stringify(body, null, 2)}\n`);
 }
+
+test("keyed spawn fence reads and writes avoid rebuilding a large source and preserve damaged neighbours", () => {
+  const directory = sandbox();
+  const fence = (key: string) => ({ version: 1, clientAttemptId: key, requestDigest: "a".repeat(64),
+    status: 400, error: "fixture admission refused", rejectedAt: "2020-01-01T00:00:00Z" });
+  const fences = Object.fromEntries(Array.from({ length: 1000 }, (_, n) => [`fixture-key-${n}`, fence(`fixture-key-${n}`)]));
+  fences["damaged-other"] = "unreadable" as never;
+  writeAccountSource(FENCES_SOURCE, { version: 1, fences }, directory);
+  const observer = spyOn(SqliteStateCollection.prototype, "loadReadonly");
+  try {
+    expect(readAccountSpawnFence("fixture-key-999", directory)).toMatchObject({ kind: "collection", body: { fences: { "fixture-key-999": fence("fixture-key-999") } } });
+    mutateAccountSpawnFence("fixture-key-new", current => { expect(current).toBeUndefined(); return fence("fixture-key-new"); }, directory);
+    expect(readAccountSpawnFence("damaged-other", directory)).toMatchObject({ kind: "collection", body: { fences: { "damaged-other": "unreadable" } } });
+    expect(observer).not.toHaveBeenCalled();
+    readAccountSource(FENCES_SOURCE, directory);
+    expect(observer).toHaveBeenCalled();
+  } finally { observer.mockRestore(); }
+});
 
 function registry(active: string, ids: string[] = [active], extra: Record<string, unknown> = {}): unknown {
   return {

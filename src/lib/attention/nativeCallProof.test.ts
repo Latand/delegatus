@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { nativeGenerationCurrent, nativeSessionObserved, nativeTranscriptCallProof, recordNativeHook, runWithNativeCallProof } from "./nativeCallProof";
+import { admittedNativeCall, runWithAdmittedNativeCall } from "./nativeCallProof";
 const nativeTest = test.skipIf(process.platform !== "linux");
 
 let root: string; let saved: string | undefined;
@@ -20,6 +21,19 @@ nativeTest("a fresh hook proof authenticates one exact call and cannot be replay
     expect(nativeTranscriptCallProof(process.pid, transcript(A))).toBe(first); return first;
   })).toBe(proof.generation);
   expect(runWithNativeCallProof(proof.token, "spawn_agent", args, () => nativeTranscriptCallProof(process.pid, transcript(A)))).toBeNull();
+});
+
+nativeTest("a receiving writer revalidates an admitted reference without retaining the token", () => {
+  const proof = recordNativeHook(process.pid, A, transcript(A), "PreToolUse", "spawn_agent", args);
+  const reference = runWithNativeCallProof(proof.token, "spawn_agent", args, () => {
+    expect(nativeTranscriptCallProof(process.pid, transcript(A))).toBe(proof.generation);
+    return admittedNativeCall();
+  });
+  expect(reference).toBeDefined();
+  expect(JSON.stringify(reference)).not.toContain(proof.token!);
+  expect(runWithAdmittedNativeCall(reference, () => nativeTranscriptCallProof(process.pid, transcript(A)))).toBe(proof.generation);
+  recordNativeHook(process.pid, B, transcript(B), "SessionStart");
+  expect(runWithAdmittedNativeCall(reference, () => nativeTranscriptCallProof(process.pid, transcript(A)))).toBeNull();
 });
 nativeTest("a proof cannot be moved to another tool, payload or parent", () => {
   const proof = recordNativeHook(process.pid, A, transcript(A), "PreToolUse", "spawn_agent", args);

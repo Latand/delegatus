@@ -539,6 +539,42 @@ export function readAccountSource(name: AccountSourceName, directory = accountsS
   return { kind: "collection", body: sourceBody(collection, spec) };
 }
 
+/** The admission hot path reads only its exact fence and source markers. */
+export function readAccountSpawnFence(key: string, directory = accountsStateDirectory()): AccountSourceRead {
+  const collection = accountCollection(directory, "read");
+  if (!collection) return { kind: "legacy" };
+  const gap = collection.get(fencesSource.gapKey);
+  if (gap) {
+    const recorded = isRecord(gap.v) ? gap.v : {};
+    return { kind: "gap", reason: typeof recorded.reason === "string" ? recorded.reason : "fence import unavailable", preservedAs: null };
+  }
+  const raw = collection.get(`raw:${FENCES_SOURCE}`);
+  if (raw) return { kind: "collection", body: raw.v };
+  const head = collection.get("meta:fence");
+  if (!head && legacyFileStillHoldsTheRecord(FENCES_SOURCE, directory)) return { kind: "legacy" };
+  const row = collection.get(`fence:${key}`);
+  if (row && (!isRecord(row.v) || row.v.key !== key)) throw new Error("invalid persisted fence key");
+  return { kind: "collection", body: { ...(head ? head.v as object : { version: 1 }),
+    fences: row ? { [key]: (row.v as { value: unknown }).value } : {} } };
+}
+
+/** One keyed fence CAS; a damaged source or exact key is never normalized away. */
+export function mutateAccountSpawnFence(key: string, mutate: (value: unknown | undefined) => unknown,
+  directory = accountsStateDirectory()): void {
+  const collection = accountCollection(directory, "write")!;
+  collection.boundedPatch(8, tx => {
+    if (tx.get(fencesSource.gapKey) || tx.get(`raw:${FENCES_SOURCE}`)) throw new Error("spawn fence source is unavailable");
+    const head = tx.get("meta:fence");
+    if (head && (!isRecord(head.v) || head.v.version !== 1)) throw new Error("unsupported spawn fence source");
+    const row = tx.get(`fence:${key}`);
+    if (row && (!isRecord(row.v) || row.v.key !== key)) throw new Error("invalid persisted fence key");
+    const value = mutate(row ? (row.v as { value: unknown }).value : undefined);
+    if (value === undefined) return;
+    if (!head) tx.put({ k: "meta:fence", v: { version: 1 } });
+    tx.put({ k: `fence:${key}`, v: { key, value } });
+  });
+}
+
 /** What the registry can say about retirement: the ids it records, or that it
     could not be read at all. An empty set is an answer; `unknown` is not, and
     the caller that refuses a launch on a retired account refuses on it too. */

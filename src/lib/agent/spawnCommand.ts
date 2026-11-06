@@ -1,3 +1,4 @@
+import { receivingSpawnAdmission } from "@/lib/mcp/launchAdmission";
 import { preflightCodexProtocol } from "@/lib/accounts/codexPinnedProtocol";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
@@ -598,10 +599,14 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (!stat.isDirectory()) {
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
+  let assertMcpAdmission: () => void;
+  try { assertMcpAdmission = await receivingSpawnAdmission(req, body as Record<string, unknown>); }
+  catch { return NextResponse.json({ error: "MCP launch admission proof unavailable", code: "launch_admission_refused" }, { status: 403 }); }
   let relatedAuthority: (string | null)[] = [];
   let workspacePrincipal: WorkspacePrincipal | null = null;
   let workspaceAccountId: string | null = null;
   const authorizeLaunch = (receipt: SpawnReceipt | null = existingAttempt) => {
+    assertMcpAdmission();
     if (workspacePrincipal && (!workspacePrincipalAllows(workspacePrincipal, explicitProject ?? projectForCwd(cwd))
       || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(cwd))
       || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(fs.realpathSync(cwd))))) throw new TeamError("workspace_forbidden", "workspace access denied", 403);

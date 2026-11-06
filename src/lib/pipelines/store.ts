@@ -1,4 +1,5 @@
 import { settleClosedPipelineAttempts } from "./closeAttempts";
+import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
@@ -29,7 +30,7 @@ import { effortScale } from "@/lib/agent/efforts";
 import { validAgentMemoryMax, normalizeAgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
-import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, StoreBusyBeforeAdmissionError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
 import { initializeStateCollections, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -2197,6 +2198,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     if (existing) return existing;
     if (preparationFailure) throw preparationFailure.error;
     options.admit?.();
+    if (pipeline.creationRequest?.admissionProtocol === 1 && tx.get(pipeline.id)) throw new Error("pipeline admission candidate already exists");
     const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
@@ -2212,7 +2214,19 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   };
   const limit = options.requireOwner ? 4096 : 16;
   const prepare = options.prepare;
-  if (!prepare) return withDeliveryMutationAsync(create, limit, options.admissionDeadline);
+  if (!prepare) {
+    let entered = false;
+    try {
+      return await withDeliveryMutationAsync(tx => { entered = true; return create(tx); }, limit, options.admissionDeadline);
+    } catch (error) {
+      // An account-owned admission cannot wait for the pipeline writer. Only
+      // a refusal before this callback may enter the durable creation queue.
+      if (pipeline.creationRequest?.admissionProtocol === 1 && !entered && error instanceof AccountCommitBusyError) {
+        throw new StoreBusyBeforeAdmissionError("pipeline writer is busy before MCP admission", { cause: error });
+      }
+      throw error;
+    }
+  }
   return refuseBusyBeforeAdmission(admitted => waitForStateLock("pipelines.create", async () => {
     const store = pipelineStore();
     // A committed replay needs live authorization, but no fresh source capture.

@@ -119,11 +119,12 @@ export function proactiveLiveAuthorityError(task: BoardTask, file = TASKS_FILE, 
 /** One indexed row per project, under the task store's asynchronous transaction.
  * A failed creation keeps this recoverable reservation for the same request. */
 export async function reserveProactiveLane(pipeline: Pipeline, requestKey: string, file = TASKS_FILE,
-  ports: ProactiveAuthority = proactiveAuthority): Promise<void> {
+  ports: ProactiveAuthority = proactiveAuthority, assertAuthority?: () => void): Promise<void> {
   if (!loadTasksByIds(new Set(pipeline.taskIds), file).some(task => task.proactive && !proactiveCandidateDecision(task, file).adopted)) return;
   const store = await waitForStateLock("tasks.proactive.lane.initialize", () => collection(file, true)!, { waitMs: 5_000 });
   try {
     await patchTaskCompanion(store, (get, boardTasks) => {
+      assertAuthority?.();
       const tasks = pipeline.taskIds.map(id => get(id));
       if (tasks.some(task => !task)) throw new Error("proactive task evidence is missing");
       const invented = tasks.filter((task): task is BoardTask => !!task?.proactive && !proactiveCandidateDecision(task, file).adopted);
@@ -174,6 +175,25 @@ export async function reserveProactiveLane(pipeline: Pipeline, requestKey: strin
         requestKey, scopeHash: proactiveScopeHash({ ...task, project: "" }), scopeRevision: task.proactive!.scopeRevision,
         graph, reviewStage: first!.id, review: "pending" as const }], result: undefined };
     }, file);
+  } finally { store.close(); }
+}
+
+/** A negative creation fence releases only its own never-materialized lane. */
+export async function releaseUnusedProactiveLane(project: string, laneId: string, requestKey: string,
+  assertAuthority: () => void, file = TASKS_FILE, deadlineAt = Date.now() + 5000): Promise<void> {
+  const store = collection(file, false);
+  if (!store) return;
+  try {
+    await store.boundedPatchAsync(256, tx => {
+      assertAuthority();
+      if (findPipelineRecord(laneId)) return;
+      for (const key of family(project)) {
+        const row = tx.get(keyFor(key));
+        if (row && row.laneId === laneId && row.requestKey === requestKey && !row.released && row.review === "pending") {
+          tx.put({ ...row, released: true });
+        }
+      }
+    }, Math.max(0, Math.min(1000, deadlineAt - Date.now())));
   } finally { store.close(); }
 }
 
