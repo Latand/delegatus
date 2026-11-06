@@ -10,9 +10,7 @@ import path from "node:path";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
-import { canonicalProject, projectAliasResolver } from "@/lib/projects/aliases";
-import { projectStoreSignature } from "@/lib/projects/persistence";
-import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
+import { canonicalProject, projectAliasKeys, projectAliasResolver } from "@/lib/projects/aliases";
 import type { IdentityWavePathRekey } from "@/lib/agent/identityWaveMigration";
 import type { BoardTask } from "@/lib/tasks/types";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -1537,49 +1535,56 @@ export function orchestratorRevocations(): OrchestratorRevocation[] {
   return readOrchestratorSeatFile().revocations;
 }
 
-const recoveryIndexes = new Map<string, RecipientAuthorityIndex>();
-function recoveryAliasRevision(): string {
-  return `${projectStoreSignature("project-aliases.json")}\0${readStateCollectionRevision(statePath("state.sqlite"), "worktree_recovery")}`;
-}
 function recoveryIndex(): RecipientAuthorityIndex | null {
   const filePath = seatsFile();
   const revision = seatFileRevisionSync(filePath);
   if (!revision) return null;
-  const aliases = recoveryAliasRevision();
-  const key = `${recipientAuthorityIndexKey(filePath, revision)}\0${aliases}`;
-  const held = recoveryIndexes.get(key);
+  const key = recipientAuthorityIndexKey(filePath, revision);
+  const held = recipientAuthorityCache().indexes.get(key);
   if (held) return held;
-  const file = readOrchestratorSeatFileOrNull();
-  if (!file || seatFileRevisionSync(filePath) !== revision || recoveryAliasRevision() !== aliases) return null;
-  const index = recipientAuthorityIndexIn(file);
-  rememberBounded(recoveryIndexes, key, index);
-  return index;
+  // Recovery reads stay constant-time. A cold or replaced authority projection
+  // is hydrated by the existing bounded async loader; this request fails closed.
+  void withViewerOperation("orchestrator.recipient-authority", () => recipientAuthorityIndex(filePath, revision)).catch(() => {});
+  return null;
+}
+
+function recoveryProjectFamily(project: string): string[] {
+  return projectAliasKeys(project);
 }
 
 /** Exact current designation from the revisioned authority projection. */
 export function currentRecoverySeat(project: string): RecoverySeat | null {
-  return recoveryIndex()?.recoverySeats.get(canonicalProject(project)) ?? null;
+  const index = recoveryIndex();
+  if (!index) return null;
+  const seats = recoveryProjectFamily(project).map(key => index.recoverySeats.get(key)).filter((seat): seat is RecoverySeat => !!seat);
+  return seats.length === 1 ? seats[0]! : null;
 }
 
 export function recoverySeatCurrent(project: string, conversationId: string, epoch: number): boolean {
   const index = recoveryIndex();
-  const active = index?.recoverySeats.get(canonicalProject(project));
+  const family = recoveryProjectFamily(project);
+  const activeRows = family.map(key => index?.recoverySeats.get(key)).filter((seat): seat is RecoverySeat => !!seat);
+  const active = activeRows.length === 1 ? activeRows[0] : undefined;
   const facts = index?.records.get(conversationId);
+  const projects = [...(index?.recoveryProjects.get(conversationId) ?? [])].map(canonicalProject);
   return !!index && active?.state === "active" && active.conversationId === conversationId && active.seatEpoch === epoch
-    && index.recoveryProjects.get(conversationId)?.size === 1 && (facts?.revokedSeatEpoch ?? 0) < epoch;
+    && new Set(projects).size === 1 && projects[0] === canonicalProject(project) && (facts?.revokedSeatEpoch ?? 0) < epoch;
 }
 
 /** Bounded backwards traversal owned by the existing revisioned projection. */
 export function recoverySeatSegment(project: string, current: string, epoch: number, from = current, limit = 100, startingEpoch?: number) {
   const index = recoveryIndex();
-  const active = index?.recoverySeats.get(canonicalProject(project));
+  const family = recoveryProjectFamily(project);
+  const activeRows = family.map(key => index?.recoverySeats.get(key)).filter((seat): seat is RecoverySeat => !!seat);
+  const active = activeRows.length === 1 ? activeRows[0] : undefined;
   if (!index || active?.conversationId !== current || active.seatEpoch !== epoch) return null;
   const rows: OrchestratorRevocation[] = [];
   const seen = new Set<string>([from]);
   let cursor = from;
   let upperEpoch = startingEpoch ?? (from === current ? epoch : Infinity);
   for (let visits = 0; visits < Math.min(100, limit); visits++) {
-    const edges = index.recoveryPredecessors.get(`${project}\0${cursor}`) ?? [];
+    const edges = family.flatMap(key => index.recoveryPredecessors.get(`${key}\0${cursor}`) ?? []);
+    if (new Set(edges.map(edge => `${edge.project}\0${edge.conversationId}\0${edge.seatEpoch}`)).size !== edges.length) return null;
     if (!edges.length) return { rows, next: null };
     if (edges.length !== 1) return null;
     const edge = edges[0]!;

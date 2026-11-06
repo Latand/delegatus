@@ -73,12 +73,18 @@ export function queuePipelineCreation(
       assert();
       exactQueuedCreationStatus(pipeline.id, binding.downstreamKey, pipeline.creationRequest!.digest);
       if (Date.now() >= binding.launchAdmission.settleAfter) throw new Error("pipeline admission deadline elapsed");
+    }
+    // The queue file is the recoverable admission record. Publish it before
+    // the immutable SQLite witness so a crash between the two has a durable
+    // candidate the drainer can finish under the same admission lock.
+    writeJsonDurably(path.join(pipelineCreationQueueDir(), `${pipeline.id}${queuedSuffix(pipeline)}`), entry);
+    if (binding?.launchAdmission) {
+      const assert = () => assertLaunchAdmissionCaller(binding);
       const witness = recordCreationAdmission({ request_key: binding.downstreamKey, digest: pipeline.creationRequest!.digest,
         candidate_id: pipeline.id, kind: "admitted" }, assert);
       if (witness.kind === "fenced") throw new Error("pipeline admission was fenced");
       assert();
     }
-    writeJsonDurably(path.join(pipelineCreationQueueDir(), `${pipeline.id}${queuedSuffix(pipeline)}`), entry);
   };
   if (pipeline.creationRequest?.admissionProtocol === 1) withAccountMutationLock(write);
   else write();
@@ -200,13 +206,27 @@ export async function admitQueuedPipelineCreations(): Promise<Pipeline[]> {
         || existing.creationRequest?.digest !== entry.pipeline.creationRequest?.digest)) throw new Error("queued pipeline candidate belongs to another creation");
       if (!existing) {
         const binding = entry.pipeline.creationRequest?.admissionBinding;
+        if (binding) {
+          const admission = binding.launchAdmission;
+          let witness = readCreationAdmission(binding.downstreamKey);
+          if (!witness) {
+            if (!admission || admission.candidateId !== entry.pipeline.id
+              || entry.pipeline.creationRequest?.digest !== admission.envelopeDigest) throw new Error("queued pipeline admission identity changed");
+            witness = recordCreationAdmission({ request_key: binding.downstreamKey, digest: admission.envelopeDigest,
+              candidate_id: admission.candidateId, kind: "admitted" }, () => {
+                if (!queuedEntryCurrent(file, expected)) throw new Error("queued pipeline admission changed");
+              });
+          }
+          if (witness.kind !== "admitted" || witness.candidate_id !== entry.pipeline.id
+            || witness.digest !== entry.pipeline.creationRequest?.digest) throw new Error("pipeline admission witness changed");
+        }
         const write = () => createPipelineWithDelivery(entry.pipeline, entry.target, entry.comparison, { assertAuthority: () => {
           if (binding) {
             if (!queuedEntryCurrent(file, expected)) throw new Error("queued pipeline admission changed");
-            assertLaunchAdmissionCaller(binding);
             const witness = readCreationAdmission(binding.downstreamKey);
             if (!witness || witness.kind !== "admitted" || witness.candidate_id !== entry.pipeline.id
               || witness.digest !== entry.pipeline.creationRequest?.digest) throw new Error("pipeline admission witness changed");
+            assertLaunchAdmissionCaller(binding);
           }
           if (entry.pipeline.workspace && !workspacePrincipalAllows(entry.pipeline.workspace, entry.pipeline.project)) throw new Error("workspace access denied");
         } });

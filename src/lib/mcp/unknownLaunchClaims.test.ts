@@ -6,6 +6,7 @@ import { mcpPageCursorStore } from "./pageCursors";
 import { runAsMcpHttpCaller } from "./callerContext";
 import * as pipelineEngine from "@/lib/pipelines/engine";
 import * as pipelineStore from "@/lib/pipelines/store";
+import * as pipelineAdmission from "@/lib/pipelines/creationAdmission";
 import { admitQueuedPipelineCreations, listQueuedPipelineCreations, pipelineCreationQueueDir } from "@/lib/pipelines/creationQueue";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,7 +15,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorRecipientRefusalAsync, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { productionDomainDependencies, recoveryCaller, viewerMcpBindings, viewerMcpRecoverableTools } from "./bindings";
 import { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore, type McpRequestBinding } from "./server";
@@ -59,6 +60,7 @@ async function fixture(git = false) {
       path: registry.conversation(id as `conversation_${string}`)!.generations.at(-1)!.path, now: "2020-01-01T00:00:00Z" });
   }
   seat(caller, "initial-seat");
+  await orchestratorRecipientRefusalAsync([], () => "conversation_identity");
   const domain = { ...productionDomainDependencies, registrySnapshot: () => registry.readOnlySnapshot(),
     attentionAuthority: () => ({ kind: "worker" as const, conversationId: caller, role: "orchestrator" }) };
   const store = new SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR, "mcp-receipts.sqlite")); cleanup.push(() => store.close());
@@ -193,6 +195,28 @@ test("warm launch reads reuse seat authority without rereading unchanged lineage
   } finally { observer.mockRestore(); }
 });
 
+test("a cold launch read reports projection readiness without scanning seat history synchronously", async () => {
+  const f = await fixture();
+  for (let n = 0; n < 120; n++) f.rotate();
+  f.claim(777);
+  const cache = (globalThis as typeof globalThis & { __delegatusOrchestratorRecipientAuthorityV2__?: { indexes: Map<string, unknown> } })
+    .__delegatusOrchestratorRecipientAuthorityV2__;
+  expect(cache).toBeDefined();
+  cache!.indexes.clear();
+  let reads = 0;
+  const read = fs.readFileSync;
+  const observer = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+    if (args[0] === path.join(f.root, "state", "orchestrator-seats.json")) reads++;
+    return Reflect.apply(read, fs, args);
+  }) as typeof fs.readFileSync);
+  try {
+    expect(await f.read()).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+    expect(reads).toBe(0);
+  } finally { observer.mockRestore(); }
+  await orchestratorRecipientRefusalAsync([], () => "conversation_identity");
+  expect(await f.read()).toMatchObject({ ok: true, items: [expect.objectContaining({ clientRequestId: "fixture-claim-777" })] });
+});
+
 
 test("the recovery authority cache refreshes when project aliases change without a seat write", async () => {
   const f = await fixture();
@@ -205,6 +229,20 @@ test("the recovery authority cache refreshes when project aliases change without
   expect(fs.readFileSync(file)).toEqual(bytes);
   expect(currentRecoverySeat(target)).toEqual(before);
   expect(currentRecoverySeat(f.project)).toEqual(before);
+});
+
+test("launch claims written under a predecessor project key remain visible after succession", async () => {
+  const f = await fixture();
+  f.claim(17); f.claim(18);
+  const predecessorPage = await f.read({ limit: 1 });
+  expect(predecessorPage.nextCursor).toBeString();
+  const successor = "repo-launch-claims-successor";
+  expect(persistProjectAliases([{ source: f.project, target: successor, displayName: "Successor fixture" }])).toBe(true);
+  const page = await f.read();
+  expect(page).toMatchObject({ ok: true, items: [{ clientRequestId: "fixture-claim-17" }, { clientRequestId: "fixture-claim-18" }] });
+  expect(await f.read({ cursor: predecessorPage.nextCursor })).toMatchObject({ cursorReset: true });
+  f.stranger();
+  expect(await f.read()).toMatchObject({ ok: false, code: "recovery_not_permitted" });
 });
 
 test("launch read refuses disclosure after the SDK service await changes the seat", async () => {
@@ -328,6 +366,36 @@ test("an actual queued pipeline with a lost MCP settlement recovers its id and d
   } finally { fail.mockRestore(); gate.release(); await holder; }
 });
 
+test("queue publication survives a lost admission witness and drains exactly once", async () => {
+  const f = await fixture(true), gate = barrier();
+  const holder = pipelineStore.withPipelineMutation(async () => { gate.enter(); await gate.held; }); await gate.ready;
+  const original = pipelineAdmission.recordCreationAdmission;
+  let dropped = false;
+  const lostWitness = spyOn(pipelineAdmission, "recordCreationAdmission").mockImplementation((...args) => {
+    if (!dropped && fs.existsSync(pipelineCreationQueueDir())
+      && fs.readdirSync(pipelineCreationQueueDir()).some(name => name.endsWith(".admission"))) {
+      dropped = true;
+      throw new Error("fixture lost witness after queue publication");
+    }
+    return original(...args);
+  });
+  const args = { clientRequestId: "bounded-pipeline-witness-gap", task: "Recover queued admission", spec: "Recover queued admission", repoDir: f.root,
+    src: f.source, autoStart: false, stages: [] };
+  let answer: Record<string, unknown>;
+  try { answer = await f.call("create_pipeline", args); }
+  finally { lostWitness.mockRestore(); gate.release(); await holder; }
+  expect(dropped).toBe(true);
+  const files = fs.readdirSync(pipelineCreationQueueDir());
+  expect(files).toEqual([expect.stringMatching(/\.admission$/)]);
+  expect(answer!).toMatchObject({ ok: true, outcome: "settled", state: "queued" });
+  const recovered = await f.call("create_pipeline", { ...args, recoveryOnly: true });
+  const recoveredId = String(recovered.pipelineId);
+  expect(recovered).toMatchObject({ ok: true, pipelineId: files[0]!.replace(/\.admission$/, "") });
+  expect((await admitQueuedPipelineCreations()).map(row => row.id)).toEqual([recoveredId]);
+  expect(await admitQueuedPipelineCreations()).toHaveLength(0);
+  expect(pipelineStore.loadPipelines().map(row => row.id)).toEqual([recoveredId]);
+});
+
 
 test("empty suppressed owner pages advance and the receipt query uses its scope index", async () => {
   const f = await fixture();
@@ -336,7 +404,7 @@ test("empty suppressed owner pages advance and the receipt query uses its scope 
   try {
     db.query("UPDATE mcp_receipts SET claimed_at=? WHERE receipt_key=?").run(Date.parse("2020-01-01T00:00:00Z"), "spawn_agent:fixture-claim-100");
     const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN SELECT sequence,receipt_key FROM mcp_receipts
-      WHERE launch_project='project' AND launch_target='project' AND launch_owner='owner' AND launch_open=1 AND sequence>0 AND sequence<=1000 ORDER BY sequence LIMIT 100`).all();
+      WHERE launch_project IN ('project') AND launch_target IN ('project') AND launch_owner='owner' AND launch_open=1 AND sequence>0 AND sequence<=1000 ORDER BY sequence LIMIT 100`).all();
     expect(plan.some(row => row.detail.includes("mcp_launch_owner"))).toBe(true);
   } finally { db.close(); }
   f.rotate();

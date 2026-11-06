@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { Database as BunDatabase } from "bun:sqlite";
+import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -2263,16 +2263,23 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     return this.db.query<{ n: number }, []>("SELECT coalesce(max(sequence),0) AS n FROM mcp_receipts").get()!.n;
   }
 
-  launchClaimPage(project: string, owner: string, after: number, watermark: number, limit: number) {
-    return this.db.query<{ sequence: number; receipt_key: string; launch_tool: string; claimed_at: number; launch_due: number | null; stage: string | null; launch_failure_code: string | null }, [string,string,string,number,number,number]>(`
+  launchClaimPage(projects: readonly string[], owner: string, after: number, watermark: number, limit: number) {
+    const keys = [...new Set(projects)].slice(0, 64);
+    if (!keys.length) return [];
+    const placeholders = keys.map(() => "?").join(",");
+    return this.db.query<{ sequence: number; receipt_key: string; launch_tool: string; claimed_at: number; launch_due: number | null; stage: string | null; launch_failure_code: string | null }, SQLQueryBindings[]>(`
       SELECT sequence,receipt_key,launch_tool,claimed_at,launch_due,stage,launch_failure_code FROM mcp_receipts
-      WHERE launch_project=? AND launch_target=? AND launch_owner=? AND launch_open=1
-        AND sequence>? AND sequence<=? ORDER BY sequence LIMIT ?`).all(project, project, owner, after, watermark, Math.min(100,limit));
+      WHERE launch_project IN (${placeholders}) AND launch_target IN (${placeholders}) AND launch_owner=? AND launch_open=1
+        AND sequence>? AND sequence<=? ORDER BY sequence LIMIT ?`).all(...keys, ...keys, owner, after, watermark, Math.min(100,limit));
   }
 
-  launchClaimStillOpen(project: string, owner: string, sequence: number): boolean {
-    return !!this.db.query("SELECT 1 FROM mcp_receipts WHERE sequence=? AND launch_project=? AND launch_target=? AND launch_owner=? AND launch_open=1")
-      .get(sequence, project, project, owner);
+  launchClaimStillOpen(projects: readonly string[], owner: string, sequence: number): boolean {
+    const keys = [...new Set(projects)].slice(0, 64);
+    if (!keys.length) return false;
+    const placeholders = keys.map(() => "?").join(",");
+    return !!this.db.query(`SELECT 1 FROM mcp_receipts WHERE sequence=? AND launch_project IN (${placeholders})
+      AND launch_target IN (${placeholders}) AND launch_owner=? AND launch_open=1`)
+      .get(sequence, ...keys, ...keys, owner);
   }
 
   dueLaunchClaims(_now: number, after: number, limit = 50) {

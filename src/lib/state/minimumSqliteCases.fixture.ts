@@ -83,7 +83,7 @@ test("launch admission metadata and pipeline tombstones execute on the minimum S
         target: { project: "fixture", identity: root }, owner: { pid: process.pid, startIdentity: null }, claimedAt: "2020-01-01T00:00:00Z",
       });
       expect(receipts.markDispatching("spawn_agent:minimum-admission", "c".repeat(64))).toBe(true);
-      expect(receipts.launchClaimPage("fixture", "conversation_fixture", 0, receipts.launchWatermark(), 10)).toHaveLength(1);
+      expect(receipts.launchClaimPage(["fixture"], "conversation_fixture", 0, receipts.launchWatermark(), 10)).toHaveLength(1);
     } finally { receipts.close(); }
   } finally { if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; }
 });

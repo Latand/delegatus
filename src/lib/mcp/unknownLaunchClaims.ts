@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { recoverySeatCurrent, recoverySeatSegment } from "@/lib/orchestrator/seats";
+import { projectAliasKeys } from "@/lib/projects/aliases";
 import { mcpPageCursorStore } from "./pageCursors";
 import { recoveryCaller, type ViewerMcpDomainDependencies } from "./bindings";
 import { McpToolRefusal, SqliteMcpReceiptStore, type McpToolArgs } from "./server";
@@ -15,11 +16,12 @@ export function listUnknownLaunchClaims(args: McpToolArgs, dependencies: ViewerM
     throw new McpToolRefusal("only the current seat may read its own project's launch claims", { code: "recovery_not_permitted" });
   }
   const pinned = JSON.stringify(caller);
+  const projectKeys = projectAliasKeys(caller.project);
   const assert = () => {
     if (JSON.stringify(recoveryCaller(dependencies, true, false)) !== pinned) throw new McpToolRefusal("launch claim caller changed", { code: "caller_unidentified" });
   };
   const scope = crypto.createHash("sha256").update(JSON.stringify(["unknown-launch-claims", caller.kind,
-    caller.conversationId, caller.project, caller.authorityStamp, caller.nativeProof, caller.seatEpoch, args.limit ?? 25])).digest("hex");
+    caller.conversationId, caller.project, projectKeys, caller.authorityStamp, caller.nativeProof, caller.seatEpoch, args.limit ?? 25])).digest("hex");
   const cursors = mcpPageCursorStore();
   const held = args.cursor === undefined ? null : cursors.resolve(args.cursor, scope);
   if (args.cursor !== undefined && held === null) throw new McpToolRefusal("launch claim cursor expired or caller changed; restart without cursor", { code: "cursor_reset", retryable: true });
@@ -33,7 +35,7 @@ export function listUnknownLaunchClaims(args: McpToolArgs, dependencies: ViewerM
     while (visits < 99 && items.length < limit && !full) {
       assert();
       const requested = Math.min(Math.floor((100 - visits) / 2), limit - items.length);
-      const rows = store.launchClaimPage(caller.project, position.owner, position.after, position.watermark, requested);
+      const rows = store.launchClaimPage(projectKeys, position.owner, position.after, position.watermark, requested);
       visits += Math.max(1, rows.length);
       for (const row of rows) {
         const previousSequence = position.after;
@@ -45,7 +47,7 @@ export function listUnknownLaunchClaims(args: McpToolArgs, dependencies: ViewerM
         if (position.owner !== caller.conversationId && (!position.activatedAt || !position.revokedAt
           || row.claimed_at < Date.parse(position.activatedAt) || row.claimed_at > Date.parse(position.revokedAt))) continue;
         visits++;
-        if (!store.launchClaimStillOpen(caller.project, position.owner, row.sequence)) continue;
+        if (!store.launchClaimStillOpen(projectKeys, position.owner, row.sequence)) continue;
         const separator = row.receipt_key.indexOf(":");
         const item = { tool: row.launch_tool, clientRequestId: row.receipt_key.slice(separator + 1),
           claimedAt: new Date(row.claimed_at).toISOString(), settleAfter: row.launch_due,
