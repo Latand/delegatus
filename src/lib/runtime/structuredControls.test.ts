@@ -569,10 +569,12 @@ test("resume converges on and republishes an already live structured successor",
 test("resume reconnects a surviving Codex process missing its Viewer adapter", async () => {
   const fixture = structuredConversation();
   const recoveries: unknown[] = [];
+  const wakes: string[] = [];
   const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "resume" }, {
     registry: fixture.registry,
     client: null,
     enabled: () => true,
+    onResumed: id => { wakes.push(id); },
     hostProcessAlive: () => true,
     republish: async () => false,
     recover: async (request) => {
@@ -580,6 +582,7 @@ test("resume reconnects a surviving Codex process missing its Viewer adapter", a
       return { target: null, path: fixture.path, conversationId: fixture.conversationId as `conversation_${string}`, spawned: false, reconnected: true };
     },
   });
+  expect(wakes).toEqual([fixture.conversationId]);
   expect(recoveries).toEqual([{ path: fixture.path, conversationId: fixture.conversationId, reconnectLiveHost: true }]);
   expect(result).toEqual({ status: 200, body: { ok: true, structured: true, target: fixture.conversationId, outcome: "resumed", spawned: false } });
 });

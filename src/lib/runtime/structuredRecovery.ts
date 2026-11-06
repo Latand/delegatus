@@ -453,6 +453,8 @@ async function recoverCandidate(
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 cwd: current.spec.cwd, codexHome: account.home,
+                mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
+                plugins: current.spec.launchProfile?.plugins ?? [],
                 env: { ...withoutUnsupportedApiCredentials(account.env),
                   ...await stageGitEnvironment(registry, current.conversationId, entry.structuredHostOperationId, current.spec.cwd) }, socketOwner,
                 initialEventCursor: claim.structuredHost.eventCursor,

@@ -267,6 +267,7 @@ export async function dispatchStructuredControl(
     attributeAccountChoice?: typeof attributeNamedAccountChoice;
     recover?: typeof recoverDeadStructuredConversation;
     republish?: typeof republishStructuredDeliveryHost;
+    onResumed?: (conversationId: string) => void | Promise<void>;
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
   } = {},
 ): Promise<StructuredControlResult | null> {
@@ -318,6 +319,13 @@ export async function dispatchStructuredControl(
   if (!STRUCTURED_CONTROL_ACTIONS.has(request.action)) {
     if (request.action === "resume") {
       if (entry.status === "dead" || entry.status === "unhosted") return null;
+      const resumed = (spawned: boolean): StructuredControlResult => {
+        void Promise.resolve().then(async () => {
+          const notify = dependencies.onResumed ?? (await import("@/lib/monitor/resumedSeatTick")).requestResumedSeatTick;
+          await notify(conversation.id);
+        }).catch(error => console.warn("[structured resume] seat recheck deferred", error instanceof Error ? error.message : String(error)));
+        return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "resumed", spawned } };
+      };
       try {
         if ((dependencies.hostProcessAlive ?? structuredHostProcessAlive)(entry.structuredHost?.process ?? null)) {
           const republished = await (dependencies.republish ?? republishStructuredDeliveryHost)({
@@ -337,19 +345,9 @@ export async function dispatchStructuredControl(
             if (!recovered || recovered.conversationId !== conversation.id || recovered.reconnected !== true) {
               return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
             }
-            return { status: 200, body: { ok: true, structured: true, target: conversation.id,
-              outcome: "resumed", spawned: recovered.spawned } };
+            return resumed(recovered.spawned);
           }
-          return {
-            status: 200,
-            body: {
-              ok: true,
-              structured: true,
-              target: conversation.id,
-              outcome: "resumed",
-              spawned: false,
-            },
-          };
+          return resumed(false);
         }
         const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
           path: request.path || generation.path,
@@ -358,16 +356,7 @@ export async function dispatchStructuredControl(
         if (!recovered) {
           return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
         }
-        return {
-          status: 200,
-          body: {
-            ok: true,
-            structured: true,
-            target: conversation.id,
-            outcome: "resumed",
-            spawned: recovered.spawned,
-          },
-        };
+        return resumed(recovered.spawned);
       } catch (error) {
         return { status: 503, body: { error: error instanceof Error ? error.message : String(error) } };
       }
