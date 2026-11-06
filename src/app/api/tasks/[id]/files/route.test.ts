@@ -21,7 +21,9 @@ let tasks: typeof import("@/lib/tasks/store");
 let resetTeamStoreForTests: typeof import("@/lib/team/store").resetTeamStoreForTests;
 let cookie = "";
 let cookieName = "";
-const now = Date.parse("2026-11-06T12:00:00Z");
+/* Minting and verification both read the real clock (verifySessionValue uses
+   Date.now()), so the 30-day idle limit never ages this fixture out. */
+const now = Date.now();
 const at = new Date(now).toISOString();
 
 beforeAll(async () => {
