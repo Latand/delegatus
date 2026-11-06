@@ -199,7 +199,8 @@ type TaskFile = {
   mode: "file" | "link" | "submodule" | null;   // null when deleted
   size: number | null;                           // bytes at head; null when deleted
   group: "declared" | "document" | "image" | "source" | "other";
-  // classifyArtifact accepts it, op is not delete, mode is file, size <= 8 MiB
+  // classifyArtifact accepts it, git does not call it binary, op is not delete,
+  // mode is file, size <= 8 MiB
   previewable: boolean;
   declaredBy?: string;                           // stage id
 };
@@ -408,7 +409,10 @@ pipelines and the locale.
   changes appear after it commits.
 - **Rows** in the server's order. Each row shows a kind glyph, the basename in
   monospace, the op word (new, changed, deleted), and `+added −removed` or
-  "binary". A second muted line shows the directory, truncated from the start.
+  "binary". A second line shows the directory, truncated from the start; a file
+  at the repository root has none, and its size sits beside its counts. Text
+  that explains a row that cannot open uses the secondary text colour, so it
+  keeps the 4.5:1 floor, and the row is told apart by its muted glyph.
   A declared output adds "<stage name> result", named with `stageDisplayName`
   from the client's own pipeline.
   - A previewable row is a button with `aria-label` "<name>, <op>, in <dir>.
@@ -417,6 +421,12 @@ pipelines and the locale.
     list item ending in "deleted", "link", "submodule", "too large to preview"
     or "no preview". It is not focusable.
   - The second line also carries the size at head (`formatBytes`).
+  - The lane heading names the lane only when the task has several lanes or
+    the lane's title differs from the dialog's subtitle; a lone lane named like
+    the task keeps its heading for screen readers. A lane whose repository
+    cannot be read shows only that reason.
+  - The preview sheet opened above the album dims the album with the same scrim
+    the album puts over the board; a click on the scrim closes the sheet.
 - **Visible versus folded.** Declared, document and image rows show, up to 24
   per lane. Every other row sits behind "Show N other changed files", which
   toggles in place. That keeps source files as metadata until asked for.
