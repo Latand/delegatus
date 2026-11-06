@@ -3482,7 +3482,7 @@ export function createMcpToolService(
             return unreadableReceipt(cause, false);
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
-          if (record && !retryCandidate(record)) return recoverRecord(record);
+          if (record && !await retryCandidate(record)) return recoverRecord(record);
           try {
             await tool.authorizeClaim?.(digestArgs, binding);
           } catch (error) {
