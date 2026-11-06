@@ -5,7 +5,7 @@ import { loadTasks, saveTasks } from "./store";
 import { taskRevision } from "./revision";
 import { expect, test } from "bun:test";
 import { createTask, patchTask } from "./commands";
-import { TASK_HOLD_KINDS, type BoardTask } from "./types";
+import { TASK_HOLD_KINDS, type BoardTask, type TaskHold } from "./types";
 
 const NOW = "2026-10-02T10:00:00.000Z";
 const LATER = "2026-10-02T11:00:00.000Z";
@@ -18,9 +18,12 @@ function ok<T extends { ok: boolean }>(result: T): Extract<T, { ok: true }> {
   return result as Extract<T, { ok: true }>;
 }
 
-test.each([...TASK_HOLD_KINDS, "banana", " External ", " POSTPONED "])("commands report discarded until for %s while preserving deadlines and stored holds", kind => {
-  const normalized = kind.trim().toLowerCase();
-  const expectedKind = normalized === "banana" ? "unstated" : normalized;
+test.each([
+  ...TASK_HOLD_KINDS.map(kind => [kind, kind] as const),
+  ["banana", "unstated"] as const,
+  [" External ", "external"] as const,
+  [" POSTPONED ", "postponed"] as const,
+])("commands report discarded until for %s while preserving deadlines and stored holds", (kind, expectedKind) => {
   const supported = expectedKind === "limit" || expectedKind === "postponed";
   const hold = { kind, note: "Wait for the dependency", until: LATER };
   const notes = [
@@ -33,7 +36,7 @@ test.each([...TASK_HOLD_KINDS, "banana", " External ", " POSTPONED "])("commands
   const step = ok(patchTask([task({ dueAt: DUE, dueTz: "UTC" })], "hold-task", {
     steps: [{ id: "dependency", text: "Wait for dependency", state: "open", hold }],
   }, NOW, { actor: "agent", conversationId: "conversation_fixture" }));
-  const expectedHold = { kind: expectedKind, note: hold.note, since: NOW, by: "agent", conversationId: "conversation_fixture", ...(supported ? { until: LATER } : {}) };
+  const expectedHold: TaskHold = { kind: expectedKind, note: hold.note, since: NOW, by: "agent", conversationId: "conversation_fixture", ...(supported ? { until: LATER } : {}) };
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "dated-hold-"));
   try {
     for (const result of [created, updated, step]) {
@@ -59,7 +62,7 @@ test("omitted until is quiet and malformed holds keep their forgiving normalizat
     expect(result.task.hold).not.toHaveProperty("until");
   }
   for (const until of ["bad date", "", null, 123, {}]) {
-    for (const kind of ["limit", "postponed", "external"]) {
+    for (const kind of ["limit", "postponed", "external"] as const) {
       const result = ok(patchTask([task()], "hold-task", { hold: { kind, until } }, NOW));
       expect(result.task.hold).toEqual({ kind, note: "", since: NOW, by: "operator" });
       expect(result.notes?.length).toBe(kind === "external" ? 1 : undefined);

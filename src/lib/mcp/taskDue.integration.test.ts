@@ -33,7 +33,7 @@ const PROJECT = "due-fixture";
 beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Maintain the board", clientRequestId: "due-seat", mode: "existing", conversationId: "conversation_fixture" });
 completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "due-seat", conversationId: "conversation_fixture", path: null });
 
-for (const kind of ["external", "resource", "limit", "postponed", "banana"]) {
+for (const kind of ["external", "resource", "limit", "postponed", "banana"] as const) {
   for (const supplied of [true, false]) {
     test(`MCP and HTTP report ignored hold dates for ${kind}, until supplied: ${supplied}`, async () => {
       const now = "2026-10-23T12:00:00.000Z";
@@ -63,8 +63,10 @@ for (const kind of ["external", "resource", "limit", "postponed", "banana"]) {
         const createArgs = { clientRequestId: `${key}-create`, project: PROJECT, text: "Wait for dependency", dueAt, dueTz: "UTC", hold, full: true };
         const created = await call("create_task", createArgs);
         expect(created.ok).toBe(true);
-        expect(created.task.hold?.kind).toBe(normalized);
-        expect(created.task.hold?.until).toBe(supplied && supported ? until : undefined);
+        const createdHold = created.task.hold;
+        if (!createdHold) throw new Error("create_task omitted the requested hold");
+        expect(createdHold.kind).toBe(normalized);
+        expect(createdHold.until).toBe(supplied && supported ? until : undefined);
         expect(created.task.dueAt).toBe(dueAt);
         db = new Database(taskSelectionSource()!.filename, { readonly: true });
         const storedRows = () => db!.query("SELECT * FROM state_rows WHERE collection='tasks' ORDER BY row_key").all();
@@ -79,7 +81,7 @@ for (const kind of ["external", "resource", "limit", "postponed", "banana"]) {
         expect(updated).toMatchObject({ ok: true, replayed: false });
         expect(updated.notes).toEqual(notes.length ? notes : undefined);
         expect(created.notes).toEqual(notes.length ? notes : undefined);
-        expect(updated.task.hold).toEqual({ ...created.task.hold, note: "Still waiting" });
+        expect(updated.task.hold).toEqual({ ...createdHold, note: "Still waiting" });
         expect(updated.task.dueAt).toBe(dueAt);
         expect(updated.task.dueHistory).toEqual(created.task.dueHistory);
         const updatedRows = storedRows();
@@ -98,7 +100,7 @@ for (const kind of ["external", "resource", "limit", "postponed", "banana"]) {
         expect(response.status).toBe(200);
         const body = await response.json() as Answer;
         expect(body.notes).toEqual(notes.length ? notes : undefined);
-        expect(body.task.hold).toEqual({ ...created.task.hold, by: "operator", conversationId: undefined });
+        expect(body.task.hold).toEqual({ ...createdHold, by: "operator", conversationId: undefined });
         expect(body.task.dueAt).toBe(dueAt);
         expect(body.task.dueHistory).toEqual(created.task.dueHistory);
       } finally {
