@@ -564,9 +564,11 @@ for (const tool of TOOLS) for (const workspace of [false, true]) {
       saveTasks([...loadTasks(), { ...own, id: "task_another", text: "Second task" }]);
       const first = await h.call(tool, { project: "Example Board", limit: 1 });
       expect(first).toMatchObject({ ok: true, hasMore: true });
+      if (!first.ok) throw new Error(first.error);
       const project = { unchanged: "Example Board", key: OWN, folder: "WidgetsRepo", root: h.folder, alias: "legacy-board" }[spelling];
       const second = await h.call(tool, { project, limit: 1, cursor: first.nextCursor });
       expect(second).toMatchObject({ ok: true });
+      if (!second.ok) throw new Error(second.error);
       expect(second.cursorReset).not.toBe(true);
       const field = tool === "list_tasks" ? "tasks" : "pipelines";
       expect(second[field]).not.toEqual(first[field]);
