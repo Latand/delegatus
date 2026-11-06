@@ -238,8 +238,12 @@ test("a lone lane named like the task adds no second mention; a root file has no
   const heading = document.querySelector("[data-task-files-lane='a'] h3")!;
   expect(heading.className).toContain("sr-only");
   const root = document.querySelector("[data-task-file='README.md']")!;
-  expect(root.querySelectorAll("button > span > span").length).toBe(1);
+  expect(root.querySelector("bdi")).toBeNull();
   expect(root.textContent).toContain("120 B");
+  // The size takes the same grid cell, line 2 of the right column, whether or not a directory is shown.
+  const sizeCell = (path: string) => document.querySelector(`[data-task-file='${path}'] [data-task-file-size]`)!.className.split(/\s+/).filter((name) => /^(col|row)-start-/.test(name)).sort();
+  expect(sizeCell("README.md")).toEqual(["col-start-2", "row-start-2"]);
+  expect(sizeCell("docs/a.md")).toEqual(sizeCell("README.md"));
   expect(document.querySelector("[data-task-file='docs/a.md'] bdi")?.textContent).toBe("docs");
 
   lanesAnswer = (ids) => ({ lanes: ids.map((id): TaskFilesLane => ({ lane: id, status: "unavailable", reason: "repository-missing" })), omitted: 0 });

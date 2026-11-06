@@ -305,27 +305,26 @@ function FileRow({ taskId, pipeline, lane, file }: {
   const body = (
     <>
       <KindGlyph file={file} />
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className={`min-w-0 flex-1 truncate font-mono text-ui ${file.previewable ? "text-primary" : "text-secondary"}`} title={file.path}>{name}</span>
-          <span className="shrink-0 text-label font-semibold text-secondary">{opWord}</span>
-          <span className="shrink-0 text-label tabular-nums text-muted">{counts}</span>
-          {/* A file at the repository root has no directory line, so its size sits beside its counts. */}
-          {!directory && file.size !== null ? <span className="shrink-0 text-caption tabular-nums text-secondary">{formatBytes(file.size)}</span> : null}
+      {/* Two columns, three facts per row: the name and its state on line 1, the size always on line 2 under the counts, and the place and the reasons stacked on the left. */}
+      <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-0.5 text-left">
+        <span className={`col-start-1 row-start-1 min-w-0 truncate font-mono text-ui ${file.previewable ? "text-primary" : "text-secondary"}`} title={file.path}>{name}</span>
+        <span className="col-start-2 row-start-1 flex shrink-0 items-baseline gap-2">
+          <span className="text-label font-semibold text-secondary">{opWord}</span>
+          <span className="text-label tabular-nums text-muted">{counts}</span>
         </span>
-        {directory ? (
-          <span className="flex min-w-0 items-baseline gap-2 text-caption text-secondary">
+        {directory || declared || reason ? (
+          <span className="col-start-1 row-start-2 flex min-w-0 flex-col gap-0.5 text-caption">
             {/* The directory shortens from its start: the end names the place. */}
-            <span className="min-w-0 flex-1 truncate" style={{ direction: "rtl", textAlign: "left" }} title={directory}><bdi>{directory}</bdi></span>
-            {file.size !== null ? <span className="shrink-0 tabular-nums">{formatBytes(file.size)}</span> : null}
+            {directory ? <span className="min-w-0 truncate text-secondary" style={{ direction: "rtl", textAlign: "left" }} title={directory}><bdi>{directory}</bdi></span> : null}
+            {declared || reason ? (
+              <span className="flex flex-wrap gap-x-2">
+                {declared ? <span data-task-file-declared="" className="font-semibold text-accent">{declared}</span> : null}
+                {reason ? <span data-task-file-reason="" className="text-secondary">{reason}</span> : null}
+              </span>
+            ) : null}
           </span>
         ) : null}
-        {declared || reason ? (
-          <span className="flex flex-wrap gap-x-2 text-caption">
-            {declared ? <span data-task-file-declared="" className="font-semibold text-accent">{declared}</span> : null}
-            {reason ? <span data-task-file-reason="" className="text-secondary">{reason}</span> : null}
-          </span>
-        ) : null}
+        {file.size !== null ? <span data-task-file-size="" className="col-start-2 row-start-2 shrink-0 justify-self-end text-caption tabular-nums text-secondary">{formatBytes(file.size)}</span> : null}
       </span>
     </>
   );
