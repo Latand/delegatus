@@ -138,7 +138,7 @@ process.on("SIGTERM", stop);
 export const BROKEN_HOST = "process.exit(3);\n";
 
 export function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean; tokenProtected?: boolean } = {}) {
-  const root = mkdtempSync("/var/tmp/llv-cli-self-update-");
+  const root = mkdtempSync(path.join(process.env.TMPDIR!, "llv-cli-self-update-"));
   roots.push(root);
   const checkout = path.join(root, "checkout");
   const home = path.join(root, "home");
@@ -147,7 +147,7 @@ export function install(options: { oldSupervisor?: boolean; oldServerRuntime?: b
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "telegram-connector-retire.mjs", "viewer-helpers-retire.mjs", "launcher-service-proof.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs", "darwin-process-identity.mjs", "launcher-credentials.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-deadline.mjs", "launcher-rollback-guard.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "telegram-connector-retire.mjs", "viewer-helpers-retire.mjs", "launcher-service-proof.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs", "darwin-process-identity.mjs", "launcher-credentials.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {

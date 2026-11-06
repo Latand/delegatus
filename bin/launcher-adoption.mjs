@@ -2,7 +2,7 @@
    install socket in their own environment. An occupied port alone owns no PID. */
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
-import net from "node:net";
+import { probeBind } from "./launcher-deadline.mjs";
 import { join } from "node:path";
 import { installedRelease, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
 
@@ -61,7 +61,7 @@ export function matchingProcess(candidate, socket, port = null, installRoot = nu
       }));
   } catch { return false; }
 }
-async function stopRecorded(candidate, socket, port = null, installRoot = null, releasePointer = null) {
+export async function stopRecorded(candidate, socket, port = null, installRoot = null, releasePointer = null) {
   if (!matchingProcess(candidate, socket, port, installRoot, releasePointer)) return false;
   const signal = value => {
     // Custody was established before shutdown. The listener can close during
@@ -86,17 +86,9 @@ export function assertLauncherAvailable(paths) {
     throw new Error("A live launcher already supervises this installation.");
   }
 }
-export function portFree(port, hostname = "127.0.0.1") {
-  return new Promise(resolve => {
-    // A proxy can connect between listen and close. The probe serves no
-    // requests; release its accepted sockets so close cannot await a peer.
-    const server = net.createServer(socket => {
-      socket.on("error", () => {});
-      socket.destroy();
-    });
-    server.once("error", () => resolve(false));
-    server.listen(port, hostname, () => server.close(() => resolve(true)));
-  });
+export async function portFree(port, hostname = "127.0.0.1") {
+  try { await probeBind({ port, host: hostname }); return true; }
+  catch (error) { if (error.code === "ETIMEDOUT") throw error; return false; }
 }
 export async function ensureWebPortFree(paths, port, socket, hostname = "127.0.0.1", installRoot = null) {
   if (await portFree(port, hostname)) return true;
