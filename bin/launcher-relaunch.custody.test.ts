@@ -53,7 +53,7 @@ while (!fs.existsSync(${JSON.stringify(gate)} + "-released-" + attempt)) await B
   // The Viewer accepts an apply under a launcher that is already running.
   const accept = () => writeFileSync(applyFile, `${JSON.stringify(apply)}\n`);
   let stops = 0, execs = 0;
-  process.execve = (() => { execs++; if (execOutcome === "throws") throw new Error("fixture exec"); }) as typeof process.execve;
+  process.execve = (() => { execs++; if (execOutcome === "throws") throw new Error("fixture exec"); }) as unknown as typeof process.execve;
   const launcherState: Record<string, unknown> = {};
   const relaunch = (image: "prior" | "next") => createRelaunch({ paths, installRoot: prior, entry: path.join(image === "prior" ? prior : next, "bin", "cli.mjs"),
     release: image === "prior" ? { sha: "a".repeat(40), dir: prior, published: false } : { sha: TARGET, dir: next, published: true },
