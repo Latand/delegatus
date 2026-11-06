@@ -4,7 +4,7 @@ import path from "node:path";
 import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { resolveShortId } from "@/lib/shortIds";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
@@ -14,8 +14,9 @@ import { conversationWorkspacePrincipal, workspacePrincipalAccess } from "@/lib/
 import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
-import { McpToolRefusal, type McpToolBindings, type McpToolService } from "./server";
-import type { ViewerMcpDomainDependencies } from "./bindings";
+import { McpToolRefusal, retainResponseAuthority, type McpToolBindings, type McpToolService } from "./server";
+import { captureBoardCaller, resolveBoardProject, type ViewerMcpDomainDependencies } from "./bindings";
+import { runWithMcpCallerResolution } from "./callerContext";
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
 
@@ -67,23 +68,75 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           : Object.values(current.conversations).find(row => row.generations.some(generation => generation.path === id) || row.continuityPaths?.includes(id)) ?? null;
       });
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
-      if (!principal) return service.callTool(tool, input, context);
-      if (!store) denied();
-      if (!PROJECT_TOOLS.has(tool)) denied();
-      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
+      const principalIdentity = JSON.stringify(principal);
+      const boardRead = tool === "list_tasks" || tool === "list_pipelines";
       const conversationProject = (id: string): string | null => {
         if (dependencies.workspaceProject) return dependencies.workspaceProject(id);
         const record = lookup(id);
         return conversationProjectKey(record?.projectOwnership, record?.generations.at(-1)?.launchProfile, { project: conversationCatalogEntry(id)?.project });
       };
-      const project = conversationProject(callerId ?? "");
+      const project = principal || boardRead ? conversationProject(callerId ?? "") : null;
+      const responseProjects: string[] = [];
+      const boardCaller = boardRead ? captureBoardCaller(dependencies, { ...context, responseAuthority: undefined }) : undefined;
+      const assertBoardCaller = () => runWithMcpCallerResolution(() => {
+        context?.assertCaller?.();
+        const current = dependencies.attentionAuthority();
+        const currentId = current.kind === "worker" || current.kind === "root" ? current.conversationId : null;
+        if (current.kind !== authority.kind || currentId !== callerId
+          || conversationProject(callerId ?? "") !== project
+          || JSON.stringify(conversationWorkspacePrincipal(lookup, callerId)) !== principalIdentity) denied();
+        if (principal) {
+          const currentAccess = workspacePrincipalAccess(principal);
+          if (!currentAccess(project) || !responseProjects.every(currentAccess)) denied();
+        }
+        boardCaller?.assert();
+      });
+      // Even an unrestricted caller and an early resolver refusal must retain
+      // current workspace authority through the final service/SDK await.
+      if (boardRead) {
+        assertBoardCaller();
+        retainResponseAuthority(context ?? {}, assertBoardCaller);
+      }
+      if (!principal) {
+        if (!boardRead) return service.callTool(tool, input, context);
+        const result = await service.callTool(tool, input, { ...context, assertCaller: assertBoardCaller });
+        assertBoardCaller();
+        return result;
+      }
+      if (!store) denied();
+      if (!PROJECT_TOOLS.has(tool)) denied();
+      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
       let allowed = workspacePrincipalAccess(principal);
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
-      if (typeof args.project === "string") {
+      const named = typeof input.project === "string" ? input.project.trim().toLowerCase() : "";
+      const aliases = boardRead ? projectAliasSnapshot({ strict: true }).aliases : {};
+      const aliasKey = Object.keys(aliases).find(key => key.toLowerCase() === named) ?? named;
+      const alias = aliases[aliasKey];
+      if (boardRead && typeof args.project === "string" && args.project.trim()) {
+        try { args.project = resolveBoardProject(args.project.trim(), dependencies); }
+        catch (error) {
+          if (!(error instanceof McpToolRefusal) || !["unknown_project", "ambiguous_project"].includes(String(error.details.code))) throw error;
+          const permitted = (value: unknown): value is { project: string; name: string } => Boolean(value && typeof value === "object"
+            && typeof (value as { project?: unknown }).project === "string" && typeof (value as { name?: unknown }).name === "string"
+            && allowed((value as { project: string }).project));
+          const candidates = Array.isArray(error.details.candidateNames) ? error.details.candidateNames : [];
+          if (error.details.code === "ambiguous_project" && !candidates.every(permitted)) denied();
+          const names = candidates.filter(permitted);
+          const matches = (Array.isArray(error.details.closeMatches) ? error.details.closeMatches : []).filter(permitted);
+          responseProjects.push(...names.map(row => row.project), ...matches.map(row => row.project));
+          // Rebuild both channels: the resolver's original message includes foreign labels.
+          return { ...refuse(), code: String(error.details.code),
+            error: error.details.code === "ambiguous_project" ? `ambiguous project: ${names.map(row => row.name).join(", ")}`
+              : `no such project; ${matches.length ? `close matches: ${matches.map(row => row.name).join(", ")}` : "no close matches"}`,
+            details: { code: error.details.code, retryable: false,
+              ...(error.details.code === "ambiguous_project" ? { candidates: names.map(row => row.project), candidateNames: names } : { closeMatches: matches }) } };
+        }
+      } else if (!boardRead && typeof args.project === "string") {
         const matches = allowedProjects.filter(key => key === args.project || key.startsWith(args.project as string));
         if (matches.length === 1) args.project = matches[0];
       }
+      if (boardRead && typeof args.project === "string" && !args.project.trim()) args.project = project;
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
       const checks: (() => string | null | undefined)[] = [() => project];
       const task = (id: string) => {
@@ -144,6 +197,10 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       if (args.machine || ["bridge_report", "bridge_directive"].includes(tool) && (args.seq !== undefined || args.ref !== undefined)) denied();
       if (tool === "conversation_action" && ["kill-target", "compact-all"].includes(String(args.action))) denied();
       const assert = () => {
+        if (boardRead) {
+          assertBoardCaller();
+          if (projectAliasSnapshot({ strict: true }).aliases[aliasKey] !== alias) denied();
+        }
         allowed = workspacePrincipalAccess(principal);
         if (!checks.every(check => allowed(check()))) denied();
         const targetEngine = typeof args.conversationId === "string" ? lookup(args.conversationId)?.engine : null;
@@ -176,7 +233,9 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         return value;
       };
       return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied(); }, async () => {
-        const result = await service.callTool(tool, args, { ...context, assertResult(answer) {
+        const result = await service.callTool(tool, args, { ...context,
+          ...(boardRead ? { assertCaller() { context?.assertCaller?.(); assert(); } } : {}),
+          assertResult(answer) {
           context?.assertResult?.(answer);
           assert();
           if (!answer.ok) return;
