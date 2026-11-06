@@ -2284,6 +2284,9 @@ export async function captureTaskFilesFrames(browser: Browser, out: string, phon
         if (!tableFits) fail("markdown: the table widens the document");
         await page.locator("[data-preview-mode='source']").click();
         await page.waitForSelector("[data-line-number]", { timeout: 10_000 });
+        /* The frame shows the source, not the moment it starts loading: wait until the footer no longer reads zero bytes loaded. */
+        const nothingLoaded = tr("preview.loadedOf", { loaded: "0 B", size: "" }).trim();
+        await page.waitForFunction((zero) => { const sheet = document.querySelector("[data-artifact-preview]"); return Boolean(sheet && !(sheet.textContent ?? "").includes(zero)); }, nothingLoaded, { timeout: 20_000 });
         await shot("markdown-source");
         /* Modal: Tab from the sheet never reaches the album rows behind it. */
         for (let press = 0; press < 14; press += 1) await page.keyboard.press("Tab");
@@ -2304,7 +2307,9 @@ export async function captureTaskFilesFrames(browser: Browser, out: string, phon
           await page.keyboard.press("Escape");
           await page.locator("[data-artifact-preview]").waitFor({ state: "detached" });
         }
-        for (const [state, file, expected] of [["unsupported", "docs/binary.md", "unsupported"], ["denied", "link.md", "denied"], ["oversized", "data/huge.txt", "oversized"]] as const) {
+        /* A binary file with a text extension lists as a row that cannot open, so it never reaches a sheet whose header and body disagree. */
+        if ((await page.locator("[data-task-file='docs/binary.md'] button").count()) !== 0) fail("list: the binary file with a text extension is a button");
+        for (const [state, file, expected] of [["denied", "link.md", "denied"], ["oversized", "data/huge.txt", "oversized"]] as const) {
           await open(file);
           await page.waitForSelector(`[data-artifact-state="${expected}"]`, { timeout: 20_000 });
           const reading = await sheetReading(state);

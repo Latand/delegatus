@@ -382,6 +382,9 @@ function PreviewSheet({
   /* Portal to <body>: feed rows live under transformed board panes, and the
      sheet must anchor to the viewport, not a pane. */
   return createPortal(
+    <>
+      {/* A sheet opened above a modal dims what it covers, as that modal dims the board, so the cut-off text beside it reads as background. */}
+      {open.layer === "overlay" && !mobile ? <div aria-hidden data-artifact-preview-scrim="" className="fixed inset-0 bg-black/40" style={{ zIndex: layerZ }} onClick={(event) => { event.stopPropagation(); onClose(); }} /> : null}
     <div
       ref={containerRef}
       tabIndex={-1}
@@ -460,7 +463,8 @@ function PreviewSheet({
         </button>
       </div>
       {body}
-    </div>,
+    </div>
+    </>,
     document.body,
   );
 }

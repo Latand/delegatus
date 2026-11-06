@@ -231,6 +231,24 @@ test("states: lane heading with the short commit, running note, truncation, empt
   expect(filesCalls().map((call) => call.url)).toEqual(["/api/tasks/task-1/files?lanes=d"]);
 });
 
+test("a lone lane named like the task adds no second mention; a root file has no empty directory line; an unreadable running lane promises nothing", async () => {
+  lanesAnswer = (ids) => ({ lanes: ids.map((id): TaskFilesLane => okLane(id, [file("README.md"), file("docs/a.md")])), omitted: 0 });
+  const host = await mount([pipeline("a", "2026-11-04T00:00:00Z", { task: "Task title" })]);
+  await openFiles(host);
+  const heading = document.querySelector("[data-task-files-lane='a'] h3")!;
+  expect(heading.className).toContain("sr-only");
+  const root = document.querySelector("[data-task-file='README.md']")!;
+  expect(root.querySelectorAll("button > span > span").length).toBe(1);
+  expect(root.textContent).toContain("120 B");
+  expect(document.querySelector("[data-task-file='docs/a.md'] bdi")?.textContent).toBe("docs");
+
+  lanesAnswer = (ids) => ({ lanes: ids.map((id): TaskFilesLane => ({ lane: id, status: "unavailable", reason: "repository-missing" })), omitted: 0 });
+  const second = await mount([pipeline("b", "2026-11-04T00:00:00Z", { task: "Task title", state: "running" })]);
+  await openFiles(second);
+  expect(document.querySelector("[data-task-files-running]")).toBeNull();
+  expect(document.querySelector("[data-task-files-unavailable='repository-missing']")).not.toBeNull();
+});
+
 test("a view with no committed file says so; a failed read says so with Retry", async () => {
   lanesAnswer = () => ({ lanes: [okLane("a", [])], omitted: 0 });
   const host = await mount([pipeline("a", "2026-11-01T00:00:00Z")]);

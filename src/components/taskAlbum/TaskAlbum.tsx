@@ -300,7 +300,7 @@ export function TaskAlbum({ taskId, title, pipelines, files, filesAvailable = fa
 
         {filesShown ? (
           <div data-album-files-body="" hidden={view !== "files"} className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${phone ? "px-3 pb-[max(16px,env(safe-area-inset-bottom))] pt-3" : "px-4 py-4"}`}>
-            <TaskFiles taskId={taskId} pipelines={pipelines} />
+            <TaskFiles taskId={taskId} pipelines={pipelines} taskTitle={title} />
           </div>
         ) : null}
         <div ref={body} hidden={view !== "images"} data-album-body="" className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${phone ? "px-3 pb-[max(16px,env(safe-area-inset-bottom))] pt-3" : "px-4 py-4"}`}>

@@ -73,7 +73,7 @@ function openFile(taskId: string, lane: Extract<TaskFilesLane, { status: "ok" }>
   });
 }
 
-export function TaskFiles({ taskId, pipelines }: { taskId: string; pipelines: readonly Pipeline[] }) {
+export function TaskFiles({ taskId, pipelines, taskTitle = "" }: { taskId: string; pipelines: readonly Pipeline[]; taskTitle?: string }) {
   const { t } = useLocale();
   /* Newest lane first. */
   const lanes = useMemo(() => [...pipelines].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || (a.id < b.id ? -1 : 1)), [pipelines]);
@@ -182,6 +182,7 @@ export function TaskFiles({ taskId, pipelines }: { taskId: string; pipelines: re
           key={pipeline.id}
           taskId={taskId}
           pipeline={pipeline}
+          named={lanes.length > 1 || laneTitle(pipeline, pipeline.id) !== cleanTitle(taskTitle.split("\n")[0] ?? "", 90)}
           answer={answers[pipeline.id]!}
           expanded={expanded.has(pipeline.id)}
           onToggle={() => setExpanded((held) => { const next = new Set(held); if (!next.delete(pipeline.id)) next.add(pipeline.id); return next; })}
@@ -203,9 +204,11 @@ export function TaskFiles({ taskId, pipelines }: { taskId: string; pipelines: re
   );
 }
 
-function LaneSection({ taskId, pipeline, answer, expanded, onToggle, onRetry }: {
+function LaneSection({ taskId, pipeline, named, answer, expanded, onToggle, onRetry }: {
   taskId: string;
   pipeline: Pipeline;
+  /** The lane heading adds a name: more than one lane, or a title the dialog's subtitle does not already say. */
+  named: boolean;
   answer: LaneState;
   expanded: boolean;
   onToggle: () => void;
@@ -214,10 +217,12 @@ function LaneSection({ taskId, pipeline, answer, expanded, onToggle, onRetry }: 
   const { t } = useLocale();
   const title = laneTitle(pipeline, pipeline.id);
   const ok = typeof answer === "object" && answer.status === "ok" ? answer : null;
+  /* Nothing can appear after a commit while the lane's repository cannot be read. */
+  const unavailable = answer === "omitted" || (typeof answer === "object" && answer.status === "unavailable");
   return (
     <section data-task-files-lane={pipeline.id} className="flex flex-col gap-2">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 className="m-0 min-w-0 truncate text-ui font-semibold text-secondary" title={title}>{title}</h3>
+        {named ? <h3 className="m-0 min-w-0 truncate text-ui font-semibold text-secondary" title={title}>{title}</h3> : <h3 className="sr-only">{title}</h3>}
         {ok ? (
           <span className="shrink-0 text-label tabular-nums text-muted" title={`${t("files.committedAt", { time: exactTime(ok.committedAt) })} · ${ok.head}`}>
             <span className="font-mono">{t("files.at", { sha: ok.head.slice(0, 7) })}</span>
@@ -225,7 +230,7 @@ function LaneSection({ taskId, pipeline, answer, expanded, onToggle, onRetry }: 
         ) : null}
       </div>
       {ok?.headSource === "last-passed" ? <p className="m-0 text-label text-muted">{t("files.lastPassed")}</p> : null}
-      {pipeline.state === "running" ? <p data-task-files-running="" className="m-0 text-label text-muted">{t("files.running")}</p> : null}
+      {pipeline.state === "running" && !unavailable ? <p data-task-files-running="" className="m-0 text-label text-muted">{t("files.running")}</p> : null}
       {answer === "loading" ? (
         <p role="status" className="m-0 flex items-center gap-2 text-label font-semibold text-muted">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> {t("common.loadingCap")}
@@ -302,19 +307,23 @@ function FileRow({ taskId, pipeline, lane, file }: {
       <KindGlyph file={file} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
         <span className="flex min-w-0 items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate font-mono text-ui text-primary" title={file.path}>{name}</span>
+          <span className={`min-w-0 flex-1 truncate font-mono text-ui ${file.previewable ? "text-primary" : "text-secondary"}`} title={file.path}>{name}</span>
           <span className="shrink-0 text-label font-semibold text-secondary">{opWord}</span>
           <span className="shrink-0 text-label tabular-nums text-muted">{counts}</span>
+          {/* A file at the repository root has no directory line, so its size sits beside its counts. */}
+          {!directory && file.size !== null ? <span className="shrink-0 text-caption tabular-nums text-secondary">{formatBytes(file.size)}</span> : null}
         </span>
-        <span className="flex min-w-0 items-baseline gap-2 text-caption text-muted">
-          {/* The directory shortens from its start: the end names the place. */}
-          <span className="min-w-0 flex-1 truncate" style={{ direction: "rtl", textAlign: "left" }} title={directory || undefined}>{directory ? <bdi>{directory}</bdi> : null}</span>
-          {file.size !== null ? <span className="shrink-0 tabular-nums">{formatBytes(file.size)}</span> : null}
-        </span>
+        {directory ? (
+          <span className="flex min-w-0 items-baseline gap-2 text-caption text-secondary">
+            {/* The directory shortens from its start: the end names the place. */}
+            <span className="min-w-0 flex-1 truncate" style={{ direction: "rtl", textAlign: "left" }} title={directory}><bdi>{directory}</bdi></span>
+            {file.size !== null ? <span className="shrink-0 tabular-nums">{formatBytes(file.size)}</span> : null}
+          </span>
+        ) : null}
         {declared || reason ? (
           <span className="flex flex-wrap gap-x-2 text-caption">
             {declared ? <span data-task-file-declared="" className="font-semibold text-accent">{declared}</span> : null}
-            {reason ? <span data-task-file-reason="" className="text-muted">{reason}</span> : null}
+            {reason ? <span data-task-file-reason="" className="text-secondary">{reason}</span> : null}
           </span>
         ) : null}
       </span>
@@ -334,7 +343,7 @@ function FileRow({ taskId, pipeline, lane, file }: {
           {body}
         </button>
       ) : (
-        <div className={`${rowClass} border-transparent bg-sunken opacity-90`}>{body}</div>
+        <div className={`${rowClass} border-transparent bg-sunken`}>{body}</div>
       )}
     </li>
   );

@@ -65,6 +65,7 @@ describe("the one ls-tree per lane", () => {
     expect(byPath(answer.files, "docs/handoff/summary.md")).toMatchObject({ mode: "file", previewable: true, op: "add", declaredBy: "design" });
     expect(byPath(answer.files, "docs/report.pdf")).toMatchObject({ size: 4 * 1024 * 1024 + 9, previewable: true });
     expect(byPath(answer.files, ".env.local")).toMatchObject({ previewable: false, group: "other" });
+    expect(byPath(answer.files, "docs/binary.md")).toMatchObject({ binary: true, mode: "file", previewable: false });
     expect(byPath(answer.files, "src/gone.ts")).toMatchObject({ op: "delete", mode: null, size: null, previewable: false });
   });
 
