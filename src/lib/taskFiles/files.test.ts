@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import fs from "node:fs";
 
 import { LANE_BRANCH } from "@/lib/laneReview/gitFixture";
-import { realExec } from "@/lib/workflows/provision";
-import { createTaskFilesCaches } from "./cache";
+import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
+import { Aborted, createTaskFilesCaches } from "./cache";
 import { createBulkFixture, createTaskFixture, spyExec, type TaskFixture } from "./fixture";
 import { documentBaseDir, laneFiles, parseTree, readBlob, resolveFile, sortRows, type TaskFile, type TaskFilesLane } from "./files";
 
@@ -17,6 +17,43 @@ const okLane = (answer: TaskFilesLane) => {
   return answer;
 };
 const byPath = (files: readonly TaskFile[], path: string) => files.find((file) => file.path === path)!;
+
+/** Lets pending promise work run until the condition holds. Microtasks only,
+    so no wall clock decides the outcome; a condition that never holds fails. */
+async function until(condition: () => boolean, what: string): Promise<void> {
+  for (let turn = 0; turn < 20_000; turn += 1) {
+    if (condition()) return;
+    await Promise.resolve();
+    if (turn % 100 === 99) await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`never reached: ${what}`);
+}
+
+/** An exec port whose diff calls wait until the test releases them. Its other
+    calls answer at once from a fixed commit pair. Every call is counted. */
+function heldExec(head: string, base: string) {
+  const held: Array<{ finish: () => void }> = [];
+  const state = { diffs: 0, active: 0, peak: 0, hold: true, signals: [] as Array<AbortSignal | undefined> };
+  const exec: ExecPort = async (_command, args, _cwd, _env, options) => {
+    if (args.includes("rev-parse")) return { code: 0, stdout: `${head}\n`, stderr: "" };
+    if (args.includes("merge-base")) return { code: 0, stdout: `${base}\n`, stderr: "" };
+    if (args.includes("show")) return { code: 0, stdout: "1790000000\n", stderr: "" };
+    if (args.includes("diff")) {
+      state.diffs += 1;
+      state.signals.push(options?.signal);
+      if (!state.hold) return { code: 0, stdout: "", stderr: "" };
+      state.active += 1;
+      state.peak = Math.max(state.peak, state.active);
+      return new Promise<ExecResult>((resolve) => {
+        held.push({ finish: () => { state.active -= 1; resolve({ code: 0, stdout: "", stderr: "" }); } });
+      });
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const release = () => { state.hold = false; for (const call of held.splice(0)) call.finish(); };
+  return { exec, state, release };
+}
+
 
 describe("the one ls-tree per lane", () => {
   test("gives modes and sizes: a symlink is link, a gitlink is submodule, a huge blob carries its size", async () => {
@@ -149,6 +186,41 @@ describe("a task's interval", () => {
     }
   });
 
+  test("a base branch that lags the task's start never widens the interval, cold or warm", async () => {
+    const fixture = keep(createTaskFixture());
+    const historical = fixture.headSha();
+    fixture.git("checkout", "-q", LANE_BRANCH);
+    fixture.write("docs/handoff/summary.md", "# Before this task\n");
+    const taskBase = fixture.commit("before the task");
+    fixture.write("docs/result.md", "# This task\n");
+    const middle = fixture.commit("task output");
+    fixture.write("docs/later.md", "# Later\n");
+    fixture.commit("task output, later");
+    fixture.git("checkout", "-q", "--detach");
+    /* origin/main still points at the fixture's first commit, older than the task's base. */
+    const lane = { ...fixture.lane(), baseRef: taskBase, stages: [] };
+    const shared = deps();
+    for (const round of ["cold", "warm"]) {
+      expect({ round, refused: await resolveFile(lane, historical, "docs/handoff/summary.md", shared) }).toMatchObject({ refused: { status: 409, code: "head_unknown" } });
+    }
+    const listed = okLane(await laneFiles(lane, shared));
+    expect(listed.base).toBe(taskBase);
+    expect(listed.files.map((file) => file.path).sort()).toEqual(["docs/later.md", "docs/result.md"]);
+    /* A revision inside the task, and the tip, stay readable. */
+    for (const [head, file] of [[middle, "docs/result.md"], [fixture.headSha(), "docs/later.md"]] as const) {
+      expect("status" in await resolveFile(lane, head, file, shared)).toBe(false);
+    }
+    /* The same after the lane landed and its branch was swept. */
+    fixture.git("update-ref", "refs/remotes/origin/main", fixture.headSha());
+    fixture.git("branch", "-q", "-D", LANE_BRANCH);
+    const swept = { ...lane, lastPassedCommit: fixture.git("rev-parse", "refs/remotes/origin/main") };
+    const after = deps();
+    for (const round of ["cold", "warm"]) {
+      expect({ round, refused: await resolveFile(swept, historical, "docs/handoff/summary.md", after) }).toMatchObject({ refused: { status: 409, code: "head_unknown" } });
+    }
+    expect("status" in await resolveFile(swept, middle, "docs/result.md", after)).toBe(false);
+  });
+
   test("an earlier lane revision stays readable after the lane landed", async () => {
     const fixture = keep(createTaskFixture());
     const first = fixture.headSha();
@@ -243,7 +315,7 @@ describe("queues", () => {
     const real = fs.realpathSync(fixture.dir);
     const release = await shared.caches.readGate.acquire();
     const queued = readBlob(fixture.lane(), real, other, shared);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await until(() => shared.caches.readGate.waiting === 1, "the read waits in line");
     expect(shared.caches.readGate.waiting).toBe(1);
     const refused = await readBlob(fixture.lane(), real, third, shared);
     expect(refused).toMatchObject({ status: 503, code: "busy", retryAfter: 2 });
@@ -260,10 +332,10 @@ describe("queues", () => {
     const hold = await shared.caches.readGate.acquire();
     const controller = new AbortController();
     const queued = readBlob(fixture.lane(), fs.realpathSync(fixture.dir), resolved, shared, controller.signal);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await until(() => shared.caches.readGate.waiting === 1, "the read waits in line");
     controller.abort();
     expect(await queued).toMatchObject({ status: 499 });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await until(() => shared.caches.readGate.waiting === 0, "the aborted read leaves the line");
     hold();
     expect(shared.caches.readGate.waiting).toBe(0);
     expect(spy.calls.filter((call) => call.includes("cat-file"))).toEqual([]);
@@ -277,12 +349,122 @@ describe("queues", () => {
     hold();
   });
 
-  test("a git call that never ends answers busy at the request deadline and leaves no slot taken", async () => {
+  test("a request that ends while its Git work runs keeps the slot until that work has ended, and no second pair starts", async () => {
     const fixture = keep(createTaskFixture());
-    const never = () => new Promise<never>(() => {});
-    const shared = { exec: never as unknown as typeof realExec, caches: createTaskFilesCaches() };
-    const answer = await Promise.race([laneFiles(fixture.lane(), shared, { deadlineMs: 30 }), new Promise((resolve) => setTimeout(() => resolve("hung"), 1500))]);
-    expect(answer).toEqual({ lane: "lane-fixture", status: "unavailable", reason: "busy" });
+    const git = heldExec(fixture.headSha(), fixture.lane().baseRef);
+    const shared = { exec: git.exec, caches: createTaskFilesCaches({ listSlots: 1, listQueue: 0 }) };
+    for (let round = 0; round < 3; round += 1) {
+      const controller = new AbortController();
+      const request = laneFiles(fixture.lane(), shared, { signal: controller.signal });
+      if (round === 0) await until(() => git.state.active === 2, "the first pair of diffs is running");
+      controller.abort();
+      expect(await request).toEqual({ lane: "lane-fixture", status: "unavailable", reason: "busy" });
+      /* The abandoned work still owns the only slot, and nothing else started. */
+      expect(shared.caches.listGate.running).toBe(1);
+      expect(git.state.diffs).toBe(2);
+    }
+    expect(git.state.peak).toBe(2);
+    git.release();
+    await until(() => shared.caches.listGate.running === 0, "the slot frees after the work ends");
+    expect(shared.caches.listFlights.size).toBe(0);
+    /* Once it ended, the next request gets the slot and its own answer. */
+    expect(okLane(await laneFiles(fixture.lane(), shared))).toMatchObject({ lane: "lane-fixture", total: 0 });
+  });
+
+  test("a request that ends signals its Git children, so the slot frees without waiting for the work", async () => {
+    const fixture = keep(createTaskFixture());
+    const stopped: boolean[] = [];
+    let started = 0;
+    const running = Promise.withResolvers<void>();
+    const exec: ExecPort = async (_command, args, cwd, env, options) => {
+      if (!args.includes("diff")) return realExec(_command, args, cwd, env, options);
+      started += 1;
+      if (started === 2) running.resolve();
+      return new Promise<ExecResult>((resolve) => {
+        const done = () => { stopped.push(true); resolve({ code: null, stdout: "", stderr: "command cancelled" }); };
+        if (options?.signal?.aborted) done();
+        else options?.signal?.addEventListener("abort", done, { once: true });
+      });
+    };
+    const shared = { exec, caches: createTaskFilesCaches({ listSlots: 1, listQueue: 0 }) };
+    const controller = new AbortController();
+    const request = laneFiles(fixture.lane(), shared, { signal: controller.signal });
+    await running.promise;
+    controller.abort();
+    expect(await request).toMatchObject({ status: "unavailable", reason: "busy" });
+    await until(() => shared.caches.listGate.running === 0, "the slot frees after the children closed");
+    expect(stopped).toHaveLength(2);
+  });
+
+  test("a request cancelled while it waits for a slot starts no Git, and another waiter still completes", async () => {
+    const fixture = keep(createTaskFixture());
+    const alone = spyExec();
+    okLane(await laneFiles(fixture.lane(), { exec: alone.exec, caches: createTaskFilesCaches() }));
+    const spy = spyExec();
+    const shared = { exec: spy.exec, caches: createTaskFilesCaches({ listSlots: 1, listQueue: 4 }) };
+    const hold = await shared.caches.listGate.acquire();
+    const cancelled = new AbortController();
+    const first = laneFiles({ ...fixture.lane(), id: "lane-first" }, shared, { signal: cancelled.signal });
+    const second = laneFiles({ ...fixture.lane(), id: "lane-second" }, shared);
+    await until(() => shared.caches.listGate.waiting === 2, "both wait for the slot");
+    cancelled.abort();
+    expect(await first).toMatchObject({ status: "unavailable", reason: "busy" });
+    await until(() => shared.caches.listGate.waiting === 1, "the cancelled request leaves the line");
+    expect(spy.calls).toEqual([]);
+    hold();
+    expect(okLane(await second)).toMatchObject({ lane: "lane-second" });
+    expect(spy.calls.length).toBe(alone.calls.length);
+  });
+
+  test("two callers of one lane share one run, and the run goes on while either still waits", async () => {
+    const fixture = keep(createTaskFixture());
+    const git = heldExec(fixture.headSha(), fixture.lane().baseRef);
+    const shared = { exec: git.exec, caches: createTaskFilesCaches() };
+    const leaving = new AbortController();
+    const one = laneFiles(fixture.lane(), shared, { signal: leaving.signal });
+    const two = laneFiles(fixture.lane(), shared);
+    await until(() => git.state.active === 2, "one pair of diffs is running");
+    leaving.abort();
+    expect(await one).toMatchObject({ reason: "busy" });
+    git.release();
+    expect(okLane(await two)).toMatchObject({ total: 0 });
+    expect(git.state.diffs).toBe(2);
+  });
+
+  test("a git call that never ends answers busy at the request deadline, and its slot is held honestly until that call ends", async () => {
+    const fixture = keep(createTaskFixture());
+    const git = heldExec(fixture.headSha(), fixture.lane().baseRef);
+    const shared = { exec: git.exec, caches: createTaskFilesCaches({ listSlots: 1, listQueue: 0 }) };
+    jest.useFakeTimers();
+    try {
+      const request = laneFiles(fixture.lane(), shared);
+      await until(() => git.state.active === 2, "the diffs are running");
+      jest.advanceTimersByTime(8_000);
+      expect(await request).toEqual({ lane: "lane-fixture", status: "unavailable", reason: "busy" });
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(shared.caches.listGate.running).toBe(1);
+    git.release();
+    await until(() => shared.caches.listGate.running === 0, "the slot frees when the call ends");
+  });
+
+  test("a resolution nobody waits for keeps its slot until its Git work ends", async () => {
+    const fixture = keep(createTaskFixture());
+    const head = fixture.headSha();
+    const git = heldExec(head, fixture.lane().baseRef);
+    const shared = { exec: git.exec, caches: createTaskFilesCaches({ listSlots: 1, listQueue: 0 }) };
+    const controller = new AbortController();
+    const resolving = resolveFile(fixture.lane(), head, "docs/handoff/summary.md", shared, controller.signal);
+    await until(() => git.state.active === 2, "the pair is being listed");
+    controller.abort();
+    await expect(resolving).rejects.toBeInstanceOf(Aborted);
+    expect(shared.caches.listGate.running).toBe(1);
+    const second = await resolveFile(fixture.lane(), head, "docs/handoff/summary.md", shared);
+    expect(second).toMatchObject({ status: 503, code: "busy" });
+    expect(git.state.diffs).toBe(2);
+    git.release();
+    await until(() => shared.caches.listGate.running === 0, "the slot frees after the work ends");
   });
 });
 

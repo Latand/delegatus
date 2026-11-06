@@ -284,15 +284,49 @@ test("lanes are read newest first, five at a time, older ones on request", async
   expect(document.querySelectorAll("[data-task-files-lane]")).toHaveLength(7);
 });
 
-test("a failed page of older lanes says so beside its button and keeps the lanes shown", async () => {
+test("a failed page of older lanes says so beside its button, keeps the lanes shown, and Show older lanes asks for the same lanes again", async () => {
   const lanes = Array.from({ length: 6 }, (_, i) => pipeline(`l${i}`, `2026-11-0${i + 1}T00:00:00Z`));
-  lanesAnswer = (ids) => ids.includes("l0") ? new Response("{}", { status: 500 }) : { lanes: ids.map((id) => okLane(id, [file(`docs/${id}.md`)])), omitted: 0 };
+  let failing = true;
+  lanesAnswer = (ids) => ids.includes("l0") && failing ? new Response("{}", { status: 500 }) : { lanes: ids.map((id) => okLane(id, [file(`docs/${id}.md`)])), omitted: 0 };
   const host = await mount(lanes);
   await openFiles(host);
   await act(async () => document.querySelector<HTMLButtonElement>("[data-task-files-older]")!.click());
   await settle();
   expect(document.querySelector("[data-task-files-older-failed]")!.textContent).toBe("Couldn't load older lanes. Press Show older lanes to try again.");
   expect(document.querySelectorAll("[data-task-files-lane]")).toHaveLength(5);
+  expect(document.querySelector("[data-task-files-older]")).not.toBeNull();
+  failing = false;
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-task-files-older]")!.click());
+  await settle();
+  expect(filesCalls().map((call) => call.url).slice(-2)).toEqual(["/api/tasks/task-1/files?lanes=l0", "/api/tasks/task-1/files?lanes=l0"]);
+  expect(document.querySelector("[data-task-files-older-failed]")).toBeNull();
+  expect(document.querySelector("[data-task-files-older]")).toBeNull();
+  expect(document.querySelectorAll("[data-task-files-lane]")).toHaveLength(6);
+  expect(text()).toContain("l0.md");
+});
+
+test("a failed middle page is retried as it was before any later page is asked for, so no lane is skipped", async () => {
+  const lanes = Array.from({ length: 12 }, (_, i) => pipeline(`l${String(i).padStart(2, "0")}`, `2026-11-${String(i + 1).padStart(2, "0")}T00:00:00Z`));
+  let failing = true;
+  lanesAnswer = (ids) => ids.includes("l06") && failing ? new Response("{}", { status: 500 }) : { lanes: ids.map((id) => okLane(id, [file(`docs/${id}.md`)])), omitted: 0 };
+  const host = await mount(lanes);
+  await openFiles(host);
+  const older = () => document.querySelector<HTMLButtonElement>("[data-task-files-older]")!;
+  await act(async () => older().click());
+  await settle();
+  expect(document.querySelector("[data-task-files-older-failed]")).not.toBeNull();
+  expect(older()).not.toBeNull();
+  failing = false;
+  await act(async () => older().click());
+  await settle();
+  const asked = filesCalls().map((call) => call.url);
+  expect(asked.at(-1)).toBe(asked.at(-2));
+  expect(asked.at(-1)).toBe("/api/tasks/task-1/files?lanes=l06,l05,l04,l03,l02");
+  await act(async () => older().click());
+  await settle();
+  expect(filesCalls().map((call) => call.url).at(-1)).toBe("/api/tasks/task-1/files?lanes=l01,l00");
+  expect(document.querySelectorAll("[data-task-files-lane]")).toHaveLength(12);
+  expect(document.querySelector("[data-task-files-older]")).toBeNull();
 });
 
 const press = async (key: string) => {

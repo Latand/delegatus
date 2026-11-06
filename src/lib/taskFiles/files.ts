@@ -170,99 +170,136 @@ async function commitTime(lane: LanePipeline, head: string, deps: TaskFilesDeps)
 
 export type PairResult = { list: PairList } | { failed: true };
 
-/** The change list of one commit pair, from the cache or from Git. Concurrent
-    identical reads share one computation. */
-export async function pairList(lane: LanePipeline, realRepo: string, base: string, head: string, deps: TaskFilesDeps, signal?: AbortSignal): Promise<PairResult> {
+/** An exec port whose children end when the signal aborts, so work nobody
+    waits for stops spawning and the slot it holds frees at once. */
+function boundTo(exec: ExecPort, signal: AbortSignal): ExecPort {
+  return (command, args, cwd, env, options) => exec(command, args, cwd, env, { ...options, signal: options?.signal ? AbortSignal.any([options.signal, signal]) : signal });
+}
+
+const checkpoint = (signal: AbortSignal): void => {
+  if (signal.aborted) throw new Aborted();
+};
+
+/** The change list of one commit pair, from the cache or from Git. The caller
+    holds an admission slot for the whole call and passes an exec bound to the
+    signal; a result is cached only while that signal is still live. */
+export async function pairList(lane: LanePipeline, realRepo: string, base: string, head: string, deps: TaskFilesDeps, signal: AbortSignal): Promise<PairResult> {
   const key = pairKey(lane, realRepo, base, head);
   const cached = deps.caches.lists.get(key) as PairList | undefined;
   if (cached) return { list: cached };
-  return deps.caches.listFlights.join(key, signal, async () => {
-    const changes = await laneChangeFiles(lane, base, head, deps.exec);
-    if (!changes) return { failed: true } as PairResult;
-    const membership = new Map<string, LaneChangeOp>(changes.map((change) => [change.path, change.op]));
-    /* The tree is read only for the rows that will show, after the sort. */
-    const provisional = sortRows(buildRows(lane, changes, new Map()));
-    const shown = provisional.slice(0, LANE_CHANGE_LIMITS.files);
-    const byPath = new Map(changes.map((change) => [change.path, change]));
-    const tree = await lsTree(lane, head, shown.filter((row) => row.op !== "delete").map((row) => row.path), deps);
-    if (!tree) return { failed: true } as PairResult;
-    const files = buildRows(lane, shown.map((row) => byPath.get(row.path)!), new Map(tree.map((record) => [record.path, record])));
-    const list: PairList = { committedAt: await commitTime(lane, head, deps), membership, files, total: changes.length };
-    deps.caches.lists.set(key, list, listBytes(list));
-    return { list } as PairResult;
-  }) as Promise<PairResult>;
+  const changes = await laneChangeFiles(lane, base, head, deps.exec);
+  checkpoint(signal);
+  if (!changes) return { failed: true };
+  const membership = new Map<string, LaneChangeOp>(changes.map((change) => [change.path, change.op]));
+  /* The tree is read only for the rows that will show, after the sort. */
+  const provisional = sortRows(buildRows(lane, changes, new Map()));
+  const shown = provisional.slice(0, LANE_CHANGE_LIMITS.files);
+  const byPath = new Map(changes.map((change) => [change.path, change]));
+  const tree = await lsTree(lane, head, shown.filter((row) => row.op !== "delete").map((row) => row.path), deps);
+  checkpoint(signal);
+  if (!tree) return { failed: true };
+  const files = buildRows(lane, shown.map((row) => byPath.get(row.path)!), new Map(tree.map((record) => [record.path, record])));
+  const committedAt = await commitTime(lane, head, deps);
+  checkpoint(signal);
+  const list: PairList = { committedAt, membership, files, total: changes.length };
+  deps.caches.lists.set(key, list, listBytes(list));
+  return { list };
 }
 
 const isAbort = (error: unknown): boolean => error instanceof Aborted;
 
-/** Rejects when the signal aborts; the work itself is left to finish. */
-function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new Aborted());
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new Aborted());
-    signal.addEventListener("abort", onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
+/** A task's revisions: the lane's pair plus the commit the lane was created
+    from when that commit is part of the lane's own history. */
+export type TaskRevisions = LaneRevisions & { taskBase: string | null };
 
 /** The commits a task's files are read between. Head is the lane's tip (its
-    branch, else the last passed commit). Base is the merge base with the
-    fetched base branch while the lane is unlanded; once the head is reachable
-    from that branch the merge base is the head itself, so the base the lane
-    was created from (`baseRef`) takes over and the files stay listed after
-    the lane lands, the branch is swept and `origin/<base>` moves on. The base
-    must be an ancestor of the head, or the pair would not be the task's own
-    interval. */
-export async function taskRevisions(lane: LanePipeline, exec: ExecPort): Promise<LaneRevisions | LaneChangeError> {
+    branch, else the last passed commit). The base is the merge base with the
+    fetched base branch, unless the commit the lane was created from
+    (`baseRef`) is a descendant of it. That covers a base branch that lags the
+    lane's start, and a lane that landed (the merge base is then the head
+    itself), so the files stay listed after the branch is swept and
+    `origin/<base>` moves on. A base the lane was created from must be an
+    ancestor of the head, or the pair would not be the task's own interval. */
+export async function taskRevisions(lane: LanePipeline, exec: ExecPort): Promise<TaskRevisions | LaneChangeError> {
   const resolved = await resolveLaneRevisions(lane, exec);
   if ("error" in resolved) return resolved;
-  let revisions = resolved;
-  if (revisions.base === revisions.head && lane.baseRef) {
-    const created = await exec("git", ["rev-parse", "--verify", "--quiet", "--end-of-options", `${lane.baseRef}^{commit}`], lane.repoDir, undefined, GIT_OPTIONS);
-    const sha = created.stdout.trim();
-    if (created.code === 0 && SHA_RE.test(sha)) revisions = { ...revisions, base: sha, baseSource: "base-ref" };
+  const busy: LaneChangeError = { error: "git did not answer in time", code: "git_failed" };
+  let created: string | null = null;
+  if (lane.baseRef) {
+    if (lane.baseRef === resolved.base || resolved.baseSource === "base-ref") created = resolved.base;
+    else {
+      const answer = await exec("git", ["rev-parse", "--verify", "--quiet", "--end-of-options", `${lane.baseRef}^{commit}`], lane.repoDir, undefined, GIT_OPTIONS);
+      const sha = answer.stdout.trim();
+      if (answer.code === 0 && SHA_RE.test(sha)) created = sha;
+    }
   }
-  /* A merge base is an ancestor of the head by construction; a base the lane
-     was created from is checked. */
-  if (revisions.baseSource === "base-ref" && revisions.base !== revisions.head) {
-    const within = await isAncestor(lane, revisions.base, revisions.head, exec);
-    if (within === "failed") return { error: "git did not answer in time", code: "git_failed" };
-    if (!within) return { error: "the lane's base is not part of its history", code: "base_unavailable" };
+  let taskBase: string | null = null;
+  if (created) {
+    const known = created === resolved.head || (resolved.baseSource === "merge-base" && created === resolved.base);
+    const within = known ? true : await isAncestor(lane, created, resolved.head, exec);
+    if (within === "failed") return busy;
+    if (within) taskBase = created;
+    else if (resolved.baseSource === "base-ref" ? resolved.base !== resolved.head : resolved.base === resolved.head) {
+      /* The only base on offer (no fetched base branch, or a lane that landed) must be in the lane's history. */
+      return { error: "the lane's base is not part of its history", code: "base_unavailable" };
+    }
   }
-  return revisions;
+  let revisions: LaneRevisions = resolved;
+  if (taskBase && taskBase !== resolved.base) {
+    /* Both are ancestors of the head; the later one starts the task's interval,
+       so a base branch that lags the lane's start never widens it. */
+    const later = resolved.base === resolved.head ? true : await isAncestor(lane, resolved.base, taskBase, exec);
+    if (later === "failed") return busy;
+    if (later) revisions = { ...resolved, base: taskBase, baseSource: "base-ref" };
+  }
+  return { ...revisions, taskBase };
 }
 
 /** One lane's answer. A deadline, a full line or a failure never throws. The
-    slot is held until the lane's own Git work ends, so a deadline that
-    answers `busy` never lets more work run than the line allows. */
+    lane's work runs once for every identical caller and holds its admission
+    slot until its own Git work has ended: a deadline or a cancelled request
+    kills the children, and the next caller gets the slot after they close, so
+    cancelled requests never let more work run than the line allows. */
 export async function laneFiles(lane: LanePipeline, deps: TaskFilesDeps, options: { signal?: AbortSignal; deadlineMs?: number } = {}): Promise<TaskFilesLane> {
   const unavailable = (reason: Extract<TaskFilesLane, { status: "unavailable" }>["reason"]): TaskFilesLane => ({ lane: lane.id, status: "unavailable", reason });
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(), options.deadlineMs ?? 8_000);
   const signal = options.signal ? AbortSignal.any([options.signal, deadline.signal]) : deadline.signal;
   try {
-    const release = await deps.caches.listGate.acquire(signal);
-    const work = withViewerOperation("pipelines.laneChanges", async (): Promise<TaskFilesLane> => {
-      let realRepo: string;
-      try { realRepo = await fs.realpath(lane.repoDir); } catch { return unavailable("repository-missing"); }
-      const revisions = await taskRevisions(lane, deps.exec);
-      if ("error" in revisions) return unavailable(revisions.code === "git_failed" ? "failed" : "commits-gone");
-      const result = await pairList(lane, realRepo, revisions.base, revisions.head, deps, signal);
-      if ("failed" in result) return unavailable("failed");
-      const { list } = result;
-      return {
-        lane: lane.id, status: "ok", head: revisions.head, base: revisions.base, headSource: revisions.headSource,
-        committedAt: list.committedAt, files: list.files, total: list.total, truncated: list.total > list.files.length,
-      };
-    }).finally(release);
-    work.catch(() => {});
-    return await abortable(work, signal);
+    return await (deps.caches.listFlights.join(laneKey(lane), signal, async (flight) => {
+      const release = await deps.caches.listGate.acquire(flight);
+      try {
+        return await withViewerOperation("pipelines.laneChanges", () => laneJob(lane, { ...deps, exec: boundTo(deps.exec, flight) }, flight));
+      } finally {
+        release();
+      }
+    }) as Promise<TaskFilesLane>);
   } catch (error) {
     if (error instanceof QueueFull || isAbort(error)) return unavailable("busy");
     return unavailable("failed");
   } finally {
     clearTimeout(timer);
   }
+}
+
+function laneKey(lane: LanePipeline): string {
+  return [lane.id, lane.repoDir, lane.branch, lane.lastPassedCommit, lane.baseRef, lane.baseBranch, declarationsKey(lane)].join("\0");
+}
+
+async function laneJob(lane: LanePipeline, deps: TaskFilesDeps, signal: AbortSignal): Promise<TaskFilesLane> {
+  const unavailable = (reason: Extract<TaskFilesLane, { status: "unavailable" }>["reason"]): TaskFilesLane => ({ lane: lane.id, status: "unavailable", reason });
+  let realRepo: string;
+  try { realRepo = await fs.realpath(lane.repoDir); } catch { return unavailable("repository-missing"); }
+  const revisions = await taskRevisions(lane, deps.exec);
+  checkpoint(signal);
+  if ("error" in revisions) return unavailable(revisions.code === "git_failed" ? "failed" : "commits-gone");
+  const result = await pairList(lane, realRepo, revisions.base, revisions.head, deps, signal);
+  if ("failed" in result) return unavailable("failed");
+  const { list } = result;
+  return {
+    lane: lane.id, status: "ok", head: revisions.head, base: revisions.base, headSource: revisions.headSource,
+    committedAt: list.committedAt, files: list.files, total: list.total, truncated: list.total > list.files.length,
+  };
 }
 
 export type FileFailure = { status: number; code: string; error: string; retryAfter?: number };
@@ -311,7 +348,8 @@ export async function resolveFile(lane: LanePipeline, head: string, file: string
       throw error;
     }
     try {
-      return await resolveUncached(lane, head, file, realRepo, key, deps, flight);
+      /* The slot frees when the Git work has ended; a resolution nobody waits for kills its children. */
+      return await resolveUncached(lane, head, file, realRepo, key, { ...deps, exec: boundTo(deps.exec, flight) }, flight);
     } finally {
       release();
     }
@@ -332,6 +370,13 @@ async function resolveUncached(lane: LanePipeline, head: string, file: string, r
     const ancestor = await isAncestor(lane, head, current.head, deps.exec);
     if (ancestor === "failed") return fail(503, "busy", "git did not answer in time", 2);
     if (!ancestor) return fail(409, "head_unknown", "this commit is not part of the lane's history");
+    if (current.taskBase && current.taskBase !== head) {
+      /* The remote's base branch may lag the lane's start, so its merge base
+         proves nothing about where the task began. */
+      const afterBase = await isAncestor(lane, current.taskBase, head, deps.exec);
+      if (afterBase === "failed") return fail(503, "busy", "git did not answer in time", 2);
+      if (!afterBase) return fail(409, "head_unknown", "this commit is from before the task's base");
+    }
     revisions = { ...pinned, headSource: current.headSource };
   }
   const result = await pairList(lane, realRepo, revisions.base, revisions.head, deps, signal);
@@ -355,6 +400,7 @@ async function resolveUncached(lane: LanePipeline, head: string, file: string, r
     base: revisions.base, head: revisions.head, oid: record.oid, size: record.size, kind: classified.kind, mime: classified.mime,
     name: file.split("/").pop() || file, committedAt: result.list.committedAt, headSource: revisions.headSource,
   };
+  checkpoint(signal);
   deps.caches.resolved.set(key, resolved, 512);
   return resolved;
 }
@@ -369,7 +415,7 @@ export async function readBlob(lane: LanePipeline, realRepo: string, resolved: R
     return await deps.caches.blobFlights.join(key, signal, async (flight) => {
       const release = await deps.caches.readGate.acquire(flight);
       try {
-        const result = await deps.exec("git", ["cat-file", "blob", resolved.oid], lane.repoDir, undefined, { ...GIT_OPTIONS, stdoutEncoding: "latin1", maxOutputBytes: PREVIEW_MAX_BYTES + 1024 });
+        const result = await boundTo(deps.exec, flight)("git", ["cat-file", "blob", resolved.oid], lane.repoDir, undefined, { ...GIT_OPTIONS, stdoutEncoding: "latin1", maxOutputBytes: PREVIEW_MAX_BYTES + 1024 });
         if (result.code !== 0) throw new Error(result.stderr || "git cat-file failed");
         const bytes = Buffer.from(result.stdout, "latin1");
         if (bytes.length !== resolved.size) throw new Error("the object's size changed");

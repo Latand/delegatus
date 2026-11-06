@@ -77,7 +77,6 @@ export function TaskFiles({ taskId, pipelines }: { taskId: string; pipelines: re
   const { t } = useLocale();
   /* Newest lane first. */
   const lanes = useMemo(() => [...pipelines].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || (a.id < b.id ? -1 : 1)), [pipelines]);
-  const [requested, setRequested] = useState(LANES_PER_REQUEST);
   const [answers, setAnswers] = useState<Record<string, LaneState>>({});
   const [failed, setFailed] = useState(false);
   const [olderFailed, setOlderFailed] = useState(false);
@@ -138,16 +137,18 @@ export function TaskFiles({ taskId, pipelines }: { taskId: string; pipelines: re
     };
   }, []);
 
+  /* A lane with no answer has not been read, or its read failed: either way
+     the next page asks for the same lanes again, so a failed page is retried
+     as it was and no lane is skipped. */
+  const unread = lanes.filter((lane) => answers[lane.id] === undefined);
   const showOlder = useCallback(() => {
-    const next = requested + LANES_PER_REQUEST;
-    setRequested(next);
     setOlderFailed(false);
-    void read(lanes.slice(requested, next).map((lane) => lane.id), "older");
-  }, [lanes, read, requested]);
+    void read(unread.slice(0, LANES_PER_REQUEST).map((lane) => lane.id), "older");
+  }, [read, unread]);
 
-  const shown = lanes.slice(0, requested).filter((lane) => answers[lane.id] !== undefined);
+  const shown = lanes.filter((lane) => answers[lane.id] !== undefined);
   const loading = shown.length === 0 && !failed;
-  const hasOlder = lanes.length > requested;
+  const hasOlder = unread.length > 0;
   const everyLaneEmpty = shown.length > 0 && shown.every((lane) => {
     const answer = answers[lane.id];
     return typeof answer === "object" && answer.status === "ok" && answer.files.length === 0;
