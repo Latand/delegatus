@@ -6363,7 +6363,8 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
     if (record?.supersededBy || generation?.archivedAt) refuse();
     const seat = caller.conversationId ? orchestratorSeatIdentityForConversation(caller.conversationId) : null;
     const project = boardReadProject(requested, dependencies);
-    return { project, fingerprint: JSON.stringify([caller, authority, record ? [record.id, record.projectOwnership,
+    const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry ?? (() => null), id);
+    return { project, fingerprint: JSON.stringify([caller, authority, principal, record ? [record.id, record.projectOwnership,
       generation?.id, generation?.path, generation?.launchProfile.project, generation?.launchProfile.cwd, generation?.launchProfile.workspace] : null, seat]) };
   });
   const pinned = snapshot();

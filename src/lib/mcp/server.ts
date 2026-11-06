@@ -324,7 +324,7 @@ function responseAuthorityResult(tool: string, args: McpToolArgs, authority: Mcp
   catch (error) { return boardReadFailure(tool, args, error); }
 }
 
-function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
+export function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
   if (!context.responseAuthority) return;
   const withinCall = AsyncLocalStorage.snapshot();
   context.responseAuthority.checks.push(() => withinCall(check));

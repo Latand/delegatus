@@ -8,7 +8,7 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/l
 import { Database } from "bun:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
+import { AgentRegistry, type RegistryConversation, type RegistryFile } from "@/lib/agent/registry";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { projectAliasStore } from "@/lib/projects/persistence";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
@@ -59,7 +59,7 @@ async function harness(workspace = false) {
   const seed = registry.ensureConversation("codex", path.join(root, "caller.jsonl"), null);
   const reader: RegistryConversation = { ...seed, id: CALLER, projectOwnership: { project: OWN, source: "operator", setAt: AT, operationId: "fixture-project" },
     generations: seed.generations.map(row => ({ ...row, id: "board-generation", launchProfile: { ...row.launchProfile, project: OWN } })) };
-  const snapshot = { ...registry.readOnlySnapshot(), conversations: { [CALLER]: reader } };
+  const snapshot: RegistryFile = { ...registry.readOnlySnapshot(), conversations: { [CALLER]: reader } };
   let mode: "manager" | "agent" | "gateway" = workspace ? "agent" : "manager";
   let seatProject: string | null = OWN, callerId: string = CALLER;
   let rows = pipelines;
@@ -111,13 +111,15 @@ async function harness(workspace = false) {
   const client = new Client({ name: "board-project-test", version: "1" });
   const [c, s] = InMemoryTransport.createLinkedPair(); await Promise.all([server.connect(s), client.connect(c)]);
   close.push(async () => { await client.close(); await server.close(); });
+  let wire = "";
   const call = async (tool: Tool, args: McpToolArgs = {}) => {
     const result = await client.callTool({ name: tool, arguments: { full: true, ...args } });
+    wire = JSON.stringify(result);
     const answer = result.structuredContent as McpToolResult;
     expect(result.content).toBeDefined();
     return answer;
   };
-  return { call, client, domain, bindings, reader, snapshot, folder, filename, receipts,
+  return { call, client, domain, bindings, reader, snapshot, folder, filename, receipts, wire: () => wire,
     useStore: (storage: McpReceiptStore) => { service = makeService(storage); },
     service: () => service, rowReads: () => rowReads,
     mode: (value: typeof mode) => { mode = value; }, seat: (value: string | null) => { seatProject = value; },
@@ -360,8 +362,8 @@ for (const tool of TOOLS) {
     expect(queued).toBe(true); expect(h.rowReads()).toBe(0);
   });
 
-  test(`${tool}: actual native hook proof survives SDK await and rejects an ended generation`, async () => {
-    const h = await harness();
+  for (const workspace of [false, true]) test(`${tool}: actual native hook proof survives SDK await and rejects an ended generation, workspace=${workspace}`, async () => {
+    const h = await harness(workspace);
     const transcript = path.join(root, "native-board.jsonl");
     fs.writeFileSync(transcript, "");
     h.domain.attentionAuthority = () => {
@@ -375,7 +377,7 @@ for (const tool of TOOLS) {
       const { token } = recordNativeHook(process.pid, "native-board", transcript, "PreToolUse", tool, args);
       h.atSdkReturn(() => { if (ended) recordNativeHook(process.pid, "native-board", transcript, "SessionEnd"); });
       const result = await h.call(tool, { ...args, nativeCallerProof: token });
-      if (ended) refused(result, "caller_unidentified"); else expect(result).toMatchObject({ ok: true, total: 1 });
+      if (ended) refused(result, workspace ? "workspace_forbidden" : "caller_unidentified"); else expect(result).toMatchObject({ ok: true, total: 1 });
     }
   });
 
@@ -418,4 +420,99 @@ for (const tool of TOOLS) test(`${tool}: retained selection reads agree cold and
   const expected = await h.call(tool, { project: OWN });
   expect(expected).toMatchObject({ ok: true, total: 1 });
   for (const project of ["Example Board", "WidgetsRepo", OWN]) expect(await h.call(tool, { project })).toEqual(expected);
+});
+
+for (const tool of TOOLS) {
+  for (const source of ["admitted", "inherited", "owner-demotion"] as const) {
+    for (const form of ["fresh", "keyed", "replay"] as const) test(`${tool}: final workspace ${source} change refuses ${form} disclosure`, async () => {
+      const h = await harness(true), store = teamStore();
+      delete h.reader.generations[0]!.launchProfile.workspace;
+      const parent = "conversation_board_parent";
+      if (source === "inherited") {
+        h.snapshot.conversations[parent] = { ...structuredClone(h.reader), id: parent };
+        h.reader.generations[0]!.launchProfile.parentConversationId = parent;
+      }
+      if (source === "owner-demotion") store.admitConversationMember(CALLER, "m_owner");
+      const mutate = () => {
+        if (source === "owner-demotion") {
+          const owner = store.member("m_owner");
+          if (!owner) throw new Error("owner required");
+          store.updateMember({ ...owner, role: "member" });
+        } else store.admitConversationMember(source === "inherited" ? parent : CALLER, "m_reader");
+      };
+      const args = { project: "Foreign Canary Board", ...(form === "fresh" ? {} : { clientRequestId: "principal-read" }) };
+      // The unchanged caller can reach the populated foreign board and replay it.
+      expect(JSON.stringify(await h.call(tool, form === "keyed" ? { project: args.project } : args))).toContain("FOREIGN_PAYLOAD_CANARY");
+      if (form === "replay") expect(await h.call(tool, args)).toMatchObject({ ok: true, replayed: true });
+      const db = new Database(h.filename);
+      try {
+        const receipts = () => db.query("SELECT * FROM mcp_receipts ORDER BY receipt_key").all();
+        const before = receipts();
+        h.atSdkReturn(mutate);
+        refused(await h.call(tool, args), "workspace_forbidden");
+        expect(h.wire()).not.toContain("FOREIGN_PAYLOAD_CANARY");
+        expect(h.wire()).not.toContain(FOREIGN);
+        if (form !== "keyed") expect(receipts()).toEqual(before);
+        h.atSdkReturn(() => {});
+        h.reopen();
+        refused(await h.call(tool, args), "workspace_forbidden");
+        if (form !== "keyed") expect(receipts()).toEqual(before);
+      } finally { db.close(); }
+    });
+  }
+
+  for (const resolution of ["unknown", "ambiguous"] as const) {
+    for (const change of ["unchanged", "membership", "candidate-project", "caller", "principal", "principal-in-place", "admission"] as const) {
+      test(`${tool}: early ${resolution} response checks ${change} at the SDK boundary`, async () => {
+        const h = await harness(true), store = teamStore();
+        const owner = store.member("m_owner");
+        if (!owner) throw new Error("owner required");
+        if (change === "admission") delete h.reader.generations[0]!.launchProfile.workspace;
+        if (change === "principal-in-place") {
+          const reader = store.member("m_reader");
+          if (!reader) throw new Error("reader required");
+          store.insertMember({ ...reader, id: "m_replacement" });
+          store.putWorkspaceMember(W1, "m_replacement", "member", owner.id, AT);
+        }
+        if (resolution === "ambiguous") {
+          placeProject(store, owner, FOREIGN, W1);
+          expect(persistProjectAliases([{ source: "same-name", target: FOREIGN, displayName: "Example Board" }])).toBe(true);
+          h.domain.authorizedSeats = () => [];
+        }
+        const args = { project: resolution === "unknown" ? "Example Boar" : "Example Board" };
+        const before = await h.call(tool, args);
+        refused(before, `${resolution}_project`);
+        expect(h.wire()).toContain("Example Board");
+        expect(h.wire()).toContain(OWN);
+        h.atSdkReturn(() => {
+          if (change === "membership") h.revokeMember();
+          if (change === "candidate-project") placeProject(store, owner, resolution === "ambiguous" ? FOREIGN : OWN, W2);
+          if (change === "caller") h.caller("conversation_replacement");
+          if (change === "principal") h.reader.generations[0]!.launchProfile.workspace = { memberId: "m_reader", workspaceId: W2 };
+          if (change === "principal-in-place") h.reader.generations[0]!.launchProfile.workspace!.memberId = "m_replacement";
+          if (change === "admission") store.admitConversationMember(CALLER, "m_reader");
+        });
+        const answer = await h.call(tool, args);
+        if (change === "unchanged") expect(answer).toEqual(before);
+        else {
+          refused(answer, "workspace_forbidden");
+          for (const privateValue of ["Example Board", OWN, FOREIGN]) expect(h.wire()).not.toContain(privateValue);
+          expect(answer).not.toHaveProperty("closeMatches");
+          expect(answer).not.toHaveProperty("candidateNames");
+        }
+        expect(h.rowReads()).toBe(0);
+      });
+    }
+  }
+}
+
+test("direct pipeline reader checks an inherited effective principal after the real page await", async () => {
+  const h = await harness(true); h.many();
+  delete h.reader.generations[0]!.launchProfile.workspace;
+  const parent = "conversation_board_parent";
+  h.snapshot.conversations[parent] = { ...structuredClone(h.reader), id: parent };
+  h.reader.generations[0]!.launchProfile.parentConversationId = parent;
+  expect(await viewerReadTools(h.domain).list_pipelines({ project: OWN, limit: 1 })).toMatchObject({ total: 251 });
+  h.onRows(() => { queueMicrotask(() => teamStore().admitConversationMember(parent, "m_reader")); });
+  await expect(viewerReadTools(h.domain).list_pipelines({ project: OWN, limit: 1 })).rejects.toMatchObject({ details: { code: "project_scope_refused" } });
 });
