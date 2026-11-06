@@ -122,7 +122,7 @@ function buildRows(lane: LanePipeline, changes: readonly LaneChangeFile[], tree:
     return {
       path: change.path, op: change.op, added: change.added, removed: change.removed, binary: change.binary,
       mode, size, group: groupOf(change.path, by !== undefined),
-      previewable: Boolean(classified) && !change.binary && change.op !== "delete" && mode === "file" && size !== null && size <= PREVIEW_MAX_BYTES,
+      previewable: Boolean(classified) && !(change.binary && classified?.kind === "text") && change.op !== "delete" && mode === "file" && size !== null && size <= PREVIEW_MAX_BYTES,
       ...(by ? { declaredBy: by } : {}),
     };
   });

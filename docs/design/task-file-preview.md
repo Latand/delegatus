@@ -199,7 +199,7 @@ type TaskFile = {
   mode: "file" | "link" | "submodule" | null;   // null when deleted
   size: number | null;                           // bytes at head; null when deleted
   group: "declared" | "document" | "image" | "source" | "other";
-  // classifyArtifact accepts it, git does not call it binary, op is not delete,
+  // classifyArtifact accepts it, git does not call a text type binary, op is not delete,
   // mode is file, size <= 8 MiB
   previewable: boolean;
   declaredBy?: string;                           // stage id
