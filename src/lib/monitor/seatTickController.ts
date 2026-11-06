@@ -1749,9 +1749,10 @@ async function check(
       const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
       const health = dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
         ?? seatMcpHealth(receipt, seat.designatedAt ?? null,
-          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
+          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio",
+          sources.registry().seatTickConversation(seat.conversationId)?.viewerMcp);
       return { ...health, ...(receipt?.viewerMcpTransport ? { transport: receipt.viewerMcpTransport } : {}) };
-    } catch { return { status: "untracked", detail: "MCP liveness could not be read" }; }
+    } catch { return { status: "dead", detail: "MCP liveness could not be read" }; }
   };
   // A missing MCP heartbeat cannot distinguish a finished dead host from a
   // live host with a broken pipe. Only the liveness plane can admit recovery.

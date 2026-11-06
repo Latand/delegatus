@@ -84,3 +84,31 @@ authorize `POST /api/conversation-host`: that write must carry an agent's
 verified spawn capability, an authenticated member session, or a verified
 internal service claim. A seat should use its MCP tools after reconnection;
 an operator can rotate a seat whose MCP process has died.
+
+
+## Engine approval refusals
+
+A current Codex thread can report an approval refusal before the stdio launcher
+observes a call. Delegatus retains bounded engine evidence alongside the claimed
+host checkpoint. The seat tick reads the current native generation by key and
+withholds wakes when that evidence reports an unavailable Viewer MCP capability.
+This applies to HTTP connections too. Host reachability remains a separate check.
+
+The incident names the engine approval refusal and affected tool names. It copies
+no error body or call arguments. A successful structured Viewer result clears
+only its own tool, after a matching start observed after the denial. Other tools,
+transport heartbeats, ordinary server refusals and old completions cannot clear
+that denial. Invalid or overflowed evidence leaves recovery unverified. The
+existing checkpoint retry path retains write failures for retry. This draft
+still has an acceptance gap during checkpoint failure: the monitor can retain
+an earlier healthy projection. See `issue-3687-diagnosis.md` for the fault probe;
+this behavior is not ready for promotion.
+
+The authenticated operator can use the Viewer's existing seat rotation control
+(`POST /api/orchestrator/rotate`) independently of the affected seat's MCP
+connection. Rotation preserves the existing approval lineage and delivery
+receipts. A stale-generation or verify-first receipt requires accounting for the
+original operation before any resend. This detector never retries an action,
+changes engine approval policy, or grants tool access. Installed read-only tool
+availability requires a separately authorized observation under the intended
+identity.

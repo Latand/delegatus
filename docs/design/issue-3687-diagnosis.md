@@ -134,3 +134,37 @@ Approval-policy changes, automatic seat rotation, forced release/restart, creden
 ## Final verification
 
 At 21:07 UTC on 6 November, main remained `423bf964`; a later issue/main recheck confirmed the same revision, issue timestamp and zero comments. The assigned worktree had no changes before this document was written. Three isolated observation/control probes exited 0; the requirement probe deliberately exited 1 with `healthy` versus expected `dead`. No product-source check is represented as a fixed-head pass. The first document scan lacked the required fingerprint configuration and exited 1 with `configuration_error`; supplying the repository's committed fingerprint catalog produced PASS, exit 0. The final scan is repeated after this edit, with its log and actual exit retained in stage evidence. No bypass was used.
+
+
+## Builder follow-up: checkpoint failure remains an acceptance blocker
+
+The scoped implementation now carries a bounded engine observation through
+Codex host state, claimed checkpoints, the keyed JSON/SQLite seat projection and
+the existing tick health decision. A recorded-shape refusal opens the existing
+incident and withholds a wake for either transport. Same-tool recovery needs a
+start observed after the denial; unrelated success and structured server refusal
+leave the denial outstanding. The implementation preserves permission policy.
+
+An additional actual-adapter fault probe invalidates a stronger claim in the
+proposed contract. After a previously healthy checkpoint, force
+`AgentRegistry.setStructuredHostClaimed` to throw while a new denial arrives.
+`host.health()` retains one denied tool; explicit persistence flush rejects;
+the keyed registry still contains the earlier healthy observation. The health
+combiner therefore returns `healthy`. Both JSON and SQLite cases fail the
+required `dead` assertion, with exit 1. Restoring the writer and flushing allows
+ordinary recovery. Private evidence: `$LLV_EVIDENCE_DIR/builder/checkpoint-failure-red.log`
+and its adjacent actual-exit file and retained test source.
+
+The checkpoint retry path cannot by itself establish management health while
+that checkpoint is unavailable. The existing runtime `session-read` handler in
+`src/runtime-host/host.ts` reads the journal projection; its current session
+contract has no direct pending engine observation. Merely copying another field
+into that journal would retain an analogous write-failure window.
+
+The recommended follow-up is to authorize a bounded, current-generation runtime
+observation at the existing keyed read/admission boundary, with explicit
+unavailable evidence and writer/seat revalidation. Its complete producer and
+consumer surface extends beyond this document's checkpoint-only file fence.
+Keep this implementation as an unpublished draft until that boundary is settled
+and the fault probe passes. No source completion or installed acceptance is
+claimed. The three review rounds and original uncertain operations remain due.

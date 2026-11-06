@@ -1923,3 +1923,29 @@ test.each(["active", "returned"] as const)("expired %s recordless dispatch recov
     }
   } finally { clock.mockRestore(); }
 });
+
+
+test("the final wake admission rechecks engine denial after asynchronous preparation", async () => {
+  for (const deny of [false, true]) {
+    const rig = harness({ pipelines: OPEN_LANE });
+    let denied = false, effects = 0;
+    const registry = rig.deps.sources!.registry;
+    rig.deps.sources!.registry = () => new Proxy(registry(), { get(target, property, receiver) {
+      if (property === "seatTickConversation") return (() => ({ id: CONVERSATION,
+        turn: { state: "idle" as const, source: "empty" as const, terminalAt: null },
+        ...(denied ? { viewerMcp: { seq: 1, observedAt: new Date(NOW).toISOString(), denied: [{ tool: "get_task", seq: 1 }], unverified: false } } : {}) })) satisfies ReturnType<typeof registry>["seatTickConversation"];
+      if (property === "seatMcpReceipt") return (() => ({ spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW).toISOString(), viewerMcpTransport: "http" as const })) satisfies ReturnType<typeof registry>["seatMcpReceipt"];
+      return Reflect.get(target, property, receiver);
+    } });
+    rig.deps.deliver = async message => {
+      await Promise.resolve();
+      denied = deny;
+      message.admissionGuard?.();
+      effects++;
+      return { ok: true, target: "structured", outcome: "delivered", structured: true };
+    };
+    const result = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(effects).toBe(deny ? 0 : 1);
+    if (deny) expect(result?.delivery?.outcome).toBe("seat-mcp-unavailable");
+  }
+});

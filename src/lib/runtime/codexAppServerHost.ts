@@ -1,3 +1,4 @@
+import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
@@ -3460,6 +3461,57 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     catch { return false; }
   }
 
+  private viewerMcp: ViewerMcpObservation | undefined;
+  private readonly viewerMcpDenials = new Set<string>();
+  private readonly viewerMcpStarts = new Map<string, { tool: string; seq: number }>();
+
+  private observeViewerMcp(event: Extract<RuntimeEvent, { kind: "item" }>): void {
+    if (event.codexItemIdentity?.threadId !== this.identity.threadId || !this.writerFenceAllowsActuation()) return;
+    const item = record(event.item);
+    if (item?.type !== "mcpToolCall" || item.server !== "viewer") return;
+    const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+    const id = typeof item.id === "string" && item.id.length <= 256 ? item.id : null;
+    const key = id && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, id]) : null;
+    const observation = this.viewerMcp;
+    if (event.phase === "started") {
+      if (!observation || (!observation.denied.length && !observation.unverified)) return;
+      if (key && this.viewerMcpStarts.get(key)?.tool === tool) return;
+      if (!tool || !key || this.viewerMcpStarts.has(key) || this.viewerMcpStarts.size >= 32) {
+        this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
+      } else this.viewerMcpStarts.set(key, { tool, seq: event.seq });
+    } else {
+      const start = key ? this.viewerMcpStarts.get(key) : undefined;
+      if (key) this.viewerMcpStarts.delete(key);
+      const denial = item.status === "failed" && record(item.error)?.message === "MCP tool call requires approval, but approval policy is never";
+      if (denial) {
+        if (key && this.viewerMcpDenials.has(key)) return;
+        if (key) {
+          this.viewerMcpDenials.add(key);
+          if (this.viewerMcpDenials.size > 32) this.viewerMcpDenials.delete(this.viewerMcpDenials.values().next().value!);
+        }
+        const next = observation ? structuredClone(observation) : { seq: event.seq, observedAt: new Date().toISOString(), denied: [], unverified: false };
+        next.seq = event.seq;
+        next.observedAt = new Date().toISOString();
+        if (!tool || (!next.denied.some(entry => entry.tool === tool) && next.denied.length >= 32)) next.unverified = true;
+        else {
+          next.denied = next.denied.filter(entry => entry.tool !== tool);
+          next.denied.push({ tool, seq: event.seq });
+        }
+        this.viewerMcp = next;
+      } else if (observation && tool && start?.tool === tool && item.status === "completed" && item.error == null) {
+        const result = record(item.result);
+        // Structured server refusals are successful transports, with no proof
+        // that the denied management capability is now permitted.
+        const structured = record(result?.structuredContent);
+        if (result && result.isError !== true && structured?.ok === true) {
+          this.viewerMcp = { ...observation, seq: event.seq, observedAt: new Date().toISOString(),
+            denied: observation.denied.filter(entry => entry.tool !== tool || start.seq <= entry.seq) };
+        }
+      }
+    }
+    if (this.viewerMcp) event.viewerMcp = structuredClone(this.viewerMcp);
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
@@ -3472,6 +3524,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       : this.engineStatus;
     return {
       status,
+      ...(this.viewerMcp ? { viewerMcp: structuredClone(this.viewerMcp) } : {}),
       sessionKey: this.identity.threadId,
       endpoint: pid ? this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` : "stdio:released",
       pid,
@@ -3812,6 +3865,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
+    if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
       this.eventStore.append(this.identity.threadId, sequenced);
     } catch (error) {
@@ -3871,7 +3925,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.cursor,
       this.onEventCursorRecovery,
     );
+    this.viewerMcp = undefined;
+    this.viewerMcpStarts.clear();
     for (const event of stored) {
+      if (event.kind === "item" && event.viewerMcp !== undefined) this.viewerMcp = normalizeViewerMcpObservation(event.viewerMcp);
       if (event.kind === "turn-started") {
         this.cancelledVoiceTurns.delete(event.turnId);
         this.activeTurnId = event.turnId;
@@ -4811,7 +4868,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
-        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+        ...((user?.type === "userMessage" || (user?.type === "mcpToolCall" && user.server === "viewer")) && turnId && stringField(params, "threadId") === this.identity.threadId
           ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt, attachedAt: new Date().toISOString() } } : {}),

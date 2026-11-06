@@ -1,3 +1,4 @@
+import * as mcpTickFixture from "../monitor/seatTickController.fixture";
 import { hostExitText, readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -7910,4 +7911,105 @@ test.each([false, true])("Codex child environments preserve the production evide
     expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
     expect(captured.options?.env?.TMPDIR).toBe(access.env.TMPDIR);
   } finally { await host.release(); access.cleanup(); }
+});
+
+
+test.each(["off", "sqlite"] as const)("Viewer MCP denial reaches claimed persistence, keyed health and tick (%s)", async sqliteMode => {
+  const { seatMcpHealth } = await import("../monitor/seatMcpHealth");
+  const { harness, PROJECT, CONVERSATION, NOW, OPEN_LANE, runSeatTickCheck } = mcpTickFixture;
+  const { flushStructuredHostPersistence } = await import("./registry");
+  const threadId = ["00000000", "0000", "4000", "8000", "000000000031"].join("-");
+  const server = new FakeAppServer(threadId);
+  const store = new MemoryEventStore();
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+  const registry = new AgentRegistry(path.join(metadataState, "registry.json"), () => true, undefined, { sqliteMode });
+  const artifactPath = `/sessions/${threadId}.jsonl`;
+  const conversation = registry.ensureConversation("codex", artifactPath, null);
+  expect(conversation.generations.at(-1)?.id).toBe(threadId);
+  const key = { engine: "codex" as const, sessionId: threadId };
+  registry.upsert({ key, artifactPath, cwd: "/repo", accountId: null, status: "idle", host: null,
+    claimEpoch: 7, claimOwner: "mcp-health-writer", pendingAction: null, structuredHost: codexHostColumns(await host.health(), 7) });
+  const stop = await bindCodexHostPersistence(registry, key, host, "mcp-health-writer", 7);
+  const receipt = { spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW - 1800000).toISOString() };
+  const filename = path.join(metadataState, "mcp-runtime", "sessions", `${receipt.spawnCapabilityDigest}.json`);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, JSON.stringify({ checkedAt: new Date(NOW).toISOString(), ready: true, failedCalls: 0 }));
+  const observe = () => registry.seatTickConversation(conversation.id)?.viewerMcp;
+  const call = (phase: "started" | "completed", id: string, tool: string, fields: Record<string, unknown> = {}, incomingThread = threadId) => {
+    server.notify(`item/${phase}`, { threadId: incomingThread, turnId: "mcp-turn", item: { type: "mcpToolCall", id, server: "viewer", tool, ...fields } });
+  };
+  const deny = (id: string, tool: string) => call("completed", id, tool, { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+  const success = (id: string, tool: string) => call("completed", id, tool, { status: "completed", result: { content: [], structuredContent: { ok: true } } });
+  const flush = () => flushStructuredHostPersistence(host);
+  try {
+    expect(seatMcpHealth(receipt, null, metadataState, NOW).status).toBe("healthy");
+    deny("denied-a", "get_task"); await flush();
+    expect(observe()?.denied).toEqual([{ tool: "get_task", seq: expect.any(Number) }]);
+    expect((await host.health()).status).toBe("idle");
+    for (const transport of ["stdio", "http"] as const) {
+      expect(seatMcpHealth(receipt, null, metadataState, NOW, transport, observe()).status).toBe("dead");
+      const rig = harness({ pipelines: OPEN_LANE });
+      const prior = rig.deps.sources!.registry;
+      rig.deps.sources!.registry = () => new Proxy(prior(), { get(target, property, receiver) {
+        if (property === "seatTickConversation") return ((id: string) => id === CONVERSATION
+          ? { ...registry.seatTickConversation(conversation.id)!, id: CONVERSATION } : null) satisfies AgentRegistry["seatTickConversation"];
+        if (property === "seatMcpReceipt") return (() => ({ ...receipt, viewerMcpTransport: transport })) satisfies AgentRegistry["seatMcpReceipt"];
+        return Reflect.get(target, property, receiver);
+      } });
+      const result = await runSeatTickCheck(PROJECT, rig.deps);
+      expect(result?.delivery?.outcome).toBe("seat-mcp-unavailable");
+      expect(rig.sent).toHaveLength(0);
+      expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open" && card.detail.includes("engine approval denied: get_task"))).toBe(true);
+    }
+    call("started", "old", "get_task");
+    deny("denied-again", "get_task");
+    success("old", "get_task");
+    call("started", "other", "get_pipeline"); success("other", "get_pipeline");
+    success("no-start", "get_task");
+    call("started", "business", "get_task");
+    call("completed", "business", "get_task", { status: "completed", result: { content: [], structuredContent: { ok: false, code: "forbidden", retryable: false } } });
+    call("completed", "unknown", "get_task", { status: "failed", error: { message: "synthetic-private-sentinel" } });
+    call("completed", "malformed", "get_task", { status: "failed", error: [] });
+    await flush(); expect(observe()?.denied).toHaveLength(1);
+    deny("denied-b", "get_pipeline");
+    call("started", "recovered-a", "get_task"); success("recovered-a", "get_task");
+    await flush(); expect(observe()?.denied.map(item => item.tool)).toEqual(["get_pipeline"]);
+    call("started", "recovered-b", "get_pipeline"); success("recovered-b", "get_pipeline");
+    await flush(); expect(observe()?.denied).toEqual([]);
+    expect(seatMcpHealth(receipt, null, metadataState, NOW, "stdio", observe()).status).toBe("healthy");
+    expect(JSON.stringify(observe())).not.toContain("synthetic-private-sentinel");
+    call("completed", "foreign", "get_task", { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } }, "other-thread");
+    await flush(); expect(observe()?.denied).toEqual([]);
+  } finally { await stop(); await host.release(); }
+});
+
+test("Viewer MCP denial restoration retains bounds and requires a fresh recovery start", async () => {
+  const threadId = "mcp-restart-thread", store = new MemoryEventStore();
+  let server = new FakeAppServer(threadId);
+  let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+  const notify = (phase: string, id: string, tool: string, fields: Record<string, unknown> = {}) => server.notify(`item/${phase}`, { threadId, turnId: "turn-restart", item: { type: "mcpToolCall", server: "viewer", id, tool, ...fields } });
+  const denied = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+  const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
+  try {
+    notify("completed", "first", "get_task", denied);
+    notify("started", "old-start", "get_task");
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(1);
+    await host.release();
+    server = new FakeAppServer(threadId);
+    host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+    notify("completed", "old-start", "get_task", success);
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(1);
+    notify("started", "fresh", "get_task"); notify("completed", "fresh", "get_task", success);
+    expect((await host.health()).viewerMcp?.denied).toEqual([]);
+    for (let index = 0; index < 32; index++) notify("completed", `denied-${index}`, index === 0 ? "x".repeat(128) : `tool_${index}`, denied);
+    expect((await host.health()).viewerMcp).toMatchObject({ unverified: false, denied: expect.any(Array) });
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(32);
+    notify("completed", "overflow", "x".repeat(129), denied);
+    expect((await host.health()).viewerMcp).toMatchObject({ unverified: true });
+    expect((await host.health()).viewerMcp?.denied).toHaveLength(32);
+    await host.release();
+    server = new FakeAppServer(threadId);
+    host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+    expect((await host.health()).viewerMcp?.unverified).toBe(true);
+  } finally { await host.release(); }
 });
