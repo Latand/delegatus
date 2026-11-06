@@ -464,3 +464,38 @@ test("answer reaches the asking conversation's pending question as its chosen la
   expect(await answer({ requestId: "toolu_roll", answer: { answers: [1] } }, false)).toMatchObject({ status: 409 });
   expect(controls).toHaveLength(1);
 });
+
+for (const engine of ["claude", "codex"] as const) test(`canonical ${engine} resume rechecks its recovered seat`, async () => {
+  const value = { ...conversation("conversation_recovered", ["/sessions/recovered.jsonl"]), engine };
+  const wakes: string[] = [];
+  const result = await applyConversationAction({ conversationId: value.id, transcriptPath: value.generations[0]!.path, action: "resume" }, {
+    registry: () => ({ conversation: () => value, conversationForPath: () => value } as never),
+    structuredEnabled: () => true, dispatchStructuredControl: async () => null,
+    resumeConversation: async () => ({ ok: true, structured: true, target: value.id, outcome: "resumed", spawned: true }),
+    onResumed: id => { wakes.push(id); },
+    interruptConversation: async () => ({ ok: true, target: "%1" }),
+    killConversation: async () => ({ ok: true, target: "%1" }),
+    compactConversation: async () => ({ ok: true, target: "%1" }),
+    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+  });
+  expect(result).toMatchObject({ status: 200, body: { outcome: "resumed" } });
+  expect(wakes).toEqual([value.id]);
+});
+
+for (const outcome of ["held", "failed"] as const) test(`canonical ${outcome} recovery does not wake a seat`, async () => {
+  const value = conversation("conversation_waiting", ["/sessions/waiting.jsonl"]);
+  const wakes: string[] = [];
+  await applyConversationAction({ conversationId: value.id, transcriptPath: value.generations[0]!.path, action: "resume" }, {
+    registry: () => ({ conversation: () => value, conversationForPath: () => value } as never),
+    structuredEnabled: () => true, dispatchStructuredControl: async () => null,
+    resumeConversation: async () => outcome === "failed"
+      ? { ok: false, outcome: "failed", status: 503, error: "recovery unavailable" }
+      : { ok: true, structured: true, target: value.id, outcome: "held", spawned: false },
+    onResumed: id => { wakes.push(id); },
+    interruptConversation: async () => ({ ok: true, target: "%1" }),
+    killConversation: async () => ({ ok: true, target: "%1" }),
+    compactConversation: async () => ({ ok: true, target: "%1" }),
+    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+  });
+  expect(wakes).toEqual([]);
+});
