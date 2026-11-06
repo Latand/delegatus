@@ -50,12 +50,17 @@ export async function receivingSpawnAdmission(request: Request, body: Record<str
     return () => {}; // Older dispatchers have no expiry eligibility.
   }
   if (!required) throw new Error("guarded launch requires its admission receiver");
+  const pinnedAdmission = binding.launchAdmission;
   const service = internalServiceClaim(request, { readOnly: true });
   if (service.claim !== "valid" || service.service !== "mcp") throw new Error("launch admission transport refused");
-  if (spawnAdmissionBodyDigest(body) !== binding.launchAdmission.envelopeDigest) throw new Error("launch admission envelope changed");
+  if (spawnAdmissionBodyDigest(body) !== pinnedAdmission.envelopeDigest) throw new Error("launch admission envelope changed");
   const { assertLaunchAdmissionCaller } = await import("./bindings");
   const pinned = binding;
   return () => {
+    const registry = agentRegistry();
+    if (registry.launchAdmissionIdentity() !== pinnedAdmission.registryIdentity) {
+      throw new Error("launch admission continuity changed");
+    }
     assertLaunchAdmissionCaller(pinned);
     const current = new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), { busyTimeoutMs: 0, preparedOnly: true });
     try {
@@ -63,7 +68,6 @@ export async function receivingSpawnAdmission(request: Request, body: Record<str
       if (!row?.binding || JSON.stringify(row.binding) !== JSON.stringify(pinned) || row.stage === "not-executed") throw new Error("launch admission claim changed");
     } finally { current.close(); }
     // A prior reservation remains concrete work. The cutoff bounds admission.
-    const registry = agentRegistry();
     const receipt = registry.spawnReceiptForClientAttempt(pinned.downstreamKey);
     const retained = registry.retainedSpawnAdmission(pinned.downstreamKey);
     if (retained && (!receipt || receipt.launchId !== retained.launchId)) throw new Error("launch admission is already retained; recover the original key");

@@ -15,9 +15,12 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { internalServiceHeaders } from "@/lib/agent/callerClaims";
+import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorRecipientRefusalAsync, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { productionDomainDependencies, recoveryCaller, viewerMcpBindings, viewerMcpRecoverableTools } from "./bindings";
+import { receivingSpawnAdmission } from "./launchAdmission";
 import { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore, type McpRequestBinding } from "./server";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -71,7 +74,11 @@ async function fixture(git = false) {
   }) }); const client = new Client({ name: "claims-reader", version: "1" });
   const [transport, peer] = InMemoryTransport.createLinkedPair(); await Promise.all([client.connect(transport), server.connect(peer)]);
   cleanup.push(async () => { await client.close(); await server.close(); });
-  const read = async (args: Record<string, unknown> = {}) => (await client.callTool({ name: "list_unknown_launch_claims", arguments: args })).structuredContent as Record<string, unknown>;
+  const read = async (args: Record<string, unknown> = {}) => {
+    const result = await client.callTool({ name: "list_unknown_launch_claims", arguments: args });
+    if (!result.structuredContent) throw new Error("unknown launch read returned no structured content");
+    return result.structuredContent as Record<string, unknown>;
+  };
   function claim(number: number, foreign = false, claimProject?: string) {
     const owner = recoveryCaller(domain, true, false);
     const key = `fixture-claim-${number}`;
@@ -85,7 +92,7 @@ async function fixture(git = false) {
   }
   const call = async (name: string, args: Record<string, unknown>) => (await client.callTool({ name, arguments: args })).structuredContent as Record<string, unknown>;
   let rotations = 0;
-  return { read, call, root, service, direct: (args: Record<string, unknown>) => runAsMcpHttpCaller({ capability }, () => service.callTool("list_unknown_launch_claims", args)),
+  return { read, call, root, service, registry, direct: (args: Record<string, unknown>) => runAsMcpHttpCaller({ capability }, () => service.callTool("list_unknown_launch_claims", args)),
     afterService: (hook: (() => Promise<void>) | undefined) => { afterService = hook; }, get source() { return registry.conversation(caller as `conversation_${string}`)!.generations.at(-1)!.path; },
     store, claim, project, rotate: () => { rotations++; caller = seed(`successor-${rotations}`); capability = registry.rotateSpawnCapabilityForConversation(caller)!.capability; seat(caller, `successor-seat-${rotations}`); },
     stranger: () => { caller = stranger; capability = strangerCapability; }, epoch: () => orchestratorSeatFor(project).active!.seatEpoch };
@@ -428,20 +435,71 @@ test("empty suppressed owner pages advance and the receipt query uses its scope 
   for (let n = 0; n < 101; n++) f.claim(n);
   const db = new (await import("bun:sqlite")).Database(f.store.filename);
   try {
-    db.query("UPDATE mcp_receipts SET claimed_at=? WHERE receipt_key=?").run(Date.parse("2020-01-01T00:00:00Z"), "spawn_agent:fixture-claim-100");
-    const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN SELECT sequence,receipt_key FROM mcp_receipts
-      WHERE launch_project IN ('project') AND launch_target IN ('project') AND launch_owner='owner' AND launch_open=1 AND sequence>0 AND sequence<=1000 ORDER BY sequence LIMIT 100`).all();
+    const plan = db.query<{ detail: string }, [string, string, string, number, number, number]>(`EXPLAIN QUERY PLAN
+      SELECT r.sequence,r.receipt_key,r.launch_tool,r.claimed_at,r.launch_due,r.stage,r.launch_failure_code
+      FROM json_each(?) AS project CROSS JOIN json_each(?) AS target CROSS JOIN mcp_receipts AS r
+      WHERE r.launch_project=project.value AND r.launch_target=target.value AND r.launch_owner=? AND r.launch_open=1
+        AND r.sequence>? AND r.sequence<=? ORDER BY r.sequence LIMIT ?`)
+      .all(JSON.stringify([f.project]), JSON.stringify([f.project]), "owner", 0, 1000, 100);
     expect(plan.some(row => row.detail.includes("mcp_launch_owner"))).toBe(true);
+    expect(plan.some(row => row.detail.includes("mcp_launch_due"))).toBe(false);
+    db.query("UPDATE mcp_receipts SET claimed_at=? WHERE receipt_key=?")
+      .run(Date.parse("2020-01-01T00:00:00Z"), "spawn_agent:fixture-claim-100");
   } finally { db.close(); }
   f.rotate();
   const first = await f.read({ limit: 1 });
   expect(first.items).toEqual([]); expect(first.nextCursor).toBeString();
   let page = first;
-  for (let n = 0; n < 4 && !(page.items as unknown[]).length; n++) {
+  for (let n = 0; n < 4 && !(page.items as unknown[]).length && typeof page.nextCursor === "string"; n++) {
     expect(Number(page.scanned)).toBeLessThanOrEqual(100);
     page = await f.read({ limit: 1, cursor: page.nextCursor });
   }
   expect(page.items).toMatchObject([{ clientRequestId: "fixture-claim-100" }]);
+});
+
+test("a large foreign open history is excluded by the parameterized owner-index seek", async () => {
+  const f = await fixture();
+  f.claim(1);
+  const binding = f.store.lookup("spawn_agent:fixture-claim-1")!.binding!;
+  const owner = binding.caller.conversationId;
+  if (!owner) throw new Error("fixture claim has no caller identity");
+  const db = new (await import("bun:sqlite")).Database(f.store.filename);
+  try {
+    db.query(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+      INSERT INTO mcp_receipts(receipt_key,digest,retention,result_json,storage_bytes,claimed_at,launch_project,launch_target,launch_owner,launch_open,launch_indexed)
+      SELECT 'foreign-'||i,printf('%064d',i),'durable',NULL,0,i,'foreign-project','foreign-target','foreign-owner',1,1 FROM n`).run();
+    const plan = db.query<{ detail: string }, [string, string, string, number, number, number]>(`EXPLAIN QUERY PLAN
+      SELECT r.sequence,r.receipt_key,r.launch_tool,r.claimed_at,r.launch_due,r.stage,r.launch_failure_code
+      FROM json_each(?) AS project CROSS JOIN json_each(?) AS target CROSS JOIN mcp_receipts AS r
+      WHERE r.launch_project=project.value AND r.launch_target=target.value AND r.launch_owner=? AND r.launch_open=1
+        AND r.sequence>? AND r.sequence<=? ORDER BY r.sequence LIMIT ?`)
+      .all(JSON.stringify([f.project]), JSON.stringify([f.project]), owner, 0, Number.MAX_SAFE_INTEGER, 1);
+    expect(plan.some(row => row.detail.includes("SEARCH r USING INDEX mcp_launch_owner"))).toBe(true);
+    expect(plan.some(row => row.detail.includes("mcp_launch_due"))).toBe(false);
+    expect(f.store.launchClaimPage([f.project], owner, 0, Number.MAX_SAFE_INTEGER, 1).map(row => row.receipt_key))
+      .toEqual(["spawn_agent:fixture-claim-1"]);
+  } finally { db.close(); }
+});
+
+test("receiving admission requires the pinned registry incarnation", async () => {
+  const f = await fixture();
+  f.claim(77);
+  const clientAttemptId = `mcp_spawn_${"d".repeat(64)}`;
+  const body = { clientAttemptId };
+  const original = f.store.lookup("spawn_agent:fixture-claim-77")!.binding!;
+  const binding: McpRequestBinding = { ...original, clientRequestId: "restored-registry-control", downstreamKey: clientAttemptId,
+    launchAdmission: { ...original.launchAdmission!, envelopeDigest: spawnAdmissionBodyDigest(body),
+      registryIdentity: f.registry.launchAdmissionIdentity() } };
+  f.store.claim("spawn_agent:restored-registry-control", "e".repeat(64), "durable", binding);
+  const request = () => new Request("http://127.0.0.1/api/spawn/admission", { method: "POST", headers: internalServiceHeaders("mcp") });
+  const callback = await receivingSpawnAdmission(request(), body);
+
+  // Native control proves the identity observer is reached with the pinned
+  // registry; it then refuses because this fixture has no launch caller proof.
+  expect(() => callback()).toThrow("launch caller authentication unavailable");
+  const changed = spyOn(f.registry, "launchAdmissionIdentity").mockReturnValue("restored-incarnation");
+  try { expect(() => callback()).toThrow("launch admission continuity changed"); }
+  finally { changed.mockRestore(); }
 });
 
 test("a queued pipeline rechecks its original seat at the final awaited writer", async () => {

@@ -2266,14 +2266,19 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
   launchClaimPage(projects: readonly string[], owner: string, after: number, watermark: number, limit: number) {
     const projectKeys = [...new Set(projects)];
     if (!projectKeys.length) return [];
-    // Keep the complete canonical family in two JSON bindings; expanding it
-    // into SQL placeholders silently capped durable aliases at 64 keys.
+    // Iterate the bounded alias families and seek each pair through the owner
+    // index. Filtering after a global launch_due walk makes limit ineffective
+    // when other projects have a large open history.
     const keys = JSON.stringify(projectKeys);
     return this.db.query<{ sequence: number; receipt_key: string; launch_tool: string; claimed_at: number; launch_due: number | null; stage: string | null; launch_failure_code: string | null }, SQLQueryBindings[]>(`
-      SELECT sequence,receipt_key,launch_tool,claimed_at,launch_due,stage,launch_failure_code FROM mcp_receipts
-      WHERE launch_project IN (SELECT value FROM json_each(?)) AND launch_target IN (SELECT value FROM json_each(?))
-        AND launch_owner=? AND launch_open=1
-        AND sequence>? AND sequence<=? ORDER BY sequence LIMIT ?`).all(keys, keys, owner, after, watermark, Math.min(100,limit));
+      SELECT r.sequence,r.receipt_key,r.launch_tool,r.claimed_at,r.launch_due,r.stage,r.launch_failure_code
+      FROM json_each(?) AS project
+      CROSS JOIN json_each(?) AS target
+      CROSS JOIN mcp_receipts AS r
+      WHERE r.launch_project=project.value AND r.launch_target=target.value
+        AND r.launch_owner=? AND r.launch_open=1
+        AND r.sequence>? AND r.sequence<=?
+      ORDER BY r.sequence LIMIT ?`).all(keys, keys, owner, after, watermark, Math.min(100,limit));
   }
 
   launchClaimStillOpen(projects: readonly string[], owner: string, sequence: number): boolean {
