@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
@@ -28,6 +29,15 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
+import { FileRuntimeEventStore } from "./eventStore";
+import { claudeStructuredHostOptions, spawnStructuredConversation, type StructuredSpawnInput } from "./structuredSpawn";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { projectEngineHostEvent } from "./engineHostEvents";
+import { consumeRuntimeEvent } from "./consumers";
+import { recordSpawnTurnEnded } from "./serverConsumers";
+import * as noticeStore from "@/lib/spawnNotice/store";
+import { sweepSpawnNotices, type SpawnNoticeDeliveryRequest } from "@/lib/spawnNotice/sweep";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-delivery-"));
 const ownedKillChildren = new Set<ReturnType<typeof Bun.spawn>>();
@@ -5687,3 +5697,254 @@ test("the real turn boundary drains its queued message even when status publicat
     await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
   }
 });
+
+
+/** Real queue, recovery admission, spawn publication and broker. Only the
+ * provider executable/auth and runtime transport are local fixture ports. */
+async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "background" | "lost-echo" | "late-result", fixtureName: string = mode) {
+  const directory = path.join(sandbox, `claude-terminal-${fixtureName}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const sessionId = "00000000-0000-0000-0000-000000000077";
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\n");
+  const profile = emptyLaunchProfile({ cwd: directory });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("claude", artifactPath, "default");
+  const key = { engine: "claude" as const, sessionId };
+  const entry = {
+    key, artifactPath, cwd: directory, accountId: "default", launchProfile: profile,
+    status: "dead" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "claude-broker" as const, endpoint: "fake:terminal-recovery",
+      process: null, eventCursor: 0, protocolVersion: "fixture-v1", writerClaimEpoch: 0,
+      activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+  };
+  registry.upsert({ ...entry, structuredHost: null });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const events = new FileRuntimeEventStore(path.join(directory, "events"));
+  const deliveries = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
+  const inputFile = path.join(directory, "inputs.jsonl");
+  fs.writeFileSync(inputFile, "");
+  const children: ChildProcessWithoutNullStreams[] = [];
+  const hosts: ClaudeStreamBrokerHost[] = [];
+  const account: StructuredSpawnInput["account"] = {
+    engine: "claude", accountId: "default", kind: "managed",
+    home: path.join(directory, "account"), transcriptRoot: directory, env: { NODE_ENV: "test" },
+  };
+  // This peer speaks captured fixture protocol shapes. It proves adapter
+  // bookkeeping, not native MCP authentication or background-job survival.
+  const peer = `
+    await import(${JSON.stringify(path.resolve(import.meta.dir, "../testing/fixtureLifetime.ts"))});
+    const fs = await import('node:fs');
+    const {createInterface} = await import('node:readline');
+    const [file, mode, session] = process.argv.slice(1);
+    const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
+    createInterface({input: process.stdin}).on('line', line => {
+      const frame = JSON.parse(line);
+      fs.appendFileSync(file, line + '\\n');
+      if (frame.type === 'control_request') emit({type: 'control_response', response: {
+        subtype: 'success', request_id: frame.request_id,
+        response: frame.request?.subtype === 'mcp_status'
+          ? {mcpServers: [{name: 'viewer', status: 'connected', tools: [{name: 'stage_report'}]}]} : {}
+      }});
+      if (frame.type === 'user') {
+        const previous = JSON.stringify(frame).includes('previous instruction');
+        if (mode !== 'lost-echo' || previous) emit({...frame, uuid: previous ? 'previous-input' : 'accepted-input'});
+        if (previous && mode === 'background') emit({type: 'system', subtype: 'task_started', task_id: 'fixture-task'});
+        if (!previous) emit({type: 'result', subtype: 'success', session_id: session});
+      }
+    });
+    process.on('SIGTERM', () => {
+      if (mode === 'late-result') emit({type: 'result', subtype: 'success', session_id: session});
+      process.exit(0);
+    });
+  `;
+  const open = async (resume: boolean, input?: StructuredSpawnInput) => {
+    const options = await claudeStructuredHostOptions(input ?? {
+      spec: {
+        engine: "claude", command: "claude", windowName: "terminal-recovery",
+        cwd: directory, transcript: artifactPath, launchProfile: profile,
+      } satisfies StructuredSpawnInput["spec"],
+      account,
+    }, { env: { ...process.env }, host: {} });
+    const hostOptions = {
+      ...options, sessionId, eventStore: events, deliveryLedger: deliveries, requestTimeoutMs: 1_000,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: ((_command, _args, options) => {
+        const child = spawn(process.execPath, ["-e", peer, inputFile, mode, sessionId], options);
+        children.push(child);
+        return child;
+      }) satisfies NonNullable<import("./claudeStreamBrokerHost").ClaudeStreamBrokerHostOptions["spawnProcess"]>,
+    };
+    const host = resume ? await ClaudeStreamBrokerHost.adopt(sessionId, hostOptions) : await ClaudeStreamBrokerHost.start(hostOptions);
+    hosts.push(host);
+    return host;
+  };
+  let successor: ClaudeStreamBrokerHost | undefined;
+  let launches = 0;
+  const handshakes: string[] = [];
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
+    ...dependencies, registry, client, transport: () => "structured", resolveAccount: () => account,
+    spawn: async input => {
+      launches++;
+      expect(input.prompt).toBe("");
+      const admission = input.resumeAdmission!;
+      return spawnStructuredConversation({ ...input, resumeAdmission: {
+        beforeClaim: () => { admission.beforeClaim(); handshakes.push("before-claim"); },
+        claimed: claim => { admission.claimed(claim); handshakes.push("claimed"); },
+      } }, {
+        startHost: async current => { successor = await open(true, current); return successor; },
+        durableSetupTimeoutMs: 3_000,
+      });
+    },
+    requestDeliveryDrain: () => {},
+  });
+  const request = {
+    path: artifactPath, conversationId: conversation.id, operationId: `terminal-operation-${mode}`,
+    clientMessageId: `terminal-client-${mode}`, text: "continue the accepted instruction", hasImages: false,
+    kind: "send" as const, policy: "queue" as const, origin: { kind: "agent" as const, role: "builder" },
+  };
+  const dependencies = { enabled: () => true, registry: () => registry, client: () => client, recover,
+    kick: () => {}, requestMigrationTick: () => {}, republish: async () => false };
+  const close = async () => {
+    try {
+      for (const host of hosts) await host.release();
+    } finally {
+      for (const child of children) await stopFixtureProcess(child);
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+    }
+  };
+  try {
+    const predecessor = await open(false);
+    if (mode !== "idle") await predecessor.send({ id: "previous-work", text: "previous instruction" });
+    const oldTurn = (await predecessor.health()).activeTurnRef;
+    const exited = new Promise<void>(resolve => children[0]!.once("close", () => resolve()));
+    children[0]!.kill(mode === "late-result" ? "SIGTERM" : "SIGKILL");
+    await exited;
+    await predecessor.release();
+    await bindStructuredDeliveryQueue([], { registry, client, recover });
+    registry.upsert(entry);
+    journal.append({ scope: `session:${conversation.id}`, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: key, hostKind: "claude-broker", host: "dead",
+      turn: "unknown", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
+    } });
+    return {
+      registry, journal, client, key, request, dependencies, events, sessionId, oldTurn, handshakes,
+      launches: () => launches, host: () => successor!, close,
+      users: () => fs.readFileSync(inputFile, "utf8").split("\n").filter(Boolean)
+        .map(line => JSON.parse(line) as { type: string; message?: { content: Array<{ type: string; text: string }> } })
+        .filter(frame => frame.type === "user"),
+      drain: () => drainHeldDeliveries(conversation.id, {
+        deliver: async ({ delivery, path: deliveryPath, clientMessageId }) => await deliverHeldStructuredMessage({
+          conversationId: conversation.id, path: deliveryPath, deliveryId: delivery.id, clientMessageId,
+          text: delivery.text, command: delivery.command,
+        }, { ...dependencies, kick: kickStructuredDeliveryQueue }) ?? "held",
+      }, registry),
+      restart: async () => {
+        await bindStructuredDeliveryQueue([], { registry, client: null });
+        await successor!.release();
+        successor = await open(true);
+        await bindStructuredDeliveryQueue([], { registry, client, recover });
+        await publishStructuredDeliveryHost({ key, host: successor });
+      },
+    };
+  } catch (error) { await close(); throw error; }
+}
+
+for (const mode of ["idle", "active", "background", "lost-echo", "late-result"] as const) {
+  test(`Claude terminal recovery preserves original delivery and notice: ${mode}`, async () => {
+    setSystemTime(new Date("2026-11-06T12:00:00Z"));
+    const f = await claudeTerminalRecoveryFixture(mode).catch(error => { setSystemTime(); throw error; });
+    try {
+      // Consume the actual producer output before adoption can repair it.
+      const terminalEvents = f.events.load(f.sessionId).filter(event => event.kind === "turn-ended");
+      expect(terminalEvents).toMatchObject(mode === "idle" ? [] : [{
+        turnId: "previous-work", status: mode === "late-result" ? "completed" : "error",
+      }]);
+      const sent: SpawnNoticeDeliveryRequest[] = [];
+      const childId = f.request.conversationId;
+      for (let replay = 0; replay < 2; replay++) for (const event of terminalEvents) {
+        const projected = projectEngineHostEvent(childId, `claude:${f.sessionId}`, event);
+        if (!projected) throw new Error("terminal event failed projection");
+        await consumeRuntimeEvent(f.journal.append(projected), {
+          flowReady: () => {}, workflowStageCompleted: () => {}, taskDeliveryAcknowledged: () => {},
+          spawnTurnEnded: turn => { recordSpawnTurnEnded(turn, {
+            child: () => ({ conversationId: childId, launcher: { conversationId: "conversation_launcher", notify: true }, contained: false }),
+            record: noticeStore.recordSpawnNoticeObligation,
+          }); },
+        });
+      }
+      for (let sweep = 0; sweep < 2; sweep++) await sweepSpawnNotices({
+        now: () => Date.parse("2026-11-06T12:00:00Z"),
+        pending: () => noticeStore.pendingSpawnNotices().filter(row => row.childConversationId === childId),
+        childRecord: noticeStore.readSpawnNoticeChild, child: async () => ({ title: "Fixture child", busy: false }),
+        recipient: launcher => ({ kind: "deliver", conversationId: launcher, path: "/sessions/launcher.jsonl" }),
+        finalMessage: () => ({ text: null, error: "fixture child exited" }),
+        origin: () => ({ kind: "agent", role: "builder", conversationId: childId }),
+        recordAttempt: noticeStore.recordSpawnNoticeAttempt, settle: noticeStore.settleSpawnNotices,
+        deliver: async notice => { sent.push(notice); return { ok: true, operationId: "fixture-notice" }; },
+      });
+      expect(sent).toHaveLength(mode === "idle" ? 0 : 1);
+      if (mode !== "idle") expect(noticeStore.readSpawnNoticeTurn(childId, "previous-work"))
+        .toMatchObject({ state: "sent", outcome: mode === "late-result" ? "completed" : "error" });
+
+      await enqueueStructuredMessage(f.request, f.dependencies);
+      await f.drain();
+      await kickStructuredDeliveryQueue();
+      expect(f.launches()).toBe(1);
+      expect(f.handshakes).toEqual(["before-claim", "claimed"]);
+      const receipt = await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client });
+      expect(receipt).toMatchObject(mode === "lost-echo"
+        ? { state: "failed", resend: "verify-first", duplicateRisk: true }
+        : { state: "delivered" });
+      const accepted = () => f.users().filter(frame => frame.message?.content.some(part => part.text.includes(f.request.text)));
+      expect(accepted()).toHaveLength(1);
+      expect(f.users().every(frame => frame.message?.content.some(part => part.text?.trim()))).toBeTrue();
+      for (const restart of [false, true]) {
+        if (restart) await f.restart();
+        await enqueueStructuredMessage(f.request, f.dependencies);
+        await f.drain();
+        await kickStructuredDeliveryQueue();
+        expect(accepted()).toHaveLength(1);
+        expect(await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client })).toEqual(receipt);
+      }
+      expect(f.events.load(f.sessionId).filter(event => event.kind === "turn-ended" && event.turnId === f.oldTurn))
+        .toHaveLength(mode === "idle" ? 0 : 1);
+    } finally { try { await f.close(); } finally { setSystemTime(); } }
+  }, 20_000);
+}
+
+for (const mutation of ["owner", "epoch", "permission"] as const) {
+  test(`Claude terminal recovery rechecks dispatch authority after an awaited read: ${mutation}`, async () => {
+    const f = await claudeTerminalRecoveryFixture("active", `authority-${mutation}`);
+    try {
+      await f.dependencies.recover({ path: f.request.path, conversationId: f.request.conversationId });
+      const host = f.host();
+      const original = f.registry.readOnlySnapshot().entries[`claude:${f.sessionId}`]!;
+      if (!original.claimOwner) throw new Error("fixture has no current writer");
+      let permitted = true;
+      const guard = () => {
+        if (!permitted || !f.registry.ownsStructuredHostClaim(f.key, original.claimOwner!, original.claimEpoch)) {
+          throw new StructuredSendRefusedError("fixture dispatch authority changed");
+        }
+      };
+      // The same native observer must receive a positive control first.
+      await host.send({ id: "positive-control", text: "positive fixture instruction" }, undefined, guard);
+      expect(f.users().some(frame => frame.message?.content.some(part => part.text === "positive fixture instruction"))).toBeTrue();
+      guard();
+      await host.health();
+      if (mutation === "owner") f.registry.upsert({ ...original, claimOwner: "structured-host:replacement" });
+      else if (mutation === "epoch") f.registry.upsert({ ...original, claimEpoch: original.claimEpoch + 1 });
+      else permitted = false;
+      expect(guard).toThrow("fixture dispatch authority changed");
+      const refused = host.send({ id: "refused-control", text: "refused fixture instruction" }, undefined, guard);
+      if (mutation === "permission") await expect(refused).rejects.toThrow("fixture dispatch authority changed");
+      // The production persistence binding retires a replaced writer before
+      // send; its native dead-host refusal is also definitive non-dispatch.
+      else expect(await refused).toEqual({ outcome: "rejected", reason: "dead-host" });
+      expect(f.users().some(frame => frame.message?.content.some(part => part.text === "refused fixture instruction"))).toBeFalse();
+    } finally { await f.close(); }
+  }, 20_000);
+}
