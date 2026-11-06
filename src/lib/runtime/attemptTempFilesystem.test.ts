@@ -156,6 +156,71 @@ test.each(["absent", "unreadable", "restored"] as const)("the final removal chec
   } finally { denied?.mockRestore(); fs.chmodSync(change === "unreadable" ? repository : parent, 0o700); store.close(); }
 });
 
+test.each([
+  ["namespace-only", "control"], ["namespace-only", "activate"], ["namespace-only", "checkout-disappears"], ["namespace-only", "reopen-absent"],
+  ["permission-fallback", "control"], ["permission-fallback", "activate"], ["permission-fallback", "checkout-disappears"], ["permission-fallback", "reopen-absent"],
+] as const)("namespace dispatch validates its final snapshot (%s, %s)", async (removalPath, change) => {
+  const parent = root(), directory = path.join(parent, "llv-stage-namespace-dispatch"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  const payload = path.join(directory, "payload"), dispatched = path.join(parent, "dispatched");
+  fs.writeFileSync(payload, "keep");
+  const docker = path.join(bin, "docker");
+  fs.writeFileSync(docker, `#!/bin/sh
+case "$1" in
+  ps) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    printf started > "$DOCKER_DISPATCH_MARKER"
+    find "$source" -depth -mindepth 1 -delete
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(docker, 0o700);
+  const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  const previousMarker = process.env.DOCKER_DISPATCH_MARKER;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.DOCKER_DISPATCH_MARKER = dispatched;
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+    if (removalPath === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return undefined;
+  });
+  let producerState = "closed", checkoutReadable = true;
+  const guard = async () => {
+    await Promise.resolve();
+    if (change === "activate") producerState = "live";
+    if (change === "checkout-disappears") checkoutReadable = false;
+    if (change === "reopen-absent") producerState = "unknown";
+    return true;
+  };
+  const dispatchGuard = () => producerState === "closed" && checkoutReadable;
+  try {
+    let error: unknown;
+    try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard); }
+    catch (caught) { error = caught; }
+    if (change === "control") {
+      expect(error).toBeUndefined();
+      expect(fs.existsSync(dispatched)).toBeTrue();
+      expect(fs.existsSync(directory)).toBeFalse();
+    } else {
+      expect(String(error)).toContain("authority changed before namespace removal");
+      expect(fs.existsSync(dispatched)).toBeFalse();
+      expect(fs.readFileSync(payload, "utf8")).toBe("keep");
+    }
+  } finally {
+    rm.mockRestore();
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+    else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+    if (previousMarker === undefined) delete process.env.DOCKER_DISPATCH_MARKER;
+    else process.env.DOCKER_DISPATCH_MARKER = previousMarker;
+  }
+});
+
 test("a capture created during the final container observation is preserved before reclaim", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-late-capture");
   fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");

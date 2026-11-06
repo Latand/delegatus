@@ -365,7 +365,7 @@ const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
   + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
 
 async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
-  guard?: () => Promise<boolean>, requireNoEvidence = false) {
+  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean) {
   const initial = fs.lstatSync(directory);
   if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
   const identity = `${initial.dev}:${initial.ino}`;
@@ -386,6 +386,8 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   const final = fs.lstatSync(directory);
   if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity)
     throw new Error("attempt identity changed before namespace dispatch");
+  if (operation === "remove" && dispatchGuard && !dispatchGuard())
+    throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
   return run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
@@ -432,8 +434,7 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
   dispatchGuard?: () => boolean): Promise<void> {
   if (requireNoEvidence) {
-    await containerCommand(directory, "remove", original, guard, true);
-    if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before namespace removal");
+    await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
     await fs.promises.rmdir(directory);
     return;
   }
@@ -441,8 +442,7 @@ export async function removeAttemptTree(directory: string, original = directory,
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    await containerCommand(directory, "remove", original, guard, true);
-    if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before namespace removal");
+    await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
     await fs.promises.rmdir(directory);
   }
 }
