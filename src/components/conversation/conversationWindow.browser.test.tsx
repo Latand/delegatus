@@ -2942,6 +2942,35 @@ describe("a consumed queued send leaves the composer by its own id", () => {
                 && clips.every((clip) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
                   && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5));
             };
+            /* A control's whole box: inside the window and inside every
+               ancestor that clips, which a label-only reading would not see. */
+            const boxWhole = (element: Element) => {
+              const rect = element.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0) return false;
+              if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) return false;
+              for (let node = element.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const clip = node.getBoundingClientRect();
+                if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5 || rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5) return false;
+              }
+              return true;
+            };
+            /* The open list's first card: its status drawn as visible text, its
+               "why" sentence and every control whole inside the list, the
+               region and the composer's box. */
+            const firstCard = document.querySelector("[data-runtime-receipt-stack][open] [data-delivery-check-card]");
+            const first = firstCard ? (() => {
+              const status = firstCard.querySelector('[role="status"]')!;
+              const why = firstCard.querySelector("[data-receipt-uncertain-why]")!;
+              return {
+                operation: firstCard.getAttribute("data-operation"),
+                status: status.textContent?.trim() ?? "",
+                statusDrawn: !status.classList.contains("sr-only") && whole(status),
+                whyWhole: whole(why),
+                controls: [...firstCard.querySelectorAll("button")].map((button) => ({ label: button.textContent?.trim() ?? "", whole: boxWhole(button) && whole(button) })),
+              };
+            })() : null;
             const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
             const cards = [...document.querySelectorAll("[data-delivery-check-card]")];
             const notice = document.querySelector('[data-testid="native-queue-notice"]');
@@ -2951,6 +2980,8 @@ describe("a consumed queued send leaves the composer by its own id", () => {
               chip: chipShown ? chip!.innerText.trim() : null,
               chipAria: chip?.getAttribute("aria-label") ?? null,
               chipWhole: !chipShown || whole(chip!),
+              first,
+              active: document.activeElement?.closest("[data-runtime-receipt-stack]") ? "list" : document.activeElement?.hasAttribute("data-receipts-chip") ? "chip" : document.activeElement?.tagName.toLowerCase() ?? null,
               listOpen: (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open ?? false,
               listShown: (document.querySelector('[data-testid="composer-receipts"]')?.getClientRects().length ?? 0) > 0,
               /* The composer's box against the column it shares with the
@@ -2981,6 +3012,12 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           const openList = async () => {
             await page.locator("[data-receipts-chip]").click();
             await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === true);
+            /* A phone hides the chip's line, so focus has to be in the list. */
+            if (viewport.touch) await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-runtime-receipt-stack]")));
+            /* The list reports the height its first card needs after its own
+               layout; the composer applies it a frame later. Read the settled
+               state, as a person sees it. */
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           };
           const closeList = async () => {
             await page.locator("[data-runtime-receipt-stack] > summary").click();
@@ -2988,6 +3025,7 @@ describe("a consumed queued send leaves the composer by its own id", () => {
                line while the list is open. */
             await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === false
               && (document.querySelector("[data-receipts-chip]")?.getClientRects().length ?? 0) > 0);
+            if (viewport.touch) await page.waitForFunction(() => document.activeElement?.hasAttribute("data-receipts-chip") === true);
           };
           const beforeRest = await read();
           await page.screenshot({ path: path.join(out, `before-rest-${key}.png`), fullPage: true });
@@ -3003,16 +3041,43 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           await openList();
           const after = await read();
           await page.screenshot({ path: path.join(out, `after-${key}.png`), fullPage: true });
-          readings[key] = { beforeRest, before, afterRest, after };
+          /* Send pressed with the picture staged: the refusal line is drawn
+             whole below the field, the list's first card stays whole beside it,
+             and the draft and the picture are kept. */
+          await page.locator("button[type=submit]").click();
+          await page.waitForSelector('[data-testid="composer-status"]');
+          const refused = await page.evaluate(() => {
+            const line = document.querySelector<HTMLElement>('[data-testid="composer-status"]')!;
+            const form = document.querySelector("form")!;
+            const range = document.createRange(); range.selectNodeContents(line);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+            const formRect = form.getBoundingClientRect();
+            return {
+              text: line.textContent?.trim() ?? "",
+              /* Every text range inside the window and the form's own box, and
+                 the line unscrolled (it may scroll in its own cap otherwise). */
+              whole: rects.length > 0 && rects.every((rect) => rect.top >= formRect.top - 0.5 && rect.bottom <= formRect.bottom + 0.5
+                && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5 && rect.left >= -0.5 && rect.right <= innerWidth + 0.5),
+              clientHeight: line.clientHeight, scrollHeight: line.scrollHeight,
+              draft: document.querySelector("textarea")?.value ?? null,
+              images: document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `refusal-${key}.png`), fullPage: true });
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          const refusedList = await read();
+          readings[key] = { beforeRest, before, afterRest, after, refused, refusedList };
           expect(pageErrors).toEqual([]);
           /* At rest the list waits behind the chip, which counts the sends
              whose fate is open: two before the proof, one after it. */
           for (const [rest, count] of [[beforeRest, 2], [afterRest, 1]] as const) {
             expect(rest.listOpen).toBe(false);
             expect(rest.listShown).toBe(false);
-            expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipAria", { count }));
+            /* Both counted sends have an unknown fate, so the yellow chip says
+               «Unconfirmed», never «Not delivered». */
+            expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipUnconfirmedAria", { count }));
             expect(rest.chip).not.toBeNull();
-            expect([translate(lang, "runtime.receipt.chip", { count }), String(count)]).toContain(rest.chip ?? "");
+            expect([translate(lang, "runtime.receipt.chipUnconfirmed", { count }), String(count)]).toContain(rest.chip ?? "");
             expect(rest.chipWhole).toBe(true);
             expect(rest.images).toBe(1);
             expect(rest.draft).toBe("an unsent draft");
@@ -3027,6 +3092,37 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           }
           expect(before.listOpen).toBe(true);
           expect(after.listOpen).toBe(true);
+          /* Opening the list guarantees the first card's status and every
+             control, whole inside the bounded list, at every viewport and in
+             both phases; the card leads with them, and its message and "why"
+             sentence below scroll inside the list when the box has no more
+             room (recorded on every viewport, gated where the box is not the
+             phone's 38dvh). */
+          for (const state of [before, after]) {
+            expect(state.first?.status).toBe(translate(lang, "composer.deliveryCheckEnded"));
+            expect(state.first?.statusDrawn).toBe(true);
+            if (!viewport.touch) expect(state.first?.whyWhole).toBe(true);
+            expect(state.first?.controls.length).toBeGreaterThanOrEqual(2);
+            expect(state.first?.controls.filter((control) => !control.whole)).toEqual([]);
+          }
+          /* A phone hides the chip's line while the list is open: focus is in
+             the list then and back on the chip once it closes. */
+          if (viewport.touch) {
+            expect(before.active).toBe("list");
+            expect(afterRest.active).toBe("chip");
+          }
+          /* The refusal: named routes, whole below the field, nothing lost. */
+          expect(refused.text).toBe(translate(lang, "composer.context.imagesBlockedQueue", {
+            toggle: translate(lang, "composer.context.toggle"), queue: translate(lang, "queue.queueMessage") }));
+          expect(refused.whole).toBe(true);
+          expect(refused.scrollHeight).toBeLessThanOrEqual(refused.clientHeight + 1);
+          expect(refused.draft).toBe("an unsent draft");
+          expect(refused.images).toBe(1);
+          /* The refusal takes room from the region's other surfaces, never from
+             the open list's first card. */
+          expect(refusedList.first?.statusDrawn).toBe(true);
+          expect(refusedList.first?.controls.filter((control) => !control.whole)).toEqual([]);
+          expect(refusedList.transcriptWhole).toBe(true);
           expect(before.images).toBe(1);
           expect(after.images).toBe(1);
           expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);

@@ -229,6 +229,10 @@ export interface ComposerBarProps {
       list waiting behind its chip, 2026-10-11): they stay mounted, and the
       region takes no room for them. */
   receiptsHidden?: boolean;
+  /** While the receipts list is open, the height (px) its first row needs to
+      be whole; the region keeps that much for it and the other surfaces yield
+      first. Null leaves the equal shares of the region as they are. */
+  receiptsMinHeight?: number | null;
   /** The desktop's Stop, its own button beside Send (operator, 2026-10-11):
       there while the agent works, so Send stays Send and a message typed
       meanwhile still queues behind the turn. The phone's send slot is its
@@ -384,6 +388,7 @@ export function ComposerBar({
   mode,
   rowControls,
   receiptsHidden = false,
+  receiptsMinHeight = null,
   stopControl,
   statusLine,
 }: ComposerBarProps) {
@@ -707,7 +712,7 @@ export function ComposerBar({
         <div
           data-testid="composer-accessories"
           hidden={!regionShown}
-          className="grid min-h-0 auto-rows-[minmax(0,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0"
+          className="grid min-h-0 auto-rows-[minmax(auto,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0"
         >
           {deliveries}
           {micHintRow}
@@ -727,7 +732,7 @@ export function ComposerBar({
               region: a run of failed or uncertain deliveries wraps into rows of
               chips, and each chip carries the controls that settle it. */}
           {receipts ? (
-            <div data-testid="composer-receipts" hidden={receiptsHidden} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
+            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsMinHeight && !receiptsHidden ? { minHeight: receiptsMinHeight } : undefined} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
           ) : null}
         </div>
       ) : null}
@@ -924,7 +929,7 @@ export function ComposerBar({
           data-testid="composer-send-blocked"
           role="status"
           aria-live="polite"
-          className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-caption font-semibold text-warning"
+          className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-caption font-semibold text-warning"
         >
           <span className="min-w-0">{sendDisabledReason}</span>
           {onSendBlockedRecover ? (
@@ -963,7 +968,7 @@ export function ComposerBar({
           data-testid="composer-status"
           role="status"
           aria-live={status.kind === "err" ? "assertive" : "polite"}
-          className={`block max-h-24 overflow-y-auto whitespace-pre-line break-words text-caption font-semibold ${status.kind === "ok" ? "text-success" : status.kind === "info" ? "text-warning" : "text-danger"}`}
+          className={`block max-h-24 shrink-0 overflow-y-auto whitespace-pre-line break-words text-caption font-semibold ${status.kind === "ok" ? "text-success" : status.kind === "info" ? "text-warning" : "text-danger"}`}
         >
           {status.text}
         </span>

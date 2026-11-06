@@ -2424,7 +2424,9 @@
           "Прибрати",
           "button",
           "button",
-          "Прибрати"
+          "Прибрати",
+          "button",
+          "button"
         ],
         "region": true,
         "chip": {
@@ -2915,7 +2917,9 @@
           "Dismiss",
           "button",
           "button",
-          "Dismiss"
+          "Dismiss",
+          "button",
+          "button"
         ],
         "region": true,
         "chip": {
@@ -3120,7 +3124,9 @@
           "Прибрати",
           "button",
           "button",
-          "Прибрати"
+          "Прибрати",
+          "button",
+          "button"
         ],
         "region": true,
         "chip": {
@@ -3609,7 +3615,9 @@
           "Dismiss",
           "button",
           "button",
-          "Dismiss"
+          "Dismiss",
+          "button",
+          "button"
         ],
         "region": true,
         "chip": {
@@ -4098,7 +4106,9 @@
           "Прибрати",
           "button",
           "button",
-          "Прибрати"
+          "Прибрати",
+          "button",
+          "button"
         ],
         "region": true,
         "chip": {
@@ -4587,7 +4597,9 @@
           "Dismiss",
           "button",
           "button",
-          "Dismiss"
+          "Dismiss",
+          "button",
+          "button"
         ],
         "region": true,
         "chip": {

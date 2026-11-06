@@ -468,3 +468,120 @@ test("phone: the chip shares one row above the field, and the open list takes th
     flushSync(() => root.unmount());
   }
 });
+
+/* One send that was refused with its fate unknown: the engine may have it. */
+const ONE_UNCONFIRMED = [
+  receipt({ operationId: "unconfirmed-only", status: "failed", resend: "verify-first", reason: "delivery outcome is unverified", text: "an unconfirmed message", at: "2026-10-11T10:02:00.000Z" }),
+];
+
+/** Drawn text: outside every screen-reader-only element and hidden ancestor. */
+const drawnText = (root: Element, text: string) =>
+  [...root.querySelectorAll("*")].some((element) => element.children.length === 0
+    && element.textContent?.trim() === text && !element.closest(".sr-only, [hidden]"));
+
+test("an unconfirmed delivery says so in the open list and on the chip, once, in both languages", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    const { host, root } = await mount({ receipts: ONE_UNCONFIRMED });
+    try {
+      const chip = rowControls(host)!.querySelector<HTMLButtonElement>("[data-receipts-chip]")!;
+      /* The chip is yellow because the fate is unknown, so its words say that
+         too instead of claiming the message was not delivered. */
+      expect(chip.textContent).toContain(translate(locale, "runtime.receipt.chipUnconfirmed", { count: 1 }));
+      expect(chip.textContent).not.toContain(translate(locale, "runtime.receipt.chip", { count: 1 }));
+      expect(chip.getAttribute("aria-label")).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 1 }));
+      expect(chip.className).toContain("text-warning");
+
+      await settle(() => chip.click());
+      const card = host.querySelector<HTMLElement>("[data-runtime-receipt-stack] [data-delivery-check-card]")!;
+      const status = translate(locale, "composer.deliveryCheckEnded");
+      /* The card draws its status itself: the list's header is wordless behind
+         the chip, so no other drawn element says it. */
+      expect(drawnText(card, status)).toBe(true);
+      expect(drawnText(host.querySelector("[data-runtime-receipt-stack] summary")!, status)).toBe(false);
+      expect([...host.querySelectorAll("[data-runtime-receipt-stack] [role=status]")]
+        .filter((node) => node.textContent?.trim() === status && !node.closest(".sr-only, [hidden]"))).toHaveLength(1);
+      /* The controls that settle it are on the card, and under the chip the
+         card leads with its status and them: a list bounded to a few lines
+         shows the decision first and scrolls to the message and the sentence. */
+      expect(card.querySelector("[data-receipt-discard]")).not.toBeNull();
+      const order = [...card.children].map((child) => child.matches("[role=status]") ? "status"
+        : child.hasAttribute("data-delivery-check-lead") ? "controls"
+          : child.hasAttribute("data-receipt-message") ? "message"
+            : child.hasAttribute("data-receipt-uncertain-why") ? "why" : "other");
+      expect(order).toEqual(["status", "controls", "message", "why"]);
+      expect(card.querySelector("[data-receipt-uncertain-why]")?.textContent?.length).toBeGreaterThan(0);
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  }
+});
+
+test("a chip that counts a settled failure beside an unconfirmed send keeps «Not delivered»", async () => {
+  const { host, root } = await mount({ receipts: THREE_UNDELIVERED });
+  try {
+    const chip = rowControls(host)!.querySelector<HTMLButtonElement>("[data-receipts-chip]")!;
+    expect(chip.textContent).toContain(translate("en", "runtime.receipt.chip", { count: 3 }));
+    expect(chip.getAttribute("aria-label")).toBe(translate("en", "runtime.receipt.chipAria", { count: 3 }));
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
+test("the chip names the list it opens", async () => {
+  const { host, root } = await mount({ receipts: ONE_UNCONFIRMED });
+  try {
+    const chip = rowControls(host)!.querySelector<HTMLButtonElement>("[data-receipts-chip]")!;
+    const stack = host.querySelector<HTMLElement>("[data-runtime-receipt-stack]")!;
+    expect(chip.getAttribute("aria-controls")).toBeTruthy();
+    expect(stack.id).toBe(chip.getAttribute("aria-controls") ?? "");
+    await settle(() => chip.click());
+    /* On the desktop the chip is still drawn, and keeps the focus. */
+    expect(chip.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement === chip || document.activeElement === document.body).toBe(true);
+    expect(stack.contains(document.activeElement)).toBe(false);
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
+test("phone: opening from the chip moves focus into the list, closing from its header returns it to the chip", async () => {
+  mobile = true;
+  const { host, root } = await mount({ receipts: ONE_UNCONFIRMED });
+  try {
+    const line = host.querySelector<HTMLElement>("[data-composer-status-line]")!;
+    const chip = line.querySelector<HTMLButtonElement>("[data-receipts-chip]")!;
+    const stack = host.querySelector<HTMLDetailsElement>("[data-runtime-receipt-stack]")!;
+    chip.focus();
+    await settle(() => chip.click());
+    expect(line.hidden).toBe(true);
+    expect(document.activeElement).toBe(stack.querySelector("summary"));
+    /* The header closes the list; the chip is drawn again and takes the focus. */
+    await settle(() => stack.querySelector<HTMLElement>("summary")!.click());
+    await settle(() => {});
+    expect(stack.open).toBe(false);
+    expect(line.hidden).toBe(false);
+    expect(document.activeElement).toBe(chip);
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
+test("phone: closing the list leaves the focus alone when the operator has moved it to the field", async () => {
+  mobile = true;
+  const { host, root } = await mount({ receipts: ONE_UNCONFIRMED });
+  try {
+    const line = host.querySelector<HTMLElement>("[data-composer-status-line]")!;
+    const chip = line.querySelector<HTMLButtonElement>("[data-receipts-chip]")!;
+    const stack = host.querySelector<HTMLDetailsElement>("[data-runtime-receipt-stack]")!;
+    await settle(() => chip.click());
+    const field = host.querySelector<HTMLTextAreaElement>("textarea")!;
+    field.focus();
+    await settle(() => stack.querySelector<HTMLElement>("summary")!.click());
+    await settle(() => {});
+    expect(stack.open).toBe(false);
+    expect(document.activeElement).toBe(field);
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
