@@ -266,6 +266,7 @@ test("blocks larger than the old total cap stream, while malformed and individua
       start + blockStart("tool_use") + delta('{"value":', "partial_json") + blockStop + stop,
       start + blockStart("tool_use") + delta('{"value":1,}', "partial_json") + blockStop + stop,
       start + blockStart("tool_use") + delta('{"value":"\\q"}', "partial_json") + blockStop + stop,
+      start + blockStart("tool_use") + delta('{"value":\u00a01}', "partial_json") + blockStop + stop,
       start + Array.from({ length: 65 }, (_, index) => blockStart("text", index)).join(""),
       start + blockStart() + delta("abc") + Array.from({ length: 65 }, () => frame({ type: "ping" })).join(""),
       start + blockStart() + delta("abc") + Array.from({ length: 5 }, () => frame({ type: "ping", padding: "z".repeat(2 * 1024 * 1024) })).join(""),

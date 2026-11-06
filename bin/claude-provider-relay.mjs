@@ -140,13 +140,13 @@ function toolChannel(secrets, marker, scrubJson) {
       return;
     }
     if (atom.length) {
-      if (/[\s,}\]]/.test(char)) atomDone();
+      if (/[ \t\r\n,}\]]/.test(char)) atomDone();
       else {
         appendAtom(unit);
         return;
       }
     }
-    if (/\s/.test(char)) { emit(unit); return; }
+    if (/[ \t\r\n]/.test(char)) { emit(unit); return; }
     const context = top();
     if (char === '"') {
       key = context.kind === "object" && ["key", "first"].includes(context.state);
