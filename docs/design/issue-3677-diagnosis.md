@@ -148,4 +148,101 @@ The full task remains open until the historical delivery branch is discriminated
 - Repeating the separate Codex explicit-resume review or adopting any original UNKNOWN operation.
 - Real-provider execution, installation, restart, deployment and production message replay. These require their own authorized acceptance step.
 
-This diagnosis changes only this document. It establishes a reproducible terminal-bookkeeping defect and a constrained implementation brief, with the empty-resume cause and native acceptance gaps retained explicitly.
+The diagnosis stage changed only this document. It established a reproducible terminal-bookkeeping defect and a constrained implementation brief, with the empty-resume cause and native acceptance gaps retained explicitly.
+
+
+## Implementation followthrough — 6 November 2026
+
+The builder changes only the terminal bookkeeping in
+`claudeStreamBrokerHost.ts`. `endActiveTurn` captures the existing turn, clears
+its in-memory queue/partial/interrupt bookkeeping and emits one error terminal
+event before the host status closes subscribers. Verified release uses the
+same operation. An ordinary result that arrived first retains its outcome.
+Restore now retains an unmatched start across a recorded dead/unhosted status;
+its persisted repair is observed by the next adoption and is not repeated.
+A terminal ledger failure logs its sanitized cause and publishes no durable
+completion; a regression checks both the warning and later adoption repair.
+No queue, recovery, receipt, orphan-stop, provider or permission policy changed.
+
+The predecessor source is `423bf964`; the builder starts after the diagnosis-only
+commit `7a3dfef815`. The issue still has no comments and retains its 5 November
+08:18:12 UTC update. Main remained `423bf964` on the builder's initial recheck. The
+adjacent background-turn lane has only its diagnostic document, with no source
+changes in the broker or delivery tests. Its final diagnosis explicitly leaves
+these failure/release/restore methods to this outcome. Comparing its actual
+working bytes with the base confirms that the combined affected source is
+identical to this patch. The old signal-domain PR's broker hunks are already
+represented in the base and remain untouched.
+
+At final recheck, main advanced to `9c084bd94c`. Its eight changed files concern
+pipeline publication refusal classification and history. Their actual source
+diffs do not change broker termination, recovery or delivery. Applying that diff
+to the verified scratch tree passes `git apply --check`, exit 0. The assigned
+branch retains its base; no combined runtime-test result is claimed.
+
+The new integration fixture uses the real queue, recovery, production
+`spawnStructuredConversation`, both `resumeAdmission` callbacks, registry
+binding, publication, event projection, runtime consumer, notice obligation
+store and notice sweep. It exits only its own local protocol peer, then checks
+that the successor receives the original instruction once and that the same
+receipt survives duplicate requests and broker/controller restart. The idle
+control creates no terminal turn; the late-result control retains completion.
+Echo loss leaves a failed `verify-first` receipt. Actual broker terminal events
+produce one notice obligation and one delivery-port call across repeated event
+consumption and sweeps.
+
+The native executable/authentication, launcher lookup and notice delivery are
+fixture ports. A background frame is synthetic. The fixture does not establish
+native background-job survival, authenticated MCP continuity, historical orphan
+eligibility or installed behavior. The registry owner/epoch controls use the
+production ownership check and persistence binding; that binding retires the
+obsolete host before dispatch. The permission control supplies a local guard
+after an awaited health read and has a positive native-write control. It does
+not establish every production permission producer or native-generation race;
+the existing migration/recovery controls remain required alongside it.
+
+### Builder verification
+
+Fresh per-file logs and actual exit files are retained privately in the stage
+evidence directory under `builder2`. The runner uses `checkEnvironment` and
+`isolatedEnvironment`, the designated gate wrapper, a closed Viewer control
+port and separate state/home/config/temp roots. Each command selects one file.
+No recorded-check custody is used. There is no performance claim.
+
+The base integration selection passes idle and late-result controls and fails
+active, background-frame and lost-echo predecessor terminal assertions: 2 pass,
+3 fail, exit 1. The focused broker base has 1 pass and 8 failures for the missing
+terminal bookkeeping. These failures are expected regression evidence.
+
+The full broker file passes 169 tests; the full delivery integration file
+passes 76 tests. Both exit 0. The initial integration harness used an empty
+transcript and incorrectly expected a thrown error after the production binding
+had already retired a replaced host. Those harness assumptions were corrected;
+the earlier failed logs are retained, including owned-runner cleanup evidence.
+
+Final head checks run as `bun run test <file>` through the designated wrapper:
+
+| File under `src/lib/` | Passed | Actual exit |
+| --- | ---: | ---: |
+| `runtime/claudeStreamBrokerHost.test.ts` | 169 | 0 |
+| `runtime/structuredDelivery.integration.test.ts` | 76 | 0 |
+| `runtime/structuredRecovery.test.ts` | 42 | 0 |
+| `runtime/structuredRecoveryBinding.test.ts` | 2 | 0 |
+| `spawnNotice/sweep.test.ts` | 24 | 0 |
+| `runtime/claudeStreamBrokerHost.compact.test.ts` | 8 | 0 |
+
+The final focused base run includes all eight integration cases: five controls
+pass and three terminal-event regressions fail, exit 1. The restored head passes
+all eight, exit 0. Removing only the broker's final dispatch guard in scratch
+makes the permission regression fail, exit 1; the original bytes were restored
+and compared before final verification. The current broker base run reproduces
+its eight expected failures, exit 1.
+
+ESLint over the three changed TypeScript files passes, exit 0. The repository
+privacy gate with required fingerprints passes on all five explicit changed
+paths. Whitespace review passes. Native commit hooks remain enabled; publication
+owns its normal pre-push checks. No standalone typecheck, build, full repository
+suite or provider call was run.
+
+Three independent runtime review rounds and separate installed acceptance
+remain required. This source change does not finish the full task.
