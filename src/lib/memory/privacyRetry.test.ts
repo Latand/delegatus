@@ -389,6 +389,52 @@ test.each(["worker", "composition", "backoff", "real-timeouts"] as const)("exhau
   } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
 });
 
+test.each(["none", "store-busy", "worker-timeout"] as const)("a fractional clipped timeout preserves the request phase and preceding cause: %s", async prior => {
+  store();
+  let clock = 0, calls = 0, dispatches = 0;
+  const budgets: number[] = [];
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async <T = void>(ms: number | undefined, value?: T): Promise<T> => {
+    clock += Number(ms);
+    return value as T;
+  });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async () => {
+    calls++;
+    const budget = privacyWorkTimeoutMs();
+    budgets.push(budget);
+    // Timers truncate fractional delays, so the clipped request can time out
+    // just before the outer cutoff. Its budget still belongs to that window.
+    clock += Math.floor(budget);
+    throw new PrivacyWorkError("worker-timeout");
+  });
+  let attempts = 0;
+  try {
+    const error = await withCurrentRoleMemory(async () => {
+      if (++attempts === 1 && prior !== "none") {
+        if (prior === "store-busy") throw new PrivacyWorkError(prior);
+        return withoutStoredLessonsAsync(privateText);
+      }
+      clock = 170_000.25;
+      return withoutStoredLessonsAsync(privateText);
+    }).then(value => { dispatches++; return value; }).catch(error => error);
+    const cause = prior === "none" ? "window-exhausted" : prior;
+    expect(error.code).toBe("LESSON_PRIVACY_UNAVAILABLE");
+    expect(error.message).toContain(`${cause}; retry window exhausted after 180 seconds during privacy worker request`);
+    expect(error.message).toContain(`privacy worker requests ${calls}`);
+    expect(clock).toBe(179_999.25);
+    expect(budgets).toEqual(prior === "worker-timeout" ? [60_000, 9_999.75] : [9_999.75]);
+    expect(pause).toHaveBeenCalledTimes(prior === "none" ? 0 : 1);
+    expect(attempts).toBe(prior === "none" ? 1 : 2);
+    expect(dispatches).toBe(0);
+    expect(error.message).not.toContain(privateText);
+    const logged = log.mock.calls.flat().join("\n");
+    expect(logged).not.toContain(privateText);
+    if (prior === "none") expect(logged).not.toContain("worker-timeout");
+    expect(logged).not.toContain("during backoff");
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});
+
 test("revision churn preserves the caller deferral without sleeping or parking", async () => {
   store();
   const collection = roleMemoryCollection()!;

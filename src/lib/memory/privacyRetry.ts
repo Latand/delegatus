@@ -33,7 +33,9 @@ function exhausted(window: Window): PrivacyRetryExhausted {
 export function privacyRevisionRerun(): void { const window = context.getStore()?.window; if (window) window.reruns++; }
 export function privacyFailureObserved(failure: PrivacyFailure): void {
   const window = context.getStore()?.window;
-  if (window && failure !== "window-exhausted") window.lastFailure = failure;
+  if (!window) return;
+  if (failure === "window-exhausted") window.exhaustedPhase ??= window.phase;
+  else window.lastFailure = failure;
 }
 /** A request owns its clipping flag even when callers filter concurrently. */
 export async function privacyWorkerRequest<T>(work: () => Promise<T>): Promise<T> {
@@ -45,9 +47,10 @@ export async function privacyWorkerRequest<T>(work: () => Promise<T>): Promise<T
   try { return await context.run({ window, request: { clipped: false } }, work); }
   finally { if (--window.workers === 0) phase(window, window.backingOff ? "backoff" : "composition"); }
 }
-export function privacyRequestWindowExpired(): boolean {
-  const current = context.getStore();
-  return !!current?.request?.clipped && performance.now() >= current.window.deadline;
+export function privacyRequestWasClipped(): boolean {
+  // Timer delays can truncate a fractional remainder. The request's budget
+  // identifies its timeout even when the callback precedes the exact cutoff.
+  return context.getStore()?.request?.clipped === true;
 }
 /** The worker includes queueing in this timeout. Nested privacy passes share
  * the original cutoff, including prompt/artifact composition and revision reads. */
@@ -88,7 +91,7 @@ export async function withPrivacyRetry<T>(work: () => Promise<T>): Promise<T> {
           throw error;
         }
         const remaining = window.deadline - performance.now();
-        if (error instanceof PrivacyRetryExhausted || remaining <= 0 && (transientPrivacyFailure(failure) || failure === "window-exhausted")) {
+        if (error instanceof PrivacyRetryExhausted || failure === "window-exhausted" || remaining <= 0 && transientPrivacyFailure(failure)) {
           if (!(error instanceof PrivacyRetryExhausted) && !(failure === "worker-timeout" && window.lastRequestClipped)) privacyFailureObserved(failure);
           const refusal = error instanceof PrivacyRetryExhausted ? error : exhausted(window);
           console.warn(`[role-memory] privacy preparation failed: ${refusal.failure}; ${refusal.summary}; refusing; nothing was sent`);

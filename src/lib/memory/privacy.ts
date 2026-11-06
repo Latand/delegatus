@@ -4,7 +4,7 @@ import { storedLessonRevision, RoleMemoryRefusal, ROLE_MEMORY_CHANGED_MESSAGE } 
 import type { PrivacyRequest, RenderReportInput, RenderReportResult, IssueReportFinding } from "./privacyWork";
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { PrivacyWorkError, privacyFailureOf } from "./privacyFailure";
-import { PrivacyRetryExhausted, privacyFailureObserved, privacyRequestWindowExpired, privacyRevisionRerun, privacyWorkerRequest, withPrivacyRetry } from "./privacyRetry";
+import { PrivacyRetryExhausted, privacyFailureObserved, privacyRequestWasClipped, privacyRevisionRerun, privacyWorkerRequest, withPrivacyRetry } from "./privacyRetry";
 
 /** A revision conflict is safe to retry only before dispatch. Never carries text. */
 export class RoleMemoryChanged extends RoleMemoryRefusal {
@@ -48,7 +48,7 @@ async function run<T>(request: PrivacyRequest): Promise<T> {
     try { return (await runPrivacyWork(request)).value as T; }
     catch (error) {
       const observed = privacyFailureOf(error);
-      const failure = observed === "worker-timeout" && privacyRequestWindowExpired() ? "window-exhausted" : observed;
+      const failure = observed === "worker-timeout" && privacyRequestWasClipped() ? "window-exhausted" : observed;
       // A revision retry may consume this error before the outer retry loop
       // sees it. Record the safe cause at its origin, including lost leases.
       if (!(error instanceof OperationLeaseExpiredError)) console.warn(`[role-memory] privacy worker failed: ${failure}`);

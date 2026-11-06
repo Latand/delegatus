@@ -288,6 +288,9 @@ and durations; nothing from a prompt, a rule or an error message enters it.
   the cutoff passed, or when a retryable failure arrives with no time left. A
   `worker-timeout` from a request whose budget was cut to the remainder counts
   as window exhaustion and is left out of the failure record. A
+  fractional timer delay can fire just before the exact cutoff; the request's
+  clipped budget still determines the cause, and its worker phase is retained
+  without another backoff. A
   `worker-timeout` after a full 60-second
   budget with time left stays a retryable failure, as today.
 - The refusal reads: `role memory could not be read or filtered; <cause>; retry
@@ -445,6 +448,8 @@ real implementation:
    - a window that ends in backoff or composition names that phase;
    - two real timeouts followed by a cut request report `worker-timeout` as
      the cause and the cut request as the phase.
+   - a clipped fractional delay that fires before the exact cutoff refuses
+     immediately in the worker phase, retaining an earlier genuine cause.
 
    No message or log line contains fixture rule text.
 8. **Deferral kept.** Three reruns after revision changes still surface
