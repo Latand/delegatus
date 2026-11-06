@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { bindResumedSeatTick } from "./resumedSeatTick";
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { SeatTickWork, outsideSeatTickWork, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkDetail, seatTickSkippedSources, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -2620,6 +2621,13 @@ function kickTurboWork(project: string, kick: ((project: string) => void) | unde
   }
 }
 
+/** A resumed conversation may request only its current designated project. */
+export async function reconcileResumedSeatTick(conversationId: string, dependencies: SeatTickControllerDependencies = {}): Promise<void> {
+  const sources = dependencies.sources ?? defaultSeatTickSources();
+  const project = sources.activeSeats().find(project => sources.seatFor(project).active?.conversationId === conversationId);
+  if (project) await reconcileSeatTick({ ...dependencies, sources }, [project]);
+}
+
 export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}, requestedProjects?: readonly string[]): Promise<SeatTickRunRecord[]> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
@@ -2811,6 +2819,10 @@ export function startSeatTick(ports: {
   const timer = schedule(run, policy.checkIntervalMs / 2);
   timer.unref?.();
   tickHost.__llvSeatTickTimer = timer;
+  bindResumedSeatTick(async conversationId => {
+    if (generation !== tickHost.__llvSeatTickGeneration || handoffHeld() || drainHeld()) return;
+    await reconcileResumedSeatTick(conversationId, { policy });
+  });
   // Read durable stall observations immediately; a restart owes no new interval.
   run();
   return true;
@@ -2823,6 +2835,7 @@ export function seatTickIdle(): boolean {
 /** Test seam: the timer is process-global, so a suite must be able to start
     from an unstarted one without reaching into module internals. */
 export function stopSeatTick(): void {
+  bindResumedSeatTick(null);
   tickHost.__llvSeatTickGeneration = (tickHost.__llvSeatTickGeneration ?? 0) + 1;
   for (const entry of tickHost.__llvSeatTickProjects?.values() ?? []) entry.work?.close();
   tickHost.__llvSeatTickProjects?.clear();
