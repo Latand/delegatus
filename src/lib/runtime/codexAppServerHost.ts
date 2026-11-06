@@ -1708,8 +1708,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ].filter(Boolean).join("\n\n"),
         }
         : {};
+      // A reconnect can recreate the registered stdio MCP child. Restore its
+      // installation and caller binding without changing the thread's policy.
+      const registeredViewer = record(record(record(configRead)?.config)?.mcp_servers)?.viewer;
+      const reconnectConfig = typeof record(registeredViewer)?.command === "string" && viewer
+        ? { mcp_servers: { viewer } } : undefined;
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(reconnectConfig ? { config: reconnectConfig } : {}) } : {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
@@ -1747,7 +1752,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
-      if (!options.socketOwner) await provisional.verifyViewerMcp();
+      await provisional.verifyViewerMcp();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
       await provisional.negotiateHistoryCapability();

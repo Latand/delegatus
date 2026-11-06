@@ -1667,6 +1667,7 @@ function addStructuredRestartConversation(
 async function startupAdoptionAttempts(
   registry: AgentRegistry,
   client?: RuntimeHostClient,
+  extra: Partial<StructuredStartupDependencies> = {},
 ): Promise<string[]> {
   const attempts: string[] = [];
   const select = (
@@ -1686,6 +1687,7 @@ async function startupAdoptionAttempts(
     await adoptStructuredHostsAtStartup({
       registry,
       client: client ?? runtimeJournalClient(journal!),
+      ...extra,
       /* A row held for its restart cut evidence schedules a re-probe; this
          helper tears its registry down, so none may reach a real timer. */
       schedule: () => ({ unref() {} }),
@@ -1726,6 +1728,35 @@ test.skipIf(process.platform === "win32").each(["terminal", "busy"] as const)("s
     expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform === "win32").each(["current", "previous", "missing-socket"] as const)("startup reconnects only a current idle seat with a surviving native socket (%s)", async scenario => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-reconnect-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = "22222222-3333-0333-0333-333333333333";
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "idle", turn: "terminal",
+    transcriptRecords: [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }],
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!,
+    endpoint: scenario === "missing-socket" ? "stdio:released" : `codex-unix:${socket}`,
+    process: captureProcessIdentity(process.pid), pendingAttention: [] } });
+  const seat = activeSeat("seat-reconnect", 1, scenario === "previous" ? "conversation_other" : conversation.id, artifactPath);
+  try {
+    expect(await startupAdoptionAttempts(registry, undefined, { orchestratorSeats: () => [seat] }))
+      .toEqual(scenario === "current" ? [`codex:${sessionId}`] : []);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -1862,6 +1862,13 @@ function startupAdoptionPredicate(registry: AgentRegistry, facts: {
     }
     const conversationId = registry.canonicalConversationId(conversation.id);
     if (pendingWork(entry)) return true;
+    // An idle current seat still needs its surviving native connection. This
+    // reconnects its socket without launching a process or a continuation turn.
+    if (entry.key.engine === "codex" && (entry.status === "idle" || entry.status === "live")
+      && orchestratorSeats().some(seat => seat.state === "active"
+        && registry.canonicalConversationId(seat.conversationId as ViewerConversationId) === conversationId)
+      && entry.structuredHost?.process
+      && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) return true;
     if (!settledStageConversationIds.has(conversationId) && entry.structuredHost?.pendingAttention.length
       && entry.structuredHost.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) return true;
     if (conversation.turn.state === "terminal") return false;
@@ -2768,7 +2775,8 @@ async function adoptStructuredHostsPass(
         // The surviving process retains its original MCP capability and launch
         // policy. Rotating its token would strand every tool call after adoption.
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
-          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment };
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment,
+            mcpServers: launchProfile?.mcpServers ?? ["viewer"], plugins: launchProfile?.plugins ?? [] };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
         const access = await materializeOwnedStructuredHostAccess(
