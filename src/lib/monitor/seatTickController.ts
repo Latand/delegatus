@@ -1270,7 +1270,7 @@ async function reconcileOutstandingWake(context: {
       try {
         outcome = await dispatchCall.run({ clientMessageId: wake.clientMessageId, token }, () => context.deliver!({
           pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" }));
+          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "context-or-queue" }));
         redispatched = deliveryOutcomeLabel(outcome);
         redispatchReason = sendRefusalDetail(outcome);
       } catch (error) {

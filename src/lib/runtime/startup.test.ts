@@ -1771,7 +1771,7 @@ test.skipIf(process.platform === "win32").each(["current", "rotated", "paused", 
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const sessionId = randomUUID();
+  const sessionId: string = randomUUID();
   const key = { engine: "codex" as const, sessionId };
   const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
     sessionId, status: "idle", turn: "terminal",
@@ -1847,7 +1847,7 @@ test.skipIf(process.platform === "win32")("startup rechecks retained seats after
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const sessionId = randomUUID();
+  const sessionId: string = randomUUID();
   const key = { engine: "codex" as const, sessionId };
   const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
     sessionId, status: "idle", turn: "terminal",
@@ -1859,7 +1859,7 @@ test.skipIf(process.platform === "win32")("startup rechecks retained seats after
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const client = runtimeJournalClient(journal);
   let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
-  const secondId = randomUUID();
+  const secondId: string = randomUUID();
   const second = addStructuredRestartConversation(registry, directory, {sessionId: secondId, status: "idle", turn: "terminal", transcriptRecords: [{type:"event_msg", timestamp:new Date().toISOString(),payload:{type:"task_complete",turn_id:"turn"}}]});
   const secondEntry = registry.readOnlySnapshot().entries[`codex:${secondId}`]!;
   registry.upsert({...secondEntry,structuredHost:{...secondEntry.structuredHost!,endpoint:`codex-unix:${socket}`,process:identity,pendingAttention:[]}});
@@ -1884,7 +1884,7 @@ test.skipIf(process.platform === "win32")("startup rechecks retained seats after
   try {
     const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => seats,
       assertActive: () => {
-        if (opened.length > 0 && !mutationObserved && structuredStartupStatus().phase === phaseFor) {
+        if (opened.length > 0 && !mutationObserved && structuredStartupStatus()?.phase === phaseFor) {
           seats = seats.filter(row => row.conversationId === conversation.id); mutationObserved = true;
         }
       },
@@ -1926,7 +1926,7 @@ test.skipIf(process.platform === "win32")("startup retirement cannot reuse anoth
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const sessionId = randomUUID();
+  const sessionId: string = randomUUID();
   const key = { engine: "codex" as const, sessionId };
   const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
     sessionId, status: "idle", turn: "terminal",
@@ -1945,7 +1945,7 @@ test.skipIf(process.platform === "win32")("startup retirement cannot reuse anoth
   const phaseFor = "recovering pending spawns";
   const olderReleaseGate = Promise.withResolvers<void>();
   const releases = await import("./structuredDeliveryController");
-  const olderHost = new FakeEngineHost(createFakeDeliveryLedger());
+  const olderHost = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), { onStateChange: () => () => {} });
   let olderRelease: Promise<boolean> | undefined;
   let forgetOlder: (() => void) | undefined;
   const ledger = createFakeDeliveryLedger();
@@ -1964,7 +1964,7 @@ test.skipIf(process.platform === "win32")("startup retirement cannot reuse anoth
         return seats;
       },
       assertActive: () => {
-        if (opened.length > 0 && !mutationObserved && structuredStartupStatus().phase === phaseFor) {
+        if (opened.length > 0 && !mutationObserved && structuredStartupStatus()?.phase === phaseFor) {
           seats = []; mutationObserved = true;
           forgetOlder = releases.retainUnpublishedStructuredLaunchHost({key, host: olderHost, registry, release: async () => { await olderReleaseGate.promise; }});
           olderRelease = releases.releaseStructuredDeliveryHost(key, olderHost);
