@@ -2506,7 +2506,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
    *   the operation fails with that reason; it is never quietly delivered as
    *   something the operator did not ask for.
    */
-  async inject(request: RuntimeInjectRequest): Promise<RuntimeInjectOutcome> {
+  async inject(request: RuntimeInjectRequest, authorizeDispatch?: () => void): Promise<RuntimeInjectOutcome> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredInjectError("Codex app-server host is unavailable", "refused");
     }
@@ -2587,6 +2587,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new StructuredInjectError("stale-generation", "refused");
     }
     if (this.activeTurnId !== turnAtActuation) throw new StructuredInjectError("stale-turn", "refused");
+    // The metadata write above yielded; the caller's seat, account and drain
+    // authority must still hold at the native write boundary.
+    authorizeDispatch?.();
     try {
       await this.rpc("thread/inject_items", { threadId: this.identity.threadId, items });
     } catch (error) {

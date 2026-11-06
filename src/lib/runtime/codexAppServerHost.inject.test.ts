@@ -14,13 +14,16 @@ import {
   CODEX_DELIVERY_CONFIRMATION_TIMEOUT_MS,
   DEFAULT_INJECT_OBSERVATION_TIMEOUT_MS,
 } from "./codexAppServerHost";
-import { StructuredInjectError } from "./engineHost";
+import { StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
 import { structuredContent } from "./structuredContent";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { parseRuntimeCommand } from "./commands";
+import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 
 // Command/control tests use a fake interpreter and its explicit inventory.
 let restoreFeatureReader: () => void;
@@ -251,6 +254,79 @@ function digestOf(text: string): string {
 
 /** Every RPC that would touch the turn. None of them may appear. */
 const TURN_MUTATIONS = ["turn/start", "turn/steer", "turn/interrupt"];
+
+test("a queued seat context policy reaches native injection and canonical receipt without a turn RPC", async () => {
+  const root = scratchRoot();
+  const server = new InjectAppServer(root);
+  const host = await startHost(server);
+  const turnId = server.startTurn();
+  const journal = new RuntimeJournal(join(root, "context.sqlite"), { structuredHosts: true, now: () => 1_000 });
+  try {
+    expect(await host.health()).toMatchObject({ activeTurnRef: turnId });
+    journal.append({ scope: { type: "session", id: "conv-native-context" }, kind: "session-status", payload: {
+      conversationId: "conv-native-context", sessionKey: { engine: "codex", sessionId: server.threadId },
+      hostKind: "codex-app-server", host: "hosted", turn: "running", activeTurnId: turnId,
+      writerClaim: "native-owner", provenance: "structured",
+      capabilities: { steer: true, inject: true, nativeQueue: true, structuredAttention: true },
+    } });
+    const command = parseRuntimeCommand("send", { conversationId: "conv-native-context", operationId: "op-native-context",
+      idempotencyKey: "key-native-context", policy: "context-or-queue", text: "worker update for the current turn" });
+    journal.executeOperation(command);
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+      hostClaim: () => "native-owner",
+      injectionBinding: () => ({ threadId: server.threadId, accountId: null, writerClaim: "native-owner" }),
+    }, () => host);
+    await queue.drain();
+    const deadline = performance.now() + 2_000;
+    while (journal.operationResult("op-native-context")?.receipt.status === "delivering" && performance.now() < deadline) await Bun.sleep(5);
+    expect(journal.operationResult("op-native-context")?.receipt).toMatchObject({ status: "delivered", turnId,
+      reason: expect.stringContaining("injected input") });
+    expect(server.injectedItems).toHaveLength(1);
+    for (const method of TURN_MUTATIONS) expect(server.requests.some(request => request.method === method)).toBe(false);
+    server.endTurn(turnId);
+    expect(journal.executeOperation(command).replayed).toBe(true);
+    await queue.drain();
+    expect(server.injectedItems).toHaveLength(1);
+    expect(server.requests.some(request => request.method === "turn/start")).toBe(false);
+  } finally { await host.release(); journal.close(); }
+});
+
+test("injection rechecks caller authority after metadata publication and before the native write", async () => {
+  const server = new InjectAppServer(scratchRoot());
+  const host = await startHost(server);
+  let ready!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { ready = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const original = io.open;
+  const open = spyOn(io, "open").mockImplementation(async (...args) => {
+    const handle = await original(...args);
+    if (String(args[0]).endsWith(".tmp")) {
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => { ready(); await held; await sync(); };
+    }
+    return handle;
+  });
+  let current = true;
+  const outcome = host.inject({ operationId: "authority-loss", threadId: server.threadId,
+    text: "worker update", contentDigest: digestOf("worker update") }, () => {
+    if (!current) throw new StructuredSendRefusedError("seat retired");
+  }).catch((error: unknown) => error);
+  try {
+    await Promise.race([entered, outcome.then(() => { throw new Error("injection ended before metadata publication"); })]);
+    current = false;
+    release();
+    expect(await outcome).toBeInstanceOf(StructuredSendRefusedError);
+    expect(server.requests.filter(request => request.method === "thread/inject_items")).toEqual([]);
+  } finally {
+    release();
+    await outcome;
+    open.mockRestore();
+    await host.release();
+  }
+});
 
 test("active-turn injection appends the operator's input and issues no turn RPC", async () => {
   const server = new InjectAppServer(scratchRoot());

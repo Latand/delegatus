@@ -92,7 +92,7 @@ export interface StructuredMessageRequest {
   clientMessageId?: string | null;
   operationId?: string;
   kind?: "send" | "steer" | "inject";
-  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  policy?: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   text: string;
