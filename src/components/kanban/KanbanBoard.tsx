@@ -64,12 +64,11 @@ import { SeatActionWires } from "./SeatActionWires";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived, readerShown } from "./kanbanFocus";
 import { closeReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
-import { stagePanelKey } from "./KanbanCard";
 import { kanbanCardsOpenByDefault } from "./cardOpenDefault";
 import { formAnswerTarget, laneState, type CardState } from "./cardState";
 import { heldAnswer, laneAnswerItems, menuAnswers, type LaneAnswerItem } from "./laneAnswerMenu";
 import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
-import { cycleOpenAgent, openAgents } from "./openAgents";
+import { cycleOpenAgent, isStageDraftAgent, openAgents, parseStageDraftAgent, stageDraftAgent, stageDraftAgentKey, stageDraftStateKey } from "./openAgents";
 import { AgentWindow, OPEN_AGENTS_SHORTCUT, OpenAgentsPill } from "./AgentWindow";
 import { AgentWindowOpener } from "./agentWindowOpener";
 import { readerReady, useAgentWindowGeometry, useReaderReady } from "./agentWindowGeometry";
@@ -78,12 +77,16 @@ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { pipelineTitle, stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
+import { StageDraftPanel } from "./StageDraft";
 import { LaneReviewSheet } from "@/components/laneReview/LaneReviewSheet";
 import { clipTitle, textField, withField } from "./taskText";
 import { BoardHistory, type HistoryEntry } from "./boardHistory";
-import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
+import { currentStageId, draftOutcome, pipelineActionOptions, pipelineEnded, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
 import { usePipelineActions } from "./usePipelineActions";
 import { useBands } from "./useBands";
+import { BoardTimeline, BoardTimelineToggle } from "./BoardTimeline";
+import { resolvedTimelineMembers } from "@/lib/board/taskTimelineMembers";
+import { useBoardTimeline } from "./boardTimelineStore";
 
 /**
  * The desktop kanban board (#1695 K2): the approved prototype's columns and
@@ -241,12 +244,11 @@ function withCardOpen(folds: CardFolds, id: string, open: boolean): CardFolds {
   return { ...folds, flipped };
 }
 
-/** A waiting stage open on a card: its first message, before it has a conversation. */
-interface StagePanel {
+/** A waiting stage open in the agent window: its first message, before it has a conversation. */
+interface OpenStageDraft {
   cardId: string;
   pipelineId: string;
   stageId: string;
-  folded: boolean;
 }
 
 /** The Stages sheet: which card's pipeline, the stage it opened on, and what to hand focus back to. */
@@ -255,6 +257,8 @@ interface SheetTarget {
   pipelineId: string;
   focus: string | null;
   opener: HTMLElement | null;
+  /** Opened from a lane's «Graph»: the sheet starts with its graph shown. */
+  graph: boolean;
 }
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
@@ -300,6 +304,22 @@ function withEntry<V>(map: ReadonlyMap<string, V>, key: string, value: V | undef
   return next;
 }
 
+/** The stage of this pipeline whose first message the agent window shows. */
+function shownDraftStage(shown: string | null, pipelineId: string): string | null {
+  const draft = shown ? parseStageDraftAgent(shown) : null;
+  return draft && draft.pipelineId === pipelineId ? draft.stageId : null;
+}
+
+/** Where a first message open in the window stands now: its card, else
+    whichever card holds its pipeline, and its stage. */
+function draftStageOf(cards: readonly KanbanCardModel[], cardsById: ReadonlyMap<string, KanbanCardModel>, entry: OpenStageDraft): { card: KanbanCardModel; pipeline: Pipeline; stage: PipelineStage } | null {
+  const own = cardsById.get(entry.cardId);
+  const card = own?.pipelines.some((summary) => summary.pipeline.id === entry.pipelineId) ? own : cards.find((candidate) => candidate.pipelines.some((summary) => summary.pipeline.id === entry.pipelineId));
+  const pipeline = card?.pipelines.find((summary) => summary.pipeline.id === entry.pipelineId)?.pipeline;
+  const stage = pipeline?.stages.find((candidate) => candidate.id === entry.stageId);
+  return card && pipeline && stage ? { card, pipeline, stage } : null;
+}
+
 const NO_EDITS: ReadonlyMap<string, never> = new Map<string, never>();
 
 type HistoryDirection = "undo" | "redo";
@@ -335,6 +355,9 @@ if (typeof document !== "undefined") {
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
+  const timeline = useBoardTimeline(project);
+  const timelineShown = !props.overview && timeline.preference.view === "timeline";
+  const toggleTimeline = () => timeline.update({ view: timelineShown ? "board" : "timeline" });
   const workLinks = useWorkLinks();
   const boardPaneRef = useBoardPaneRef();
   /* The bar's word on the server (#2071 D7): a reconnect in progress is a
@@ -435,11 +458,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const { controller, statuses, edits } = useTaskMutations(allTasks, props.mutationPorts);
   /* A card still being written shows the saving bar: a pending write, or a new task drawn ahead of its create. */
   const pendingIds = useMemo(() => ({ pending: (id: string) => controller.pending(id) || isProvisionalTaskId(id) }), [controller]);
-  /* Which cards show a pipeline's graph or its summary, as the operator chose. */
-  const [graphChoices, setGraphChoices] = useState<ReadonlyMap<string, boolean>>(() => new Map());
-  const toggleGraph = useCallback((cardId: string, pipelineId: string, open: boolean) => {
-    setGraphChoices((current) => new Map(current).set(`${cardId}|${pipelineId}`, open));
-  }, []);
   /* K5b: pipeline actions, waiting stages' first messages, and the Stages sheet. */
   const pipelinePorts = props.pipelinePorts ?? browserPipelinePorts;
   const [ownStageDrafts] = useState(() => (props.stageDrafts ? null : new StageDrafts()));
@@ -447,7 +465,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [ownConversationDrafts] = useState(() => (props.conversationDrafts ? null : new ConversationDrafts()));
   const conversationDrafts = props.conversationDrafts ?? ownConversationDrafts!;
   const draftsVersion = useSyncExternalStore(stageDrafts.subscribe, stageDrafts.version, stageDrafts.version);
-  const [stagePanels, setStagePanels] = useState<ReadonlyMap<string, StagePanel>>(() => new Map());
+  /* Waiting stages whose first message is open in the agent window, in the
+     order opened, by their window key. Held in memory only, as the card's
+     panels were: a reload does not bring them back. */
+  const [openDrafts, setOpenDrafts] = useState<ReadonlyMap<string, OpenStageDraft>>(() => new Map());
   const [sheet, setSheet] = useState<SheetTarget | null>(null);
   /* The lane review sheet (docs/design/lane-diff-comments.md); one of the two sheets is open at a time. */
   const [review, setReview] = useState<{ pipelineId: string; title: string; opener: HTMLElement | null } | null>(null);
@@ -549,6 +570,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const card of model.unlinked) map.set(card.id, card);
     return map;
   }, [model]);
+  const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
+  const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
+    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []),
+  ...resolvedTimelineMembers(projection, timelineTasks)], [model, projection, timelineTasks]);
   /* The card ⋯'s source conversation (variant 3), read only while that menu
      is open: the newest conversation the card holds, named with its branch. */
   const menuCard = menu.open?.value.kind === "card" ? cardsById.get(menu.open.value.cardId) ?? null : null;
@@ -577,7 +602,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const shownState = windowState.project === project ? windowState.shown : null;
   const setWindow = useCallback((agent: string | null, shown?: string | null) => {
     setWindowState((current) => {
-      const next = { project, agent, shown: shown === undefined ? (current.project === project ? current.shown : null) : shown };
+      /* A stage's first message has no feed to read: it is on screen in the
+         commit it is asked for. */
+      const next = { project, agent, shown: isStageDraftAgent(agent) ? agent : shown === undefined ? (current.project === project ? current.shown : null) : shown };
       return next.agent === current.agent && next.shown === current.shown && next.project === current.project ? current : next;
     });
   }, [project]);
@@ -686,9 +713,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* An agent closed while it is in the reader and its neighbour has not
      read yet: it has left the list and stays in the reader until the
      neighbour can take its place, then it closes (see closeReaderFor). */
-  const [closing, setClosing] = useState<{ key: string; memory: ReaderMemory } | null>(null);
-  /* The agents open on the board, for the agent window's list. */
-  const openNow = useMemo(() => openAgents(t, readerViews, openReaders, props.now), [t, readerViews, openReaders, props.now]);
+  const [closing, setClosing] = useState<{ key: string; close: () => void } | null>(null);
+  /* The agents open on the board, for the agent window's list: the
+     conversations, then the waiting stages' first messages. */
+  const openConversations = useMemo(() => openAgents(t, readerViews, openReaders, props.now), [t, readerViews, openReaders, props.now]);
+  const shownDrafts = useMemo(() => [...openDrafts].flatMap(([key, entry]) => {
+    const found = draftStageOf(cards, cardsById, entry);
+    return found ? [{ key, ...found }] : [];
+  }), [openDrafts, cards, cardsById]);
+  const openNow = useMemo(() => [
+    ...openConversations,
+    ...shownDrafts.map(({ key, card, pipeline, stage }) => stageDraftAgent(key, {
+      name: stageNames(t, pipeline).get(stage.id) ?? stage.id,
+      card: card.titlePending ? t("kanban.untitled") : card.title,
+      stage,
+      stateWord: t(stageDraftStateKey(!stageNotStarted(pipeline, stage.id), pipelineEnded(pipeline))),
+    })),
+  ], [openConversations, shownDrafts, t]);
   const windowAgents = useMemo(() => (closing ? openNow.filter((agent) => agent.key !== closing.key) : openNow), [openNow, closing]);
   const windowKeysRef = useRef<readonly string[]>([]);
   windowKeysRef.current = windowAgents.map((agent) => agent.key);
@@ -714,7 +755,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
      neighbour, or with the window. */
   useLayoutEffect(() => {
     if (!closing || shown === closing.key) return;
-    closing.memory.update((readers) => closeReader(readers, closing.key));
+    closing.close();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the close it held is done
     setClosing(null);
   }, [closing, shown]);
@@ -1710,11 +1751,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           type: "item",
           label: t("kanban.draft.editMenu"),
           keepFocus: true,
-          onSelect: () => {
-            /* A folded panel opens, so the field it edits is there to take focus. */
-            if (value.from === "panel") foldStagePanel(stagePanelKey(value.cardId, pipeline.id, stage.id), false);
-            stageDrafts.begin(pipeline.id, stage.id, stagePromptExtra(stage.prompt));
-          },
+          onSelect: () => stageDrafts.begin(pipeline.id, stage.id, stagePromptExtra(stage.prompt)),
         });
         /* K6: the first turn's account, chosen in the stage's account picker. */
         if (anchor) {
@@ -1731,7 +1768,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
         item(forStage(skip), t("kanban.stages.skipThis"), t("kanban.pipelineAct.skipWhy")),
       );
       if (value.from === "panel") {
-        items.push({ type: "sep" }, { type: "item", label: t("kanban.stages.showInStages"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline, stage.id) });
+        /* The window gives way to the stages view, standing on this stage, which takes the keyboard. */
+        items.push({ type: "sep" }, { type: "item", label: t("kanban.stages.showInStages"), keepFocus: true, onSelect: () => {
+          if (windowAgentRef.current) setWindow(null, null);
+          openSheet(card.id, pipeline, stage.id);
+        } });
       }
       return { label: t("kanban.stages.stageActions", { stage: name }), items };
     }
@@ -2101,7 +2142,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     if (!shown || !focusOnShow.current) return;
     focusOnShow.current = false;
-    const reader = placement.slotOf(shown)?.querySelector<HTMLElement>("[data-kanban-reader]");
+    const reader = isStageDraftAgent(shown)
+      ? rootRef.current?.querySelector<HTMLElement>(`[data-agent-window-frame] [data-stage-detail="${cssEscape(shown)}"]`)
+      : placement.slotOf(shown)?.querySelector<HTMLElement>("[data-kanban-reader]");
     /* A reader that came back with its own focus (its composer, its caret) keeps it. */
     if (reader && !reader.contains(document.activeElement)) reader.focus({ preventScroll: true, ...(keyedLast ? {} : { focusVisible: false }) });
   }, [shown, placement]);
@@ -2131,9 +2174,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
   }, [files, filesByPath, openReaderFor]);
   /* A node or chip opens what its stage has: the latest own attempt's
-     conversation, or, for a stage that has not started, its first message in
-     a panel on the card (prototype `openStage`). */
-  const pendingPanelFocus = useRef<string | null>(null);
+     conversation, or, for a stage that has not started, its first message.
+     Both open in the agent window, and the card keeps its geometry
+     (docs/design/task-card-no-inline-conversations.md §2). */
   const openStage = useCallback((pipeline: Pipeline, stage: PipelineStage, cardId?: string) => {
     const attempt = latestAttempt(pipeline, stage.id);
     if (attempt) {
@@ -2141,22 +2184,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return;
     }
     if (!cardId || !stageDraftable(pipeline, stage.id)) return;
-    const key = stagePanelKey(cardId, pipeline.id, stage.id);
-    setStagePanels((current) => withEntry(current, key, { cardId, pipelineId: pipeline.id, stageId: stage.id, folded: false }));
-    pendingPanelFocus.current = key;
-    revealCard(cardId);
-  }, [openRecorded, revealCard]);
-  useLayoutEffect(() => {
-    const key = pendingPanelFocus.current;
-    if (!key) return;
-    const panel = rootRef.current?.querySelector<HTMLElement>(`[data-stage-detail="${cssEscape(key)}"]`);
-    if (!panel) return;
-    pendingPanelFocus.current = null;
-    panel.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
-    panel.focus({ preventScroll: true });
-  });
-  /* A draft made from a card's conversation opens on its card as the Builder's
-     first message, once the board draws the lane the server answered. */
+    const key = stageDraftAgentKey(cardId, pipeline.id, stage.id);
+    setOpenDrafts((current) => (current.has(key) ? current : withEntry(current, key, { cardId, pipelineId: pipeline.id, stageId: stage.id })));
+    openedFrom.current = null;
+    focusOnShow.current = true;
+    setWindow(key);
+  }, [openRecorded, setWindow]);
+  /* A draft made from a card's conversation opens its card, and the Builder's
+     first message in the agent window, once the board draws the lane the
+     server answered. */
   const conversationDraftsVersion = useSyncExternalStore(conversationDrafts.subscribe, conversationDrafts.version, conversationDrafts.version);
   const openConversationDraft = useCallback((cardId: string, pipeline: Pipeline) => {
     setCardFolds((current) => withCardOpen(current, cardId, true));
@@ -2172,21 +2208,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       openConversationDraft(card.id, summary.pipeline);
     }
   }, [cards, conversationDraftsVersion, conversationDrafts, openConversationDraft]);
-  const foldStagePanel = useCallback((key: string, folded: boolean) => {
-    setStagePanels((current) => {
-      const panel = current.get(key);
-      return panel && panel.folded !== folded ? withEntry(current, key, { ...panel, folded }) : current;
-    });
-  }, []);
-  const closeStagePanel = useCallback((key: string) => {
-    const cardId = stagePanels.get(key)?.cardId;
-    setStagePanels((current) => withEntry(current, key, undefined));
-    if (cardId) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
-  }, [stagePanels]);
-  const openStagePanelMenu = useCallback((key: string, anchor: HTMLElement) => {
-    const panel = stagePanels.get(key);
-    if (panel) menu.setOpen({ anchor, value: { kind: "stage", cardId: panel.cardId, pipelineId: panel.pipelineId, stageId: panel.stageId, from: "panel" } });
-  }, [stagePanels, menu]);
+  const openStageDraftMenu = useCallback((key: string, anchor: HTMLElement) => {
+    const entry = openDrafts.get(key);
+    const found = entry ? draftStageOf(cards, cardsById, entry) : null;
+    if (found) menu.setOpen({ anchor, value: { kind: "stage", cardId: found.card.id, pipelineId: found.pipeline.id, stageId: found.stage.id, from: "panel" } });
+  }, [openDrafts, cards, cardsById, menu]);
   /* A draft the stage's record makes moot goes, wherever it was open: the
      stage started with its words, or its words were never changed. */
   useEffect(() => {
@@ -2196,61 +2222,71 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (pipeline) stageDrafts.settleFromStage(key, pipeline);
     }
   }, [pipelines, draftsVersion, stageDrafts]);
-  /* When a waiting stage starts, its panel leaves the card and the stage's
-     conversation joins the agent window's list. A draft the start overtook keeps the panel, which
-     says the draft was not delivered, until the operator lets it go. A panel
-     whose pipeline left the board goes with it. */
+  /* When a waiting stage starts, its first message leaves the window's list
+     and the stage's conversation joins it; one on screen stays there until
+     that conversation has read, as a switch does. A draft the start
+     overtook keeps its place, saying the draft was not delivered, until the
+     operator lets it go. One whose pipeline left the board goes with it. */
   useEffect(() => {
-    if (!stagePanels.size) return;
-    let next = stagePanels;
+    if (!openDrafts.size) return;
+    let next = openDrafts;
     const promoted: FileEntry[] = [];
-    for (const [key, panel] of stagePanels) {
-      const summary = cards.flatMap((card) => card.pipelines).find((entry) => entry.pipeline.id === panel.pipelineId);
-      const stage = summary?.pipeline.stages.find((entry) => entry.id === panel.stageId);
-      if (!summary || !stage) {
+    let handOver: { key: string; file: FileEntry } | null = null;
+    for (const [key, entry] of openDrafts) {
+      if (closing?.key === key) continue;
+      const found = draftStageOf(cards, cardsById, entry);
+      if (!found) {
         next = withEntry(next, key, undefined);
         continue;
       }
-      const draft = stageDrafts.get(stageDraftKey(panel.pipelineId, panel.stageId));
-      if (stageNotStarted(summary.pipeline, stage.id) || (draft && draftOutcome(summary.pipeline, stage.id, draft) !== "included")) continue;
-      const attempt = latestAttempt(summary.pipeline, stage.id);
+      const { pipeline, stage } = found;
+      const draft = stageDrafts.get(stageDraftKey(pipeline.id, stage.id));
+      if (stageNotStarted(pipeline, stage.id) || (draft && draftOutcome(pipeline, stage.id, draft) !== "included")) continue;
+      const attempt = latestAttempt(pipeline, stage.id);
       const file = attempt ? (attempt.agentPath ? filesByPath.get(attempt.agentPath) : undefined) ?? (attempt.conversationId ? filesByConversation.get(attempt.conversationId) : undefined) : undefined;
-      /* The attempt's conversation is not on the board yet: the panel waits for it. */
+      /* The attempt's conversation is not on the board yet: the draft waits for it. */
       if (!file) continue;
-      next = withEntry(next, key, undefined);
       promoted.push(file);
+      if (shownRef.current === key && !handOver) handOver = { key, file };
+      else next = withEntry(next, key, undefined);
     }
-    if (next !== stagePanels) setStagePanels(next);
+    if (next !== openDrafts) setOpenDrafts(next);
     if (promoted.length) {
       memory.update((readers) => promoted.reduce<OpenReader[]>((current, file) => openReader(current, conversationIdentity(file), file.path), [...readers]));
     }
-  }, [stagePanels, cards, draftsVersion, stageDrafts, filesByPath, filesByConversation, memory]);
-  const panelsByCard = useMemo(() => {
+    if (handOver) {
+      const { key, file } = handOver;
+      setClosing({ key, close: () => setOpenDrafts((current) => withEntry(current, key, undefined)) });
+      if (windowAgentRef.current === key) setWindow(conversationIdentity(file));
+    }
+  }, [openDrafts, closing, cards, cardsById, draftsVersion, stageDrafts, filesByPath, filesByConversation, memory, setWindow]);
+  /* Each card's waiting stages open in the window, so their pills read as open. */
+  const draftsByCard = useMemo(() => {
     const byCard = new Map<string, string[]>();
-    for (const panel of stagePanels.values()) {
-      const lines = byCard.get(panel.cardId) ?? [];
-      lines.push(`${panel.pipelineId}\t${panel.stageId}\t${panel.folded ? "1" : "0"}`);
-      byCard.set(panel.cardId, lines);
+    for (const { card, pipeline, stage } of shownDrafts) {
+      const lines = byCard.get(card.id) ?? [];
+      lines.push(`${pipeline.id}\t${stage.id}`);
+      byCard.set(card.id, lines);
     }
     return new Map([...byCard].map(([cardId, lines]) => [cardId, lines.join("\n")] as const));
-  }, [stagePanels]);
-  /* A waiting stage's panel or an agent draft opens its card when it appears
-     (§2.3): they are forms the card stands in. The operator can close it again. */
+  }, [shownDrafts]);
+  /* An agent draft opens its card when it appears (§2.3): it is a form the
+     card stands in. The operator can close it again. */
   const formCards = useRef<ReadonlySet<string>>(EMPTY_SET);
   useLayoutEffect(() => {
-    const now = new Set(cards.filter((card) => card.drafts.length > 0 || panelsByCard.has(card.id)).map((card) => card.id));
+    const now = new Set(cards.filter((card) => card.drafts.length > 0).map((card) => card.id));
     const fresh = [...now].filter((id) => !formCards.current.has(id));
     formCards.current = now;
     if (fresh.length) setCardFolds((current) => fresh.reduce((folds, id) => withCardOpen(folds, id, true), current));
-  }, [cards, panelsByCard]);
+  }, [cards]);
 
   /* ── The Stages sheet ─────────────────────────────────────────────────── */
-  const openSheet = useCallback((cardId: string, pipeline: Pipeline, stageId?: string) => {
+  const openSheet = useCallback((cardId: string, pipeline: Pipeline, stageId?: string, options: { graph?: boolean } = {}) => {
     const summary = cardsByIdRef.current.get(cardId)?.pipelines.find((entry) => entry.pipeline.id === pipeline.id);
     const focus = stageId ?? (summary ? currentStageId(summary.pipeline, summary.views) : null);
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setReview(null);
-    setSheet({ cardId, pipelineId: pipeline.id, focus, opener });
+    setSheet({ cardId, pipelineId: pipeline.id, focus, opener, graph: options.graph === true });
   }, []);
   const openReview = useCallback((pipeline: Pipeline, title: string) => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -2356,6 +2392,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
      out of the list. The last one closes the window. */
   const closeReaderFor = useCallback((key: string) => {
     disown(key);
+    /* A stage's first message leaves the window's drafts; a conversation leaves the reader memory. */
+    const close = isStageDraftAgent(key)
+      ? () => setOpenDrafts((current) => withEntry(current, key, undefined))
+      : () => memory.update((readers) => closeReader(readers, key));
     const agent = windowAgentRef.current;
     const onScreen = shownRef.current;
     if (agent && (agent === key || onScreen === key)) {
@@ -2364,15 +2404,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const neighbour = at < 0 ? null : keys[at + 1] ?? keys[at - 1] ?? null;
       /* An agent still on its way into the reader stays asked for. */
       const next = agent === key ? neighbour : agent;
-      if (onScreen === key && next && !readerReady(placement.containerOf(next))) {
+      if (onScreen === key && next && !isStageDraftAgent(next) && !readerReady(placement.containerOf(next))) {
         setWindow(next);
-        setClosing({ key, memory });
+        setClosing({ key, close });
         return;
       }
       setWindow(next, onScreen === key ? next : onScreen);
       if (!next) focusAfterWindow(".board-frame");
     }
-    memory.update((readers) => closeReader(readers, key));
+    close();
   }, [memory, disown, setWindow, placement, focusAfterWindow]);
   const openReaderMenu = useCallback((key: string, anchor: HTMLElement, stop: ReaderStop) => menu.setOpen({ anchor, value: { kind: "reader", key, stop } }), [menu]);
 
@@ -2538,7 +2578,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      reader, whatever path brought it there and wherever focus stands, so a
      composer's selected-context line is the same for an agent after an open,
      a switch or a close. */
-  const inReader = windowOpen && !seatReaderKeys.has(shown ?? "") ? shown : focusedReader;
+  /* A stage's first message is no conversation: with one on screen the selection stays where it was. */
+  const inReader = windowOpen && !isStageDraftAgent(shown) && !seatReaderKeys.has(shown ?? "") ? shown : focusedReader;
   const focusedView = inReader ? readerViews.find((view) => view.readerKey === inReader) : undefined;
 
   /* ── The agent window's list ─────────────────────────────────────────── */
@@ -2566,6 +2607,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const key of keys) disown(key);
     setWindow(null, null);
     memory.update((readers) => readers.filter((reader) => !keys.has(reader.key)));
+    setOpenDrafts((current) => ([...current.keys()].some((key) => keys.has(key)) ? new Map([...current].filter(([key]) => !keys.has(key))) : current));
     /* The window and the pill go with the last agent; the board keeps the keyboard. */
     focusAfterWindow(".board-frame");
   }, [memory, disown, setWindow, focusAfterWindow]);
@@ -2928,7 +2970,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       menuOpen={menu.open?.value.kind === "column" && menu.open.value.status === status}
       widths={widthControls ? { state: wideColumns, wide: wideShelf } : null}
       readerKeysByCard={readerKeysByCard}
-      panelsByCard={panelsByCard}
+      draftsByCard={draftsByCard}
       actingByCard={actingByCard}
       newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
       heldLaunches={heldLaunches}
@@ -2955,8 +2997,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onSaveHold: cardSaveHold,
         onCancelHold: cardCancelHold,
         onIconMenu: openIconMenu,
-        graphChoices,
-        onToggleGraph: toggleGraph,
         onOpenAttempt: cardOpenAttempt,
         onDismissLaunch: dismissLaunch,
         drafts: stageDrafts,
@@ -2968,9 +3008,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onWorkLinks: openWorkLinks,
         onAnswerCard: answerCard,
         seatConversationIds,
-        onStagePanelFold: foldStagePanel,
-        onStagePanelClose: closeStagePanel,
-        onStagePanelMenu: openStagePanelMenu,
         onAddAgent: props.onAddAgent ? addAgentToCard : undefined,
         onAsked: taskAsked,
         projectNames: props.overview?.names ?? null,
@@ -2978,6 +3015,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }}
     />
   ));
+  /* The first message the window's reader shows, and the conversation a draft its stage did not take can open. */
+  const shownDraft = isStageDraftAgent(shown) ? shownDrafts.find((entry) => entry.key === shown) ?? null : null;
+  const shownDraftAttempt = shownDraft ? latestAttempt(shownDraft.pipeline, shownDraft.stage.id) : null;
+  const shownDraftRecorded = shownDraftAttempt && (shownDraftAttempt.agentPath || shownDraftAttempt.conversationId)
+    ? { path: shownDraftAttempt.agentPath, conversationId: shownDraftAttempt.conversationId }
+    : null;
   const sheetView = sheet && sheetSummary ? (
     <StagesSheet
       key={`${sheet.cardId}|${sheet.pipelineId}`}
@@ -2986,7 +3029,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
       panes={sheetPanes}
       flowsById={flowsById}
       initialFocus={sheet.focus}
+      initialGraph={sheet.graph}
       windowReader={shown}
+      windowDraft={shownDraftStage(shown, sheet.pipelineId)}
       placement={placement}
       drafts={stageDrafts}
       ports={pipelinePorts}
@@ -2995,6 +3040,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onChooseAttempt={(stageId, n) => setPaneAttempts((current) => withEntry(current, stageDraftKey(sheet.pipelineId, stageId), n))}
       onStageMenu={(stage, anchor) => menu.setOpen({ anchor, value: { kind: "stage", cardId: sheetSummary.card.id, pipelineId: sheet.pipelineId, stageId: stage.id, from: "sheet" } })}
       onOpenRecorded={openRecorded}
+      onOpenStage={(stage) => {
+        /* The window opens over the sheet; closing it hands the keyboard back to the node or chip. */
+        const from = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        openStage(sheetSummary.summary.pipeline, stage, sheetSummary.card.id);
+        openedFrom.current = from;
+      }}
       onLeaveWindow={leaveWindow}
       onClose={closeSheet}
     />
@@ -3049,7 +3100,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
      a count is enough inside a menu); its tray opens where it always did, under the control that
      now leads to it. */
   const barExtra: BarTrailExtra = {
-    menuRows: (close) => hiddenCount ? (
+    menuRows: (close) => <>
+      {!props.overview && barFit.includes("panels") ? <button type="button" data-board-timeline-menu="" className={BAR_MENU_ROW} aria-pressed={timelineShown} onClick={() => { close(); toggleTimeline(); }}><span>{t("timeline.title")}</span></button> : null}
+      {hiddenCount ? (
       <button
         type="button"
         className={BAR_MENU_ROW}
@@ -3065,8 +3118,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
         <span className="min-w-0 flex-1">{t("kanban.hidden")}</span>
         <span className="font-normal tabular-nums text-muted">{hiddenCount}</span>
       </button>
-    ) : null,
-    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} folded={barFit.includes("panels")} /> : null,
+    ) : null}</>,
+    panelsTail: <>
+      {props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} folded={barFit.includes("panels")} /> : null}
+      {props.overview ? null : <BoardTimelineToggle active={timelineShown} onToggle={toggleTimeline} />}
+    </>,
     /* The list still hangs under its own segment, which the row keeps as an empty anchor beside ⋯. */
     recentRow: props.recentAgents ? (close) => (
       <button type="button" className={BAR_MENU_ROW} data-bar-more-recent="" aria-haspopup="dialog" onClick={() => { close(); queueMicrotask(() => setRecentOpen(true)); }}>
@@ -3159,7 +3215,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               menuOpen={menu.open?.value.kind === "create" || composingTask}
             />
           </div>
-          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : null}
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : props.overview ? null : <div className="bar-slot"><BoardTimelineToggle active={timelineShown} onToggle={toggleTimeline} /></div>}
           <BarIslandSlot />
         </header>
       )}
@@ -3170,7 +3226,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <div className="kb-pane" ref={boardPaneRef}>
       <div className="kb-page">
       {seatSide ? null : seatView}
-      <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
+      <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t(timelineShown ? "timeline.title" : "kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
+      {timelineShown && loaded ? (
+        <BoardTimeline project={project} tasks={timelineTasks} members={timelineMembers}
+          pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update} />
+      ) : null}
+      <div className="board-rest" hidden={timelineShown && loaded} inert={timelineShown && loaded}>
       {!loaded ? (
         /* The columns it is loading, in the tracks this width gives them (#2071). */
         <KanbanColumnsSkeleton mode={mode} style={boardStyle} />
@@ -3222,6 +3283,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       )}
       </div>
       </div>
+      </div>
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
       </div>
       </div>
@@ -3254,7 +3316,22 @@ export function KanbanBoard(props: KanbanBoardProps) {
           onCloseAll={closeAllAgents}
           onLeave={leaveWindow}
         >
-          {shown ? <ReaderSlot key={shown} placement={placement} readerKey={shown} /> : null}
+          {shownDraft ? (
+            <div key={shown} className="reader-slot" data-stage-draft-slot="">
+              <StageDraftPanel
+                panelKey={shown!}
+                cardTitle={shownDraft.card.titlePending ? t("kanban.untitled") : shownDraft.card.title}
+                pipeline={shownDraft.pipeline}
+                stage={shownDraft.stage}
+                names={stageNames(t, shownDraft.pipeline)}
+                drafts={stageDrafts}
+                ports={pipelinePorts}
+                onClose={leaveWindow}
+                onMenu={(anchor) => openStageDraftMenu(shown!, anchor)}
+                onOpenConversation={shownDraftRecorded ? () => openRecorded(shownDraftRecorded) : null}
+              />
+            </div>
+          ) : shown ? <ReaderSlot key={shown} placement={placement} readerKey={shown} /> : null}
           {incoming ? <ReaderSlot key={incoming} placement={placement} readerKey={incoming} incoming /> : null}
         </AgentWindow>
       ) : null}
@@ -3374,12 +3451,12 @@ type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
   | "onToggleCollapsed" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onIconMenu"
-  | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
-  | "drafts" | "conversationDrafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onLaneAnswer" | "onWorkLinks" | "onAnswerCard" | "seatConversationIds" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
+  | "onOpenAttempt" | "onDismissLaunch"
+  | "drafts" | "conversationDrafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onLaneAnswer" | "onWorkLinks" | "onAnswerCard" | "seatConversationIds" | "onAddAgent" | "onAsked"
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, newTask, heldLaunches, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, draftsByCard, actingByCard, newTask, heldLaunches, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -3400,7 +3477,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   /** Its own column menu is open, which keeps an opened strip open. */
   menuOpen: boolean;
   readerKeysByCard: ReadonlyMap<string, string>;
-  panelsByCard: ReadonlyMap<string, string>;
+  draftsByCard: ReadonlyMap<string, string>;
   actingByCard: ReadonlyMap<string, string>;
   model: KanbanModel;
   mode: KanbanLayoutMode;
@@ -3432,7 +3509,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       remoteAgents={card.task ? remoteAgentsByTask.get(card.task.id) ?? NO_REMOTE_FOR_CARD : NO_REMOTE_FOR_CARD}
       remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
       readerKeys={readerKeysByCard.get(card.id) ?? ""}
-      stagePanels={panelsByCard.get(card.id) ?? ""}
+      openDrafts={draftsByCard.get(card.id) ?? ""}
       acting={actingByCard.get(card.id) ?? ""}
       editing={editing.get(card.id) ?? null}
       failedEdit={failedEdits.get(card.id) ?? null}

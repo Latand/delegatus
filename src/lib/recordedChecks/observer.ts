@@ -13,8 +13,8 @@ import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
-import { openRecordedChecks, type CheckRow } from "./store";
-import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck } from "./service";
+import { openRecordedChecks, recordedExecutionState, custodyCapacityReleased, type CheckRow } from "./store";
+import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck, revisionRefusedAdmission, terminalAttemptBinding } from "./service";
 import { digest, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
 import { setRecordedCheckWake } from "./signal";
 
@@ -48,6 +48,12 @@ export class RecordedCheckObserver {
   private eventCursor = 0;
   private eventWork?: Promise<void>;
   private eventsDirty = false;
+  private readinessWork?: Promise<void>;
+  private readinessDirty = false;
+  private readinessRetry = false;
+  private readinessGeneral = false;
+  private readinessRecipients = new Set<string>();
+  private startupWork?: Promise<void>;
   constructor(private ports: ObserverPorts, readonly filename = statePath("state.sqlite")) {}
   private active() { return !this.stopped && this.ports.active() && statePath("state.sqlite") === this.filename; }
   private store() { return openRecordedChecks(this.filename); }
@@ -65,6 +71,9 @@ export class RecordedCheckObserver {
       console.error("[recorded checks] delivery observation unavailable");
       this.receiptsChanged();
     });
+    this.startupWork = this.reconcileStartup().catch(() => console.error("[recorded checks] startup reconciliation retained"));
+  }
+  private async reconcileStartup() {
     const store = await this.store();
     try {
       let cursor = "";
@@ -74,8 +83,8 @@ export class RecordedCheckObserver {
         if (!page.length) break;
         for (const row of page) {
           cursor = row.id;
-          this.install(row);
-          setImmediate(() => { void this.observe(row.id).catch(() => console.error("[recorded checks] startup reconciliation retained")); });
+          try { await this.observe(row.id); }
+          catch { console.error("[recorded checks] startup reconciliation retained"); }
         }
         if (page.length < 32) break;
         await new Promise<void>(resolve => setImmediate(resolve));
@@ -106,7 +115,61 @@ export class RecordedCheckObserver {
       .finally(() => { this.eventWork = undefined; });
   }
   receiptsChanged(changed?: string, retryUndispatched = false, recipient?: string) {
-    for (const id of changed ? this.watches.has(changed) ? [changed] : [] : this.watches.keys()) {
+    if (!changed) {
+      // Retained completion deliveries do not occupy native watcher slots.
+      // Readiness events revisit the durable backlog in bounded pages, with
+      // one coalesced reader rather than an unbounded in-memory delivery map.
+      this.readinessDirty = true;
+      this.readinessRetry ||= retryUndispatched;
+      if (recipient) this.readinessRecipients.add(recipient);
+      else this.readinessGeneral = true;
+      if (this.readinessWork) return;
+      this.readinessWork = (async () => {
+        const store = await this.store();
+        try {
+          do {
+            this.readinessDirty = false;
+            const retry = this.readinessRetry;
+            this.readinessRetry = false;
+            const general = this.readinessGeneral;
+            this.readinessGeneral = false;
+            const recipients = [...this.readinessRecipients];
+            this.readinessRecipients.clear();
+            if (general) {
+              let cursor = "";
+              for (;;) {
+                if (!this.active()) return;
+                const page = store.page(cursor);
+                for (const row of page) {
+                  cursor = row.id;
+                  await this.observe(row.id, false, retry);
+                }
+                if (page.length < 32) break;
+                await new Promise<void>(resolve => setImmediate(resolve));
+              }
+            } else {
+              for (const target of recipients) {
+                let cursor = "";
+                for (;;) {
+                  if (!this.active()) return;
+                  const page = store.pendingForRecipient(target, cursor);
+                  for (const row of page) {
+                    cursor = row.id;
+                    if (this.ports.recipient(row.binding.project)?.conversation === target)
+                      await this.observe(row.id, false, retry, target);
+                  }
+                  if (page.length < 32) break;
+                  await new Promise<void>(resolve => setImmediate(resolve));
+                }
+              }
+            }
+          } while (this.readinessDirty && this.active());
+        } finally { store.close(); }
+      })().catch(() => console.error("[recorded checks] readiness reconciliation retained"))
+        .finally(() => { this.readinessWork = undefined; });
+      return;
+    }
+    for (const id of [changed]) {
       const watch = this.watches.get(id);
       if (recipient && (!watch || this.ports.recipient(watch.project)?.conversation !== recipient)) continue;
       void this.observe(id, false, retryUndispatched).catch(() => {});
@@ -128,7 +191,7 @@ export class RecordedCheckObserver {
       } finally { store.close(); }
     } catch { console.error("[recorded checks] observation fault awaits durable reconciliation"); }
   }
-  async observe(id: string, refreshResult = true, retryUndispatched = refreshResult): Promise<void> {
+  async observe(id: string, refreshResult = true, retryUndispatched = refreshResult, expectedRecipient?: string): Promise<void> {
     if (!this.active()) return;
     if (refreshResult) this.resultRequested.add(id);
     if (retryUndispatched) this.deliveryRequested.add(id);
@@ -138,7 +201,7 @@ export class RecordedCheckObserver {
       do {
         this.dirty.delete(id);
         const slot = parseInt(id.slice(0, 8), 16) % 128;
-        await withFileTransactionAsync(path.join(path.dirname(this.filename), "recorded-check-observers", String(slot)), "recorded-check observation", () => this.reconcile(id));
+        await withFileTransactionAsync(path.join(path.dirname(this.filename), "recorded-check-observers", String(slot)), "recorded-check observation", () => this.reconcile(id, expectedRecipient));
       } while (this.dirty.has(id) && this.active());
     });
     this.pending.set(id, pending);
@@ -148,6 +211,7 @@ export class RecordedCheckObserver {
   }
   private install(row: CheckRow) {
     if (this.stopped) return;
+    if (custodyCapacityReleased(row)) { this.release(row.id); return; }
     const existing = this.watches.get(row.id);
     if (existing) {
       if (row.acknowledgement) {
@@ -178,7 +242,7 @@ export class RecordedCheckObserver {
     };
     arm();
   }
-  private async reconcile(id: string) {
+  private async reconcile(id: string, expectedRecipient?: string) {
     const refreshResult = this.resultRequested.delete(id);
     const retryUndispatched = this.deliveryRequested.delete(id);
     const store = await this.store();
@@ -190,6 +254,8 @@ export class RecordedCheckObserver {
       const authority = () => {
         if (!this.active()) throw new Error("recorded check observer lost serving authority");
         if (digest(servingObservation()) !== digest(observation)) throw new Error("recorded check observer epoch changed");
+        if (expectedRecipient && this.ports.recipient(row!.binding.project)?.conversation !== expectedRecipient)
+          throw new Error("recorded completion readiness recipient changed");
       };
       if (digest(row.observation) !== digest(observation)) {
         const updated: CheckRow = { ...row, revision: row.revision + 1, observation };
@@ -200,10 +266,13 @@ export class RecordedCheckObserver {
         const updated: CheckRow = { ...row, revision: row.revision + 1, observerFault: fault };
         await store.write(updated, row.revision, authority); row = updated;
       }
-      if (!row.acknowledgement && row.admission === "preparing") {
+      if (!row.acknowledgement && (row.admission === "preparing" || revisionRefusedAdmission(row))) {
         try {
+          const original = row;
+          const terminalRecovery = revisionRefusedAdmission(row) && fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
           row = await handoffRecordedCheck(row.binding.conversation, "reconcile-preparation", row.log,
-            { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} }, row.id);
+            { binding: terminalRecovery ? () => terminalAttemptBinding(original) : callingAttempt,
+              verify: verifyLiveCustody, observe: async () => {} }, row.id);
         } catch (error) {
           const fresh = store.get(id)!;
           if (fresh.admission !== "preparing") { row = fresh; }
@@ -238,19 +307,21 @@ export class RecordedCheckObserver {
           await store.write(updated, row.revision, () => { authority(); retained.assertUnchanged(); }); row = updated;
         }
       }
+      if (custodyCapacityReleased(row)) this.release(id);
       if (!row.result || row.notification?.state === "delivered" || row.notification?.state === "failed") return;
       if (!row.notification) {
         const target = this.ports.recipient(row.binding.project);
         if (!target) return;
         const result = row.result;
         const notification: NonNullable<CheckRow["notification"]> = { key: `${seatMessageKeys.recordedCheck}${row.id}`, ...target,
-          text: `[Delegatus] Recorded check ${row.id}: ${result.state}; command exit ${result.terminal?.report?.commandExit ?? "unknown"}; cleanup ${result.terminal?.report?.cleanup ?? "unknown"}; selection ${result.complete ? "complete" : "incomplete"}, ${result.completed}/${row.descriptor.manifest.selection.length} reported, ${result.failed} failing. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
+          text: `[Delegatus] Recorded check ${row.id}: ${recordedExecutionState(row) === "not-started" ? "not-started" : result.state}; command exit ${result.terminal?.report?.commandExit ?? "unknown"}; cleanup ${result.terminal?.report?.cleanup ?? "unknown"}; selection ${result.complete ? "complete" : "incomplete"}, ${result.completed}/${row.descriptor.manifest.selection.length} reported, ${result.failed} failing. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
           operation: null, state: "reserved", reason: null, noDispatch: false };
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification };
         await store.write(updated, row.revision, authority); row = updated;
       }
       if (row.notification!.noDispatch) {
         const target = this.ports.recipient(row.binding.project), notice = row.notification!;
+        if (expectedRecipient && target?.conversation !== expectedRecipient) return;
         if (!target || !retryUndispatched && digest([target.conversation, target.path, target.seatEpoch]) === digest([notice.conversation, notice.path, notice.seatEpoch])) return;
         // The last attempt explicitly refused before dispatch. Clear that proof
         // before retrying on readiness/startup or rebinding to a successor.
@@ -269,7 +340,7 @@ export class RecordedCheckObserver {
       if (digest(delivered) !== digest({ operation: row.notification!.operation, state: row.notification!.state, reason: row.notification!.reason, noDispatch: row.notification!.noDispatch })) {
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification: { ...row.notification!, ...delivered }, observerFault: fault ?? null };
         await store.write(updated, row.revision, authority);
-        if (updated.acknowledgement && (delivered.state === "delivered" || delivered.state === "failed")) this.release(id);
+        if (custodyCapacityReleased(updated)) this.release(id);
       }
     } finally { store.close(); }
   }

@@ -30,6 +30,8 @@ import { providerCredentialRevision } from "@/lib/accounts/claudeProviderHealth"
 
 import type {
   DeliveryReceipt,
+  DeliveryTimingMark,
+  DeliveryTimingObserver,
   EngineHost,
   HostState,
   NormalizedQueueEntry,
@@ -310,6 +312,7 @@ const CHILD_ENV_ALLOWLIST = [
   /* Explicit opt-in for Claude's bypass-permissions mode under container root. */
   "IS_SANDBOX",
   "LLV_SPAWN_CAPABILITY",
+  "LLV_EVIDENCE_DIR",
   "LLV_GATE_CPU_PRIORITY_SOURCE",
   /* Where Claude Code writes background-task output. A pipeline stage runs
      with TMPDIR in its scratch directory and this pinned to the temp root the
@@ -1074,7 +1077,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     };
   }
 
-  async send(entry: QueueEntry, _firstDispatch?: import("./engineHost").FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, _firstDispatch?: import("./engineHost").FirstDispatchEvidence, authorizeDispatch?: () => void,
+    observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
     if (this.unavailable()) return { outcome: "rejected", reason: "dead-host" };
     if (!entry.id) throw new Error("queue entry id is required");
     const normalized = normalizeQueueEntry(entry);
@@ -1093,6 +1097,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const existingPending = this.pendingDeliveries.get(entry.id);
     if (existingPending) return existingPending.promise;
+    const markTiming = (mark: DeliveryTimingMark) => {
+      try { observeTiming?.(mark); } catch { /* Timing observers cannot affect delivery. */ }
+    };
+    markTiming("claude-prepare-start");
     const imageBlock = (image: StructuredImageRef): JsonObject => ({ type: "image", source: {
       type: "base64", media_type: image.mime, data: this.readImage(image).toString("base64"),
     } });
@@ -1109,6 +1117,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       blocks.push(...normalized.content.images.map(imageBlock));
       if (normalized.content.text) blocks.push({ type: "text", text: normalized.content.text });
     }
+    markTiming("claude-prepare-end");
     authorizeDispatch?.();
     const disposition: ClaudeDeliveryState["disposition"] = duplicate?.disposition
       ?? (this.activeTurnId ? "queued-next-turn" : "turn-started");
@@ -1138,11 +1147,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       try { fs.appendFileSync(this.memoryQueuePath, JSON.stringify({ id: entry.id, digest: crypto.createHash("sha256").update(normalized.content.text).digest("hex") }) + "\n"); }
       catch { /* no matching receipt means the hook abstains */ }
     }
+    markTiming("claude-write-start");
     this.write({
       type: "user",
       session_id: this.identity.sessionId,
       message: { role: "user", content: blocks },
     });
+    markTiming("claude-write-end");
     this.turnQueue.push(entry.id);
     if (!this.activeTurnId) {
       this.activeTurnId = entry.id;
@@ -1638,8 +1649,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           return this.failWithoutLedger(new Error(`Claude delivery ledger failed: ${safeError(error)}`));
         }
       }
+      const attachedAt = echoOperationId ? new Date().toISOString() : undefined;
       this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed",
-        ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt,
+        ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt, attachedAt,
           ...(delivery?.entry.parts ? { memberOperationIds: delivery.entry.parts.map(part => part.operationId) } : {}) } } : {}) });
       return;
     }

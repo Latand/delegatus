@@ -38,6 +38,8 @@ export interface ExecOptions {
   stdoutEncoding?: "utf8" | "latin1";
   /** Publication children retain their owner's kernel lock across a restart. */
   inheritFd?: number;
+  /** Independent resource owners survive wrappers that replace inheritFd. */
+  additionalInheritedFds?: readonly number[];
 }
 
 export type ExecPort = (command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>, options?: ExecOptions) => ExecResult | Promise<ExecResult>;
@@ -53,7 +55,7 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
   const budget = cpuWaitBudget({ ...process.env, GIT_TERMINAL_PROMPT: "0", ...env });
   const child = spawn(command, args, {
     cwd, detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd])],
+    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []],
     env: budget.env,
   });
   const stop = (reason: string) => {

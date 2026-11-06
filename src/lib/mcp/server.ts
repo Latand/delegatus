@@ -1,4 +1,5 @@
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
+import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -141,6 +142,7 @@ export const MCP_TOOL_NAMES = [
   "relay_answer",
   "relay_service_tools",
   "issue_report",
+  "github_app_connect",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -231,6 +233,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   /* Records a preview and files one issue (#2518). A replayed clientRequestId
      must answer with the issue the first call filed, never file a second. */
   "issue_report",
+  "github_app_connect",
 ]);
 
 /** Private request data is never receipted. Service actions use the relay call id for idempotency. */
@@ -292,6 +295,9 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
      payload under the same key is refused by the digest check above. */
   "publish_prototype_review",
   "resend_prototype_review_telegram",
+  // The downstream service persists caller/key receipts and one request row
+  // per repository before publishing its idempotent form.
+  "github_app_connect",
 ]);
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
@@ -318,6 +324,8 @@ export interface McpToolCallContext {
   binding?: McpRequestBinding;
   /** Revalidate this invocation's native generation at the transport boundary. */
   assertCaller?: () => void;
+  /** Trusted authorization of full result identities, before display compaction. */
+  assertResult?: (result: McpToolResult) => void;
   /** Persist a newly created orchestrator recipient before its first send. */
   bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
@@ -408,7 +416,7 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       read, claim or in-process join, and part of the receipt's key, so one
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
-  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string>;
+  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string | null>;
   /** Resolve guarded references to their retained full identity before hashing a receipt. */
   canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
@@ -2809,6 +2817,7 @@ export function createMcpToolService(
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
+        context.assertResult?.(result);
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
@@ -3067,7 +3076,9 @@ export function createMcpToolService(
               recovered: true, outcome: "settled", evidence: "mcp-receipt", nextAction: "follow-disposition",
               ...(!previous.recovered ? {
                 original: previous,
-                state: typedTool === "spawn_agent" ? "completed" : "delivered",
+                state: typedTool === "spawn_agent"
+                  ? (previous.state === "settled" ? "completed" : previous.state)
+                  : "delivered",
                 ...(["send_message", "send_message_to_orchestrator"].includes(typedTool) ? { resend: "not-needed", duplicateRisk: false } : {}),
               } : {}),
             } : {}),
@@ -3125,7 +3136,7 @@ export function createMcpToolService(
               outcome = "conflict";
               return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
             }
-            if (record.result && !recoveryOnly) {
+            if (record.result && !recoveryOnly && (typedTool !== "spawn_agent" || terminalResult(record.result))) {
               outcome = "replay";
               return { ...record.result, replayed: true };
             }
@@ -3149,9 +3160,11 @@ export function createMcpToolService(
           // Revalidate it so ordinary same-key replays also close on expiry.
           const remoteAcceptance = typedTool === "send_message_to_orchestrator"
             && recorded.target.identity?.startsWith("machine:") && record.result?.ok && !terminalResult(record.result);
-          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance) {
+          const pendingSpawn = typedTool === "spawn_agent" && record.result?.ok
+            && !terminalResult(record.recoveryResult ?? record.result);
+          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance && !pendingSpawn) {
             outcome = "replay";
-            return { ...record.result, replayed: true };
+            return { ...(typedTool === "spawn_agent" ? record.recoveryResult ?? record.result : record.result), replayed: true };
           }
           if (typedTool === "send_message_to_orchestrator" && record.stage === "claimed" && recorded.target.identity?.startsWith("machine:")) {
             // The sender's fence also closes a stalled pre-dispatch owner.
@@ -3634,7 +3647,7 @@ export function createMcpToolService(
                admission lookup again after its store recovers. */
             return failure(typedTool, requestId, "outcome_unknown",
               `${error.message}; deployment admission may have completed. Read deployment_status and replay only the original clientRequestId to resolve the admitted deployment.`,
-              false, false, { outcome: "unknown", nextAction: "deployment_status" });
+              false, false, { outcome: "unknown", nextAction: "retry-same-key", reconciliationBudgetMs: 5000 });
           }
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
@@ -3651,13 +3664,16 @@ export function createMcpToolService(
           /* Named issue, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || typedTool === "github_app_connect" || error.details.code === "cross_project_refused"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           const retiredRefusal = error instanceof McpToolRefusal
             && (error.details.code === "FLOW_RETIRED" || error.details.code === "STAGE_KIND_RETIRED")
             ? { code: error.details.code, retryable: false } : null;
+          const terminalStageReport = typedTool === "stage_report" && error instanceof McpToolRefusal
+            && ["STAGE_REPORT_SETTLED", "STAGE_REPORT_NOT_AN_ATTEMPT", "STAGE_REPORT_NOT_HELD",
+              "STAGE_REPORT_SUPERSEDED", "STAGE_REPORT_NOT_A_RUN_STAGE"].includes(String(error.details.code));
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
@@ -3674,7 +3690,7 @@ export function createMcpToolService(
             requestId,
             taskCode ?? retiredRefusal?.code ?? botRefusal?.code ?? namedRefusal?.code ?? "tool_failed",
             error instanceof Error ? error.message : String(error),
-            retiredRefusal ? false : botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
+            retiredRefusal || terminalStageReport ? false : botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -3760,6 +3776,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
+  github_app_connect: "Ask once to connect a GitHub repository or grant missing App permissions. Only the designated seat itself or the operator's own session may ask. Pass repository as owner/name or a GitHub URL, optionally owner for a bare name, and permissions as a map of GitHub permission keys to read or write (default contents/write, pull_requests/write, metadata/read). Delegatus sends one decision form with the required GitHub links, then checks for up to 24 hours, proves the credential and declares the repository. It never changes App settings or installs the App itself. When the repository belongs to the calling project, follow the GitHub steps; Delegatus verifies the grant and completes without another answer. For a different project's repository, follow the links and choose Connect in the form. The same clientRequestId replays its first answer; a fresh id reads an open request's current state without a second form. Completion goes to the project's current seat. Running agents retain their launch environment. No wait parameter.",
   pipeline_checks: "Choose Cloud or local checks for a pipeline stage, lane or its project default. Stage scope requires stageId. Cloud is the default. A null execution restores inheritance. The voice companion can ask its project orchestrator to change this setting.",
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
@@ -3814,7 +3831,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage, and the fix stage's next is the reviewer, so every round gets a fresh reviewer on the new head. The fixer is builder mode=apply-fixes: it fixes every handed finding and every in-spec discovery immediately, adds focused checks, and leaves grading to reviewers. It never returns fail for its own discovery: it fixes it or lists an outside-spec observation under Notes. It returns fail only when blocked, setting blocked:true and blockedReason. A self-fail with a new committed head, without blocked:true, proceeds to review with the fixer's findings as notes for the reviewer; a fail with no new head still parks with its reason. New `review-loop` definitions refuse with STAGE_KIND_RETIRED. Stored legacy definitions remain readable and support explicit conversion preview before start.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
-    "autoStart:false creates a draft the operator starts from the board; a draft that pins `baseBranch` must also pass `baseRef` (a draft is not provisioned, so the caller resolves the SHA).",
+    "autoStart:false creates a draft the operator starts from the board; a draft pinned to a commit must also pass `baseRef` (the caller resolves the SHA), and a draft given only `baseBranch` follows that branch: it is stored at the checkout's current origin/<baseBranch> and resolved again at Start.",
     "`publication` omitted publishes when an owner delivery target has a remote and stays local-only when it has none. internal: stages and reviews settle on Delegatus's own attempts, verdicts and exact clean local revisions; nothing is pushed while the pipeline runs. remote-branch: requires a delivery remote, publishes each accepted revision, and fences reviews on the published head. Without baseRef, creation returns provisioning and the controller fetches origin/<baseBranch> time-bounded; with no origin it resolves local <baseBranch>. A failed base read parks with its reason. A pinned baseRef never touches the network. create_pipeline answers delivery.publishes and the stored target; after adding a remote, pipeline_action set-delivery-remote adopts it for a local-only lane.",
     "`src` is the creator's transcript path: a native ~/.claude/projects path is normalized to the shared Claude transcript store when the mirrored file exists there.",
     "An accepted create answers an acknowledgement: `pipelineId`, `state`, `stateDetail`, `cursor`, `taskIds`, `branch`, each stage's `{id, engine, model, effort}`, `stageDigests` and `graphDigest`. It never echoes the spec, prompts or role scaffolds you sent; get_pipeline reads the full record.",
@@ -3880,11 +3897,11 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
   ].join(" "),
-  publish_prototype_review: "For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (the durable evidence folder and legacy /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id; decision.skipped:true means the operator took the recommendations, and an answer's skipped:true (no options) means the operator set that question aside as already decided or no longer relevant: do not ask it again. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
-    "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
+    "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds selects sources before reading; counts describe matching kinds. Reads use a 3.5-second gathering budget within the caller's deadline. partial:true names omissions, and countIsLowerBound means missing sources may add rows. Full evidence is available. Use a fresh clientRequestId for each observation.",
     "With target, clear one conversation reason, parked lane, report question or waiting prototype round; task targets include the waiting round. Only the operator's root/gateway session and this project's designated seat may clear. Its maintainer may read and cannot clear; workers and unidentified callers are refused. Update decisions stay answer-only.",
     'Targets: {kind:"conversation",conversationId|path,reasonId}, {kind:"pipeline",pipelineId,laneMovedAt}, {kind:"report",seq}, {kind:"prototype",taskId,reviewId}, {kind:"task",taskId}. Optional reason is one line up to 200 characters, retained beside server attribution in the read\'s cleared list. undo:true restores the mark. New reasons and rounds ask again. Dismissal resolves a report question in its log and leaves prototype choices open. pipeline_action dismiss/undismiss is the same lane write.',
     "A worker's ask, question, plan, memory kill or permission request and a parked lane in a project with a seat wait on that seat first and are off the operator's list; your wakes name them. Answer each where it asked (send_message to the conversation, conversation_action answer or permission, pipeline_action resolve-decision or accept-head). Only when the operator alone can decide, ask them in a decision form (publish_prototype_review with questions, in their language), then pass escalate {reviewId} with a conversation target and its reasonId, or a pipeline target: the form's row stands for the wait until they answer, and their answer comes to you to carry back. undo:true withdraws it.",
@@ -4043,8 +4060,8 @@ const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable
   .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
 
 const pipelineStageSchema = z.object({
-  runtime: z.enum(["local", "codex-cloud"]).optional()
-    .describe("Stage execution location. Omitted inherits the project default. Cloud runs Codex reviewer, verifier and builder/fix stages on the published lane branch; confirmed Cloud unavailability falls back locally once."),
+  runtime: z.enum(["local", "codex-cloud", "claude-cloud"]).optional()
+    .describe("Stage execution location. Omitted inherits the project default. codex-cloud runs Codex reviewer, verifier and builder/fix stages and claude-cloud runs Claude reviewer, verifier, architect and builder/fix stages, each on the published lane branch; confirmed Cloud unavailability falls back locally once and keeps its cause."),
   agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
@@ -4176,6 +4193,8 @@ const taskSummaryInputSchema = z.object({
 });
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  github_app_connect: z.object({ clientRequestId: clientRequestIdSchema, repository: z.string().min(1).max(1024), owner: z.string().min(1).max(39).optional(),
+    permissions: z.record(z.string().regex(/^[a-z][a-z_]{0,63}$/), z.enum(["read", "write"])).optional() }).strict(),
   pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
   resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),
@@ -4332,6 +4351,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       branch: z.string().startsWith("refs/heads/"),
       remote: z.string().optional(),
       pr: z.number().int().positive().optional(),
+      prRepository: z.string().optional().describe("Only for a PR from a fork: the <owner>/<repo> the PR was opened in, which must be the checkout's GitHub origin, while remote names the fork."),
       rejectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("Commit SHA or unique local commit prefix (7+ hex)."),
       comparison: z.boolean().optional(),
     }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
@@ -4348,8 +4368,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     repoDir: z.string().min(1).describe("Absolute path of the project folder. A safe new folder receives a local main repository and first commit before provisioning. Existing repositories keep their remotes."),
     project: z.string().optional().describe("Optional project key, display name or repository name, in any letter case with surrounding whitespace. Must agree with repoDir; unknown, ambiguous or contradictory values refuse before claim or dispatch."),
-    baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
-    baseRef: z.string().optional().describe("Commit the pipeline is pinned to. Required when a draft (autoStart:false) pins baseBranch — resolve the SHA yourself."),
+    baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft (autoStart:false) given this without baseRef follows the branch: it is stored at the checkout's current origin/<baseBranch> and Start resolves the branch again."),
+    baseRef: z.string().optional().describe("Commit the pipeline is pinned to — resolve the SHA yourself. A draft with baseBranch and baseRef stays pinned to it when it starts."),
     stages: z.array(pipelineStageSchema).describe(
       `Stage graph, 0–${MAX_PIPELINE_STAGES} stages (a started pipeline needs at least ${MIN_STARTED_PIPELINE_STAGES}). Stages run in the order the next edges chain them, not array order; every review-loop must be pass-reachable from a run stage.`,
     ),
@@ -4379,7 +4399,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional().describe("set-edge fail edge: action when its review budget is spent."),
     role: pipelineStageSchema.shape.role.nullable().describe("override-stage: role reference, or null to clear it."),
     applyNow: z.boolean().optional().describe("override-stage: interrupt the running run stage and continue the SAME attempt on the new runtime."),
-    runtime: pipelineStageSchema.shape.runtime.describe("override-stage: local or codex-cloud, applied to the next attempt."),
+    runtime: pipelineStageSchema.shape.runtime.describe("override-stage: local, codex-cloud or claude-cloud, applied to the next attempt."),
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
@@ -4883,6 +4903,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required for mutations."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    pipelineStageRuntime: z.enum(["local", "codex-cloud"]).nullable().optional().describe("Default runtime for new eligible Codex stages. Send null to read, local or codex-cloud to set, separately from tick changes. Only the operator or this project's designated seat may read or set it. Existing pipelines keep their runtime."),
     turbo: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), credits: z.boolean().optional(), creditAccounts: z.array(z.string()).optional(), why: z.string().max(500).nullable().optional() }).optional()
       .describe("Turbo: this project's live Codex conversations run their account's fastest tier. Operator enables/extends (1, 2, 4 or 8 hours, default 2; null until off). The seat may only shorten, turn off or withdraw credits (credits:false), with why. credits:true (paid-credit approval) is operator-only, from the panel."),
     autonomy: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), why: z.string().max(500).nullable().optional(), proactive: z.object({ enabled: z.boolean() }).strict().optional() }).optional()
@@ -5154,8 +5175,10 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
          resolver reads the request's identity rather than this process's. */
       const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
       const forwardedDeadline = ((extra as { _meta?: Record<string, unknown> })._meta)?.["delegatus/deadlineAt"];
+      const callBudgetMs = (toolName === "telegram_bot_send_document" || toolName === "telegram_bot_send_media")
+        ? cloneFileCallBudgetMs() ?? 30_000 : 30_000;
       const timeoutMs = typeof forwardedDeadline === "number" && Number.isFinite(forwardedDeadline)
-        ? Math.max(0, Math.min(30_000, forwardedDeadline - Date.now())) : 30_000;
+        ? Math.max(0, Math.min(callBudgetMs, forwardedDeadline - Date.now())) : callBudgetMs;
       const deadline = deadlineSignal(timeoutMs, {
         /* Over stdio a client's cancel reaches `extra.signal`. Over the
            stateless HTTP endpoint it arrives on a later POST, to another
@@ -5269,6 +5292,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   // their complete service and protocol work in the owned executor.
   const {
     productionViewerControlDependencies,
+    productionDomainDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
@@ -5296,14 +5320,16 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     } };
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  return withMcpDispatchTurns(createMcpToolService(
+  const { withWorkspaceMcpFence } = await import("./workspaceFence");
+  const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
-  ));
+  );
+  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
 }
 
 export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {

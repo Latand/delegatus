@@ -11,12 +11,14 @@ import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity"
 import { CodexRealtimeTranscript } from "./codexRealtimeTranscript";
 import type { NativeQueueInput } from "./nativeCodexQueue";
 import { StructuredAnswerError, StructuredSendRefusedError } from "./engineHost";
-import type { FirstDispatchEvidence } from "./engineHost";
+import type { DeliveryTimingMark, DeliveryTimingObserver, FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
+import os from "node:os";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
+import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -317,6 +319,7 @@ const CHILD_ENV_ALLOWLIST = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "LLV_SPAWN_CAPABILITY",
+  "LLV_EVIDENCE_DIR",
   "LLV_GATE_CPU_PRIORITY_SOURCE",
   /* The re-hosted Viewer MCP launcher resolves the current release and the
      runtime host's stable listener from these non-secret inputs. */
@@ -432,6 +435,9 @@ const DELIVERY_HISTORY_BYTES = MAX_STRUCTURED_IMAGE_ENCODED_BYTES + 16 * 1024 * 
 // Single-item frames retain the nominal item coverage of 128 pages of 32
 // items. The byte budget and existing caller deadline still bound the read.
 const DELIVERY_HISTORY_PAGES = 128 * 32;
+// Recent durable engine items can prove consumption while history RPCs are
+// unavailable. Older items still use the bounded canonical-history reader.
+const NATIVE_QUEUE_EVENT_PROOF_LIMIT = 128;
 /**
  * A `thread/resume` (or `thread/read`) response replays the whole thread
  * history as one JSONL frame, and history the operator legally accumulated can
@@ -1279,6 +1285,9 @@ function threadStatus(value: unknown): ThreadStatus | null {
 /** One app-server connection with durable callbacks and event replay. */
 export class CodexAppServerHost implements EngineHost, TierCapableHost {
   readonly identity: CodexThreadIdentity;
+  private gateCheckRoot: GateCheckRoot | null = null;
+  private readonly gateCheckAbort = new AbortController();
+  private readonly gateCheckRequests = new Map<string | number, { turnId: unknown; abort: AbortController }>();
 
   private readonly child: CodexTransport;
   private readonly requestTimeoutMs: number;
@@ -1422,6 +1431,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private writerFence: (() => boolean) | null = null;
   private persistenceFlush: (() => Promise<void>) | null = null;
   private ledgerFailed = false;
+  // Notifications retained by a predecessor may have lost a canonical
+  // rejection at handoff or on a failed append. Only this owner's canonical
+  // validation can make those immutable identities eligible for fallback.
+  private nativeQueueRequiresCanonicalValidation = false;
+  // Keep identities beyond the notification payload window. If their bounded
+  // index fills, uncertainty requires this owner's canonical validation.
+  private readonly nativeQueueObservedItems = new Map<string, string>();
+  private readonly nativeQueueCanonicalItems = new Map<string, string>();
+  private readonly nativeQueueRejectedItems = new Set<string>();
+  private nativeQueueRejectionCapacityReached = false;
   private failure: Error | null = null;
   private readonly reapedPromise: Promise<void>;
   private resolveReaped!: () => void;
@@ -1574,7 +1593,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       options.releaseCleanup?.();
       throw error;
     }
-    const childEnv = telegram.env;
+    const childEnv = { ...telegram.env };
+    const gateCheckLaunchRoot = childEnv.TMPDIR ?? os.tmpdir();
+    const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot);
+    if (gateCheckLaunchBinding) childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
+    else delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
     let child: CodexTransport;
     try {
       const spawnOptions = { cwd: options.cwd, env: childEnv, detached: true };
@@ -1591,6 +1614,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw error;
     }
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
+    provisional.gateCheckRoot = child instanceof CodexSocketTransport
+      ? socketGateCheckRoot({ endpoint: child.endpoint, process: { pid: child.pid,
+        startIdentity: child.startIdentity, bootEpoch: child.bootEpoch } }, options.socketOwner ? undefined : gateCheckLaunchBinding)
+      : gateCheckLaunchBinding;
+    provisional.nativeQueueRequiresCanonicalValidation = threadId !== null;
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;
     try {
@@ -1680,8 +1708,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ].filter(Boolean).join("\n\n"),
         }
         : {};
+      // A reconnect can recreate the registered stdio MCP child. Restore its
+      // installation and caller binding without changing the thread's policy.
+      const registeredViewer = record(record(record(configRead)?.config)?.mcp_servers)?.viewer;
+      const reconnectConfig = typeof record(registeredViewer)?.command === "string" && viewer
+        ? { mcp_servers: { viewer } } : undefined;
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(reconnectConfig ? { config: reconnectConfig } : {}) } : {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
@@ -1690,6 +1723,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         })
         : await provisional.rpc("thread/start", {
           cwd: options.cwd,
+          ...(protocol.hasRequestField("thread/start", "dynamicTools") ? { dynamicTools: [gateCheckTool] } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...launchAccess,
@@ -1718,7 +1752,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
-      if (!options.socketOwner) await provisional.verifyViewerMcp();
+      await provisional.verifyViewerMcp();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
       await provisional.negotiateHistoryCapability();
@@ -1919,8 +1953,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
-        const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
-          candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
+        const history = await this.readNativeQueueHistory(entries);
         return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
       },
       sendWithdrawn: async (entry, expectedTurnId) => {
@@ -1988,8 +2021,106 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
     if (entry.binding.threadId !== this.identity.threadId) return null;
-    const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
+    const history = snapshot ?? await this.readNativeQueueHistory([entry], true);
+    // A successful canonical read takes precedence over retained notifications,
+    // including absence or conflicting input for this exact client identity.
+    // Keep delayed-receipt recovery from the durable ledger when RPCs fail;
+    // invalid history or a different thread identity never enables that fallback.
+    if (history.state === "unknown" && (history.reason === "transport" || history.reason === "deadline")) {
+      // Retained events belong to this writer's view. A canonical proof can
+      // still settle a delayed receipt after the writer has handed over.
+      if (this.ledgerFailed || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return null;
+      return this.nativeQueueProof(entry, this.nativeQueueEventHistory());
+    }
     return this.nativeQueueProof(entry, history);
+  }
+
+  private async readNativeQueueHistory(entries: NativeQueueRecord[], stopAtMatch = false): Promise<CodexDeliveryHistoryResult> {
+    const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
+      candidate => {
+        const observedClientIds = new Set<string>();
+        for (const turn of candidate.turns) for (const item of turn.items) {
+          if (item.type === "userMessage" && typeof item.clientId === "string") observedClientIds.add(item.clientId);
+        }
+        let proven = false;
+        for (const entry of entries) {
+          if (entry.binding.threadId !== this.identity.threadId || !observedClientIds.has(entry.clientUserMessageId)) continue;
+          const proof = this.nativeQueueProof(entry, candidate);
+          if (proof) {
+            this.validateNativeQueueEventEvidence(proof);
+            proven = true;
+          } else this.rejectNativeQueueEventEvidence(entry, candidate);
+        }
+        return proven || (stopAtMatch && observedClientIds.has(entries[0]!.clientUserMessageId));
+      });
+    if (history.state === "complete") {
+      for (const entry of entries) {
+        const proof = this.nativeQueueProof(entry, history);
+        if (proof) this.validateNativeQueueEventEvidence(proof);
+        else this.rejectNativeQueueEventEvidence(entry, history);
+      }
+    }
+    return history;
+  }
+
+  private rejectNativeQueueEventEvidence(entry: NativeQueueRecord,
+    history: Extract<CodexDeliveryHistoryResult, { state: "observed" | "complete" }>): void {
+    if (entry.binding.threadId !== this.identity.threadId || this.nativeQueueRejectionCapacityReached) return;
+    const identities = new Set([...this.nativeQueueObservedItems, ...this.nativeQueueCanonicalItems]
+      .filter(([, clientId]) => clientId === entry.clientUserMessageId).map(([key]) => key));
+    // The canonical item may precede its notification entirely.
+    for (const turn of history.turns) for (const item of turn.items) {
+      if (item.type !== "userMessage") continue;
+      if (item.clientId !== entry.clientUserMessageId) continue;
+      identities.add(this.nativeQueueItemIdentity(turn.id, item.id, item.clientId));
+    }
+    let rejected = false;
+    for (const key of identities) {
+      if (this.nativeQueueRejectedItems.has(key)) continue;
+      this.nativeQueueCanonicalItems.delete(key);
+      // Never evict a rejection and thereby make its replay eligible. Once
+      // the bounded set fills, this host requires canonical proof for all items.
+      if (this.nativeQueueRejectedItems.size >= NATIVE_QUEUE_EVENT_PROOF_LIMIT) this.nativeQueueRejectionCapacityReached = true;
+      else this.nativeQueueRejectedItems.add(key);
+      rejected = true;
+    }
+    if (!rejected || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
+    this.emit({ kind: "native-queue-changed", threadId: this.identity.threadId, evidenceRejectedFor: entry.clientUserMessageId });
+  }
+
+  private nativeQueueItemIdentity(turnId: string, itemId: string, clientId: string): string {
+    return JSON.stringify([this.identity.threadId, turnId, itemId, clientId]);
+  }
+
+  private validateNativeQueueEventEvidence(proof: NonNullable<ReturnType<CodexAppServerHost["nativeQueueProof"]>>): void {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
+    const key = this.nativeQueueItemIdentity(proof.turnId, proof.itemId, proof.clientUserMessageId);
+    this.nativeQueueRejectedItems.delete(key);
+    this.nativeQueueCanonicalItems.delete(key);
+    this.nativeQueueCanonicalItems.set(key, proof.clientUserMessageId);
+    if (this.nativeQueueCanonicalItems.size > NATIVE_QUEUE_EVENT_PROOF_LIMIT) {
+      this.nativeQueueCanonicalItems.delete(this.nativeQueueCanonicalItems.keys().next().value!);
+    }
+  }
+
+  private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
+    if (!this.identity.path) return { state: "unknown", reason: "identity" };
+    const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
+    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
+      if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
+      if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
+      const item = record(event.item);
+      if (item?.type !== "userMessage" || !stringField(item, "id") || !stringField(item, "clientId")
+        || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
+      const key = this.nativeQueueItemIdentity(event.turnId, item.id as string, item.clientId as string);
+      if (this.nativeQueueRejectedItems.has(key)) continue;
+      if (this.nativeQueueRejectionCapacityReached
+        || this.nativeQueueRequiresCanonicalValidation && !this.nativeQueueCanonicalItems.has(key)) continue;
+      turns.push({ id: event.turnId, itemsView: "full", items: [{ ...item, id: item.id as string, type: "userMessage" }] });
+    }
+    // Only a positive, exact payload match is evidence. Missing, started and
+    // conflicting items leave the original operation owed to reconciliation.
+    return { state: "observed", identity: { threadId: this.identity.threadId, path: this.identity.path }, turns, pages: [], bytes: 0 };
   }
 
   private nativeQueueProof(entry: NativeQueueRecord, history: CodexDeliveryHistoryResult) {
@@ -2109,7 +2240,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -2128,7 +2259,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let reject!: (error: unknown) => void;
     const promise = new Promise<DeliveryReceipt>((fulfill, fail) => { resolve = fulfill; reject = fail; });
     this.sendingDeliveries.set(normalized.id, { contentDigest: normalized.contentDigest, promise });
-    void this.sendOnce(normalized, firstDispatch, authorizeDispatch).then(resolve, reject);
+    void this.sendOnce(normalized, firstDispatch, authorizeDispatch, observeTiming).then(resolve, reject);
     try {
       return await promise;
     } finally {
@@ -2138,15 +2269,19 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
+  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
+    const mark = (name: DeliveryTimingMark) => { try { observeTiming?.(name); } catch { /* Observation only. */ } };
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
     const normalized = normalizeQueueEntry(entry);
+    mark("codex-prepare");
     if (normalized.content.images.length && this.imageInputSupport === "unknown") await this.refreshImageInputSupport();
     entry = this.prepareDelivery(normalized);
+    mark("codex-confirmed-read");
     const confirmed = await this.confirmedDelivery(entry, firstDispatch?.firstDispatch === true
       && firstDispatch.operationId === entry.id && Boolean(firstDispatch.writerClaim));
+    mark("codex-confirmed");
     if (confirmed) return confirmed;
     const currentTurn = this.activeTurnId;
     if (entry.expectedTurnId !== undefined && entry.expectedTurnId !== currentTurn) {
@@ -2168,6 +2303,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         ),
       },
     ];
+    mark("codex-input-ready");
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredSendRefusedError("stale-generation");
     }
@@ -2176,12 +2312,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (currentTurn) {
       if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
       try {
+        mark("codex-rpc-start");
         const result = await this.rpc("turn/steer", {
           threadId: this.identity.threadId,
           expectedTurnId: currentTurn,
           input,
           clientUserMessageId: entry.id,
         });
+        mark("codex-rpc-end");
         return this.awaitDeliveryConfirmation(entry, {
           outcome: "steered",
           turnId: turnIdFromResult(result, "turn/steer"),
@@ -2194,12 +2332,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
     }
     const profile = codexTurnProfile(entry.runtime, { model: this.requestedModel, effort: this.effort }, this.modelCatalog);
+    mark("codex-rpc-start");
     const result = await this.rpc("turn/start", {
       threadId: this.identity.threadId,
       ...profile,
       input,
       clientUserMessageId: entry.id,
     });
+    mark("codex-rpc-end");
     const turnId = turnIdFromResult(result, "turn/start");
     if (typeof profile.model === "string") this.requestedModel = profile.model;
     this.activeTurnId = turnId;
@@ -2366,7 +2506,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
    *   the operation fails with that reason; it is never quietly delivered as
    *   something the operator did not ask for.
    */
-  async inject(request: RuntimeInjectRequest): Promise<RuntimeInjectOutcome> {
+  async inject(request: RuntimeInjectRequest, authorizeDispatch?: () => void): Promise<RuntimeInjectOutcome> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredInjectError("Codex app-server host is unavailable", "refused");
     }
@@ -2420,6 +2560,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (request.expectedTurnId !== undefined && request.expectedTurnId !== this.activeTurnId) {
       throw new StructuredInjectError("stale-turn", "refused");
     }
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     /* Read once, before the write, so the placement reported afterwards is the
        one the request was actually issued against rather than whatever the turn
        axis drifted to while the insertion was being observed. */
@@ -2447,6 +2590,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new StructuredInjectError("stale-generation", "refused");
     }
     if (this.activeTurnId !== turnAtActuation) throw new StructuredInjectError("stale-turn", "refused");
+    // The metadata write above yielded; the caller's seat, account and drain
+    // authority must still hold at the native write boundary.
+    authorizeDispatch?.();
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     try {
       await this.rpc("thread/inject_items", { threadId: this.identity.threadId, items });
     } catch (error) {
@@ -3395,6 +3544,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async releaseTransportFenced(): Promise<void> {
     if (this.released) return;
+    this.gateCheckAbort.abort();
     this.settleArmedTierCut("host-gone");
     if (this.reconnecting) {
       this.disconnectSocketConnection();
@@ -3671,6 +3821,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     this.events.push(sequenced);
+    if (event.kind === "item" && event.phase === "completed" && event.turnId
+      && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
+      const item = record(event.item);
+      if (item?.type === "userMessage" && stringField(item, "id") && stringField(item, "clientId")) {
+        const key = this.nativeQueueItemIdentity(event.turnId, item.id as string, item.clientId as string);
+        if (this.nativeQueueObservedItems.has(key) || this.nativeQueueObservedItems.size < NATIVE_QUEUE_EVENT_PROOF_LIMIT) {
+          this.nativeQueueObservedItems.set(key, item.clientId as string);
+        } else this.nativeQueueRequiresCanonicalValidation = true;
+      }
+    }
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();
@@ -4368,6 +4528,30 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!method) return this.fail(new Error("Codex app-server message has no method"));
     const params = record(message.params) ?? {};
     if (typeof id === "number" || typeof id === "string") {
+      if (method === "item/tool/call" && params.tool === gateCheckTool.name) {
+        if (this.gateCheckRequests.has(id)) return;
+        const waitAbort = new AbortController();
+        this.gateCheckRequests.set(id, { turnId: params.turnId, abort: waitAbort });
+        const current = () => !this.dead && !this.released && !this.releasing
+          && params.threadId === this.identity.threadId && params.turnId === this.activeTurnId && this.writerFenceAllowsActuation();
+        const answer = async () => {
+          let result;
+          try {
+            decodeCodexServerRequest(this.protocol, id, method, params);
+            if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
+            result = await runGateCheckTool(params.arguments, this.gateCheckRoot, AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]));
+          } catch (error) {
+            result = { success: false, contentItems: [{ type: "inputText", text: safeError(error) }] };
+          }
+          if (!this.dead && !this.released && !this.releasing && this.writerFenceAllowsActuation()) {
+            if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: "gate wait owner changed; result unknown" }] };
+            encodeCodexServerResponse(this.protocol, method, result, params);
+            this.write({ jsonrpc: "2.0", id, result });
+          }
+        };
+        void answer().catch(error => this.fail(new Error(safeError(error)))).finally(() => this.gateCheckRequests.delete(id));
+        return;
+      }
       const identity = codexRequestIdentity(this.callbackGeneration, method, id, params);
       const existing = [...this.callbackReceipts].find(([, receipt]) => sameCodexRequest(receipt.identity, identity));
       const requestDigest = codexRequestDigest(params);
@@ -4627,8 +4811,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
+        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+          ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
-        ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
+        ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt, attachedAt: new Date().toISOString() } } : {}),
       });
       /* #862: the compaction item is the completion signal for a manual
          compact control. It is read after the emit so the durable event ledger
@@ -4638,6 +4824,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     if (method === "turn/completed" && turnId) {
+      for (const wait of this.gateCheckRequests.values()) if (wait.turnId === turnId) wait.abort.abort();
       const turn = record(params.turn);
       const status = terminalStatus(turn?.status);
       if (reconcileBufferedLifecycle) this.bufferedTerminalTurnIds.add(turnId);
@@ -4687,6 +4874,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private fail(error: Error, activeFlags: string[] = []): void {
+    this.gateCheckAbort.abort();
     if (this.dead || this.released) return;
     this.clearVoiceStreamTimers();
     this.dead = true;

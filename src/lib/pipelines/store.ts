@@ -1,7 +1,9 @@
+import { settleClosedPipelineAttempts } from "./closeAttempts";
+import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
-import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
+import { cloudStageConfigurationError, isCloudRuntime, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -19,7 +21,7 @@ import path from "node:path";
 
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { pipelineHasPullRequest } from "@/lib/forge/resolve";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { deliveryPullRequestRepository } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
@@ -29,7 +31,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
@@ -303,11 +305,26 @@ function isTerminalOutputPublication(value: unknown): boolean {
     && /^[0-9a-f]{40}$/i.test(publication[key] as string));
 }
 
+function isSetupResult(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const setup = value as Record<string, unknown>;
+  return Array.isArray(setup.command) && setup.command.length > 0 && setup.command.length <= 32
+    && setup.command.every(arg => typeof arg === "string" && arg.length <= 2048)
+    && typeof setup.cwd === "string" && typeof setup.hash === "string" && /^[a-f0-9]{64}$/.test(setup.hash)
+    && ["running", "passed", "failed"].includes(String(setup.state))
+    && typeof setup.startedAt === "string" && Number.isFinite(Date.parse(setup.startedAt))
+    && isNullableString(setup.completedAt) && (setup.code === null || Number.isInteger(setup.code))
+    && (setup.state !== "passed" || setup.code === 0 && typeof setup.completedAt === "string")
+    && typeof setup.stdout === "string" && setup.stdout.length <= 16_000
+    && typeof setup.stderr === "string" && setup.stderr.length <= 16_000;
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
   return (
-    attempt.n === index + 1 &&
+    attempt.n === index + 1 && isSetupResult(attempt.setup) &&
     (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
     (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
@@ -393,9 +410,12 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.memoryCap === undefined || normalizeAgentMemoryCap(attempt.memoryCap) !== null) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&
+    isSpawnAdmissionBudget(attempt.spawnAdmissionBudget) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isStartupOwnerWait(attempt.startupOwnerWait) &&
+    isStartupOwnerWait(attempt.roleMemoryDispatchWait) &&
+    isRoleMemoryDelivery(attempt.roleMemoryDelivery) &&
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
@@ -415,6 +435,14 @@ function isRestoreContinuation(value: unknown): boolean {
     && (record.promptBoundary === null || Number.isSafeInteger(record.promptBoundary) && Number(record.promptBoundary) >= 0)
     && Number.isSafeInteger(record.count) && Number(record.count) >= 1 && Number(record.count) <= 3
     && typeof record.clientMessageId === "string" && record.clientMessageId.length > 0 && record.clientMessageId.length <= 300;
+}
+
+function isRoleMemoryDelivery(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const delivery = value as Record<string, unknown>;
+  return [delivery.launchId, delivery.conversationId, delivery.transcript].every(item => typeof item === "string" && item.length > 0)
+    && (delivery.retryClaimId === null || typeof delivery.retryClaimId === "string" && delivery.retryClaimId.length > 0);
 }
 
 function isStartupOwnerWait(value: unknown): boolean {
@@ -449,6 +477,23 @@ function isPermissionDenials(value: unknown): boolean {
   });
 }
 
+function isSpawnAdmissionBudget(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const budget = value as Record<string, unknown>;
+  const spent = budget.spent as Record<string, unknown> | undefined;
+  return !!spent && ["host", "writer", "controller"].every(kind => typeof spent[kind] === "number"
+    && Number.isFinite(spent[kind]) && Number(spent[kind]) >= 0 && Number(spent[kind]) <= 600_000)
+    && ["host", "writer", "controller"].includes(String(budget.kind))
+    && (budget.legacyLimitMs === undefined || typeof budget.legacyLimitMs === "number"
+      && Number.isFinite(budget.legacyLimitMs) && budget.legacyLimitMs >= 0 && budget.legacyLimitMs <= 600_000)
+    && (budget.inFlightKind === undefined || budget.inFlightKind === "host" || budget.inFlightKind === "writer")
+    && ["waitingSince", "inFlightSince"].every(key => budget[key] === undefined
+      || typeof budget[key] === "string" && Number.isFinite(Date.parse(budget[key] as string)))
+    && ["lastFailure", "lastWriterFailure"].every(key => budget[key] === undefined
+      || typeof budget[key] === "string" && (budget[key] as string).length <= 2_000);
+}
+
 function isSpawnActivation(value: unknown): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -459,6 +504,7 @@ function isSpawnActivation(value: unknown): boolean {
     && ["reserved", "reserving", "dispatching", "settled"].includes(String(activation.phase))
     && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
     && typeof activation.startedAt === "string" && typeof activation.fence === "string"
+    && (activation.admissionStartedAt === undefined || typeof activation.admissionStartedAt === "string" && Number.isFinite(Date.parse(activation.admissionStartedAt)))
     && (activation.replay === undefined || typeof activation.replay === "boolean")
     && (activation.prepareInput === undefined || typeof activation.prepareInput === "boolean")
     && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
@@ -476,7 +522,7 @@ function isAttemptDefinition(value: unknown): boolean {
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const definition = value as Record<string, unknown>;
   const role = definition.role;
-  return (definition.runtime === undefined || definition.runtime === "local" || definition.runtime === "codex-cloud")
+  return (definition.runtime === undefined || definition.runtime === "local" || isCloudRuntime(definition.runtime))
     && validAgentMemoryMax(definition.agentMemoryMaxBytes)
     && typeof definition.boundAt === "string"
     && typeof definition.stageDigest === "string"
@@ -644,7 +690,7 @@ function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
   const owner = plan.owner;
   return typeof plan.id === "string" && !!plan.id && ["pending", "running", "settled"].includes(plan.phase)
     && (plan.hosts === undefined || (Array.isArray(plan.hosts) && plan.hosts.every((item) => item && host(item.target)
-      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && typeof item.evidence.startedAt === "string"
+      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && isNullableString(item.evidence.startedAt)
       && typeof item.evidence.state === "string" && isNullableString(item.evidence.error)
       && isNullableString(item.evidence.completedAt) && isVerdict(item.evidence.verdict)
       && isUnresolvedTermination(item.evidence.unresolvedTermination))))
@@ -926,7 +972,9 @@ function isPipelineMerge(value: unknown): boolean {
     && typeof merge.reviewedHead === "string"
     && isStringList(merge.chain)
     && Array.isArray(merge.updates) && merge.updates.every((update) => Boolean(update) && typeof update === "object"
-      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head))
+      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head)
+      && [(update as Record<string, unknown>).commit, (update as Record<string, unknown>).base]
+        .every(sha => sha === undefined || (typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))))
     && isStringList(merge.seenChecks)
     && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
     && (merge.lastChecks === null || isStringList(merge.lastChecks))
@@ -981,7 +1029,24 @@ export function isPipelineConversationSource(value: unknown): value is NonNullab
     && Number.isFinite(Date.parse(source.capturedAt)) && new Date(source.capturedAt).toISOString() === source.capturedAt;
 }
 
+/** Format five is the rollback reader for format six. New integration
+ * records stay opaque until the implementation of their authority is present. */
+function needsIntegrationReader(value: unknown): boolean {
+  if (PIPELINES_SCHEMA_VERSION >= 6 || !value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return "adoptedCreationRequest" in record || "adoptedCreationRequests" in record
+    || !!record.merge && typeof record.merge === "object" && "integration" in record.merge;
+}
+
+/** Keyed raw reads keep queued effects fenced even when executable projections
+ * correctly exclude an unsupported pipeline. */
+export function pipelineRequiresNewerReader(id: string): boolean {
+  if (PIPELINES_SCHEMA_VERSION >= 6) return false;
+  return pipelineHasIntegrationMetadata(stateDatabaseFile(), id);
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
+  if (needsIntegrationReader(value)) return false;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
@@ -1528,7 +1593,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
           .filter((attempt) => Boolean(attempt.verdict || attempt.completedAt))
           .map((attempt) => `${run.stageId}:${attempt.n}`))
       : []);
-  return {
+  const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
@@ -1571,7 +1636,10 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
+            ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
+            ...(attempt.roleMemoryDelivery ? { roleMemoryDelivery: { ...attempt.roleMemoryDelivery } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
@@ -1613,6 +1681,20 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
         : [],
     })),
   };
+  settleClosedPipelineAttempts(revived, (pipeline, stageId, attempt) => {
+    if (attempt.spawnCalls === 0) return "none";
+    try {
+      const base = `pipeline_${pipeline.id}_${stageId}_${attempt.n}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
+      const receipts = agentRegistry().pipelineSpawnHistory(base);
+      if (!receipts.length) return attempt.spawnCalls === undefined && attempt.startedAt ? "uncertain" : "none";
+      if (receipts.every(receipt => receipt.state === "failed" && receipt.membershipAdmitted === false
+        && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath)) return "no-host";
+      return receipts.some(receipt => receipt.state === "starting") ? "uncertain" : "launched";
+    } catch {
+      return "uncertain";
+    }
+  });
+  return revived;
 }
 
 /** Detach every nested field before a mutable reader or session sees a shared
@@ -1687,6 +1769,8 @@ function decodePipeline(value: unknown, collection = "pipelines"): Pipeline | nu
 /** Unknown vocabulary is diagnosed separately from a broken known shape. The
     substituted copy is used only to validate structure, never for execution. */
 function pipelineRecordIssue(value: unknown, collection = "pipelines"): RegistryRecordIssue {
+  if (needsIntegrationReader(value)) return reportRegistryRecord(collection, value, "unknown-but-preserved",
+    "pipeline integration requires a newer reader; preserved without launch or settlement");
   const unknown: string[] = [];
   const copy = structuredClone(value);
   const visit = (node: unknown, location: string) => {
@@ -1753,6 +1837,7 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
     {
       collection: "pipelines",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
+      compatibleSchemaVersions: [6],
       migrationId: "pipelines-json-v1",
       loadRecords: () => parsePipelinesFile(pipelinesFile()),
       key: registryRecordKey,
@@ -1762,6 +1847,7 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
     {
       collection: "pipelines_archive",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
+      compatibleSchemaVersions: [6],
       migrationId: "pipelines-archive-json-v1",
       loadRecords: () => parsePipelinesFile(pipelinesArchiveFile()),
       key: registryRecordKey,
@@ -1779,6 +1865,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
   const common = {
     readCacheKey: JSON.stringify(["pipeline-v1", PIPELINE_ROLE_IDS]),
     schemaVersion: PIPELINES_SCHEMA_VERSION,
+    compatibleSchemaVersions: [6],
     busyMessage: "pipeline state is busy",
     key: (pipeline: Pipeline) => pipeline.id,
     decode: decodePipeline,
@@ -1875,7 +1962,9 @@ export function loadPipelinesForList(): readonly Pipeline[] {
 export async function loadPipelinesForListAsync(): Promise<readonly Pipeline[]> {
   const rows = await pipelineStore().loadReadonlyAsync();
   if (!Object.isFrozen(rows)) {
-    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    // Incremental snapshots retain frozen records. Only changed graphs owe
+    // work; yielding for every retained row can exhaust a busy seat's budget.
+    await forEachCooperatively(rows.filter(row => !Object.isFrozen(row)), row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
     Object.freeze(rows);
   }
   return loadPipelinesForList();
@@ -1938,12 +2027,12 @@ export async function withPipelineStartupAdmission<T>(
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
   compact = false,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; waitMs?: number } = {},
 ): Promise<T> {
   return withViewerOperation("pipelines.startup-admission", () => withWaitCorrelation({ label: `pipelines.startup-admission:${phase}` }, async () => {
     let entered = false;
     let prepared: PreparedPipelineEvidence | undefined;
-    const waitMs = pipelineLockWaitMs();
+    const waitMs = Math.max(0, Math.min(pipelineLockWaitMs(), options.waitMs ?? Infinity));
     const deadline = performance.now() + waitMs;
     try {
       const outcome = await waitForStateLock("pipelines.startup-admission", async () => {
@@ -2053,11 +2142,12 @@ export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<
   return pipelineStore().boundedPatch(16, operation);
 }
 
-export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
-  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).boundedPatchAsync(limit, (tx) => {
+export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16, admissionDeadline = Infinity): Promise<R> {
+  const remaining = () => Math.min(pipelineLockWaitMs(), Math.max(0, admissionDeadline - performance.now()));
+  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: remaining() })).boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
-  }, pipelineLockWaitMs()));
+  }, remaining()));
 }
 
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */
@@ -2078,6 +2168,9 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
 
 export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
   requireOwner?: boolean;
+  /** Monotonic deadline shared by store opening and writer admission. */
+  admissionDeadline?: number;
+  assertAuthority?: () => void;
   /** Outside the lease; repeated after contention before another create attempt. */
   prepare?: () => Promise<void>;
   /** Synchronous creation-only freshness guard under the writer lease. */
@@ -2087,6 +2180,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   onReplay?: () => void;
 } = {}): Promise<Pipeline> {
   const replay = (tx: StateBoundedTransaction<Pipeline>) => {
+    options.assertAuthority?.();
     if (pipeline.creationRequest) {
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {
@@ -2103,7 +2197,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     if (existing) return existing;
     if (preparationFailure) throw preparationFailure.error;
     options.admit?.();
-    const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
+    const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
         ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,
@@ -2118,7 +2212,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   };
   const limit = options.requireOwner ? 4096 : 16;
   const prepare = options.prepare;
-  if (!prepare) return withDeliveryMutationAsync(create, limit);
+  if (!prepare) return withDeliveryMutationAsync(create, limit, options.admissionDeadline);
   return refuseBusyBeforeAdmission(admitted => waitForStateLock("pipelines.create", async () => {
     const store = pipelineStore();
     // A committed replay needs live authorization, but no fresh source capture.
@@ -2134,7 +2228,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
       // A peer may have committed while preparation was running or refused.
       return create(tx, preparationFailure);
     });
-  }, { waitMs: pipelineLockWaitMs(), subject: "pipelines" }));
+  }, { waitMs: Math.min(pipelineLockWaitMs(), Math.max(0, (options.admissionDeadline ?? Infinity) - performance.now())), subject: "pipelines" }));
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {
@@ -2217,7 +2311,7 @@ export function loadArchivedPipelinesForList(): readonly Pipeline[] {
 export async function loadArchivedPipelinesForListAsync(): Promise<readonly Pipeline[]> {
   const rows = await archiveStore().loadReadonlyAsync();
   if (!Object.isFrozen(rows)) {
-    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    await forEachCooperatively(rows.filter(row => !Object.isFrozen(row)), row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
     Object.freeze(rows);
   }
   return rows;
@@ -2293,22 +2387,22 @@ export async function archiveSettledPipelines(
 
 export function checkpointPipelineRollbackMirrorsForDemotion(): { pipelines: number; pipelinesArchive: number } {
   const { active, archive } = stores();
-  const pipelines = active.checkpointMirrorForDemotion((pipelines, revision) => {
-    atomicWriteJson(pipelinesFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelines = active.checkpointMirrorForDemotion((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
-  const pipelinesArchive = archive.checkpointMirrorForDemotion((pipelines, revision) => {
-    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelinesArchive = archive.checkpointMirrorForDemotion((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
   return { pipelines, pipelinesArchive };
 }
 
 export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promise<{ pipelines: number; pipelinesArchive: number }> {
   const { active, archive } = stores();
-  const pipelines = await active.checkpointMirrorForDemotionAsync((pipelines, revision) => {
-    atomicWriteJson(pipelinesFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelines = await active.checkpointMirrorForDemotionAsync((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
-  const pipelinesArchive = await archive.checkpointMirrorForDemotionAsync((pipelines, revision) => {
-    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelinesArchive = await archive.checkpointMirrorForDemotionAsync((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
   return { pipelines, pipelinesArchive };
 }

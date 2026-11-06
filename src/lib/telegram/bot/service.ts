@@ -315,7 +315,7 @@ export class TelegramBotService {
 
   private readonly fileConfirmations: FileSendConfirmations;
   constructor(private readonly deps: TelegramBotDependencies) {
-    this.fileConfirmations = new FileSendConfirmations(() => this.connectedStore(), () => deps.now(), deps.fileConfirmationId);
+    this.fileConfirmations = new FileSendConfirmations(() => this.store(), () => deps.now(), deps.fileConfirmationId);
   }
   fileConfirmation(id: string): FileConfirmationView { return this.fileConfirmations.read(id); }
   /** Only the owner route calls this, with a live authorization recheck. No send input accepts a grant. */
@@ -330,18 +330,18 @@ export class TelegramBotService {
   }
   private fileApprovalCheck(chat: ChatRow, approval: FileSendApproval | undefined): (() => void) | undefined {
     if (!approval) return undefined;
-    const botId = this.storedBotId();
+    const botId = this.fileSenderIdentity(chat);
     return () => {
       approval.authorize();
-      const current = this.connectedStore().chat(chat.chatId);
-      if (Date.parse(approval.expiresAt) <= this.deps.now().getTime() || !botId || this.storedBotId() !== botId)
+      const current = this.store().chat(chat.chatId);
+      if (Date.parse(approval.expiresAt) <= this.deps.now().getTime() || !botId || this.fileSenderIdentity(chat) !== botId)
         throw new TelegramBotError("confirmation_invalid", "This confirmation expired or the connected bot changed.");
       const refusal = current ? postRefusal(current) : null;
       if (!current || refusal) throw new TelegramBotError(refusal?.code ?? "chat_not_allowed", refusal?.reason ?? "The destination is no longer available.");
     };
   }
   private admitFileSend(kind: "document" | "media", chat: ChatRow, options: FileSendOptions, files: FileConfirmationView["files"], reasons: DocumentWarning[], approval?: FileSendApproval): void {
-    const snapshot = { kind, chatId: chat.chatId, chatTitle: chat.title, topicId: options.topicId, options, files, reasons, botId: this.storedBotId()! };
+    const snapshot = { kind, chatId: chat.chatId, chatTitle: chat.title, topicId: options.topicId, options, files, reasons, botId: this.fileSenderIdentity(chat)! };
     if (approval) {
       if (fileSendDigest(snapshot) !== approval.digest) throw new TelegramBotError("confirmation_invalid", "The file or destination changed after this confirmation was requested.");
       this.fileApprovalCheck(chat, approval)!();
@@ -350,6 +350,24 @@ export class TelegramBotService {
       const first = reasons[0]!;
       throw new TelegramBotError(first.code, `${first.reason} The owner can confirm this exact send in Delegatus: ${confirmation.url}`, { secretClass: reasons.find(reason => reason.secretClass)?.secretClass, confirmation });
     }
+  }
+
+  private fileSenderIdentity(chat: ChatRow): string | null {
+    const botId = this.storedBotId();
+    if (botId) return botId;
+    const route = chat.type !== "private" ? this.deps.clones?.peek(chat.chatId) : null;
+    return route?.methodsFeature && route.send && this.deps.clones?.valid(route, chat.chatId) ? route.id : null;
+  }
+  private async fileSendStore(input: TelegramFileSendInput): Promise<TelegramBotStore> {
+    if (this.storedBotId()) return this.connectedStore();
+    const store = this.store();
+    let chat: ChatRow | null = null;
+    try { chat = this.resolveChat(store, input.chat); } catch { /* Preserve the legacy disconnected refusal below. */ }
+    if (chat && chat.type !== "private") {
+      const route = await this.deps.clones?.route(chat.chatId);
+      if (route && this.deps.clones?.valid(route, chat.chatId)) return store;
+    }
+    return this.connectedStore();
   }
 
   private publication: OutboundPublication | null = null;
@@ -740,7 +758,7 @@ export class TelegramBotService {
    * one given, else the chat's current one, else one built from its title.
    */
   async addChat(reference: unknown, alias?: unknown): Promise<{ status: TelegramBotStatusPayload; chat: string; chatId: string }> {
-    const store = this.connectedStore();
+    const store = this.store();
     const target = chatReference(reference);
     if (target === null) {
       throw new TelegramBotError("chat_reference_invalid", "name the chat by its numeric id (a group's starts with -100) or its @username");
@@ -749,6 +767,36 @@ export class TelegramBotService {
     if (wanted !== null && !validChatAlias(wanted)) {
       throw new TelegramBotError("alias_invalid", "an alias is 1–32 lowercase letters, digits, - or _, starting with a letter or digit, and not digits alone");
     }
+    // A paired clone can be the only bot in an already allowed group. Its
+    // directory proves coverage, but supplies no forum flag or Bot API token.
+    const targetKey = String(target);
+    const knownTarget = store.resolveChat(targetKey)
+      ?? (targetKey.startsWith("@") ? store.chats().find(chat => chat.username?.toLowerCase() === targetKey.slice(1).toLowerCase()) : null);
+    const assignedBot = (chatId: string) => store.postingState(db => db.query<{ assigned_bot: string | null }, [string]>("SELECT assigned_bot FROM chats WHERE chat_id=?").get(chatId)?.assigned_bot);
+    const clone = knownTarget?.postAllowed && knownTarget.alias && knownTarget.type !== "private" && !assignedBot(knownTarget.chatId)
+      ? await this.deps.clones?.route(knownTarget.chatId) : null;
+    if (clone && knownTarget && this.deps.clones?.valid(clone, knownTarget.chatId)) {
+      // Clone discovery has no Bot API answer for forum state. Keep that
+      // coverage path, while refreshing the state when a local posting bot can
+      // see this chat. A failed local lookup must not block clone-only saves.
+      for (const bot of this.postingBots()) {
+        const found = await bot.transport.call<TgChat>("getChat", { chat_id: knownTarget.chatId });
+        const candidate = found.ok ? found.result : null;
+        if (!candidate || String(candidate.id) !== knownTarget.chatId || typeof candidate.type !== "string") continue;
+        store.recordLookedUpChat({ ...candidate, is_forum: candidate.is_forum === true }, null, this.deps.now());
+        break;
+      }
+      const current = store.chat(knownTarget.chatId);
+      if (!current?.postAllowed || !current.alias) throw new TelegramBotError("chat_not_allowed", "posting permission changed; allow the chat in the Telegram panel first");
+      if (assignedBot(current.chatId)) throw new TelegramBotError("chat_not_allowed", "the chat's bot assignment changed; check the Telegram panel and retry");
+      if (wanted !== null && wanted !== current.alias) {
+        const outcome = store.setChatSettings(current.chatId, { alias: wanted, postAllowed: true });
+        if (outcome === "alias_taken") throw new TelegramBotError("alias_taken", "another chat already has that alias");
+        if (outcome !== "ok") throw new TelegramBotError("chat_unknown", "no such chat");
+      }
+      return { status: this.status(), chat: wanted ?? current.alias, chatId: current.chatId };
+    }
+    this.connectedStore();
     let chat: TgChat | null = null;
     let botStatus: TelegramBotMemberStatus | null = null;
     let lastError: TelegramBotError | null = null;
@@ -767,7 +815,9 @@ export class TelegramBotService {
         if (member.ok && typeof member.result?.status === "string" && MEMBER_STATUSES.has(member.result.status)) status = member.result.status as TelegramBotMemberStatus;
       }
       if (status === "left" || status === "kicked") { lastError = new TelegramBotError("bot_not_in_chat", "the bot is not a member of that chat; add it first"); continue; }
-      chat = candidate;
+      // Bot API getChat omits is_forum for a non-forum. Clone discovery's
+      // omitted flag remains unknown because it never takes this path.
+      chat = { ...candidate, is_forum: candidate.is_forum === true };
       botStatus = bot.receiving ? status : null;
       break;
     }
@@ -1340,7 +1390,7 @@ export class TelegramBotService {
       outgoing-message journal. Every image is loaded before transport starts. */
   sendMedia(input: TelegramFileSendInput): Promise<TelegramBotSendAnswer> { return this.sendMediaChecked(input); }
   private async sendMediaChecked(input: TelegramFileSendInput, approval?: FileSendApproval): Promise<TelegramBotSendAnswer> {
-    const store = this.connectedStore();
+    const store = await this.fileSendStore(input);
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
@@ -1444,7 +1494,7 @@ export class TelegramBotService {
       nothing posted, so a corrected retry under the same key may send. */
   sendDocument(input: TelegramFileSendInput): Promise<TelegramBotSendAnswer> { return this.sendDocumentChecked(input); }
   private async sendDocumentChecked(input: TelegramFileSendInput, approval?: FileSendApproval): Promise<TelegramBotSendAnswer> {
-    const store = this.connectedStore();
+    const store = await this.fileSendStore(input);
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);

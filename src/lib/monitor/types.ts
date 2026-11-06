@@ -1170,6 +1170,10 @@ export interface SeatTickProjectState {
   wakeDecidedSince?: string | null;
   /** A check-error notice may still be open, including a refused close. */
   checkErrorAlarmPending?: boolean;
+  /** Whether the current consecutive-error episode has been observed by the watchdog. */
+  checkErrorAlarmEpisodeActive?: boolean;
+  /** Durable identity of the current check-failure episode, retained after recovery. */
+  checkErrorAlarmVersion?: number;
   catchUpProgress?: Omit<SeatTickCatchUp, "pending"> | null;
   lastWakeAt: string | null;
   lastWakeReasons: SeatTickWakeReasonKind[];
@@ -1482,7 +1486,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
   detail: string;
   /**
    * Whether the condition still holds.

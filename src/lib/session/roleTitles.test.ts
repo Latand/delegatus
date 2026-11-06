@@ -5,6 +5,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { deriveRoleSessionTitles, overlayRoleSessionTitles, taskSubjectLabel } from "./roleTitles";
+import { taskOwnerResolver } from "@/lib/review/directReviewGrouping";
 
 /*
  * Issue #325 §titles: Viewer-spawned workers carry machine boilerplate titles —
@@ -85,6 +86,51 @@ const assignment = (conversationId: string, at = "2026-07-10T01:00:00.000Z") => 
 });
 
 const roleConfig = { engine: "claude" as const, model: null, effort: null };
+
+describe("task owner lookup across a board projection", () => {
+  test("conversation and path matches share newest-assignment precedence and stable task ties", () => {
+    const first = task({ id: "first", updatedAt: "2026-07-10T03:00:00Z", assignments: [
+      assignment("conversation-subject", "2026-07-10T01:00:00Z"),
+      { ...assignment("conversation-other", "2026-07-10T02:00:00Z"), path: "/review" },
+    ] });
+    const second = task({ id: "second", updatedAt: first.updatedAt, assignments: [
+      assignment("conversation-subject", "2026-07-10T02:00:00Z"),
+    ] });
+    const resolve = taskOwnerResolver([first, second]);
+    expect(resolve("conversation-subject", null)).toBe(second);
+    expect(resolve("conversation-subject", "/review")).toBe(first);
+    expect(resolve(null, "/review")).toBe(first);
+    expect(resolve(null, null)).toBeNull();
+    const revised = { ...second, updatedAt: "2026-07-10T04:00:00Z" };
+    expect(taskOwnerResolver([first, revised])("conversation-subject", "/review")).toBe(revised);
+    expect(taskOwnerResolver([second, first])("conversation-subject", "/review")).toBe(second);
+  });
+
+  test("legacy empty identity matches keep their existing path and absence rules", () => {
+    const empty = task({ id: "empty", assignments: [assignment("")] });
+    const pathOnly = task({ id: "path", assignments: [{ ...assignment("other"), path: "" }] });
+    const resolve = taskOwnerResolver([empty, pathOnly]);
+    expect(resolve(null, "/legacy")).toBe(empty);
+    expect(resolve("unknown", "")).toBe(pathOnly);
+    expect(resolve("", "")).toBeNull();
+    expect(resolve("missing", "/missing")).toBeNull();
+  });
+
+  test("many title lookups read each task assignment list once", () => {
+    let assignmentReads = 0;
+    const tasks = Array.from({ length: 100 }, (_, index) => {
+      const owned = Object.freeze([assignment(`conversation-${index}`)]);
+      const row = task({ id: `task-${index}` });
+      Object.defineProperty(row, "assignments", { enumerable: true, get: () => { assignmentReads++; return owned; } });
+      return Object.freeze(row);
+    });
+    const resolve = taskOwnerResolver(Object.freeze(tasks));
+    for (let repeat = 0; repeat < 5; repeat++) {
+      for (let index = 0; index < tasks.length; index++) expect(resolve(`conversation-${index}`, null)).toBe(tasks[index]);
+    }
+    expect(assignmentReads).toBeLessThanOrEqual(tasks.length);
+  });
+});
 
 function managedFlow(overrides: Partial<Flow> & { id: string; implementerPath: string }): Flow {
   return {

@@ -16,6 +16,7 @@ export type Selection = (typeof SELECTIONS)[number];
 /* The files that start the executable through NATIVE_CODEX_QUEUE_TEST_BINARY,
    LLV_CODEX_HISTORY_CLI or LLV_CODEX_BINARY, once per supported version. */
 export const engineFiles = [
+  "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
@@ -24,6 +25,7 @@ export const engineFiles = [
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
   "src/lib/runtime/nativeQueueHost.integration.test.ts",
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+  "src/lib/runtime/deliveryLongTurn.native.test.ts",
 ];
 /* Engine files that install globals: one process each, like the other
    injection files. */
@@ -33,6 +35,7 @@ export const engineInjectionFiles = [
 ];
 
 export const files = [
+  "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
@@ -46,6 +49,7 @@ export const files = [
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
   "src/lib/runtime/nativeQueueHost.integration.test.ts",
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+  "src/lib/runtime/deliveryLongTurn.native.test.ts",
   "src/lib/runtime/codexTurnProfile.test.ts",
   "src/lib/runtime/codexAppServerHost.test.ts",
   "src/lib/runtime/claudeStreamBrokerHost.test.ts",

@@ -33,12 +33,33 @@ export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), requ
   observerFault: z.string().max(1024).nullable().default(null),
   observation: z.object({ owner: identitySchema, epoch: z.number().int().positive().nullable(), releaseRevision: z.string().nullable() }).strict().nullable().default(null),
   custody: z.array(reportSchema).max(4).default([]),
+  // Producer reports are compressed after retention. Keep their native owners
+  // independently of the aggregate close, which can omit an outer command.
+  terminalOwners: z.array(identitySchema).max(8).optional(),
   acknowledgement: z.object({ actor: z.string(), resultRevision: z.number(), resultDigest: z.string(), evidenceDigest: z.string(),
     disposition: z.literal("adopt-retained"), at: z.number() }).strict().nullable(),
 }).strict();
 export type CheckRow = z.infer<typeof rowSchema>;
+/** Releasing admission capacity never acknowledges or retires evidence. Unknown
+ * native identity is still an owner; an elapsed deadline alone proves nothing. */
+export function custodyCapacityReleased(row: CheckRow): boolean {
+  const terminal = row.result?.terminal;
+  if (terminal?.dispatch === "not-started"
+    || terminal?.report?.phase === "close" && terminal.report.cleanup === "confirmed") return true;
+  const owners = [row.binding.host, row.descriptor.recorder, row.descriptor.wrapper,
+    ...row.custody.flatMap(report => [report.supervisor, report.command]),
+    terminal?.report?.supervisor, terminal?.report?.command, ...(row.terminalOwners ?? []),
+    ...(terminal?.reports ?? []).flatMap(report => [report.supervisor, report.command])];
+  return owners.every(owner => !owner || !processIdentityMayRun(owner));
+}
+export class RecordedCheckCapacityError extends Error {
+  constructor(readonly holders: ReturnType<RecordedCheckStore["capacity"]>) {
+    super("recorded check custody capacity is full");
+  }
+}
 /** Scoped to this admitted run. An absent receipt proves no native absence. */
-export function recordedExecutionState(row: CheckRow | null): "active" | "completed" | "unknown" {
+export function recordedExecutionState(row: CheckRow | null): "active" | "completed" | "not-started" | "unknown" {
+  if (row?.result?.terminal?.dispatch === "not-started") return "not-started";
   if (!row || row.admission !== "accepted") return "unknown";
   const terminal = row.result?.terminal;
   if (terminal?.report?.phase === "close" && terminal.report.cleanup === "confirmed") return "completed";
@@ -48,17 +69,20 @@ export function recordedExecutionState(row: CheckRow | null): "active" | "comple
   return owners.every(owner => owner && processIdentityStatus(owner) === "alive" && processIdentityMayRun(owner)) ? "active" : "unknown";
 }
 function requiresOwner(row: CheckRow, now: number) {
-  return row.admission !== "refused" && row.descriptor.recorder.bootEpoch === systemBootEpoch()
+  return !custodyCapacityReleased(row) && row.admission !== "refused" && row.descriptor.recorder.bootEpoch === systemBootEpoch()
     && now <= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS
+    && row.result?.terminal?.dispatch !== "not-started"
     && !(row.result?.terminal?.report?.cleanup === "confirmed" && row.result.terminal.report.phase === "close");
 }
 const indexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS recorded_checks_host ON recorded_checks(conversation,deadline) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_launch ON recorded_checks(launch) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_backlog_launch ON recorded_checks(launch)",
+  "CREATE INDEX IF NOT EXISTS recorded_check_slots_launch ON recorded_check_slots(launch)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_session ON recorded_checks(session) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_owner ON recorded_checks(owner) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_pending ON recorded_checks(id)",
+  "CREATE INDEX IF NOT EXISTS recorded_checks_pending_recipient ON recorded_checks(json_extract(value,'$.notification.conversation'),id) WHERE json_extract(value,'$.notification.noDispatch')=1",
   "CREATE INDEX IF NOT EXISTS recorded_check_events_revision ON recorded_check_events(revision)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_history_pipeline ON recorded_checks_history(pipeline,id)",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_directory ON recorded_check_roots(directory,id) WHERE held=1",
@@ -83,6 +107,16 @@ export class RecordedCheckStore {
         this.db.exec("PRAGMA journal_mode=WAL");
         this.db.exec(`CREATE TABLE IF NOT EXISTS recorded_checks(id TEXT PRIMARY KEY, request TEXT UNIQUE NOT NULL,
           conversation TEXT NOT NULL, launch TEXT NOT NULL, session TEXT NOT NULL, owner TEXT NOT NULL, deadline REAL NOT NULL, acknowledged INTEGER NOT NULL, value TEXT NOT NULL)`);
+        // Seed once on upgrade. Reopening a store must never reacquire a slot
+        // released by another writer while its receipt remains unacknowledged.
+        if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recorded_check_slots'").get()) {
+          this.db.transaction(() => {
+            if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recorded_check_slots'").get()) {
+              this.db.exec("CREATE TABLE recorded_check_slots(id TEXT PRIMARY KEY,launch TEXT NOT NULL)");
+              this.db.exec("INSERT INTO recorded_check_slots SELECT id,launch FROM recorded_checks");
+            }
+          }).immediate();
+        }
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_check_roots(directory TEXT NOT NULL,id TEXT NOT NULL,identity TEXT NOT NULL,retirement TEXT,held INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(directory,id))");
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_checks_history(id TEXT PRIMARY KEY,request TEXT UNIQUE NOT NULL,pipeline TEXT NOT NULL,value TEXT NOT NULL)");
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_check_evidence(run TEXT NOT NULL,revision INTEGER NOT NULL,ordinal INTEGER NOT NULL,file TEXT NOT NULL,sha256 TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(run,revision,ordinal))");
@@ -106,11 +140,32 @@ export class RecordedCheckStore {
     return this.db.query<{ value: string }, [string, number]>("SELECT value FROM recorded_checks WHERE id>? ORDER BY id LIMIT ?")
       .all(after, Math.max(1, Math.min(32, limit))).map(row => rowSchema.parse(JSON.parse(row.value)));
   }
+  pendingForRecipient(recipient: string, after = "", limit = 32): CheckRow[] {
+    return this.db.query<{ value: string }, [string, string, number]>(
+      "SELECT value FROM recorded_checks WHERE id>? AND json_extract(value,'$.notification.conversation')=? AND json_extract(value,'$.notification.noDispatch')=1 ORDER BY id LIMIT ?",
+    ).all(after, recipient, Math.max(1, Math.min(32, limit))).map(row => rowSchema.parse(JSON.parse(row.value)));
+  }
   version() { return this.db.query<{ revision: number }, []>("SELECT revision FROM recorded_checks_revision WHERE id=1").get()?.revision ?? 0; }
   changed(after: number) {
     return this.db.query<{ id: string; revision: number }, [number]>("SELECT id,revision FROM recorded_check_events WHERE revision>? ORDER BY revision LIMIT 32").all(after);
   }
   hasLedger() { return !!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recorded_checks'").get(); }
+  capacity() {
+    return this.db.query<{ value: string }, []>("SELECT value FROM recorded_check_slots JOIN recorded_checks USING(id) ORDER BY id LIMIT 128")
+      .all().map(raw => {
+        const row = rowSchema.parse(JSON.parse(raw.value));
+        return { id: row.id, project: row.binding.project, pipeline: row.binding.pipeline, stage: row.binding.stage, launch: row.binding.launch,
+          state: custodyCapacityReleased(row) ? row.result?.terminal ? "settled" : "abandoned" : "live-or-unverified" };
+      });
+  }
+  private releaseCapacity() {
+    const rows = this.db.query<{ value: string }, []>("SELECT value FROM recorded_check_slots JOIN recorded_checks USING(id) LIMIT 128").all();
+    const remove = this.db.query("DELETE FROM recorded_check_slots WHERE id=?");
+    for (const raw of rows) {
+      const row = rowSchema.parse(JSON.parse(raw.value));
+      if (custodyCapacityReleased(row)) remove.run(row.id);
+    }
+  }
   evidencePage(id: string, revision: number, cursor: number) {
     return this.db.transaction(() => {
       const row = this.get(id);
@@ -121,6 +176,12 @@ export class RecordedCheckStore {
     })();
   }
   put(row: CheckRow, expected: number | null, authority: () => void = () => {}) {
+    if (row.result?.terminal?.reports.length) {
+      const owners = [...(row.terminalOwners ?? []),
+        ...row.result.terminal.reports.flatMap(report => [report.supervisor, report.command])]
+        .filter((owner): owner is NonNullable<typeof owner> => owner !== null);
+      row = { ...row, terminalOwners: [...new Map(owners.map(owner => [digest(owner), owner])).values()] };
+    }
     rowSchema.parse(row);
     const value = JSON.stringify(row.result ? { ...row, result: { ...row.result, evidence: [],
       terminal: row.result.terminal ? { ...row.result.terminal, reports: [] } : null } } : row);
@@ -153,8 +214,11 @@ export class RecordedCheckStore {
         || digest(current.result) !== digest(row.result))) throw new Error("recorded check acknowledged result changed");
       if (!current) {
         const count = (sql: string, args: string[] = []) => this.db.query<{ count: number }, string[]>(sql).get(...args)!.count;
-        if (count("SELECT count(*) AS count FROM recorded_checks") >= 128
-          || count("SELECT count(*) AS count FROM recorded_checks WHERE launch=?", [row.binding.launch]) >= 4) throw new Error("recorded check custody capacity is full");
+        if (count("SELECT count(*) AS count FROM recorded_check_slots") >= 128
+          || count("SELECT count(*) AS count FROM recorded_check_slots WHERE launch=?", [row.binding.launch]) >= 4) this.releaseCapacity();
+        if (!custodyCapacityReleased(row) && (count("SELECT count(*) AS count FROM recorded_check_slots") >= 128
+          || count("SELECT count(*) AS count FROM recorded_check_slots WHERE launch=?", [row.binding.launch]) >= 4))
+          throw new RecordedCheckCapacityError(this.capacity());
       }
       if (row.result && current?.result?.revision !== row.result.revision) {
         if (row.result.evidence.length !== row.result.evidenceCount || digest(row.result.evidence) !== row.result.evidenceDigest)
@@ -174,6 +238,8 @@ export class RecordedCheckStore {
       else this.db.query("INSERT INTO recorded_checks VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,acknowledged=excluded.acknowledged")
           .run(row.id, row.request, row.binding.conversation, row.binding.launch, row.binding.session,
             digest(row.binding.host), row.descriptor.manifest.deadline, Number(!!row.acknowledgement), value);
+      if (custodyCapacityReleased(row)) this.db.query("DELETE FROM recorded_check_slots WHERE id=?").run(row.id);
+      else if (!current) this.db.query("INSERT INTO recorded_check_slots VALUES(?,?)").run(row.id, row.binding.launch);
       if (!current) for (const root of row.descriptor.manifest.roots) this.db.query("INSERT INTO recorded_check_roots(directory,id,identity) VALUES(?,?,?)").run(root.directory, row.id, root.identity);
       if (row.acknowledgement) for (const root of row.descriptor.manifest.roots)
         this.db.query("UPDATE recorded_check_roots SET held=0 WHERE directory=? AND id=?").run(root.directory, row.id);
@@ -184,8 +250,24 @@ export class RecordedCheckStore {
       else this.db.query("INSERT INTO recorded_check_events VALUES(?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision").run(row.id, this.version());
     })();
   }
-  async write(row: CheckRow, expected: number | null, authority?: () => void) {
-    await waitForStateLock("recorded-check.write", () => stateLockAttempt("recorded-check.write", () => this.put(row, expected, authority)));
+  async write(row: CheckRow, expected: number | null, authority?: () => void, waitMs?: number) {
+    await waitForStateLock("recorded-check.write", () => stateLockAttempt("recorded-check.write", () => this.put(row, expected, authority)), { waitMs });
+    this.changedHint(row);
+  }
+  /** Admission changes only its own fields in the latest row. Observation and
+   * notification writes may have committed while source hashing was awaited. */
+  async update(id: string, change: (current: CheckRow) => CheckRow, authority: () => void, waitMs?: number) {
+    const row = await waitForStateLock("recorded-check.update", () => stateLockAttempt("recorded-check.update", () => this.db.transaction(() => {
+      const current = this.get(id);
+      if (!current) throw new Error("recorded check reservation disappeared");
+      const updated = change(current);
+      this.put(updated, current.revision, authority);
+      return updated;
+    }).immediate()), { waitMs });
+    this.changedHint(row);
+    return row;
+  }
+  private changedHint(row: CheckRow) {
     wakeRecordedChecks(row.id, false);
     // WAL filesystem events may precede COMMIT. This single bounded hint is
     // renamed only after commit; its reader always re-reads the indexed row.
@@ -203,7 +285,7 @@ export class RecordedCheckStore {
     return !!this.db.query("SELECT 1 FROM recorded_checks WHERE acknowledged=0 AND launch=? LIMIT 1").get(launch);
   }
   sessionHeld(session: string, expected: ProcessIdentity) {
-    const rows = this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND session=? LIMIT 128").all(session);
+    const rows = this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND session=?").all(session);
     return rows.some(raw => {
       const row = rowSchema.parse(JSON.parse(raw.value));
       return sameRecordedProcessIdentity(row.binding.host, expected) && requiresOwner(row, custodyClock());
@@ -212,15 +294,15 @@ export class RecordedCheckStore {
   ownerHeld(expected: ProcessIdentity) {
     if (!expected.startIdentity || !expected.bootEpoch) return false;
     const owner = digest({ pid: expected.pid, startIdentity: expected.startIdentity, bootEpoch: expected.bootEpoch });
-    const rows = this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND owner=? LIMIT 128").all(owner);
+    const rows = this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND owner=?").all(owner);
     return rows.some(raw => requiresOwner(rowSchema.parse(JSON.parse(raw.value)), custodyClock()));
   }
   forLaunch(launch: string): CheckRow[] {
-    return this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND launch=? ORDER BY id LIMIT 4")
+    return this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND launch=? ORDER BY id")
       .all(launch).map(row => rowSchema.parse(JSON.parse(row.value)));
   }
   forHost(conversation: string): CheckRow[] {
-    return this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND conversation=? LIMIT 128")
+    return this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND conversation=?")
       .all(conversation).map(row => rowSchema.parse(JSON.parse(row.value)));
   }
   rootHeld(directory: string): boolean {
@@ -274,12 +356,13 @@ export async function recordRootRetirement(directory: string, identity: string, 
   try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason))); }
   finally { store.close(); }
 }
-export function openRecordedChecks(filename = statePath("state.sqlite")) {
-  return waitForStateLock("recorded-check.open", () => stateLockAttempt("recorded-check.open", () => new RecordedCheckStore(filename)));
+export function openRecordedChecks(filename = statePath("state.sqlite"), waitMs?: number) {
+  return waitForStateLock("recorded-check.open", () => stateLockAttempt("recorded-check.open", () => new RecordedCheckStore(filename)), { waitMs });
 }
 export const recordedAttemptReceipts = (launch: string) => readRecorded(store => store.forLaunch(launch).map(row => ({
   id: row.id, admission: row.admission, deadline: row.descriptor.manifest.deadline, reason: row.reason,
-  pending: !row.result?.terminal || row.result.terminal.report?.cleanup !== "confirmed", resultRevision: row.result?.revision ?? null,
+  pending: row.result?.terminal?.dispatch !== "not-started"
+    && (!row.result?.terminal || row.result.terminal.report?.cleanup !== "confirmed"), resultRevision: row.result?.revision ?? null,
   complete: row.result?.complete === true,
   verified: row.result?.complete === true && row.result.failed === 0 && row.result.terminal?.wrapperExit === 0
     && row.result.terminal.report?.commandExit === 0 && row.result.terminal.cancellation === null,

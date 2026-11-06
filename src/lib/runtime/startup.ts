@@ -62,6 +62,7 @@ import {
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
   releaseStructuredDeliveryHostsForDemotion,
+  releaseStructuredDeliveryHost,
   type DemotionInterruptionOptions,
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -73,7 +74,7 @@ import { sendReceiptFor } from "./sendSettlement";
 import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
+import { claudeHostLaunchPaths, materializeOwnedStructuredHostAccess, tempOwnerForConversation, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, hostTurnRecordModifiedAt, readHostTurnRecord } from "./eventStore";
 import { holdRestartCutRow, releaseRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
@@ -172,6 +173,7 @@ function retainedStartupHostIsCurrent(
   snapshot: RegistryFile,
   item: AdoptedStructuredHost,
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
+  seats: readonly OrchestratorSeat[] = [],
 ): boolean {
   const key = sessionKeyId(item.key);
   const entry = snapshot.entries[key];
@@ -179,9 +181,14 @@ function retainedStartupHostIsCurrent(
   const conversation = registryConversationsForEntryKey(snapshot, key).find((candidate) =>
     candidate.engine === item.key.engine
       && candidate.generations.at(-1)?.id === item.key.sessionId);
+  // A surviving current seat is adopted without a restart obligation. Its
+  // terminal turn must remain hosted through every later reconciliation.
+  const currentIdleSeat = conversation && item.key.engine === "codex"
+    && seats.some(seat => seat.state === "active"
+      && resolveConversationAlias(snapshot, seat.conversationId as ViewerConversationId) === conversation.id);
   return Boolean(conversation
     && !conversation.supersededBy
-    && (conversation.turn.state !== "terminal" || retainedTerminalHostKeys.has(key)));
+    && (conversation.turn.state !== "terminal" || retainedTerminalHostKeys.has(key) || currentIdleSeat));
 }
 
 async function revalidateRetainedStartupHosts(
@@ -189,18 +196,33 @@ async function revalidateRetainedStartupHosts(
   retained: readonly AdoptedStructuredHost[],
   prepared: RegistryFile | undefined = undefined,
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
+  currentSeats: () => readonly OrchestratorSeat[] = () => [],
 ): Promise<AdoptedStructuredHost[]> {
-  const current: AdoptedStructuredHost[] = [];
-  await forEachStartupBatch(retained, async (item) => {
-    const snapshot = prepared ?? startupHostSnapshot(registry, item.key);
-    if (!startupHostInScope(registry, sessionKeyId(item.key))
-      || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys)) current.push(item);
-    else {
-      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, () => item.host.release());
-      await flushStructuredHostPersistence(item.host);
+  let remaining = [...retained];
+  let preparedSnapshot = prepared;
+  for (;;) {
+    const current: AdoptedStructuredHost[] = [];
+    const retired: AdoptedStructuredHost[] = [];
+    for (const item of remaining) {
+      const snapshot = preparedSnapshot ?? startupHostSnapshot(registry, item.key);
+      if (!startupHostInScope(registry, sessionKeyId(item.key))
+        || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys, currentSeats())) current.push(item);
+      else retired.push(item);
     }
-  });
-  return current;
+    // Return a fresh set without a cleanup await after its retention checks.
+    // Each cleanup pass removes at least one candidate, bounding rechecks.
+    if (retired.length === 0) return current;
+    await forEachStartupBatch(retired, async item => {
+      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
+        if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
+          await item.host.release();
+          await flushStructuredHostPersistence(item.host);
+        }
+      });
+    });
+    remaining = current;
+    preparedSnapshot = undefined;
+  }
 }
 
 const RUNTIME_EFFECT_PAGE_SIZE = 100;
@@ -1862,6 +1884,13 @@ function startupAdoptionPredicate(registry: AgentRegistry, facts: {
     }
     const conversationId = registry.canonicalConversationId(conversation.id);
     if (pendingWork(entry)) return true;
+    // An idle current seat still needs its surviving native connection. This
+    // reconnects its socket without launching a process or a continuation turn.
+    if (entry.key.engine === "codex" && (entry.status === "idle" || entry.status === "live")
+      && orchestratorSeats().some(seat => seat.state === "active"
+        && registry.canonicalConversationId(seat.conversationId as ViewerConversationId) === conversationId)
+      && entry.structuredHost?.process
+      && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) return true;
     if (!settledStageConversationIds.has(conversationId) && entry.structuredHost?.pendingAttention.length
       && entry.structuredHost.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) return true;
     if (conversation.turn.state === "terminal") return false;
@@ -2152,12 +2181,14 @@ export async function claudeStartupHostOptions(
   startupEnvironment: NodeJS.ProcessEnv,
   agentRole?: string | null,
   identity?: ReturnType<typeof memoryStartIdentity>,
+  tempOwner?: Parameters<typeof materializeOwnedStructuredHostAccess>[3],
 ) {
-  const access = materializeStructuredHostAccess(
+  const access = await materializeOwnedStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
     { ...withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
       ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) },
     capability,
+    tempOwner ?? (() => ({ pipelineId: null, launchId: sessionKeyId(entry.key), retainUntilClose: false })),
   );
   /* No owner means no account answered for this transcript, so there is no
      home to read a server definition out of and none is invented here. */
@@ -2246,6 +2277,61 @@ function startStructuredHostPass(
     return hosts;
   }).finally(() => { current.pending = undefined; });
   return current.pending;
+}
+
+/** A retry outlives the pass that scheduled it. Its callable must be created
+ * outside that pass's lexical scope: otherwise it keeps the registry snapshots,
+ * membership projections and all other captured pass locals alive. A class
+ * constructor also preserves this boundary in the production minified bundle. */
+class StartupRowRetryJob {
+  private readonly key: string;
+  private readonly entry: Pick<AgentRegistryEntry, "key" | "cwd">;
+  constructor(
+    private readonly registry: AgentRegistry,
+    entry: AgentRegistryEntry,
+    private readonly lifetime: Pick<StructuredStartupDependencies, "signal" | "assertActive">,
+    private readonly retryDependencies: StructuredStartupDependencies,
+    private readonly schedule: NonNullable<StructuredStartupDependencies["schedule"]>,
+  ) {
+    this.key = sessionKeyId(entry.key);
+    this.entry = { key: { ...entry.key }, cwd: entry.cwd };
+  }
+
+  private assertActive(deadline: number): void {
+    this.lifetime.signal?.throwIfAborted();
+    this.lifetime.assertActive?.();
+    if (performance.now() >= deadline) throw new Error("structured startup pass deadline exceeded");
+  }
+
+  readonly run = async (): Promise<void> => {
+    const rowRetries = startupRowRetries(this.registry);
+    const deadline = performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS;
+    const retryActive = () => this.assertActive(deadline);
+    const releaseActive = () => this.assertActive(Number.POSITIVE_INFINITY);
+    try { releaseActive(); } catch { return; }
+    try {
+      const current = startupHostSnapshot(this.registry, this.entry.key).entries[this.key];
+      if (!current?.structuredHost || rowRetries.get(this.key)?.resolved) {
+        await startupRowNotice(this.entry, null, retryActive);
+        await rowRetries.clear(this.key, retryActive);
+        return;
+      }
+      await startStructuredHostPass(this.retryDependencies, new Set([this.key]), false, true);
+    } catch (error) {
+      try {
+        releaseActive();
+        const failed = await rowRetries.failed(this.key, startupRowReason(error), Date.now(), releaseActive);
+        if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
+          try {
+            await startupRowNotice(this.entry, failed, retryActive);
+            await rowRetries.notified(failed, releaseActive);
+          } catch { console.error("[structured hosts] quarantine card publication deferred", { key: this.key }); }
+        }
+      } catch { console.error("[structured hosts] row retry could not be recorded", { key: this.key }); }
+      try { releaseActive(); } catch { return; }
+      rowRetries.schedule(this.key, this.schedule, this.run);
+    }
+  };
 }
 
 async function adoptStructuredHostsPass(
@@ -2489,7 +2575,7 @@ async function adoptStructuredHostsPass(
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
     const retained = retainAdoptedHosts(startupPasses.get(registry)?.ready ?? [], startupPasses.get(registry)?.retained ?? []);
     let nextAdoptedHosts = retained.length ? await revalidateRetainedStartupHosts(
-      registry, retained, undefined, retainedRecoveryHostKeys(),
+      registry, retained, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
     ) : [];
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     /* Off the loop (rule c); refused, it is skipped this pass and the next
@@ -2651,7 +2737,9 @@ async function adoptStructuredHostsPass(
       const owns = async (): Promise<boolean> => {
         try { assertActive(); } catch { return false; }
         if (heldHostKeys.has(key) || deferredHostKeys.has(key) || skippedHostKeys.has(key)) return false;
-        const current = startupHostSnapshot(registry, item.key).entries[key];
+        const snapshot = startupHostSnapshot(registry, item.key);
+        const current = snapshot.entries[key];
+        if (!retainedStartupHostIsCurrent(snapshot, item, retainedRecoveryHostKeys(), orchestratorSeats())) return false;
         if (!current?.structuredHost || current.status === "dead" || current.status === "unhosted"
           || current.claimOwner !== claimOwner || current.claimEpoch !== claimEpoch
           || current.structuredHost.writerClaimEpoch !== writerEpoch) return false;
@@ -2711,13 +2799,15 @@ async function adoptStructuredHostsPass(
         // The surviving process retains its original MCP capability and launch
         // policy. Rotating its token would strand every tool call after adoption.
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
-          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment };
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment,
+            mcpServers: launchProfile?.mcpServers ?? ["viewer"], plugins: launchProfile?.plugins ?? [] };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
-        const access = materializeStructuredHostAccess(
+        const access = await materializeOwnedStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
           stageEnvironment,
           capability,
+          () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
         return {
@@ -2790,6 +2880,7 @@ async function adoptStructuredHostsPass(
             { ...startupEnvironment, ...guard },
             registry.conversationForPath(entry.artifactPath)?.agentRole,
             memoryStartIdentity(registry, conversation.id),
+            () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
           ),
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
         };
@@ -2843,6 +2934,7 @@ async function adoptStructuredHostsPass(
       nextAdoptedHosts,
       undefined,
       retainedRecoveryHostKeys(),
+      orchestratorSeats,
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
@@ -2929,6 +3021,7 @@ async function adoptStructuredHostsPass(
       nextAdoptedHosts,
       publicationSnapshot,
       retainedRecoveryHostKeys(),
+      orchestratorSeats,
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const finalShouldAdopt = await structuredStartupAdoptionFilter(
@@ -3081,7 +3174,6 @@ async function adoptStructuredHostsPass(
       }));
     }
     assertActive();
-    adoptedHosts = nextAdoptedHosts;
     const retryEntryKeys = new Map(retryEntries.map(entry => [sessionKeyId(entry.key), entry.key] as const));
     for (const key of new Set([...heldHostKeys, ...failures.keys()])) {
       const entry = publicationSnapshot.entries[key] ?? initialSnapshot.entries[key];
@@ -3129,37 +3221,17 @@ async function adoptStructuredHostsPass(
           await rowRetries.notified(row, assertActive);
         } catch { console.error("[structured hosts] quarantine card publication deferred", { key }); }
       }
-      const retry = async (): Promise<void> => {
-        const retryActive = activeUntil(performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS);
-        const releaseActive = activeUntil(Number.POSITIVE_INFINITY);
-        try { releaseActive(); } catch { return; }
-        try {
-          const current = startupHostSnapshot(registry, entry.key).entries[key];
-          if (!current?.structuredHost || rowRetries.get(key)?.resolved) {
-            await startupRowNotice(entry, null, retryActive);
-            await rowRetries.clear(key, retryActive);
-            return;
-          }
-          await startStructuredHostPass(retryDependencies, new Set([key]), false, true);
-        } catch (error) {
-          try {
-            releaseActive();
-            const failed = await rowRetries.failed(key, startupRowReason(error), Date.now(), releaseActive);
-            if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
-              try {
-                await startupRowNotice(entry, failed, retryActive);
-                await rowRetries.notified(failed, releaseActive);
-              } catch {
-                console.error("[structured hosts] quarantine card publication deferred", { key });
-              }
-            }
-          } catch { console.error("[structured hosts] row retry could not be recorded", { key }); }
-          try { releaseActive(); } catch { return; }
-          rowRetries.schedule(key, schedule, retry);
-        }
-      };
-      rowRetries.schedule(key, schedule, retry);
+      const retry = new StartupRowRetryJob(registry, entry,
+        { signal: dependencies.signal, assertActive: dependencies.assertActive }, retryDependencies, schedule);
+      rowRetries.schedule(key, schedule, retry.run);
     }
+    // Publication, health and recovery all await. Re-read designation after
+    // the final await so a seat changed during those phases leaves no adapter.
+    nextAdoptedHosts = await revalidateRetainedStartupHosts(
+      registry, nextAdoptedHosts, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
+    );
+    adoptedHosts = nextAdoptedHosts;
+    rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
         rememberDeferredStructuredStartup(

@@ -641,7 +641,7 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
     accountLimitsSource: () => ({
       accounts: {
         claude: [{ accountId: "claude-a", label: "Account A" }, { accountId: "claude-b", label: "Account B" }],
-        codex: [{ accountId: "codex-a", label: "Codex A" }],
+        codex: [{ accountId: "codex-a", label: "Codex A", spendCredits: true }],
         copilot: [{ accountId: "copilot-a", label: "Copilot A" }],
       },
       active: { claude: "claude-a", codex: "codex-a", copilot: "copilot-a" },
@@ -656,6 +656,7 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
 
   const all = await bindings.account_limits({ clientRequestId: "limits-all" }) as { count: number; accounts: Array<Record<string, unknown>> };
   expect(all.count).toBe(4);
+  expect(all.accounts.find(account => account.engine === "codex")).toMatchObject({ spendCredits: true, credits: null });
   expect(all.accounts[0]).toEqual({
     engine: "claude",
     accountId: "claude-a",

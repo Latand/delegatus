@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
@@ -19,6 +19,7 @@ import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { mirrorSettledReceipts, resolveSendReceipt, sendReceiptFor, settleDueSends } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
+import { DeliveryWake } from "./deliveryWake";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { structuredContentDigest } from "./structuredContent";
@@ -3771,7 +3772,7 @@ test("a stale synchronization-held steer fails safely across Codex and Claude re
   }
 });
 
-for (const policy of ["queue", "steer-or-queue"] as const) {
+for (const policy of ["queue", "steer-or-queue", "context-or-queue"] as const) {
 test(`a published Codex successor receives its migration-held ${policy} message once, under the original operation (#1709)`, async () => {
   const directory = path.join(sandbox, `migration-${policy}`);
   fs.mkdirSync(directory);
@@ -5629,5 +5630,60 @@ test("a reservation whose record was owed at a crash gets it back from the next 
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
+  }
+});
+
+
+test("the real turn boundary drains its queued message even when status publication refuses", async () => {
+  const directory = path.join(sandbox, "boundary-publication-refusal");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = ["00000007", "0000", "4000", "8000", "000000000001"].join("-");
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const conversation = registry.ensureConversation("codex", artifactPath, "fixture");
+  const key = { engine: "codex" as const, sessionId };
+  const ledger = createFakeDeliveryLedger();
+  const initial: HostState = { ...await new FakeEngineHost().health(), sessionKey: sessionId,
+    status: "active", activeTurnRef: "incumbent" };
+  const observed = statefulObservableFakeHost(initial, ledger);
+  registry.upsert({ key, artifactPath, cwd: directory, accountId: "fixture", launchProfile: emptyLaunchProfile({ cwd: directory }),
+    status: "live", host: null, structuredHost: { kind: "codex-app-server", endpoint: initial.endpoint,
+      process: null, eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 0,
+      activeTurnRef: "incumbent", pendingAttention: [], activeFlags: [] }, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const progress = new DeliveryProgressStore(null);
+  const append = client.append.bind(client);
+  let refuse = false;
+  let restoreWake = () => {};
+  client.append = async event => {
+    if (refuse && event.kind === "session-status") throw new Error("status publication refused");
+    return append(event);
+  };
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observed.host }], { registry, client, progress,
+      watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+    const accepted = await enqueueStructuredMessage({ conversationId: conversation.id, path: artifactPath,
+      operationId: "boundary-followup", clientMessageId: "boundary-followup", text: "boundary-followup", hasImages: false,
+      kind: "send", policy: "queue" }, { enabled: () => true, registry: () => registry, client: () => client,
+      kick: kickStructuredDeliveryQueue });
+    expect(accepted?.ok).toBe(true);
+    await kickStructuredDeliveryQueue();
+    await waitForCondition(() => progress.get("boundary-followup")?.waitReason === "awaiting-turn");
+    expect(ledger.writes).toHaveLength(0);
+    const wake = spyOn(DeliveryWake.prototype, "schedule"); restoreWake = () => wake.mockRestore();
+    const beforeBoundary = wake.mock.calls.length;
+    refuse = true;
+    observed.setState({ ...initial, status: "idle", activeTurnRef: null });
+    // The wake is owed at the event itself, before the failed publication can
+    // suspend it. Its timer remains real and delivers through the queue below.
+    expect(wake.mock.calls.length).toBeGreaterThan(beforeBoundary);
+    // No watchdog, receipt read, second send or explicit kick releases this.
+    await waitForCondition(() => ledger.writes.length === 1);
+    expect(ledger.writes[0]?.id).toBe("boundary-followup");
+    await waitForCondition(() => journal.operationResult("boundary-followup")?.receipt.status === "delivered");
+    expect(ledger.writes).toHaveLength(1);
+  } finally {
+    refuse = false; restoreWake();
+    await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
   }
 });

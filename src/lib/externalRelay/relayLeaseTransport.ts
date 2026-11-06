@@ -9,7 +9,7 @@ import { ExternalRelayError, relayCall } from "./client";
 import { completeRelayRequest } from "./relayCompletion";
 import { ownerRelayAuthorized, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
 
-export type TransportResult = { body: ExternalRelayCompletion; delivery: RelayAnswerDelivery };
+export type TransportResult = { body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string };
 type Frame = { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
   | { type: "completion"; result?: TransportResult; error?: true } | { type: "refresh_features" } | { type: "drained" };
 // A validated 128 KB answer may expand to 768 KB when JSON escapes control

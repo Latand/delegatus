@@ -14,13 +14,16 @@ import {
   CODEX_DELIVERY_CONFIRMATION_TIMEOUT_MS,
   DEFAULT_INJECT_OBSERVATION_TIMEOUT_MS,
 } from "./codexAppServerHost";
-import { StructuredInjectError } from "./engineHost";
+import { StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
 import { structuredContent } from "./structuredContent";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { parseRuntimeCommand } from "./commands";
+import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 
 // Command/control tests use a fake interpreter and its explicit inventory.
 let restoreFeatureReader: () => void;
@@ -252,6 +255,231 @@ function digestOf(text: string): string {
 /** Every RPC that would touch the turn. None of them may appear. */
 const TURN_MUTATIONS = ["turn/start", "turn/steer", "turn/interrupt"];
 
+test("a queued seat context policy reaches native injection and canonical receipt without a turn RPC", async () => {
+  const root = scratchRoot();
+  const server = new InjectAppServer(root);
+  const host = await startHost(server);
+  const turnId = server.startTurn();
+  const journal = new RuntimeJournal(join(root, "context.sqlite"), { structuredHosts: true, now: () => 1_000 });
+  try {
+    expect(await host.health()).toMatchObject({ activeTurnRef: turnId });
+    journal.append({ scope: { type: "session", id: "conv-native-context" }, kind: "session-status", payload: {
+      conversationId: "conv-native-context", sessionKey: { engine: "codex", sessionId: server.threadId },
+      hostKind: "codex-app-server", host: "hosted", turn: "running", activeTurnId: turnId,
+      writerClaim: "native-owner", provenance: "structured",
+      capabilities: { steer: true, inject: true, nativeQueue: true, structuredAttention: true },
+    } });
+    const command = parseRuntimeCommand("send", { conversationId: "conv-native-context", operationId: "op-native-context",
+      idempotencyKey: "key-native-context", policy: "context-or-queue", text: "worker update for the current turn" });
+    journal.executeOperation(command);
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+      hostClaim: () => "native-owner",
+      injectionBinding: () => ({ threadId: server.threadId, accountId: null, writerClaim: "native-owner" }),
+    }, () => host);
+    await queue.drain();
+    const deadline = performance.now() + 2_000;
+    while (journal.operationResult("op-native-context")?.receipt.status === "delivering" && performance.now() < deadline) await Bun.sleep(5);
+    expect(journal.operationResult("op-native-context")?.receipt).toMatchObject({ status: "delivered", turnId,
+      reason: expect.stringContaining("injected input") });
+    expect(server.injectedItems).toHaveLength(1);
+    for (const method of TURN_MUTATIONS) expect(server.requests.some(request => request.method === method)).toBe(false);
+    server.endTurn(turnId);
+    expect(journal.executeOperation(command).replayed).toBe(true);
+    await queue.drain();
+    expect(server.injectedItems).toHaveLength(1);
+    expect(server.requests.some(request => request.method === "turn/start")).toBe(false);
+  } finally { await host.release(); journal.close(); }
+});
+
+test("injection rechecks caller authority after metadata publication and before the native write", async () => {
+  const server = new InjectAppServer(scratchRoot());
+  const host = await startHost(server);
+  let ready!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { ready = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const original = io.open;
+  const open = spyOn(io, "open").mockImplementation(async (...args) => {
+    const handle = await original(...args);
+    if (String(args[0]).endsWith(".tmp")) {
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => { ready(); await held; await sync(); };
+    }
+    return handle;
+  });
+  let current = true;
+  const outcome = host.inject({ operationId: "authority-loss", threadId: server.threadId,
+    text: "worker update", contentDigest: digestOf("worker update") }, () => {
+    if (!current) throw new StructuredSendRefusedError("seat retired");
+  }).catch((error: unknown) => error);
+  try {
+    await Promise.race([entered, outcome.then(() => { throw new Error("injection ended before metadata publication"); })]);
+    current = false;
+    release();
+    expect(await outcome).toBeInstanceOf(StructuredSendRefusedError);
+    expect(server.requests.filter(request => request.method === "thread/inject_items")).toEqual([]);
+  } finally {
+    release();
+    await outcome;
+    open.mockRestore();
+    await host.release();
+  }
+});
+
+
+function holdInjectionMetadata() {
+  let ready!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { ready = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const original = io.open;
+  const open = spyOn(io, "open").mockImplementation(async (...args) => {
+    const handle = await original(...args);
+    if (String(args[0]).endsWith(".tmp")) {
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => { ready(); await held; await sync(); };
+    }
+    return handle;
+  });
+  return { entered, release, restore: () => open.mockRestore() };
+}
+
+function blockInjection(server: InjectAppServer, turnId: string) {
+  server.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: "approval-context", method: "item/commandExecution/requestApproval",
+    params: { threadId: server.threadId, turnId, itemId: "approval-item", command: "echo fixture" } })}\n`);
+}
+
+async function contextDispatchFixture(active: boolean, kind: "send" | "inject" = "send") {
+  const root = scratchRoot();
+  const server = new InjectAppServer(root);
+  const host = await startHost(server);
+  const turnId = active ? server.startTurn() : null;
+  expect((await host.health()).activeTurnRef).toBe(turnId);
+  const journal = new RuntimeJournal(join(root, "context-race.sqlite"), { structuredHosts: true, now: () => 1_000 });
+  journal.append({ scope: { type: "session", id: "conv-context-race" }, kind: "session-status", payload: {
+    conversationId: "conv-context-race", sessionKey: { engine: "codex", sessionId: server.threadId },
+    hostKind: "codex-app-server", host: "hosted", turn: active ? "running" : "idle", activeTurnId: turnId,
+    writerClaim: "context-owner", provenance: "structured",
+    capabilities: { steer: true, inject: true, nativeQueue: true, structuredAttention: true },
+  } });
+  const command = parseRuntimeCommand(kind, { conversationId: "conv-context-race", operationId: "op-context-race",
+    idempotencyKey: "key-context-race", text: "worker update at the native boundary",
+    ...(kind === "send" ? { policy: "context-or-queue" } : {}) });
+  journal.executeOperation(command);
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    status: async id => journal.operationResult(id)?.receipt ?? null,
+    transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+    hostClaim: () => "context-owner",
+    injectionBinding: () => ({ threadId: server.threadId, accountId: null, writerClaim: "context-owner" }),
+  }, () => host);
+  const receipt = () => journal.operationResult("op-context-race")!.receipt;
+  const observe = async () => {
+    const deadline = performance.now() + 2_000;
+    while (receipt().status === "delivering" && performance.now() < deadline) await Bun.sleep(5);
+    return receipt();
+  };
+  const resolveAttention = async () => {
+    server.notify("serverRequest/resolved", { threadId: server.threadId, requestId: "approval-context" });
+    expect((await host.health()).status).toBe("active");
+  };
+  return { server, host, journal, command, turnId, queue, receipt, observe, resolveAttention,
+    close: async () => { await host.release(); journal.close(); } };
+}
+
+test("context wake requeues an idle-to-active race during native metadata publication", async () => {
+  const r = await contextDispatchFixture(false);
+  const barrier = holdInjectionMetadata();
+  const draining = r.queue.drain();
+  try {
+    await Promise.race([barrier.entered, draining.then(() => { throw new Error("dispatch ended before metadata publication"); })]);
+    const turnId = r.server.startTurn();
+    barrier.release();
+    await draining;
+    barrier.restore();
+    expect(r.receipt()).toMatchObject({ status: "queued", reason: "stale-turn", idempotencyKey: "key-context-race" });
+    expect(r.journal.executeOperation(r.command).replayed).toBe(true);
+    await r.queue.drain();
+    expect(await r.observe()).toMatchObject({ status: "delivered", turnId });
+    await r.queue.drain();
+    expect(r.server.injectedItems).toHaveLength(1);
+    for (const method of TURN_MUTATIONS) expect(r.server.requests.some(request => request.method === method)).toBe(false);
+  } finally { barrier.release(); await draining; barrier.restore(); await r.close(); }
+});
+
+test.each(["send", "inject"] as const)("%s refuses attention arriving during injection metadata publication", async kind => {
+  const r = await contextDispatchFixture(true, kind);
+  const barrier = holdInjectionMetadata();
+  const draining = r.queue.drain();
+  try {
+    await Promise.race([barrier.entered, draining.then(() => { throw new Error("injection ended before metadata publication"); })]);
+    blockInjection(r.server, r.turnId!);
+    expect((await r.host.health()).status).toBe("attention");
+    barrier.release();
+    await draining;
+    barrier.restore();
+    expect(r.server.injectedItems).toEqual([]);
+    expect(r.receipt()).toMatchObject({ status: kind === "send" ? "queued" : "failed",
+      reason: "blocking attention must be answered before injecting context" });
+    await r.queue.drain();
+    expect(r.server.injectedItems).toEqual([]);
+    await r.resolveAttention();
+    expect(r.journal.executeOperation(r.command).replayed).toBe(true);
+    await r.queue.drain();
+    if (kind === "send") {
+      expect(await r.observe()).toMatchObject({ status: "delivered", turnId: r.turnId });
+      expect(r.server.injectedItems).toHaveLength(1);
+    } else {
+      expect(r.receipt().status).toBe("failed");
+      expect(r.server.injectedItems).toEqual([]);
+    }
+    for (const method of TURN_MUTATIONS) expect(r.server.requests.some(request => request.method === method)).toBe(false);
+  } finally { barrier.release(); await draining; barrier.restore(); await r.close(); }
+});
+
+test("explicit injection refuses attention arriving during canonical lookup", async () => {
+  const r = await contextDispatchFixture(true);
+  const request = { operationId: "op-lookup-attention", threadId: r.server.threadId,
+    text: "worker update", contentDigest: digestOf("worker update") };
+  try {
+    // The synchronous lookup has returned, and inject is suspended at its await.
+    const pending = r.host.inject(request).catch((error: unknown) => error);
+    blockInjection(r.server, r.turnId!);
+    const error = await pending;
+    expect(error).toBeInstanceOf(StructuredInjectError);
+    expect(error).toMatchObject({ phase: "refused", message: "blocking attention must be answered before injecting context" });
+    expect(r.server.injectedItems).toEqual([]);
+    await r.resolveAttention();
+    expect(await (await r.host.inject(request)).observe()).toBe(true);
+    expect(r.server.injectedItems).toHaveLength(1);
+  } finally { await r.close(); }
+});
+
+test("a context retry after attention resolves absorbs an unknown native acknowledgement", async () => {
+  const r = await contextDispatchFixture(true);
+  const barrier = holdInjectionMetadata();
+  const draining = r.queue.drain();
+  try {
+    await Promise.race([barrier.entered, draining.then(() => { throw new Error("injection ended before metadata publication"); })]);
+    blockInjection(r.server, r.turnId!);
+    barrier.release();
+    await draining;
+    barrier.restore();
+    expect(r.receipt().status).toBe("queued");
+    await r.resolveAttention();
+    r.server.swallowInject = true;
+    await r.queue.drain();
+    expect(r.receipt().status).toBe("uncertain");
+    expect(r.journal.executeOperation(r.command).replayed).toBe(true);
+    r.server.endTurn(r.turnId!);
+    await r.queue.drain();
+    expect(r.receipt().status).toBe("uncertain");
+    expect(r.server.requests.filter(request => request.method === "thread/inject_items")).toHaveLength(1);
+    for (const method of TURN_MUTATIONS) expect(r.server.requests.some(request => request.method === method)).toBe(false);
+  } finally { barrier.release(); await draining; barrier.restore(); await r.close(); }
+});
+
 test("active-turn injection appends the operator's input and issues no turn RPC", async () => {
   const server = new InjectAppServer(scratchRoot());
   const host = await startHost(server);
@@ -481,7 +709,7 @@ test("an engine without the method refuses explicitly and never falls back to st
 
 test("an executable without a reviewed protocol is refused before spawning", async () => {
   const server = new InjectAppServer(scratchRoot(), INVENTED_THREAD_ID, "0.150.0");
-  await expect(startHost(server)).rejects.toThrow("CLI 0.150.0 has no pinned schema");
+  await expect(startHost(server)).rejects.toThrow(/CLI 0\.150\.0; Supported: .+; cause: no older pin/);
   expect(server.requests).toEqual([]);
 });
 
@@ -905,7 +1133,7 @@ test("a resumed thread reads that Telegram is unavailable from its history, once
 
 test("an unreviewed old engine cannot resume a thread through an assumed capability", async () => {
   clearTelegramConnection();
-  await expect(resumeGrantedThread("0.152.0")).rejects.toThrow("has no pinned schema");
+  await expect(resumeGrantedThread("0.152.0")).rejects.toThrow(/CLI 0\.152\.0; Supported: .+; cause: no older pin/);
 });
 
 test("a resumed thread whose Telegram is connected is told nothing", async () => {

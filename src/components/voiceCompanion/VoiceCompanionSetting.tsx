@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { onOpenKeys, openKeys } from "@/components/keys/openKeys";
@@ -74,9 +74,13 @@ export function VoiceCompanionSetting() {
   const speech = locale === "uk" ? "uk" as const : "en" as const;
   const announce = () => window.dispatchEvent(new Event(COMPANION_SETTINGS_EVENT));
   /* A refusal reads beside the control that was pressed, so it is in view where the person's eyes are. */
-  const [pressed, setPressed] = useState<"enabled" | "backend" | "cap" | "callMemory" | "release" | null>(null);
+  const [pressed, setPressed] = useState<"enabled" | "backend" | "cap" | "callMemory" | "timerTelegram" | "release" | null>(null);
+  const refusalRef = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    if (error) refusalRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [error, pressed]);
   const change = async (value: Parameters<typeof update>[0], control: NonNullable<typeof pressed>) => { setPressed(control); if (await update(value)) announce(); };
-  const refusal = (control: typeof pressed) => error && pressed === control ? <p role="alert" className="mt-1.5 text-[13px] text-danger" data-voice-companion-setting-error={error}>{companionErrorMessage(error, speech)}</p> : null;
+  const refusal = (control: typeof pressed) => error && pressed === control ? <p ref={refusalRef} role="alert" className="mt-1.5 text-[13px] text-danger" data-voice-companion-setting-error={error}>{companionErrorMessage(error, speech)}</p> : null;
   const commitCap = async () => {
     if (capDraft === null || !settings) return;
     const value = Number(capDraft.replace(",", "."));
@@ -114,7 +118,10 @@ export function VoiceCompanionSetting() {
               return (
                 <div key={backend} data-voice-backend={backend} data-selected={selected ? "" : undefined} className={`flex min-w-0 flex-col gap-3 border-b border-border px-3 py-2.5 last:border-b-0 ${selected ? "bg-accent-soft/40" : "bg-card"}`}>
                   <label className="flex min-h-6 cursor-pointer items-center gap-2.5 max-sm:min-h-9">
-                    <input type="radio" name={ids.backend} value={backend} checked={selected} disabled={busy} onChange={() => void change({ backend }, "backend")} className="h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:h-5 max-sm:w-5" />
+                    {/* An API choice held without its key draws the backend serving it now as checked; pressing that one is
+                        the decision to stay on it, so it is sent and the remembered API choice goes. */}
+                    <input type="radio" name={ids.backend} value={backend} checked={selected} disabled={busy} onChange={() => void change({ backend }, "backend")}
+                      onClick={() => { if (selected && settings.held) void change({ backend }, "backend"); }} className="h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:h-5 max-sm:w-5" />
                     <span className="text-[13px] font-semibold text-primary">{t(backend === "api" ? "voiceCompanion.settings.backend.api" : "voiceCompanion.settings.backend.codex")}</span>
                   </label>
                   {selected && backend === "api" ? (
@@ -186,6 +193,14 @@ export function VoiceCompanionSetting() {
         </div>
       ) : null}
       <VoiceDevicesSetting />
+      {settings ? <section data-timer-telegram className="mt-4 min-w-0 border-t border-border pt-3 text-[13px] [overflow-wrap:anywhere]">
+        <label className="flex min-h-11 items-center justify-between gap-4 font-semibold">
+          {t("voiceCompanion.timerTelegram.title")}
+          <input type="checkbox" role="switch" checked={settings.timerTelegram === true} aria-label={t("voiceCompanion.timerTelegram.title")} onChange={event => void change({ timerTelegram: event.target.checked }, "timerTelegram")} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
+        </label>
+        {refusal("timerTelegram")}
+        <p className="text-muted">{t("voiceCompanion.timerTelegram.hint")}</p>
+      </section> : null}
       {settings ? <CallMemorySetting enabled={settings.callMemory ?? true} busy={busy} onChange={callMemory => void change({ callMemory }, "callMemory")} refusal={refusal("callMemory")} /> : null}
       {refusal(null)}
     </div>

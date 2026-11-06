@@ -5,13 +5,44 @@ import path from "node:path";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
+import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_TIMING_MARK_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
 
 /* Private temporary files only. */
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-progress-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const noTimer = (() => 0 as unknown as ReturnType<typeof setTimeout>);
+
+test("operation marks are bounded, schedule no writes and survive an ordinary progress write", () => {
+  const filename = path.join(root, "timing.sqlite");
+  let timers = 0;
+  const store = new DeliveryProgressStore(filename, () => Date.parse("2026-10-11T00:00:00Z"), () => { timers++; return noTimer(); });
+  try {
+    store.note("timed", "conversation", { waitReason: "dispatching", attempted: true });
+    expect(store.flush()).toBe(true);
+    const before = structuredClone(store.get("timed")!);
+    const previousTimers = timers;
+    store.mark("absent", "host-send");
+    store.mark("timed", "host-send", "invalid");
+    expect(store.get("absent")).toBeNull();
+    expect(store.get("timed")).toEqual(before);
+    for (let i = 0; i < DELIVERY_TIMING_MARK_LIMIT + 3; i++) store.mark("timed", "codex-rpc-start");
+    expect(timers).toBe(previousTimers);
+    expect(store.flush()).toBe(true);
+    expect(readDeliveryProgress(["timed"], filename).get("timed")).toEqual(before);
+    const record = store.get("timed")!;
+    expect(record).toEqual({ ...before, timingMarks: Array(DELIVERY_TIMING_MARK_LIMIT).fill({
+      mark: "codex-rpc-start", at: "2026-10-11T00:00:00.000Z", attempt: 1,
+    }), timingMarksDropped: 3 });
+    store.settle("timed", "delivered", null);
+    expect(store.flush()).toBe(true);
+    const saved = structuredClone(store.get("timed"));
+    store.close();
+    const reopened = new DeliveryProgressStore(filename, undefined, noTimer);
+    try { expect(reopened.get("timed")).toEqual(saved); }
+    finally { reopened.close(); }
+  } finally { store.close(); }
+});
 
 /* A busy week's retained completions, newer than the records under test. */
 function addRecentCompletions(filename: string, now: number): void {
@@ -971,4 +1002,23 @@ test("conversation delivery history keeps separate sent message outcomes", () =>
     expect(records.find(record => record.operationId === "message-one")?.phaseHistory?.at(-1)?.phase).toBe("delivered");
     expect(records.find(record => record.operationId === "message-two")?.phaseHistory?.at(-1)?.phase).toBe("failed");
   } finally { store.close(); }
+});
+
+
+test("a renewed turn deadline survives a process restart and a stale admission cannot shorten it", async () => {
+  const now = Date.parse("2026-11-01T12:00:00Z");
+  const filename = path.join(root, "turn-boundary.sqlite");
+  const store = new DeliveryProgressStore(filename, () => now, noTimer);
+  store.note("boundary-message", "conversation_boundary", { waitReason: "awaiting-turn" });
+  store.deadline("boundary-message", new Date(now + 100 * 60_000).toISOString(), "turn-boundary");
+  store.deadline("boundary-message", new Date(now + 10 * 60_000).toISOString(), "settlement-window");
+  expect(store.get("boundary-message")?.deadlinePolicy).toBe("turn-boundary");
+  expect(store.flush()).toBe(true); store.close();
+  const modulePath = new URL("./deliveryProgress.ts", import.meta.url).pathname;
+  const child = Bun.spawn([process.execPath, "--eval", `const m=await import(${JSON.stringify(modulePath)}); const s=new m.DeliveryProgressStore(${JSON.stringify(filename)}); console.log(JSON.stringify(s.get("boundary-message"))); s.close();`],
+    { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const record = JSON.parse(await new Response(child.stdout).text()) as DeliveryProgressRecord;
+  expect(await child.exited).toBe(0);
+  expect(record.deadlinePolicy).toBe("turn-boundary");
+  expect(Date.parse(record.deadlineAt!)).toBe(now + 100 * 60_000);
 });

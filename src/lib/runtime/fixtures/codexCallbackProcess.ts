@@ -55,11 +55,16 @@ if (mode === "engine-socket") {
           if (connection === 2 && config.reconnectFailure) {
             if (config.reconnectFailure === "disconnect") socket.terminate();
             else send({ id: message.id, error: { code: -32000, message: "fixture transient config failure" } });
-          } else reply({ config: { mcp_servers: {} } });
+          } else reply({ config: { mcp_servers: { viewer: { command: "bun", args: ["fixture-viewer"] } } } });
           break;
         case "model/list": reply({ data: [] }); break;
+        case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "thread/resume": {
-          if (Object.keys(message.params).some(key => key !== "threadId")) throw new Error("reconnect changed the existing thread policy");
+          if (Object.keys(message.params).some(key => key !== "threadId" && key !== "config")) throw new Error("reconnect changed the existing thread policy");
+          const restored = message.params.config?.mcp_servers?.viewer;
+          if (!restored?.env?.LLV_STATE_DIR || !restored.env_vars?.includes("LLV_SPAWN_CAPABILITY")) throw new Error("reconnect lost Viewer MCP installation or caller binding");
+          if (Object.keys(message.params.config).some(key => key !== "mcp_servers")
+            || Object.keys(message.params.config.mcp_servers).some(key => key !== "viewer")) throw new Error("reconnect changed unrelated thread configuration");
           const replay = () => {
             if (!pending) return;
             const request = { id: "approval", method, params: { threadId: thread, turnId: "turn", itemId: "item", startedAtMs: 1 } };
@@ -98,9 +103,10 @@ if (mode === "engine-socket") {
       switch (message.method) {
         case "initialize": reply({ userAgent: "fixture" }); break;
         case "account/read": reply({ account: { type: "chatgpt", planType: "pro" } }); break;
-        case "config/read": reply({ config: { mcp_servers: {} } }); break;
+        case "config/read": reply({ config: { mcp_servers: { viewer: { command: "bun", args: ["fixture-viewer"] } } } }); break;
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null }); break;
         case "model/list": reply({ data: [] }); break;
+        case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "thread/start":
         case "thread/resume":
           reply({ thread: { id: thread, path: null, turns: [], status: { type: "idle" } } });

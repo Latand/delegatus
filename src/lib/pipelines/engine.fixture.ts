@@ -188,6 +188,12 @@ function harness() {
       /* Review ingress requires a publishable remote, so the default repo has
          one. A test that needs the no-origin case overrides this. */
       if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: "git@example.invalid:owner/repo.git\n", stderr: "" };
+      if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
+      // Model the command-line-only remote used to validate a stored URL.
+      if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+        const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+        if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+      }
       if (args[0] === "ls-remote") {
         const branch = loadPipelines()[0]?.branch ?? "pipeline/test";
         return { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${branch}\n`, stderr: "" };
@@ -1727,7 +1733,7 @@ function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>
     spawnReceipt: (launchId: string) => ports().spawnReceipt(launchId),
     transcriptPresent: (pathname: string) => ports().transcriptPresent!(pathname),
     failStageLaunch: (launchId: string, conversationId: string, reason: string) => ports().failStageLaunch!(launchId, conversationId, reason),
-    failStoppedStageLaunch: (launchId: string, conversationId: string, reason: string, eligible: () => boolean) => ports().failStoppedStageLaunch!(launchId, conversationId, reason, eligible),
+    failStoppedStageLaunch: (...args: Parameters<NonNullable<PipelinePorts["failStoppedStageLaunch"]>>) => ports().failStoppedStageLaunch!(...args),
     releaseFailedStageLaunchContinuation: (launchId: string, conversationId: string) => ports().releaseFailedStageLaunchContinuation!(launchId, conversationId),
     conversationHostUnavailableSince: (conversationId: string) => ports().conversationHostUnavailableSince!(conversationId),
     conversationHostProcess: (conversationId: string) => ports().conversationHostProcess!(conversationId),
@@ -2089,6 +2095,7 @@ function expectProviderParkAt(pipeline: Pipeline, at: string): void {
 
 async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: string, text: string, resetDelay: number | null = null, pinned = false) {
   const h = harness();
+  h.ports.providerRecoveryRandom = defaultPipelinePorts({ providerRecoveryRandom: () => 1 }).providerRecoveryRandom;
   await runningStructuredStage(h);
   // Recovery successors use the same structured hosting as the initial stage.
   const baseSpawn = h.ports.spawnAgent;

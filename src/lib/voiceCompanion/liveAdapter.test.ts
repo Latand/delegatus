@@ -75,8 +75,28 @@ test("media starts on request, mouth follows played output, microphone echo pres
   expect(f.closes).toBeGreaterThan(0);
   expect(state.closure).toEqual({ reason: "operator", incomplete: false });
   expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+  // The browser's own zone travels with the start; the server resolves the call's clock from it.
+  expect(f.requests.find(row => row.action === "start")?.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   expect(JSON.stringify(f.requests)).not.toContain("api_key");
   unsubscribe();
+});
+
+test("a three-second ICE episode mid-reply posts one connection row and keeps the call up", async () => {
+  const f = fixture();
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.callbacks.playback({ speaking: true, rms: 0.6, playedMs: 800 });
+  f.callbacks.connection("disconnected");
+  f.callbacks.connection("disconnected");
+  f.advance(3000);
+  f.callbacks.connection("connected");
+  f.callbacks.connection("connected");
+  await f.adapter.refresh();
+  expect(f.requests.filter(row => row.action === "command")).toEqual([
+    { action: "command", sessionId: "fixture-session", command: { type: "episode", ms: 3000, speaking: "voice" } },
+  ]);
+  expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+  expect(f.requests.filter(row => row.action === "close")).toHaveLength(0);
+  await f.adapter.dispose();
 });
 
 test("a server-admitted Live proposal is displayed with missing input and remains pending during partial duplex speech", async () => {
@@ -145,7 +165,7 @@ test("a Viewer that stops answering mid-call is a drop: the close says so, and o
   f.advance(600);
   await f.adapter.close();
   expect(events.filter(event => event.type === "error").map(event => (event as { code: string }).code)).toContain("CONNECTION_LOST");
-  expect(f.requests.filter(row => row.action === "close")).toEqual([{ action: "close", sessionId: "fixture-session", reason: "transport" }]);
+  expect(f.requests.filter(row => row.action === "close")).toEqual([{ action: "close", sessionId: "fixture-session", reason: "transport", cause: "viewer-unreachable" }]);
   /* An operator's own hang-up of the next call carries no reason. */
   f.healPolls();
   await f.adapter.start({ project: "fixture", locale: "en" });
@@ -162,7 +182,7 @@ test("a Viewer that stops answering mid-call is a drop: the close says so, and o
 /** Every cue the adapter asked for, in order. */
 function countingCues() {
   const played: string[] = [];
-  return { played, cues: { prepare: () => { played.push("prepare"); }, connect: () => { played.push("connect"); }, disconnect: () => { played.push("disconnect"); }, dispose: () => { played.push("dispose"); } } };
+  return { played, cues: { prepare: () => { played.push("prepare"); }, connect: () => { played.push("connect"); }, disconnect: () => { played.push("disconnect"); }, timer: () => { played.push("timer"); }, dispose: () => { played.push("dispose"); } } };
 }
 const heard = (played: string[]) => played.filter(name => name === "connect" || name === "disconnect");
 
@@ -186,6 +206,17 @@ test("a connected session plays one connect cue and one disconnect cue, whicheve
     await f.adapter.close();
     expect(heard(played), label).toEqual(["connect", "disconnect"]);
   }
+});
+
+test("a fired timer the server reports plays the timer cue once, however often the poll returns", async () => {
+  const { played, cues } = countingCues();
+  const f = fixture({ cues });
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.push(f.event({ type: "timer.fired", timerId: "vt_fixture" }));
+  await f.adapter.refresh();
+  await f.adapter.refresh();
+  expect(played.filter(name => name === "timer")).toEqual(["timer"]);
+  await f.adapter.close();
 });
 
 test("a start that never connects plays no cue, and two sessions in a row play two and two", async () => {
@@ -236,7 +267,7 @@ async function served() {
       }
       const body = JSON.parse(String(init.body));
       if (body.action === "start") return Response.json(await service.start(body), { status: 201 });
-      if (body.action === "close") await (body.sessionId ? service.close(body.sessionId) : service.closeRequest(body.requestId));
+      if (body.action === "close") await (body.sessionId ? service.close(body.sessionId, body.reason, body.cause, body.episode) : service.closeRequest(body.requestId));
       if (body.action === "command") await service.command(body.sessionId, body.command);
       return Response.json({ ok: true });
     }) as typeof fetch });
@@ -565,7 +596,7 @@ test("healthy event polling keeps the real watchdog alive while a project acknow
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   let gets = 0;
-  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 1_000, cues: { prepare() {}, connect() {}, disconnect() {}, dispose() {} },
+  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 1_000, cues: { prepare() {}, connect() {}, disconnect() {}, timer() {}, dispose() {} },
     media: () => ({ open: async () => "v=0", answer: async () => {}, mute: value => { muted = value; }, interrupt() {}, close: async () => {} }),
     fetch: (async (url, init) => {
       if (!init?.body) {
@@ -629,4 +660,323 @@ for (const lost of [false, true]) test(`returning to the acknowledged project ke
     expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
     expect(f.requests.filter(row => row.action === "close")).toHaveLength(0);
   } finally { releaseB(); releaseA(); await f.adapter.dispose(); }
+});
+
+
+/** Loss occurs after the real service minted. Other requests, especially close, still reach it. */
+async function reconnecting(options: { lostAnswers?: number; failBeforeMint?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; holdOffer?: boolean; closeAfterLost?: boolean; loseClose?: boolean; refusal?: string; contentClose?: boolean } = {}) {
+  const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
+  const { CompanionStorage } = await import("./storage");
+  const { CompanionAdmission } = await import("./admission");
+  const { CompanionLiveSessions } = await import("./liveSession");
+  let now = Date.UTC(2026, 10, 4, 12);
+  process.env.LLV_STATE_DIR = path.join(root, `reconnect-${++reconnectFixture}`);
+  const storage = new CompanionStorage(() => now); storage.updateSettings({ enabled: true });
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, () => now);
+  const provider = new FakeLiveProvider();
+  const liveAtMint: number[] = [];
+  const create = provider.create.bind(provider);
+  provider.create = async (...args: Parameters<typeof create>) => { liveAtMint.push(provider.attached); return create(...args); };
+  const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads({ call: async () => ({}), projectFor: async () => "fixture", recipient: () => null,
+    resolveProject: current => current!, review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } }),
+    provider, { now: () => now, key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+  let callbacks!: MediaCallbacks;
+  let opens = 0, peers = 0, muted = false, failures = options.lostAnswers ?? 0, preMintFailures = options.failBeforeMint ?? 0, failPoll = false;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const requests: Record<string, unknown>[] = [];
+  const sounds: string[] = [];
+  const cues = { prepare() {}, connect() { sounds.push("connect"); }, disconnect() { sounds.push("disconnect"); }, timer() {}, tick() { sounds.push("tick"); }, giveUp() { sounds.push("give-up"); }, dispose() {} };
+  const media: CompanionMedia = { open: async () => { opens++; peers++; return "v=0"; }, restart: async cb => { callbacks = cb; peers++; if (options.holdOffer) await held; return "v=0"; },
+    answer: async () => {
+      if (peers > 1 && (options.audioRefused || options.answerError)) { const code = options.audioRefused ? "AUDIO_REFUSED" : options.answerError; options.audioRefused = false; options.answerError = undefined; throw new Error(code); }
+    }, mute: value => { muted = value; }, interrupt() {}, close: async () => {} };
+  const adapter = new OfficialVoiceCompanionAdapter({ now: () => now, pollMs: 100_000, media: cb => { callbacks = cb; return media; }, cues,
+    fetch: (async (url, init) => {
+      if (String(url).includes("/resume")) return Response.json({ resumable: service.resumable({ operator: true }) });
+      if (!init?.body) {
+        if (failPoll) { failPoll = false; throw new TypeError("lost poll"); }
+        const query = new URL(String(url), "http://127.0.0.1").searchParams;
+        return Response.json({ events: await service.events(query.get("sessionId")!, Number(query.get("after"))) });
+      }
+      const body = JSON.parse(String(init.body)); requests.push(body);
+      try {
+        if (body.action === "start") {
+          if (body.resume && options.refusal) return Response.json({ code: options.refusal }, { status: 409 });
+          if (body.resume && preMintFailures-- > 0) throw new TypeError("start request did not reach service");
+          const answer = await service.start(body);
+          if (body.resume && options.contentClose) {
+            options.contentClose = false;
+            provider.replay(answer.providerId, { type: "session.closed", event_id: "content-close", reason: "content", usage: { seconds: 1 } });
+            await service.drain(answer.sessionId);
+          }
+          if (body.resume && options.holdAnswer) await held;
+          if (body.resume && failures-- > 0) {
+            if (options.closeAfterLost) { options.closeAfterLost = false; await service.close(answer.sessionId, "transport", "watchdog"); }
+            throw new TypeError("lost start answer");
+          }
+          if (body.resume && options.failFirstPoll) { options.failFirstPoll = false; failPoll = true; }
+          return Response.json(answer);
+        }
+        if (body.action === "close") {
+          if (options.loseClose && body.sessionId && body.reason === "transport") { options.loseClose = false; throw new TypeError("lost close request"); }
+          await (body.sessionId ? service.close(body.sessionId, body.reason, body.cause, body.episode) : service.closeRequest(body.requestId));
+        }
+        if (body.action === "command") await service.command(body.sessionId, body.command);
+        return Response.json({ ok: true });
+      } catch (error) { if (error instanceof TypeError) throw error; return Response.json({ code: (error as Error).message }, { status: 409 }); }
+    }) as typeof fetch });
+  const store = createCompanionStore(adapter, { now: () => now, random: () => 0.5 });
+  const disconnect = store.connect();
+  await store.start({ project: "fixture", locale: "en" });
+  const first = Object.values(storage.read().sessions).at(-1)!;
+  provider.replay(first.providerId!, { type: "session.output_transcript.delta", event_id: "reply", delta: "The build passed.", start_ms: 0, end_ms: 1000 });
+  await service.drain(first.id); await adapter.refresh();
+  callbacks.playback({ speaking: true, rms: 0.5, playedMs: 400 });
+  const flush = async () => { for (let i = 0; i < 200; i++) await Promise.resolve(); };
+  return { adapter, store, service, provider, storage, requests, sounds, liveAtMint, first, release,
+    get callbacks() { return callbacks; }, get opens() { return opens; }, get muted() { return muted; },
+    async drop(poll = false, cause: "ice-failed" | "channel-closed" = "ice-failed") { if (poll) { failPoll = true; jest.advanceTimersByTime(100_000); } else callbacks.lost("PROVIDER_ERROR", cause); await flush(); },
+    async tick(ms: number) { now += ms; jest.advanceTimersByTime(ms); await flush(); },
+    async dispose() { release(); await store.stop(); disconnect(); await flush(); },
+  };
+}
+let reconnectFixture = 0;
+
+test("notice-to-request timing includes the replacement offer's preparation", async () => {
+  const f = await reconnecting({ holdOffer: true });
+  try {
+    await f.drop(); await f.tick(150);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+    await f.tick(2000); f.release(); await f.tick(0);
+    expect(f.requests.filter(row => row.action === "start").at(-1)?.reconnect).toMatchObject({ noticedToStartMs: 2150 });
+    expect(f.store.get().reconnected).toBe(true);
+  } finally { await f.dispose(); }
+});
+
+for (const initiallyMuted of [false, true]) for (const heldOffer of [false, true]) test("mute " + (initiallyMuted ? "off" : "on") + " during " + (heldOffer ? "held offer preparation" : "retry backoff") + " is applied to the recovered microphone", async () => {
+  const f = await reconnecting(heldOffer ? { holdOffer: true } : { lostAnswers: 2 });
+  try {
+    if (initiallyMuted) await f.store.command({ type: "mute", muted: true });
+    await f.drop(); await f.tick(150);
+    if (heldOffer) {
+      expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+      expect(f.muted).toBe(true);
+    } else {
+      expect(f.requests.filter(row => row.action === "start")).toHaveLength(3);
+      expect(f.store.get().reconnected).toBe(false);
+      expect(f.muted).toBe(true);
+    }
+    await f.store.command({ type: "mute", muted: !initiallyMuted });
+    /* Recovery keeps the microphone physically muted while the replacement is being prepared. */
+    expect(f.muted).toBe(true);
+    if (heldOffer) { f.release(); await f.tick(0); }
+    else await f.tick(1_000);
+    expect(f.store.get(), JSON.stringify(f.store.get())).toMatchObject({ reconnected: true });
+    expect(f.muted).toBe(!initiallyMuted);
+  } finally { await f.dispose(); }
+});
+
+test("a lost browser close carries its cause into the resume that closes the original part", async () => {
+  const f = await reconnecting({ loseClose: true });
+  try {
+    await f.drop();
+    expect(f.service.admission.transcriptRecord(f.first.id).entries.some(row => row.kind === "session_end")).toBe(false);
+    await f.tick(150);
+    expect(f.store.get().reconnected).toBe(true);
+    const originalEnd = f.service.admission.transcriptRecord(f.first.id).entries.find(row => row.kind === "session_end");
+    expect(originalEnd?.data).toMatchObject({ reason: "transport", cause: "ice-failed" });
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(2);
+    expect(f.provider.sessions).toHaveLength(2);
+  } finally { await f.dispose(); }
+});
+
+for (const poll of [false, true]) test(`${poll ? "failed poll" : "failed peer"} mid-reply resumes within 300ms, keeps mute and one microphone, and sounds one cue each`, async () => {
+  const f = await reconnecting();
+  try {
+    await f.store.command({ type: "mute", muted: true });
+    await f.drop(poll);
+    expect(f.store.get().phase).toBe("reconnecting");
+    expect(f.store.get().reconnected).toBe(false);
+    await f.tick(150);
+    expect(f.provider.sessions).toHaveLength(2);
+    expect(f.store.get().reconnected).toBe(true);
+    expect(f.opens).toBe(1); expect(f.muted).toBe(true);
+    expect(f.sounds).toEqual(["connect", "disconnect", "connect"]);
+    expect(f.requests.filter(row => row.action === "start").at(-1)).toMatchObject({ resume: f.first.id, reconnect: { attempts: 1, automatic: true, tier: 2 } });
+  } finally { await f.dispose(); }
+});
+
+for (const lostAnswers of [1, 4]) test(`${lostAnswers} lost start answers recover with same-key retries and a single unbranched call`, async () => {
+  const f = await reconnecting({ lostAnswers });
+  try {
+    await f.drop(); await f.tick(150);
+    if (lostAnswers === 4) {
+      expect(f.store.get().reconnected).toBe(false);
+      await f.tick(1000); expect(f.store.get().reconnected).toBe(false);
+      await f.tick(2000);
+    }
+    expect(f.store.get().reconnected).toBe(true);
+    expect(f.sounds).not.toContain("give-up");
+    expect(f.provider.sessions).toHaveLength(lostAnswers === 1 ? 2 : 4);
+    expect(f.liveAtMint.every(count => count === 0)).toBe(true);
+    const starts = f.requests.filter(row => row.action === "start");
+    expect(starts[1].requestId).toBe(starts[2].requestId);
+    expect(starts[1].sdp).toBe(starts[2].sdp);
+    const parts = Object.values(f.storage.read().sessions);
+    for (let i = 1; i < parts.length; i++) {
+      const start = f.service.admission.transcriptRecord(parts[i].id).entries.find(row => row.kind === "session_start")!;
+      expect(start.data.resumes).toBe(parts[i - 1].id);
+      if (i < parts.length - 1) expect(f.service.admission.transcriptRecord(parts[i].id).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause: "answer-lost" });
+    }
+  } finally { await f.dispose(); }
+});
+
+test("End behind an unanswered mint closes it as operator and cancels all later retries", async () => {
+  const f = await reconnecting({ holdAnswer: true });
+  try {
+    await f.drop(); await f.tick(150);
+    expect(f.provider.sessions).toHaveLength(2);
+    const stopping = f.store.stop(); f.release(); await stopping;
+    await f.tick(60_000);
+    expect(f.provider.sessions).toHaveLength(2);
+    const last = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(f.service.admission.transcriptRecord(last.id).entries.find(row => row.kind === "session_end")?.data.reason).toBe("operator");
+    expect(f.store.get().phase).toBe("offline");
+    expect(f.store.get().resumable).toBeNull();
+  } finally { await f.dispose(); }
+});
+
+test("End during backoff closes the latest part after both start answers are lost", async () => {
+  const f = await reconnecting({ lostAnswers: 2 });
+  try {
+    await f.drop(); await f.tick(150);
+    const unanswered = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(unanswered.closed).toBe(false);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(3);
+    await f.store.stop();
+    expect(f.service.admission.transcriptRecord(unanswered.id).entries.find(row => row.kind === "session_end")?.data.reason).toBe("operator");
+    expect(f.requests.filter(row => row.action === "close" && row.requestId === unanswered.mintRequestId)).toHaveLength(1);
+    await f.tick(60_000);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(3);
+    expect(f.service.resumable({ operator: true })).toBeNull();
+    expect(f.store.get().resumable).toBeNull();
+  } finally { await f.dispose(); }
+});
+
+test("a manual reconnect losing both answers sends no close; the next tap follows the unanswered part", async () => {
+  const f = await reconnecting({ lostAnswers: 2 });
+  try {
+    await f.drop(); await f.store.stop();
+    await expect(f.store.start({ project: "fixture", locale: "en", resume: f.first.id })).rejects.toThrow("lost start answer");
+    const unanswered = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(unanswered.closed).toBe(false);
+    expect(f.requests.filter(row => row.action === "close" && row.requestId === unanswered.mintRequestId)).toHaveLength(0);
+    await f.store.start({ project: "fixture", locale: "en", resume: f.first.id });
+    expect(f.store.get().reconnected).toBe(true);
+    expect(f.service.admission.transcriptRecord(unanswered.id).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause: "answer-lost" });
+    expect(f.provider.attached).toBe(1);
+  } finally { await f.dispose(); }
+});
+
+test("a same-key replay after its part closed retries from that part", async () => {
+  const f = await reconnecting({ lostAnswers: 1, closeAfterLost: true });
+  try {
+    await f.drop(); await f.tick(150);
+    expect(f.store.get().reconnected).toBe(false);
+    await f.tick(1000);
+    expect(f.store.get().reconnected).toBe(true);
+    expect(f.provider.sessions).toHaveLength(3);
+  } finally { await f.dispose(); }
+});
+
+test("End in backoff with no minted part leaves the drop offered", async () => {
+  const stopped = await reconnecting({ failBeforeMint: 2 });
+  try {
+    await stopped.drop(); await stopped.tick(150); await stopped.store.stop();
+    await stopped.tick(60_000);
+    expect(stopped.requests.filter(row => row.action === "start")).toHaveLength(3);
+    expect(Object.values(stopped.storage.read().sessions)).toHaveLength(1);
+    expect(stopped.store.get().resumable?.sessionId).toBe(stopped.first.id);
+  } finally { await stopped.dispose(); }
+});
+
+for (const code of ["SESSION_UNAVAILABLE", "MINT_UNCERTAIN"]) test(`${code} stops automatic attempts immediately with one give-up cue`, async () => {
+  const f = await reconnecting({ refusal: code });
+  try {
+    await f.drop(); await f.tick(150); await f.tick(60_000);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(2);
+    expect(f.store.get().phase).toBe("offline"); expect(f.store.get().error).toBe(code);
+    expect(f.sounds.filter(row => row === "give-up")).toHaveLength(1);
+  } finally { await f.dispose(); }
+});
+
+for (const manual of [false, true]) test(`a content close during ${manual ? "manual" : "automatic"} resume removes the call's continuation offer`, async () => {
+  const f = await reconnecting({ contentClose: true });
+  try {
+    await f.drop();
+    if (manual) {
+      await f.store.stop();
+      await expect(f.store.start({ project: "fixture", locale: "en", resume: f.first.id })).rejects.toThrow("CONTENT_BLOCKED");
+    } else await f.tick(150);
+    expect(f.store.get().error).toBe("CONTENT_BLOCKED");
+    expect(f.store.get().resumable).toBeNull();
+    expect(f.service.resumable({ operator: true })).toBeNull();
+    await f.tick(60_000);
+    expect(f.provider.sessions).toHaveLength(2);
+    expect(f.sounds.filter(sound => sound === "give-up")).toHaveLength(manual ? 0 : 1);
+  } finally { await f.dispose(); }
+});
+
+test("an uncertain provider mint stops the loop without creating a second replacement", async () => {
+  const f = await reconnecting();
+  try {
+    f.provider.createFailures.push("lost"); await f.drop(); await f.tick(150); await f.tick(1000); await f.tick(60_000);
+    expect(f.store.get().error).toBe("MINT_UNCERTAIN"); expect(f.provider.sessions).toHaveLength(2);
+    expect(f.sounds.filter(row => row === "give-up")).toHaveLength(1);
+  } finally { await f.dispose(); }
+});
+
+for (const cause of ["ice-failed", "channel-closed"] as const) test(`six automatic reconnects in ten minutes keep ${cause} at give-up`, async () => {
+  const f = await reconnecting();
+  try {
+    for (let i = 0; i < 6; i++) { await f.drop(); await f.tick(150); expect(f.store.get().reconnected).toBe(true); }
+    await f.drop(false, cause); await f.tick(60_000);
+    expect(f.provider.sessions).toHaveLength(7); expect(f.store.get().error).toBe("RECONNECT_GAVE_UP");
+    expect(f.sounds.slice(-2)).toEqual(["disconnect", "give-up"]);
+    const capped = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(f.service.admission.transcriptRecord(capped.id).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause });
+    expect(f.sounds.filter(row => row === "give-up")).toHaveLength(1);
+    await f.store.start({ project: "fixture", locale: "en" });
+    const fresh = Object.values(f.storage.read().sessions).at(-1)!;
+    f.provider.replay(fresh.providerId!, { type: "session.output_transcript.delta", event_id: "fresh-reply", delta: "The next check passed.", start_ms: 0, end_ms: 1000 });
+    await f.service.drain(fresh.id); await f.adapter.refresh(); await f.drop(); await f.tick(150);
+    expect(f.provider.sessions).toHaveLength(9); expect(f.store.get().reconnected).toBe(true);
+  } finally { await f.dispose(); }
+});
+
+for (const failFirstPoll of [true, false]) test(`resumed ${failFirstPoll ? "first poll fails and retries" : "playback refusal stops with a resumable drop"}`, async () => {
+  const f = await reconnecting({ failFirstPoll, audioRefused: !failFirstPoll });
+  try {
+    await f.drop(); await f.tick(150);
+    const failed = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(f.service.admission.transcriptRecord(failed.id).entries.find(row => row.kind === "session_end")?.data.reason).toBe("transport");
+    expect(f.service.admission.transcriptRecord(failed.id).entries.find(row => row.kind === "session_end")?.data.cause).toBe(failFirstPoll ? "viewer-unreachable" : "audio-refused");
+    if (failFirstPoll) { await f.tick(1000); expect(f.store.get().reconnected).toBe(true); }
+    else {
+      expect(f.store.get().phase).toBe("offline"); expect(f.store.get().resumable?.sessionId).toBe(failed.id); expect(f.sounds.filter(sound => sound === "give-up")).toHaveLength(1);
+      await f.store.start({ project: "fixture", locale: "en", resume: failed.id }); expect(f.store.get().reconnected).toBe(true);
+      expect(f.requests.filter(row => row.action === "start").at(-1)?.resume).toBe(failed.id);
+    }
+  } finally { await f.dispose(); }
+});
+
+test("a resumed SDP answer that cannot be applied closes as a peer drop and the next attempt continues it", async () => {
+  const f = await reconnecting({ answerError: "PROVIDER_ERROR" });
+  try {
+    await f.drop(); await f.tick(150);
+    const failed = Object.values(f.storage.read().sessions).at(-1)!;
+    expect(f.service.admission.transcriptRecord(failed.id).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause: "ice-failed" });
+    await f.tick(1000); expect(f.store.get().reconnected).toBe(true);
+  } finally { await f.dispose(); }
 });

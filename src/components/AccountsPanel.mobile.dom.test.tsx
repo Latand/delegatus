@@ -99,6 +99,28 @@ const codexMain = account({
 
 const codexSpare = account({ id: "cx-spare", label: "Spare", authPresent: false, authHealth: "signed_out" });
 
+test("a Codex phone row with paid credits near its limit can change paid spending without switching the active account", async () => {
+  const writes: Array<{ id: string; enabled: boolean }> = [];
+  let selections = 0;
+  const paidCredits = { balance: "49695.72", checkedAt: null };
+  const nearLimit = (id: string, usedPercent: number) => account({ id, label: id, paidCredits,
+    limits: { freshness: "fresh", session: window5h(20, NOW + HOUR), weekly: windowWeek(usedPercent, NOW + DAY) } });
+  const near = nearLimit("cx-near", 96);
+  const ready = nearLimit("cx-ready", 20);
+  const state = engineState("codex", [codexMain, near, ready, codexSpare], codexMain.id, {
+    setSpendCredits: async (id, enabled) => { writes.push({ id, enabled }); return true; },
+    select: async () => { selections++; return true; },
+  });
+  const view = await mount([state]);
+  const blockOf = (id: string) => view.host.querySelector(`[data-mobile2-account="${id}"] [data-account-spend-credits="${id}"]`);
+  for (const id of [codexMain.id, ready.id, codexSpare.id]) expect(blockOf(id)).toBeNull();
+  const toggle = blockOf(near.id)?.querySelector('[role="switch"]');
+  expect(toggle).not.toBeNull();
+  await act(async () => { (toggle as HTMLElement).click(); });
+  expect(writes).toEqual([{ id: near.id, enabled: true }]);
+  expect(selections).toBe(0);
+});
+
 test("phone provider credential damage shows repair and never offers sign-in", async () => {
   const damaged = account({ id: "cl-provider", label: "Provider", authPresent: false, authHealth: "error",
     provider: { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: null } });

@@ -1,4 +1,4 @@
-import { bindHostExitWriter, hostExitText, hostExitWriterPending, hostExitWriterRegistered, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
+import { bindHostExitWriter, discardHostExitWriter, hostExitText, hostExitWriterPending, hostExitWriterRegistered, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -75,9 +75,18 @@ async function startStderrDrain(fifo: string, file: string): Promise<StderrDrain
     writer = fs.openSync(fifo, fs.constants.O_RDWR);
     // The shell creates the empty sink before launch. Do not let dd truncate a
     // wrapper's diagnostic through its alias when the FIFO ends without bytes.
-    // dd copies the first bytes unbuffered; cat then discards the rest.
+    // dd copies one block at a time so short FIFO reads stay visible to the
+    // startup diagnostic; cat then discards everything after the retained cap.
     const script = `umask 077; exec 3<"$1" 4>"$2" || exit 1; echo ready; exec >/dev/null
-trap '' HUP; dd bs=1 count="$3" conv=notrunc <&3 >&4 2>/dev/null; cat <&3 >/dev/null`;
+trap '' HUP
+size=0
+while [ "$size" -lt "$3" ]; do
+  previous=$size
+  dd bs=4096 count=1 conv=notrunc <&3 >&4 2>/dev/null
+  size=$(wc -c <"$2")
+  [ "$size" -gt "$previous" ] || break
+done
+cat <&3 >/dev/null`;
     const drain = spawn("sh", ["-c", script, "sh", fifo, file, String(STDERR_KEEP_BYTES)], { stdio: ["ignore", "pipe", "ignore"], detached: true });
     const finished = new Promise<void>(resolve => { drain.once("close", () => resolve()); drain.once("error", () => resolve()); });
     drain.unref();
@@ -289,7 +298,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       if (supervisedProcess && pid !== supervisedProcess.pid) {
         // The namespace's waiter owns the native record. This outer waiter
         // observed only the launch handle and must leave no receipt for it.
-        fs.writeFileSync(path.join(directory, "host-exit.json"), JSON.stringify({ discard: true }), { mode: 0o600 });
+        discardHostExitWriter(directory);
         reclaimHostExit(supervisedProcess);
       }
       const nativeExit = () => {

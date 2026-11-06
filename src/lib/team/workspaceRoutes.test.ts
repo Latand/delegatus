@@ -25,9 +25,11 @@ test("every served API route has a reviewed gate decision and every project hand
 });
 
 test("dynamic route policies use whole segments, and new routes are owner-only", () => {
+  expect(WORKSPACE_ROUTES["/api/pipelines/source"]).toBe("project");
   expect(workspaceRouteDecision("/api/tasks/task-foreign/spawn")).toBe("project");
   expect(workspaceRouteDecision("/api/accounts/codex/active")).toBe("owner");
   expect(workspaceRouteDecision("/api/team/workspaces/workspace/members")).toBe("team");
   expect(workspaceRouteDecision("/api/tasks/task/extra-route")).toBe("owner");
   expect(workspaceRouteDecision("/api/new-route")).toBe("owner");
+  expect(workspaceRouteDecision("/api/forge/app-connect")).toBe("owner");
 });

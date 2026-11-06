@@ -1,7 +1,12 @@
 # Role memory layers: a larger store in levels, role-wide rules for every role, write-quality checks, and selection under one hard maximum
 
-Status: design with decisions recorded on 2026-10-22; slice 1 implements
-frozen whole-scope delivery and shadow measurement. The research was written against
+Implementation update, 2026-11-03: selected delivery is enabled, the shadow
+switch is retired, and connected keys choose the default Decisions provider.
+See [current behavior and replay](role-memory-selector-observations.md) and
+the [evaluation table](../../evals/role-selection/README.md). The shadow pilot,
+rollbacks and future slices below describe the historical design.
+
+Status: design with decisions recorded on 2026-10-22. The research was written against
 `main` at `f5fd6a2c0`; file and line references are to that commit. Revised
 twice the same day after critiques: when the second revision was finished
 `main` stood at `ee990fcfc`, four commits later, and none of them touches a
@@ -135,8 +140,9 @@ this commit, against its own `renderLearnedRulesSelection` and
 ### 1.2 Scope fill against the bound
 
 112 scope rows, 34 with active rules, 437 active rules (395 distinct texts),
-mean length 252 code points, 26 at the 300-point cap. The bound is
-`ROLE_MEMORY_BOUND = 10_000` code points per scope
+mean length 252 code points, 26 at the 300-point cap. The bound was 10 000 at
+this measurement; the 2026-11-03 decision raises it to
+`ROLE_MEMORY_BOUND = 15_000` code points per scope
 (`src/lib/memory/roleTypes.ts:11`), counted on the rendered `- [id] rule`
 lines.
 

@@ -10,7 +10,7 @@ import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import { runClaimedRequest, runningCount, advertisedSlots } from "./runner";
 import { reserveRun, dropRun, readRunLedger, externalRelayFile, updateRelayStore, type PairedRelay } from "./store";
 import { reserveChainConversation, releaseConversation } from "./conversations";
-import { declineHeldRelayRequests } from "./hold";
+import { capacityWaiters, declineHeldRelayRequests } from "./hold";
 import { setRelaySwitch } from "./switches";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
@@ -269,15 +269,19 @@ test("acknowledgements, lock waits, reentry after a drain and completion failure
 test("capacity returning at the admission cutoff cannot start expired waiting work", async () => {
   let now = Date.now(); const clock = spyOn(Date, "now").mockImplementation(() => now);
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
-  const relay = paired(`${server.origin}/v1`); reserveRun(blocker(relay, "cutoff-blocker"));
+  const relay = paired(`${server.origin}/v1`); relay.id = "cutoff-readiness";
+  reserveRun(blocker(relay, "cutoff-blocker"));
   // Keep the service timestamp on the same clock as the mocked local cutoff.
   const pending = runClaimedRequest(relay, { ...claim("cutoff-return", 11000),
     deadline_at: new Date(now + 11000).toISOString() }, undefined, { command });
   try {
-    await Bun.sleep(150); now += 1000; dropRun("cutoff-blocker");
+    const readyBy = performance.now() + 5000;
+    while (capacityWaiters(relay.id, "target_1") !== 1 && performance.now() < readyBy) await Bun.sleep(1);
+    expect(capacityWaiters(relay.id, "target_1")).toBe(1);
+    now += 1000; dropRun("cutoff-blocker");
     expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });
   } finally { dropRun("cutoff-blocker"); await pending; clock.mockRestore(); await server.close(); }
-}, 5000);
+}, 15000);
 
 test("an orphan conversation has free chat capacity and is recovered before admission", async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));

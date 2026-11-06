@@ -1,3 +1,5 @@
+import { preflightCodexProtocol } from "@/lib/accounts/codexPinnedProtocol";
+import { hardenedRedact } from "@/lib/view/compactText";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { SpawnReceipt } from "./registry";
 import { RegistryWriterBusyError } from "./registry";
@@ -69,6 +71,9 @@ import { loadPipelines } from "@/lib/pipelines/store";
 import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
+import { conversationWorkspacePrincipal, memberWorkspacePrincipal, workspacePrincipalAllows, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { existingTeamStore } from "@/lib/team/store";
+import { TeamError } from "@/lib/team/members";
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
 import { derivedSpawnTitle, durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentWithPrompt, verifyTmuxHostEvidence } from "@/lib/tmux";
@@ -129,10 +134,13 @@ function pinFallbackTitle(req: Pick<NextRequest, "headers">): string {
 }
 
 export interface SpawnCommandDependencies {
+  /** Trusted in-process service authority; never read from the request body. */
+  workspacePrincipal?: WorkspacePrincipal;
   registry: typeof agentRegistry;
   resolveHealthySpawnAccount: typeof resolveHealthySpawnAccount;
   resolveSpawnAccount: typeof accountManager.resolveSpawn;
   resolvePinnedSpawnAdmission?: typeof resolvePinnedSpawnAdmission;
+  preflightProtocol?(account: HealthySpawnAccountResolution): Promise<void>;
   runtimeHostClient: typeof runtimeHostClient;
   publishFilesRevision?: typeof publishFilesRevision;
   spawnStructuredConversation: typeof spawnStructuredConversation;
@@ -201,6 +209,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   resolveHealthySpawnAccount,
   resolveSpawnAccount: (engine, accountId) => accountManager.resolveSpawn(engine, accountId),
   resolvePinnedSpawnAdmission,
+  preflightProtocol: account => account.engine === "codex" ? preflightCodexProtocol(account.env) : Promise.resolve(),
   runtimeHostClient,
   publishFilesRevision,
   spawnStructuredConversation,
@@ -590,7 +599,18 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
   let relatedAuthority: (string | null)[] = [];
+  let workspacePrincipal: WorkspacePrincipal | null = null;
+  let workspaceAccountId: string | null = null;
   const authorizeLaunch = (receipt: SpawnReceipt | null = existingAttempt) => {
+    if (workspacePrincipal && (!workspacePrincipalAllows(workspacePrincipal, explicitProject ?? projectForCwd(cwd))
+      || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(cwd))
+      || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(fs.realpathSync(cwd))))) throw new TeamError("workspace_forbidden", "workspace access denied", 403);
+    if (workspacePrincipal && engine !== "copilot" && (receipt?.accountId ?? workspaceAccountId)) {
+      const project = explicitProject ?? projectForCwd(cwd);
+      const allowed = allowedAccountIdsForProject(project, engine);
+      const selected = (receipt?.accountId ?? workspaceAccountId)!;
+      if (allowed && !allowed.includes(selected)) throw new ProjectAccountRefusedError({ kind: "not_allowed", accountId: selected, allowedAccountIds: allowed }, engine, project);
+    }
     assertProactiveTaskExecution([...(typeof body.taskId === "string" ? [body.taskId] : []),
       ...(receipt?.failureReporting?.taskIds ?? []),
       ...proactiveConversationTaskIds([...relatedAuthority, receipt?.conversationId,
@@ -683,6 +703,13 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       ? registry.conversation(parentConversationId as `conversation_${string}`)
       : null;
     const parentProfile = parentRecord?.generations.at(-1)?.launchProfile;
+    const team = existingTeamStore();
+    workspacePrincipal = existingAttempt?.launchProfile.workspace ?? dependencies.workspacePrincipal
+      ?? (spawnActor.kind === "member" && team
+        ? memberWorkspacePrincipal(team, spawnActor.memberId, explicitProject ?? projectForCwd(cwd))
+        : conversationWorkspacePrincipal((id: string) => registry.conversation(id as `conversation_${string}`), authenticatedCaller?.kind === "agent"
+          ? authenticatedCaller.conversationId : launcher.value?.conversationId ?? pipelineSourceConversationId ?? parentConversationId));
+    authorizeLaunch();
     const seatParent = parentRecord?.agentRole === "orchestrator"
       && parentRecord.delegationDepth === 0
       && parentProfile?.parentConversationId == null
@@ -940,10 +967,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const assertRequestedAccountBinding = (): void => {
       // The advertised account pin follows pipeline policy; accountId retains
       // the operator's legacy override contract.
-      if (typeof body.account !== "string" || engine === "copilot") return;
+      if (engine === "copilot") return;
+      const named = workspacePrincipal ? requestedAccountId : typeof body.account === "string" ? body.account : null;
+      if (!named) return;
       const allowedAccountIds = allowedAccountIdsForProject(spawnProject, engine);
-      if (allowedAccountIds !== null && !allowedAccountIds.includes(body.account)) {
-        throw new ProjectAccountRefusedError({ kind: "not_allowed", accountId: body.account, allowedAccountIds }, engine, spawnProject);
+      if (allowedAccountIds !== null && !allowedAccountIds.includes(named)) {
+        throw new ProjectAccountRefusedError({ kind: "not_allowed", accountId: named, allowedAccountIds }, engine, spawnProject);
       }
     };
     let account: HealthySpawnAccountResolution;
@@ -1046,6 +1075,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           ...(specBase.launchProfile ?? {}),
           cwd,
           parentConversationId,
+          ...(workspacePrincipal ? { workspace: workspacePrincipal } : {}),
           allowSubagents: body.allowSubagents === true,
           mcpServers: grantedServers,
           plugins,
@@ -1061,6 +1091,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       : null;
     const pinTitle = pinFallback ? pinFallbackTitle(req) : null;
     const spec = specForAccount(account, pinTitle);
+    workspaceAccountId = account.accountId;
     const prepareTmuxSpawn = (): void => {
       if (engine !== "claude" || transport !== "tmux") return;
       const profileId = path.basename(spec.transcript ?? "", ".jsonl");
@@ -1087,6 +1118,27 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       () => dependencies.resolveSpawnAccount(engine, account.accountId),
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
+    if (!existingAttempt && transport === "structured") {
+      try { await dependencies.preflightProtocol?.(account); }
+      catch (error) {
+        const reason = hardenedRedact(error instanceof Error ? error.message : "protocol validation failed")
+          .replace(/\s+/g, " ").trim().slice(0, 500);
+        const fenced = await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, reason, dependencies);
+        if (fenced?.kind === "existing-receipt") {
+          // The probe yielded before its refusal. A peer may already own this
+          // exact request; the atomic fence returns that durable admission.
+          const admittedAccount = typeof requestedAccount === "string" ? requestedAccount : fenced.receipt.accountId;
+          const admittedDigest = admittedAccount ? requestDigestForAccount(admittedAccount, pinFallback || queuedUntil !== null) : digest;
+          if (fenced.receipt.requestDigest !== admittedDigest) {
+            return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
+          }
+          authorizeLaunch(fenced.receipt);
+          const response = spawnResponseForReceipt(fenced.receipt, fenced.receipt.artifactPath, { structured: true });
+          return NextResponse.json(response, { status: spawnReplayStatus(response, true) });
+        }
+        return NextResponse.json({ error: reason, code: "codex_protocol_refused" }, { status: 409 });
+      }
+    }
     const commitAccountAdmission = existingAttempt ? undefined : await dependencies.prepareAccountAdmission?.(account.accountId);
     // Retry deferred membership without holding the registry writer. Keeping
     // the original reservation result also keeps responsibility for dispatch.
@@ -1340,7 +1392,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
               registry.deferStructuredSpawnAdmission(receipt.launchId, receipt.admissionOwner!, dependencies.runtimeAdmissionRetry?.now?.() ?? Date.now(), error.message))) {
               return;
             }
-            await failOwnedAdmission(`structured spawn failed: ${error.message}`.slice(0, 240));
+            await failOwnedAdmission(hardenedRedact(`structured spawn failed: ${error.message}`).replace(/\s+/g, " ").trim().slice(0, 500));
           }
           return;
         }
@@ -1585,6 +1637,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       deleteInboxImages(imagePaths);
     }
     if (error instanceof SpawnParentError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof TeamError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });

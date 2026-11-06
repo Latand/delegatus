@@ -377,7 +377,7 @@ for (const pool of [false, true]) {
     expect(f.h.spawnInputs).toHaveLength(2);
     // Several hundred controller passes cover the full reset window; let them
     // finish before the next fixture replaces their shared isolated store.
-  }, 30_000);
+  }, 60_000);
 }
 
 

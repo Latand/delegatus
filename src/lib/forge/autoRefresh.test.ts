@@ -6,6 +6,8 @@ import path from "node:path";
 import type { CreatePipelineRequest, Pipeline, PipelineMerge } from "@/lib/pipelines/types";
 import type { PullRequestState } from "./workLinks";
 import type { RefreshOptions } from "./autoRefresh";
+import type { BaseUpdatePush, BaseUpdateRequest } from "./baseUpdate";
+import { createHash } from "node:crypto";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 
 /* The merge runner (#2187 §4.3-§4.4) against a fake `gh` and clock: invented
@@ -20,6 +22,8 @@ const {
   MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, lanePullRequest, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
 const { ForgeAppWriteRefused } = await import("./appWrite");
+const { BaseUpdateError } = await import("./baseUpdate");
+const { checkFailedReason } = await import("./mergeReasons");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -73,6 +77,9 @@ type PullRequest = {
   checks: Check[];
   isDraft?: boolean;
   reviewDecision?: string;
+  /** The head branch GitHub names, and whether it lives in a fork. */
+  branch?: string;
+  fork?: boolean;
 };
 
 const green = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "SUCCESS" });
@@ -82,6 +89,8 @@ const red = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "
     strict-base changes and owned refresh delivery; GitHub updates are refused. */
 function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[]; strict?: boolean; mergeBase?: string }) {
   let clock = T0;
+  let mergeBase = options.mergeBase;
+  const logs: string[] = [];
   const calls: string[][] = [];
   const pipelines = new Map(options.lanes.map((pipeline) => [pipeline.id, structuredClone(pipeline)]));
   const prs = new Map(options.prs.map((pr) => [pr.number, pr]));
@@ -112,6 +121,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
         reviewDecision: pr.reviewDecision ?? "",
         mergeCommit: pr.state === "MERGED" ? { oid: "f".repeat(40) } : null,
         mergedAt: pr.state === "MERGED" ? iso(clock) : null,
+        ...(pr.branch ? { headRefName: pr.branch, isCrossRepository: pr.fork ?? false } : {}),
         statusCheckRollup: pr.checks.map((check) => ({
           __typename: "CheckRun",
           name: check.name,
@@ -126,7 +136,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "api" && /\/pulls\/\d+\/reviews/.test(args[1] ?? "")) return "";
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/rules/branches/`)) return "[]";
-    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/`)) return options.mergeBase ?? baseTip;
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/`)) return mergeBase ?? baseTip;
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return args.at(-1) === ".commit.sha" ? baseTip : JSON.stringify(options.required ?? []);
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
     if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") throw new Error("GitHub update-branch is forbidden");
@@ -152,6 +162,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   const writes: Array<{ args: string[]; repository: string }> = [];
   let writeRefusal: string | null = null;
   const ports = {
+    log: (message: string) => { logs.push(message); },
     now: () => clock,
     activeSeat: async () => ({ srcPath: null, srcConversationId: "seat-one" }),
     startRefresh: async (request: CreatePipelineRequest, options: RefreshOptions) => {
@@ -212,6 +223,8 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     ports,
     setCached: (value: PullRequestState | null) => { cached = value; },
     setBase: (value: string) => { baseTip = value; },
+    setMergeBase: (value: string) => { mergeBase = value; },
+    logs,
     setCreateMode: (value: typeof createMode) => { createMode = value; },
     add: (value: Pipeline) => { pipelines.set(value.id, value); },
     remove: (id: string) => { pipelines.delete(id); },
@@ -1214,10 +1227,961 @@ test("refresh waiting and the published head deadline survive a process restart"
   expect(code, `${out}\n${err}`).toBe(0);
 });
 
+/* The runner's own base update (docs/design/merge-queue-refresh-capacity.md §5):
+   a fake Git that answers each plan with a commit derived from its inputs and
+   lands each push on the PR whose branch it names. */
+type UpdateSnapshot = { lanes: Pipeline[]; prs: PullRequest[]; now: number };
+function behindQueue(count: number, options: { strict?: boolean; refreshConcurrency?: number; pr?: Partial<PullRequest>; resume?: UpdateSnapshot; mergeBase?: string } = {}) {
+  const lanes = options.resume?.lanes ?? Array.from({ length: count }, (_, index) => {
+    const value = finished();
+    value.id = `queued-${index}`;
+    value.closedAt = iso(T0 + index);
+    value.delivery!.ownerId = value.id;
+    value.delivery!.target = { ...value.delivery!.target, branch: `refs/heads/topic-${index}`, pr: index + 11 };
+    return value;
+  });
+  const h = harness({ strict: options.strict ?? true, required: ["ci"], lanes, mergeBase: options.mergeBase,
+    prs: options.resume?.prs ?? lanes.map((_, index) => openPr(index + 11, { mergeStateStatus: "BEHIND", branch: `topic-${index}`, ...options.pr })) });
+  if (options.resume) h.advance(options.resume.now - T0);
+  if (options.refreshConcurrency) Object.assign(h.ports, { refreshConcurrency: options.refreshConcurrency });
+  const plans: BaseUpdateRequest[] = [];
+  const pushes: Array<BaseUpdatePush & { mergesBefore: number }> = [];
+  const git = { conflict: false, pushFailure: null as string | null, landed: (pr: PullRequest) => { pr.checks = [green("ci")]; }, moveHead: null as string | null,
+    planned: null as (() => void) | null };
+  Object.assign(h.ports, { updateBase: {
+    plan: async (request: BaseUpdateRequest) => {
+      plans.push(structuredClone(request));
+      git.planned?.();
+      if (git.conflict) return { kind: "conflict" as const };
+      return { kind: "commit" as const, commit: createHash("sha1").update(`${request.head}:${request.base}:${request.at}`).digest("hex") };
+    },
+    push: async (request: BaseUpdatePush) => {
+      pushes.push({ ...structuredClone(request), mergesBefore: h.merges().length });
+      const pr = [...h.prs.values()].find(candidate => `refs/heads/${candidate.branch}` === request.branch)!;
+      if (git.moveHead) pr.head = git.moveHead;
+      if (git.pushFailure) { const stderr = git.pushFailure; git.pushFailure = null; throw new BaseUpdateError("push", stderr); }
+      Object.assign(pr, { head: request.commit, mergeStateStatus: "CLEAN" });
+      git.landed(pr);
+    },
+  } });
+  return { h, plans, pushes, git };
+}
+
+function unknownQueue(count = 1, options: { resume?: UpdateSnapshot; current?: boolean; slots?: number } = {}) {
+  const queue = behindQueue(count, { strict: false, resume: options.resume, refreshConcurrency: options.slots,
+    pr: { mergeStateStatus: "UNKNOWN", mergeable: "UNKNOWN" } });
+  const run = queue.h.ports.run;
+  queue.h.ports.run = async args => args[1]?.includes("/compare/") && args.at(-1) === ".merge_base_commit.sha"
+    ? options.current || queue.h.ports.loadPipelines().some(lane => lane.merge?.updates.some(update => update.commit && args[1]!.endsWith(update.commit)))
+      ? MAIN_1 : "0".repeat(40) : run(args);
+  queue.git.landed = pr => { pr.mergeable = "MERGEABLE"; pr.checks = [green("ci")]; };
+  return queue;
+}
+
+test.each(["UNKNOWN", null])("unknown queue: %s refreshes a diverged reviewed head at the bound and merges its checked update", async mergeable => {
+  const { h, pushes, plans } = unknownQueue();
+  h.prs.get(11)!.mergeable = mergeable;
+  await h.sweep();
+  h.advance(MERGE_SETTLE_MS - MERGE_POLL_MS);
+  await h.sweep();
+  h.advance(MERGE_POLL_MS - 1);
+  await h.sweep();
+  expect(pushes).toEqual([]);
+  h.advance(1);
+  await h.sweep();
+  expect(plans).toHaveLength(1);
+  expect(plans[0]).toMatchObject({ head: HEAD_A, base: MAIN_1, at: iso(T0 + MERGE_SETTLE_MS) });
+  expect(pushes).toHaveLength(1);
+  expect(h.merges()).toEqual([]);
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", headSeenAt: null });
+  await h.run(MERGE_SETTLE_MS + 2 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "merged", mergedHead: pushes[0]!.commit });
+  expect(h.merges()[0]!.at(-1)).toBe(pushes[0]!.commit);
+});
+
+test.each(["pending", "missing"])("unknown queue: %s old-head checks do not delay a proven base refresh", async checks => {
+  const { h, pushes } = unknownQueue();
+  h.prs.get(11)!.checks = checks === "pending" ? [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }] : [];
+  await h.sweep();
+  h.advance(MERGE_SETTLE_MS);
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+  expect(h.merge("queued-0")!.state).toBe("updating");
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: the persisted bound survives a process restart", async () => {
+  const name = "unknown queue: the persisted bound survives a process restart";
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  const saved = fixture ? JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot : undefined;
+  const { h, pushes } = unknownQueue(1, { resume: saved });
+  if (!saved) {
+    await h.sweep();
+    h.advance(MERGE_SETTLE_MS - MERGE_POLL_MS);
+    await h.sweep();
+    h.advance(MERGE_POLL_MS - 1);
+    await restartBehindQueue(name, h);
+    return;
+  }
+  expect(h.merge("queued-0")!.headSeenAt).toBe(iso(T0));
+  await h.sweep();
+  expect(pushes).toEqual([]);
+  h.advance(1);
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+});
+
+for (const slots of [1, 2]) test(`unknown queue: a current-base UNKNOWN releases readiness for clean peers with ${slots} slots`, async () => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  const saved = fixture ? JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot : undefined;
+  const { h, pushes } = unknownQueue(3, { current: true, slots, resume: saved });
+  for (const number of [12, 13]) Object.assign(h.prs.get(number)!, { mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  if (!saved) {
+    await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
+    await restartBehindQueue(`unknown queue: a current-base UNKNOWN releases readiness for clean peers with ${slots} slots`, h);
+    return;
+  }
+  await h.sweep();
+  h.advance(MERGE_SETTLE_MS);
+  await h.run(MERGE_SETTLE_MS + 6 * MERGE_POLL_MS, () => h.merges().length === 2);
+  expect(h.merges().map(args => args[2])).toEqual(["12", "13"]);
+  expect(h.merge("queued-0")!.state).toBe("checking");
+  expect(pushes).toEqual([]);
+});
+
+test("unknown queue: retiring an update clears a deferred reason without starting its clock", async () => {
+  const { h } = unknownQueue(3, { current: true, slots: 2 });
+  await h.sweep();
+  const owner = h.merge("queued-1")!;
+  owner.state = "merged";
+  h.prs.get(12)!.state = "MERGED";
+  const waiter = h.merge("queued-2")!;
+  Object.assign(waiter, { state: "checking", reason: "waiting for the update of PR #12 (pipeline queued-1)",
+    headSeenAt: null, nextReadAt: iso(T0 + MERGE_POLL_MS) });
+  await h.sweep();
+  expect(h.merge("queued-2")).toMatchObject({ state: "checking", reason: null, headSeenAt: null, nextReadAt: iso(T0 + MERGE_POLL_MS) });
+});
+
+test("unknown queue: a settled UNKNOWN update releases the next base update past the bound", async () => {
+  const { h, git, pushes } = unknownQueue(2);
+  git.landed = pr => { pr.mergeable = "UNKNOWN"; pr.mergeStateStatus = "UNKNOWN"; pr.checks = [green("ci")]; };
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS, () => pushes.length === 1);
+  expect(pushes).toHaveLength(1);
+  Object.assign(h.prs.get(12)!, { mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  await h.run(2 * MERGE_SETTLE_MS + 6 * MERGE_POLL_MS, () => pushes.length === 2);
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0", "refs/heads/topic-1"]);
+  expect(h.merge("queued-0")!.state).toBe("checking");
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: settled green checks never time out solely on UNKNOWN", async () => {
+  const { h, pushes } = unknownQueue(1, { current: true });
+  await h.sweep();
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "checking", headSeenAt: iso(T0), blockedAt: null });
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "checking", headSeenAt: iso(T0), blockedAt: null });
+  expect(pushes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+});
+
+test.each(["refused", "malformed"])("unknown queue: %s ancestry cannot authorize a refresh", async failure => {
+  const { h, pushes } = unknownQueue();
+  const run = h.ports.run;
+  h.ports.run = async args => {
+    if (args[1]?.includes("/compare/")) {
+      if (failure === "refused") throw new Error("connection reset by peer");
+      return "";
+    }
+    return run(args);
+  };
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+  expect(h.merge("queued-0")!.readFailures).toBeGreaterThan(0);
+  expect(pushes).toEqual([]);
+  expect(h.creates).toEqual([]);
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: a diverged head uses a reviewed refresh when mechanical updates are unavailable", async () => {
+  const { h } = unknownQueue();
+  Object.assign(h.ports, { updateBase: undefined });
+  await h.run(MERGE_SETTLE_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-0")!.state).toBe("refreshing");
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: unfinished required checks keep their own timeout", async () => {
+  const { h } = unknownQueue(1, { current: true });
+  h.prs.get(11)!.checks = [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }];
+  await h.sweep();
+  h.advance(MERGE_WAIT_LIMIT_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout });
+  expect(h.merges()).toEqual([]);
+});
+
+test.each(["base read", "comparison", "plan", "reservation"])("unknown queue: a retry racing the %s prevents the old update", async phase => {
+  const { h, git, pushes } = unknownQueue();
+  await h.sweep();
+  const retry = () => { h.merge("queued-0")!.attempts++; };
+  if (phase === "plan") git.planned = retry;
+  else if (phase === "reservation") {
+    const mutate = h.ports.mutate;
+    h.ports.mutate = async (id, change) => {
+      const result = await mutate(id, change);
+      if (h.merge(id)?.updates.length) retry();
+      return result;
+    };
+  } else {
+    const run = h.ports.run;
+    h.ports.run = async args => {
+      const result = await run(args);
+      if (phase === "base read" ? args.at(-1) === ".commit.sha" : args[1]?.includes("/compare/")) retry();
+      return result;
+    };
+  }
+  h.advance(MERGE_SETTLE_MS);
+  await h.sweep();
+  expect(pushes).toEqual([]);
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: a requested change arriving during planning stops the refreshed merge", async () => {
+  const { h, git, pushes } = unknownQueue();
+  git.planned = () => { h.prs.get(11)!.reviewDecision = "CHANGES_REQUESTED"; };
+  await h.run(2 * MERGE_SETTLE_MS);
+  expect(pushes).toHaveLength(1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.changesRequested });
+  expect(h.merges()).toEqual([]);
+});
+
+test("unknown queue: a merged update owner clears unvisited followers' stale reasons immediately", async () => {
+  const { h } = unknownQueue(3, { current: true, slots: 2 });
+  Object.assign(h.prs.get(12)!, { mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  Object.assign(h.prs.get(13)!, { mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  const run = h.ports.run;
+  let fail = true;
+  h.ports.run = async args => {
+    if (fail && args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+      fail = false;
+      throw new Error("connection reset by peer");
+    }
+    return run(args);
+  };
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merge("queued-2")!.reason).toContain("waiting for the update of PR #12");
+  const headSeenAt = h.merge("queued-2")!.headSeenAt;
+  await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-1")!.state === "merged");
+  expect(h.merge("queued-1")!.state).toBe("merged");
+  expect(h.merge("queued-2")!.reason ?? "").not.toContain("PR #12");
+  expect(h.merge("queued-2")!.headSeenAt).toBe(headSeenAt);
+});
+
+test.each(["conflict", "red", "requested change", "moved head"])("unknown queue: %s still prevents merging", async stop => {
+  const { h, git, pushes } = unknownQueue();
+  await h.sweep();
+  const pr = h.prs.get(11)!;
+  if (stop === "conflict") git.conflict = true;
+  if (stop === "red") { pr.checks = [red("ci")]; git.landed = updated => { updated.checks = [red("ci")]; }; }
+  if (stop === "requested change") pr.reviewDecision = "CHANGES_REQUESTED";
+  if (stop === "moved head") pr.head = "d".repeat(40);
+  await h.run(MERGE_SETTLE_MS + 5 * MERGE_POLL_MS);
+  expect(h.merges()).toEqual([]);
+  if (stop !== "red") expect(pushes).toEqual([]);
+  if (stop === "conflict") expect(h.creates).toHaveLength(1);
+  if (stop === "requested change") expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.changesRequested });
+  if (stop === "moved head") expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  if (stop === "red") {
+    // Even a permitted refresh must stop on a red required check on its new head.
+    expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason("ci") });
+  }
+});
+
+// Keep this causal probe identical on the pinned base and the fixed runner.
+for (const status of ["BEHIND", "UNSTABLE"]) for (const check of ["ci", "optional-audit"]) {
+  test(`outdated red probe: ${status} with ${check} uses one mechanical update and fresh exact-head checks`, async () => {
+    const { h, git, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40),
+      pr: { mergeStateStatus: status, checks: check === "ci" ? [red(check)] : [green("ci"), red(check)] } });
+    git.landed = pr => { pr.checks = []; };
+    await h.sweep();
+    const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };
+    console.log("outdated-red-probe", status, check, JSON.stringify(counts));
+    expect(counts).toEqual({ plans: 1, pushes: 1, refreshes: 0, merges: 0 });
+    const updated = pushes[0]!.commit;
+    expect(h.merge("queued-0")!.updates).toEqual([{ requestedAt: iso(T0), head: null, commit: updated, base: MAIN_1 }]);
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.merge("queued-0")).toMatchObject({ state: "waiting-checks", head: updated,
+      headSeenAt: iso(T0 + MERGE_POLL_MS), reason: "waiting for ci" });
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.checks = [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }];
+    await h.run(3 * MERGE_POLL_MS);
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.checks = [green("ci")];
+    await h.run(3 * MERGE_POLL_MS, () => h.merges().length === 1);
+    expect(h.merges().map(args => args.at(-1))).toEqual([updated]);
+    expect(plans).toHaveLength(1);
+    expect(pushes).toHaveLength(1);
+    expect(h.creates).toEqual([]);
+  });
+}
+
+test("outdated red probe: three reviewed PRs need no agent refresh lanes", async () => {
+  const { h, plans, pushes } = behindQueue(3, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+  for (let poll = 0; poll < 60 && h.merges().length < 3; poll++) {
+    await h.sweep();
+    // On the old runner a refused refresh releases its slot for the next PR.
+    for (const lane of h.ports.loadPipelines()) if (lane.refreshOf) h.pipeline(lane.id).state = "closed";
+    h.advance(MERGE_POLL_MS);
+  }
+  const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };
+  console.log("outdated-red-three-pr-probe", JSON.stringify(counts));
+  expect(counts).toEqual({ plans: 3, pushes: 3, refreshes: 0, merges: 3 });
+  expect(h.merges().map(args => args[2])).toEqual(["11", "12", "13"]);
+  expect(h.merges().map(args => args.at(-1))).toEqual(pushes.map(push => push.commit));
+  expect(pushes.map(push => push.mergesBefore)).toEqual([0, 1, 2]);
+});
+
+test.each(["ci", "optional-audit"])("current-base red %s stays blocked with mechanical ports available", async check => {
+  const { h, plans, pushes } = behindQueue(1, { pr: { mergeStateStatus: "UNSTABLE", checks: [red(check)] } });
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason(check) });
+  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0, 0]);
+});
+
+test.each(["ci", "optional-audit"])("red %s remains visible during update and blocks a failing new head", async check => {
+  const { h, git, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red(check)] } });
+  git.landed = pr => { pr.checks = [red(check)]; h.setMergeBase(MAIN_1); };
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", reason: checkFailedReason(check) });
+  expect(h.logs).toContain(`[auto merge] queued-0: ${checkFailedReason(check)} on ${HEAD_A}; recorded base update ${pushes[0]!.commit} from ${MAIN_1}`);
+  await h.run(10 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason(check), head: pushes[0]!.commit });
+  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([1, 1, 0, 0]);
+});
+
+test("a stale forge comparison cannot refresh a red head Git proves current", async () => {
+  const { h, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+  Object.assign(h.ports, { updateBase: { plan: async () => ({ kind: "current" }), push: async () => { throw new Error("unexpected push"); } } });
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason("ci") });
+  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0, 0]);
+});
+
+test("an outdated red head with a real conflict gets one visible lane and cannot skip resolution review", async () => {
+  const { h, git, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+  git.conflict = true;
+  await h.run(3 * MERGE_POLL_MS);
+  expect([plans.length, pushes.length, h.creates.length]).toEqual([1, 0, 1]);
+  const child = h.pipeline("refresh-1");
+  expect(child.refreshOf).toEqual({ pipelineId: "queued-0", base: MAIN_1 });
+  const head = "c".repeat(40);
+  Object.assign(child, { state: "completed", lastPassedCommit: head, closedAt: iso(h.now()) });
+  child.delivery!.active = false;
+  child.runs[1]!.attempts[0]!.state = "failed";
+  Object.assign(h.prs.get(11)!, { head, checks: [green("ci")], mergeStateStatus: "CLEAN" });
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merges()).toEqual([]);
+  expect(h.creates).toHaveLength(1);
+});
+
+for (const phase of ["comparison", "plan", "record"] as const) {
+  test.each(["active", "foreign", "disabled", "review", "head", "target", "peer", "proactive"])(`red update rejects changed authority after ${phase}: %s`, async change => {
+    const { h, git, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+    const invalidate = () => {
+      const owner = h.pipeline("queued-0");
+      if (change === "active") owner.delivery!.active = true;
+      if (change === "foreign") owner.delivery!.disposition = "comparison";
+      if (change === "disabled") h.setSetting({ enabled: false });
+      if (change === "review") owner.runs[1]!.attempts[0]!.state = "failed";
+      if (change === "head") owner.lastPassedCommit = "b".repeat(40);
+      if (change === "target") owner.delivery!.target.branch = "refs/heads/other";
+      if (change === "proactive") owner.proactiveTaskIds = ["unadopted-task"];
+      if (change === "peer") {
+        const peer = structuredClone(owner);
+        peer.id = "new-owner"; peer.state = "running"; peer.delivery!.active = true;
+        h.add(peer);
+      }
+    };
+    if (phase === "comparison") {
+      const run = h.ports.run;
+      h.ports.run = async args => { const result = await run(args); if (args[1]?.includes("/compare/")) invalidate(); return result; };
+    } else if (phase === "plan") git.planned = invalidate;
+    else {
+      const mutate = h.ports.mutate;
+      h.ports.mutate = async (id, change) => { const result = await mutate(id, change); if (h.merge(id)?.updates.length) invalidate(); return result; };
+    }
+    await h.sweep();
+    expect(pushes).toEqual([]);
+    expect(h.creates).toEqual([]);
+    expect(h.merges()).toEqual([]);
+  });
+}
+
+test.each([
+  ["fork", { fork: true }], ["unnamed head", { branch: undefined }], ["foreign branch", { branch: "foreign" }],
+] as const)("outdated red %s stays on the existing refresh path", async (_name, pr) => {
+  const { h, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")], ...pr } });
+  await h.sweep();
+  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 1, 0]);
+});
+
+for (const landed of [false, true]) {
+  const name = `outdated red uncertain push recovers the same tuple after restart, landed=${landed}`;
+  test(name, async () => {
+    const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+    if (fixture) {
+      const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+      const { h, plans, pushes } = behindQueue(1, { resume: saved, mergeBase: "0".repeat(40) });
+      const expected = h.merge("queued-0")!.updates[0]!.commit!;
+      h.advance(MERGE_POLL_MS);
+      await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
+      expect(h.merge("queued-0")!.updates).toHaveLength(1);
+      expect(plans.map(plan => plan.at)).toEqual(landed ? [] : [iso(T0)]);
+      expect(pushes.map(push => push.commit)).toEqual(landed ? [] : [expected]);
+      expect(h.merges().map(args => args.at(-1))).toEqual([expected]);
+      expect(h.creates).toEqual([]);
+      return;
+    }
+    const { h, git, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+    git.pushFailure = "connection refused";
+    await h.sweep();
+    expect(h.merge("queued-0")).toMatchObject({ state: "updating", readFailures: 1 });
+    expect(pushes).toHaveLength(1);
+    if (landed) Object.assign(h.prs.get(11)!, { head: pushes[0]!.commit, checks: [green("ci")], mergeStateStatus: "CLEAN" });
+    await restartBehindQueue(name, h);
+  });
+}
+
+test("repeated reads of an unconfirmed red update reuse its recorded tuple", async () => {
+  const { h, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+  const updateBase = (h.ports as unknown as { updateBase: { push: (request: BaseUpdatePush) => Promise<void> } }).updateBase;
+  updateBase.push = async request => { pushes.push({ ...request, mergesBefore: 0 }); };
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", reason: checkFailedReason("ci") });
+  expect(h.merge("queued-0")!.updates).toHaveLength(1);
+  expect(new Set(plans.map(plan => plan.at))).toEqual(new Set([iso(T0)]));
+  expect(new Set(pushes.map(push => push.commit)).size).toBe(1);
+  expect(h.creates).toEqual([]);
+  expect(h.merges()).toEqual([]);
+});
+
+test("a red update replans a changed base before replay and waits for the resulting head", async () => {
+  const { h, git, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+  git.pushFailure = "connection refused";
+  git.landed = pr => { pr.checks = []; };
+  await h.sweep();
+  h.setBase(MAIN_2);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+  expect(h.merge("queued-0")!.updates).toEqual([]);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(plans.map(plan => plan.base)).toEqual([MAIN_1, MAIN_2]);
+  expect(pushes).toHaveLength(2);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "waiting-checks", head: pushes[1]!.commit });
+  expect(h.merges()).toEqual([]);
+  h.prs.get(11)!.checks = [green("ci")];
+  await h.run(3 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merges().map(args => args.at(-1))).toEqual([pushes[1]!.commit]);
+  expect(h.creates).toEqual([]);
+});
+
+test("a foreign push racing an outdated red update remains fenced", async () => {
+  const { h, git, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+  git.moveHead = "d".repeat(40);
+  git.pushFailure = "! [rejected] (non-fast-forward)";
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  expect(pushes).toHaveLength(1);
+  expect(h.creates).toEqual([]);
+  expect(h.merges()).toEqual([]);
+});
+
+test.each(["comparison", "plan", "record"])("main moving after a red update's %s requires another exact-head check cycle", async phase => {
+  const { h, git, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
+  const move = () => { h.setBase(MAIN_2); };
+  if (phase === "comparison") {
+    const run = h.ports.run;
+    h.ports.run = async args => { const result = await run(args); if (args[1]?.includes("/compare/")) move(); return result; };
+  } else if (phase === "plan") git.planned = move;
+  else {
+    const mutate = h.ports.mutate;
+    h.ports.mutate = async (id, change) => { const result = await mutate(id, change); if (h.merge(id)?.updates.length) move(); return result; };
+  }
+  git.landed = pr => { pr.mergeStateStatus = "BEHIND"; pr.checks = [green("ci")]; };
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+  expect(h.merges()).toEqual([]);
+  git.landed = pr => { pr.checks = []; };
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(plans.map(plan => [plan.head, plan.base])).toEqual([[HEAD_A, MAIN_1], [pushes[0]!.commit, MAIN_2]]);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "waiting-checks", head: pushes[1]!.commit });
+  expect(h.merges()).toEqual([]);
+  h.prs.get(11)!.checks = [green("ci")];
+  await h.run(3 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merges().map(args => args.at(-1))).toEqual([pushes[1]!.commit]);
+  expect(h.creates).toEqual([]);
+});
+
+test("PRs only behind main are updated by the runner one at a time and merge with no refresh lane", async () => {
+  const { h, plans, pushes } = behindQueue(3);
+  await h.run(60 * MERGE_POLL_MS, () => h.merges().length === 3);
+  expect(h.merges().map(args => args[2])).toEqual(["11", "12", "13"]);
+  expect(h.creates).toHaveLength(0);
+  expect(h.updates()).toHaveLength(0);
+  expect(h.writes.every(write => write.args[0] === "pr" && write.args[1] === "merge")).toBe(true);
+  // Each update merges the base tip into the reviewed head, after the previous merge landed.
+  expect(plans.map(plan => [plan.repoDir, plan.head, plan.base])).toEqual([
+    ["/fixture/repository", HEAD_A, MAIN_1], ["/fixture/repository", HEAD_A, MAIN_2], ["/fixture/repository", HEAD_A, MAIN_2]]);
+  expect(pushes.map(push => [push.branch, push.mergesBefore])).toEqual([["refs/heads/topic-0", 0], ["refs/heads/topic-1", 1], ["refs/heads/topic-2", 2]]);
+  expect(h.merges().map(args => args.at(-1))).toEqual(pushes.map(push => push.commit));
+  expect(h.merge("queued-1")).toMatchObject({ state: "merged", chain: [HEAD_A, pushes[1]!.commit], mergedHead: pushes[1]!.commit,
+    updates: [{ requestedAt: plans[1]!.at, head: pushes[1]!.commit, commit: pushes[1]!.commit, base: MAIN_2 }] });
+});
+
+test("a second PR behind the same base tip waits for the first one's update", async () => {
+  const { h, pushes } = behindQueue(2, { refreshConcurrency: 2 });
+  await h.sweep();
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0"]);
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", reason: null });
+  expect(h.merge("queued-1")).toMatchObject({ state: "checking", headSeenAt: null,
+    reason: "waiting for the update of PR #11 (pipeline queued-0)" });
+  await h.run(20 * MERGE_POLL_MS, () => h.merges().length === 2);
+  expect(h.merges().map(args => args[2])).toEqual(["11", "12"]);
+  expect(pushes.map(push => push.mergesBefore)).toEqual([0, 1]);
+  expect(h.creates).toHaveLength(0);
+});
+
+async function restartBehindQueue(name: string, h: ReturnType<typeof behindQueue>["h"]) {
+  const file = path.join(sandbox, `update-queue-${createHash("sha1").update(name).digest("hex")}.json`);
+  fs.writeFileSync(file, JSON.stringify({ lanes: h.ports.loadPipelines(), prs: [...h.prs.values()], now: h.now() }));
+  const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path, "-t", `^${name}$`], {
+    env: { ...process.env, BASE_UPDATE_QUEUE_FIXTURE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code, `${out}\n${err}`).toBe(0);
+  expect(err).toContain("1 pass");
+  expect(err).toContain("0 fail");
+}
+
+for (const slots of [1, 2]) test(`a recovered queue head keeps polling a later mechanical update owner with ${slots} slots after restart`, async () => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, pushes } = behindQueue(2, { resume: saved, refreshConcurrency: slots });
+    const recorded = h.merge("queued-1")!.updates[0]!.commit!;
+    expect(h.merge("queued-0")!.readFailures).toBe(0);
+    h.advance(MERGE_POLL_MS);
+    await h.run(2 * MERGE_WAIT_LIMIT_MS, () => h.merge("queued-0")!.state === "merged" && h.merge("queued-1")!.state === "merged");
+    expect(h.merges().map(args => args[2])).toEqual(["12", "11"]);
+    expect(h.merge("queued-1")).toMatchObject({ state: "merged", mergedHead: recorded });
+    expect(pushes.map(push => [push.branch, push.mergesBefore])).toEqual([["refs/heads/topic-0", 1]]);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  const { h, pushes } = behindQueue(2, { refreshConcurrency: slots });
+  const run = h.ports.run;
+  let fail = true;
+  h.ports.run = async args => {
+    if (fail && args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+      fail = false;
+      throw new Error("connection reset by peer");
+    }
+    return run(args);
+  };
+  await h.sweep();
+  expect(h.merge("queued-0")!.readFailures).toBe(1);
+  if (slots === 1) {
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+  }
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-1"]);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ readFailures: 0, state: "checking",
+    reason: "waiting for the update of PR #12 (pipeline queued-1)" });
+  await restartBehindQueue(`a recovered queue head keeps polling a later mechanical update owner with ${slots} slots after restart`, h);
+});
+
+for (const restart of [false, true]) {
+  const name = `old update history yields to the latest base update after read recovery${restart ? " and restart" : ""}`;
+  test(name, async () => {
+    const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+    const saved = fixture ? JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot : undefined;
+    const { h, pushes } = behindQueue(2, { refreshConcurrency: 2, resume: saved });
+    if (saved) h.setBase(MAIN_2);
+    if (!saved) {
+      await h.sweep();
+      h.advance(MERGE_POLL_MS);
+      await h.sweep();
+      expect(h.merge("queued-0")!.chain).toHaveLength(2);
+      expect(h.merges()).toEqual([]);
+      h.setBase(MAIN_2);
+      for (const pr of h.prs.values()) pr.mergeStateStatus = "BEHIND";
+      const run = h.ports.run;
+      let fail = true;
+      h.ports.run = async args => {
+        if (fail && args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+          fail = false;
+          throw new Error("connection reset by peer");
+        }
+        return run(args);
+      };
+      h.advance(MERGE_POLL_MS);
+      await h.sweep();
+      expect(h.merge("queued-0")!.readFailures).toBe(1);
+      expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0", "refs/heads/topic-1"]);
+      h.advance(MERGE_POLL_MS);
+      await h.sweep();
+    }
+    const first = h.merge("queued-0")!, owner = h.merge("queued-1")!;
+    expect(first).toMatchObject({ readFailures: 0, state: "checking",
+      reason: "waiting for the update of PR #12 (pipeline queued-1)" });
+    expect(first.readAt).toBe(owner.readAt);
+    expect(first.updates.at(-1)!.base).toBe(MAIN_1);
+    expect(owner.updates.at(-1)!.base).toBe(MAIN_2);
+    const recorded = owner.updates.at(-1)!.commit!;
+    if (restart && !saved) {
+      await restartBehindQueue(name, h);
+      return;
+    }
+    const before = pushes.length;
+    await h.run(2 * MERGE_WAIT_LIMIT_MS, () => h.merges().length === 2);
+    expect(h.merges().map(args => args[2])).toEqual(["12", "11"]);
+    expect(h.merge("queued-1")).toMatchObject({ state: "merged", mergedHead: recorded });
+    expect(h.merge("queued-0")!.state).toBe("merged");
+    expect(pushes.slice(before).map(push => [push.branch, push.mergesBefore])).toEqual([["refs/heads/topic-0", 1]]);
+    expect(h.creates).toEqual([]);
+    expect(h.updates()).toEqual([]);
+  });
+}
+
+test.each(["closed", "paused", "needs_decision", "running"] as const)("a %s mechanical update owner releases capacity after restart", async state => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, plans, pushes } = behindQueue(2, { resume: saved });
+    const owner = structuredClone(h.pipeline("queued-0"));
+    h.advance(MERGE_POLL_MS);
+    await h.run(2 * MERGE_WAIT_LIMIT_MS, () => h.merge("queued-1")!.state === "merged");
+    expect(plans.map(plan => plan.base)).toEqual([MAIN_1]);
+    expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-1"]);
+    expect(h.merges().map(args => args[2])).toEqual(["12"]);
+    expect(h.merge("queued-1")!.state).toBe("merged");
+    expect(h.pipeline("queued-0")).toEqual(owner);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  const { h, pushes } = behindQueue(2);
+  await h.sweep();
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0"]);
+  expect(h.merge("queued-0")!.state).toBe("updating");
+  h.pipeline("queued-0").state = state;
+  await restartBehindQueue(`a ${state} mechanical update owner releases capacity after restart`, h);
+});
+
+test.each(["closed", "paused", "needs_decision", "running"] as const)("a %s mechanical update with an unresolved merge retains capacity after restart", async state => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, plans, pushes } = behindQueue(2, { resume: saved });
+    h.advance(MERGE_POLL_MS);
+    await h.run(2 * MERGE_WAIT_LIMIT_MS);
+    expect(h.merge("queued-0")!.state).toBe("merging");
+    expect(plans).toEqual([]);
+    expect(pushes).toEqual([]);
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.state = "MERGED";
+    await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-1")!.state === "merged");
+    expect(h.merge("queued-0")!.state).toBe("merged");
+    expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-1"]);
+    expect(h.merges().map(args => args[2])).toEqual(["12"]);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  const { h } = behindQueue(2);
+  const write = h.ports.write;
+  h.ports.write = async (args, repository) => {
+    const result = await write(args, repository);
+    // GitHub accepted the merge but has not reported its landing yet.
+    if (args[0] === "pr" && args[1] === "merge" && args[2] === "11") h.prs.get(11)!.state = "OPEN";
+    return result;
+  };
+  await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-0")!.state === "merging");
+  expect(h.merge("queued-0")!.state).toBe("merging");
+  h.pipeline("queued-0").state = state;
+  await restartBehindQueue(`a ${state} mechanical update with an unresolved merge retains capacity after restart`, h);
+});
+
+test("a textual conflict found by the runner's merge starts exactly one refresh lane", async () => {
+  const { h, git, pushes } = behindQueue(1);
+  git.conflict = true;
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(pushes).toHaveLength(0);
+  expect(h.merge("queued-0")).toMatchObject({ state: "refreshing", updates: [], refresh: { base: MAIN_1, head: HEAD_A, pipelineId: "refresh-1" } });
+});
+
+test("the runner waits for checks on its updated head before merging", async () => {
+  const { h, git, pushes } = behindQueue(1);
+  git.landed = pr => { pr.checks = [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }]; };
+  await h.sweep();
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "waiting-checks", head: pushes[0]!.commit,
+    headSeenAt: iso(T0 + MERGE_POLL_MS), reason: "waiting for ci" });
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merges()).toEqual([]);
+  h.prs.get(11)!.checks = [green("ci")];
+  await h.run(3 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merges().map(args => args.at(-1))).toEqual([pushes[0]!.commit]);
+  expect(h.creates).toEqual([]);
+});
+
+test("a recorded update whose push failed is pushed again as the same commit", async () => {
+  const { h, git, plans, pushes } = behindQueue(1);
+  git.pushFailure = "fatal: unable to access the remote: Could not resolve host: github.com";
+  await h.sweep();
+  const recorded = structuredClone(h.merge("queued-0")!);
+  expect(recorded).toMatchObject({ state: "updating", readFailures: 1 });
+  expect(recorded.reason).toStartWith("Base update temporarily unavailable: fatal: unable to access the remote");
+  expect(recorded.updates).toEqual([{ requestedAt: iso(T0), head: null, commit: pushes[0]!.commit, base: MAIN_1 }]);
+  expect(h.prs.get(11)!.head).toBe(HEAD_A);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(plans.map(plan => plan.at)).toEqual([iso(T0), iso(T0)]);
+  expect(pushes.map(push => push.commit)).toEqual([recorded.updates[0]!.commit!, recorded.updates[0]!.commit!]);
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", readFailures: 0 });
+  await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merges().map(args => args.at(-1))).toEqual([recorded.updates[0]!.commit!]);
+  expect(h.merge("queued-0")!.updates).toHaveLength(1);
+  expect(h.creates).toHaveLength(0);
+});
+
+test("an update recorded before a lost push reply recovers in a fresh process", async () => {
+  const fixture = process.env.BASE_UPDATE_RESTART_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, pushes } = behindQueue(1, { resume: saved });
+    const expected = h.merge("queued-0")!.updates[0]!.commit!;
+    const alreadyLanded = saved.prs[0]!.head === expected;
+    h.advance(MERGE_POLL_MS);
+    await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
+    expect(h.merge("queued-0")!.updates).toHaveLength(1);
+    expect(h.merges().map(args => args.at(-1))).toEqual([expected]);
+    expect(pushes.map(push => push.commit)).toEqual(alreadyLanded ? [] : [expected]);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  for (const landed of [false, true]) {
+    const { h, git } = behindQueue(1);
+    git.pushFailure = "connection refused";
+    await h.sweep();
+    const update = h.merge("queued-0")!.updates[0]!;
+    if (landed) Object.assign(h.prs.get(11)!, { head: update.commit, mergeStateStatus: "CLEAN" });
+    const file = path.join(sandbox, `base-update-restart-${landed}.json`);
+    fs.writeFileSync(file, JSON.stringify({ lanes: h.ports.loadPipelines(), prs: [...h.prs.values()], now: h.now() }));
+    const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path, "-t",
+      "^an update recorded before a lost push reply recovers in a fresh process$"], {
+      env: { ...process.env, BASE_UPDATE_RESTART_FIXTURE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code, `${out}\n${err}`).toBe(0);
+  }
+});
+
+test("base update failures stop at the durable bound after restart and release the next PR", async () => {
+  const fixture = process.env.BASE_UPDATE_FAILURE_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, git, pushes } = behindQueue(2, { resume: saved });
+    git.planned = () => {
+      if (h.merge("queued-0")!.state !== "blocked") git.pushFailure = "connection refused";
+    };
+    h.advance(MERGE_POLL_MS);
+    await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
+    expect(h.merge("queued-0")).toMatchObject({ state: "blocked", readFailures: 3 });
+    expect(h.merge("queued-0")!.reason).toContain("connection refused");
+    expect(pushes.filter(push => push.branch === "refs/heads/topic-0")).toHaveLength(2);
+    expect(h.merges().map(args => args[2])).toEqual(["12"]);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  const { h, git } = behindQueue(2);
+  git.pushFailure = "connection refused";
+  await h.sweep();
+  expect(h.merge("queued-0")!.readFailures).toBe(1);
+  const file = path.join(sandbox, "base-update-failure-restart.json");
+  fs.writeFileSync(file, JSON.stringify({ lanes: h.ports.loadPipelines(), prs: [...h.prs.values()], now: h.now() }));
+  const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path, "-t",
+    "^base update failures stop at the durable bound after restart and release the next PR$"], {
+    env: { ...process.env, BASE_UPDATE_FAILURE_FIXTURE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code, `${out}\n${err}`).toBe(0);
+});
+
+test("a recorded update that cannot be recreated exactly is dropped and planned again", async () => {
+  const { h, git, plans, pushes } = behindQueue(1);
+  git.pushFailure = "fatal: unable to access the remote: Could not resolve host: github.com";
+  await h.sweep();
+  const updateBase = (h.ports as unknown as { updateBase: { plan: (request: BaseUpdateRequest) => Promise<unknown> } }).updateBase;
+  const plan = updateBase.plan;
+  updateBase.plan = async request => { await plan(request); return { kind: "commit", commit: "c".repeat(40) }; };
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "checking", updates: [] });
+  updateBase.plan = plan;
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(plans).toHaveLength(3);
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", updates: [{ requestedAt: iso(T0 + 2 * MERGE_POLL_MS), head: null, base: MAIN_1 }] });
+  expect(pushes.at(-1)!.commit).toBe(h.merge("queued-0")!.updates[0]!.commit!);
+});
+
+test("an unlanded update is replanned against a base that moved before replay", async () => {
+  const { h, git, plans, pushes } = behindQueue(1);
+  git.pushFailure = "connection refused";
+  await h.sweep();
+  h.setBase(MAIN_2);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(pushes).toHaveLength(1);
+  expect(h.merge("queued-0")!.updates).toEqual([]);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(plans.at(-1)!.base).toBe(MAIN_2);
+  expect(pushes).toHaveLength(2);
+});
+
+test.each(["initial", "replay"] as const)("%s update rechecks delivery authority after planning", async phase => {
+  const { h, git, pushes } = behindQueue(1);
+  if (phase === "replay") {
+    git.pushFailure = "connection refused";
+    await h.sweep();
+    h.advance(MERGE_POLL_MS);
+  }
+  git.planned = () => { h.pipeline("queued-0").delivery!.active = true; };
+  const count = pushes.length;
+  await h.sweep();
+  expect(pushes).toHaveLength(count);
+  expect(h.merges()).toEqual([]);
+});
+
+test("an update rechecks authority after its durable record is written", async () => {
+  const { h, pushes } = behindQueue(1);
+  const mutate = h.ports.mutate;
+  h.ports.mutate = async (id, change) => {
+    const changed = await mutate(id, change);
+    if (h.merge(id)?.updates.length) h.pipeline(id).delivery!.active = true;
+    return changed;
+  };
+  await h.sweep();
+  expect(h.merge("queued-0")!.updates).toHaveLength(1);
+  expect(pushes).toEqual([]);
+});
+
+test("a branch moved by someone else between the record and the push blocks with headChanged", async () => {
+  const { h, git } = behindQueue(1);
+  git.moveHead = "d".repeat(40);
+  git.pushFailure = "! [rejected] (non-fast-forward)";
+  await h.sweep();
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  expect(h.creates).toHaveLength(0);
+  expect(h.merges()).toHaveLength(0);
+});
+
+test("a red required check after the runner's update blocks that PR and the next one is updated", async () => {
+  const { h, git, pushes } = behindQueue(2);
+  git.landed = pr => { pr.checks = pr.number === 11 ? [red("ci")] : [green("ci")]; };
+  await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason("ci") });
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0", "refs/heads/topic-1"]);
+  expect(h.merges().map(args => args[2])).toEqual(["12"]);
+  expect(h.creates).toHaveLength(0);
+});
+
+test.each([
+  ["a fork", { fork: true }],
+  ["another head branch", { branch: "renamed" }],
+  ["an unnamed head branch", { branch: undefined }],
+] as const)("a PR from %s keeps the refresh-lane path", async (_name, pr) => {
+  const { h, plans } = behindQueue(1, { pr: pr as Partial<PullRequest> });
+  await h.sweep();
+  expect(plans).toHaveLength(0);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "refreshing", updates: [] });
+});
+
+test("a lane without a checkout keeps the refresh-lane path", async () => {
+  const { h, plans } = behindQueue(1);
+  delete (h.pipeline("queued-0") as Partial<Pipeline>).repoDir;
+  await h.sweep();
+  expect(plans).toHaveLength(0);
+  expect(h.creates).toHaveLength(1);
+});
+
+test.each([false, true])("a reviewed proactive lane keeps the refresh-lane path, red=%s", async failed => {
+  const { h, plans } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [failed ? red("ci") : green("ci")] } });
+  const lane = h.pipeline("queued-0");
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { task } = await admitProactiveTask({ ...candidate("base-update-exclusion"), project: lane.project },
+    { ...context(), project: lane.project }, undefined, authority());
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task));
+  lane.taskIds = [task.id];
+  lane.proactiveTaskIds = [task.id];
+  const review = lane.stages[1]!;
+  if (review.kind !== "run") throw new Error("expected a result review");
+  review.effectiveRole.roleId = "reviewer";
+  lane.runs[1]!.attempts[0]!.reviewHeadSha = lane.lastPassedCommit;
+  await h.sweep();
+  expect(plans).toEqual([]);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge(lane.id)!.state).toBe("refreshing");
+});
+
+test("the runner's update entries survive store reload, and malformed ones are refused", async () => {
+  const { h } = behindQueue(1);
+  await h.sweep();
+  const { buildPipeline, savePipelines, loadPipelines } = await import("@/lib/pipelines/store");
+  const value = buildPipeline({ id: "persisted-update", task: "Update", project: "fixture", repoDir: "/fixture/repository",
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: BUILDER as Pipeline["stages"][number]["effectiveRole"] }],
+    srcPath: null, srcConversationId: null, now: iso(T0), state: "draft" });
+  value.state = "completed";
+  value.cursor = null;
+  value.closedAt = iso(T0);
+  value.merge = structuredClone(h.merge("queued-0")!);
+  expect(value.merge.updates).toHaveLength(1);
+  savePipelines([value]);
+  expect(loadPipelines()[0]!.merge!.updates).toEqual(value.merge!.updates);
+  for (const bad of [{ commit: "wrong" }, { base: 7 }, { commit: null }]) {
+    const invalid = structuredClone(value);
+    Object.assign(invalid.merge!.updates[0]!, bad);
+    expect(() => savePipelines([invalid])).toThrow("malformed pipeline record");
+  }
+});
+
 test.each([
   ["refresh", "running", "running", true],
-  ["refresh", "passed", "committing", true],
-  ["refresh", "skipped", "committing", true],
+  ["refresh", "spawning", "running", true],
+  ["refresh", "reviewing", "running", true],
+  ["refresh", "committing", "committing", false],
+  ["refresh", "passed", "committing", false],
+  ["refresh", "skipped", "committing", false],
   ["refresh", "failed", "pending", true],
   ["refresh", "passed", "pending", true],
   ["refresh", "needs_decision", "pending", true],
@@ -1244,6 +2208,56 @@ test.each([
   else expect(h.merge("queued-1")!.reason).toBeNull();
   expect(h.creates).toHaveLength(held ? 1 : 2);
   expect(h.writes).toEqual([]);
+});
+
+/* 2026-10-30: the refresh agent passed at 21:01, then the lane waited on
+   passed-stage settlement (`running`, cursor `refresh/committing`, attempt
+   `passed`), parked in needs_decision, and every seat retry-stage or publish
+   returned it to that phase. Each time it took the repository slot again. */
+test("a passed refresh waiting on settlement, parked or resumed by the seat holds no refresh capacity", async () => {
+  const h = queuedRefreshes(["ci"], 3);
+  await h.sweep();
+  expect(h.creates).toHaveLength(1);
+  const settle = (id: string) => {
+    const child = h.pipeline(id);
+    const attempt = child.runs.find(run => run.stageId === "refresh")!.attempts[0]! as unknown as Record<string, unknown>;
+    Object.assign(attempt, { state: "passed", verdict: { status: "pass" }, completedAt: iso(h.now() - 60_000),
+      settlementAdmissionRetry: { failures: 1, retryAt: iso(h.now() - 1) } });
+    child.state = "running";
+    child.cursor = { stageId: "refresh", state: "committing", input: null, activatedBy: null };
+    child.stateDetail = "no controller job became available for passed-stage settlement within 15 minutes; automatic retry 1/3";
+  };
+  settle("refresh-1");
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  expect(h.merge("queued-1")).toMatchObject({ state: "refreshing", refresh: { pipelineId: "refresh-2" } });
+  // The seat's retry-stage parks it and returns it to running/committing.
+  for (const state of ["needs_decision", "running"] as const) {
+    h.pipeline("refresh-1").state = state;
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.merge("queued-2")!.reason).toBe("PR is behind its base; waiting for repository capacity held by refresh refresh-2");
+  }
+  // A seat publish of the accepted head: settled, cursor not yet moved on.
+  const published = h.pipeline("refresh-1");
+  published.delivery!.operation = { id: "publication-1", epoch: published.delivery!.epoch, passedStage: true,
+    state: "settled", sha: published.lastPassedCommit,
+    result: { ok: true, sha: published.lastPassedCommit, remote: "published" } };
+  settle("refresh-2");
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.creates).toHaveLength(3);
+  expect(h.merge("queued-2")).toMatchObject({ state: "refreshing", refresh: { pipelineId: "refresh-3" } });
+  expect(h.updates()).toHaveLength(0);
+});
+
+test.each(["paused", "needs_decision"] as const)("a refresh %s with its agent unfinished releases refresh capacity", async state => {
+  const h = queuedRefreshes(["ci"], 2);
+  await h.sweep();
+  h.pipeline("refresh-1").state = state;
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  expect(h.merge("queued-1")).toMatchObject({ state: "refreshing", refresh: { pipelineId: "refresh-2" } });
 });
 
 test("an unresolved repository merge holds dispatch across polling windows and process restarts", async () => {

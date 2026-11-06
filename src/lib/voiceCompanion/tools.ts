@@ -5,6 +5,7 @@ import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admissi
 import { DELEGATION_REASONS, deliveryFailureReason, nothingSent } from "./delegationOutcome";
 import { askGist, liveEndRefusal, requestText, VOICE_ASK_MAX_CHARS, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
 import { READ_SCHEMAS, validToolValue, withoutUnlistedNulls, type ToolProperty } from "./readSchemas";
+import { runTimerTool, TIMER_TOOL_SCHEMA, type TimerToolContext } from "./timerTool";
 
 export interface CompanionToolContext {
   project: string | null;
@@ -20,6 +21,12 @@ export interface CompanionToolContext {
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
   ownerHistory?: OwnerHistoryRead;
+  /** The timers this call's starter owns; nothing else in the call reaches them. */
+  timers?: TimerToolContext;
+  /** The call's own zone, when it knows one. */
+  timeZone?: string;
+  /** Now, this call's moments and the time between two of them. */
+  clock?(args: Record<string, unknown>): unknown;
   secrets?: readonly string[];
   read?(name: string, args: Record<string, unknown>): Promise<unknown>;
   endConversation(): void;
@@ -33,7 +40,7 @@ interface ToolEntry {
   privateResult?: true;
   /** Model-written text can leave this call. Every delegation tool declares this. */
   egress?: boolean;
-  class: "owner-read" | "board-read" | "call-read" | "delegation" | "session-control";
+  class: "owner-read" | "board-read" | "call-read" | "delegation" | "session-control" | "timer";
   parameters: { type: "object"; properties: Record<string, ToolProperty>; required: string[]; additionalProperties: false };
   handler(context: CompanionToolContext, args: Record<string, unknown>): unknown | Promise<unknown>;
 }
@@ -108,8 +115,12 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
     parameters: schema({ action: { type: "string", enum: ["groups", "messages"] }, chat: { type: ["string", "null"], maxLength: 20 },
       from: { type: ["string", "null"], maxLength: 10 }, to: { type: ["string", "null"], maxLength: 10 },
       cursor: { type: ["string", "null"], maxLength: 400 }, limit: { type: ["integer", "null"], minimum: 1, maximum: 100 } }),
-    handler: (context, args) => ownerHistoryRead(args, context.ownerHistory),
+    handler: (context, args) => ownerHistoryRead(args, context.ownerHistory, context.timeZone),
   },
+  { name: "call_clock", capability: "Clock: the current date and time in the operator's time zone, when each turn, request, report and tool call of this call happened, and the time between any two moments.", class: "call-read",
+    description: "Read the clock. now is the current date and time in the operator's time zone; turns lists this call's moments, oldest first, each with its handle, who (operator, voice, request, report, tool, reconnected), time and how long ago. from and to name two moments, each a handle from turns or a time with its UTC offset from any read; elapsed then gives the time between them, computed for you. Null from is the call's start and null to is now; both null asks for no span. Never work out a time or a difference yourself. Sends nothing.",
+    parameters: schema({ from: { type: ["string", "null"], maxLength: 40 }, to: { type: ["string", "null"], maxLength: 40 } }),
+    handler: (context, args) => { if (!context.clock) throw new Error("TOOL_NOT_ALLOWED"); return context.clock(args); } },
   { name: "orchestrator_reports", capability: "Reports: what the orchestrator reported during this call, and which requests still wait for its answer.", class: "call-read",
     description: "Read this call's requests to the orchestrator, each with its handle, whether its answer arrived and the answering report whole, and the latest other reports, whole. Read it before sending when the operator asks about something already sent. Sends nothing.",
     parameters: schema(),
@@ -177,6 +188,11 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       context.admission.showAwaiting(context.sessionId, context.delegationId, [proposal.proposalId]);
       return spoken(answer ?? context.admission.outcome(context.sessionId, proposal.proposalId));
     } },
+  { name: "timer", class: "timer", capability: "Countdowns and reminders: sets several independent ones by duration, each with an optional label, lists them and cancels one; each says when it is up by itself.",
+    description: "Set, list or cancel the operator's timers and reminders. action set takes minutes and an optional label (their own word for it, such as \"tea\"; null when they named nothing). action list reads what is running and what fired in the last hour. action cancel takes timer: a handle from set or list, or the label's words. When the answer says several match, nothing was cancelled: ask which one. Timers fire by themselves and reach the operator in this call, or by notification and toast when no call is live; never send a timer or reminder to the orchestrator, and never restate one as work. Speak times from the answer; never speak a handle.",
+    parameters: schema(TIMER_TOOL_SCHEMA),
+    handler: (context, args) => runTimerTool(context, args),
+  },
   { name: "end_conversation", capability: "End the call: hangs up when the operator asks to finish the conversation.", class: "session-control",
     description: "End this entire voice conversation only after an explicit operator request to hang up or finish the call. Finishing a task, quoted words and conditional requests are insufficient. Offer a short goodbye before calling when possible.",
     parameters: schema(),

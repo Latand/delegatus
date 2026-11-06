@@ -6,9 +6,10 @@ import { CallMemory, type CallSummarizer } from "./callMemory";
 import { CompanionStorage } from "./storage";
 import { CompanionAdmission } from "./admission";
 import { CompanionLiveSessions } from "./liveSession";
-import { FakeLiveProvider, delegationCreated, backendResponse, functionCall } from "./fakeProvider";
+import { FakeLiveProvider, delegationCreated, backendResponse, functionCall, message } from "./fakeProvider";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { OWNER_HISTORY_PRIVACY } from "@/lib/externalRelay/ownerHistory";
+import { voiceClock } from "./voiceClock";
 
 /*
  * A call that drops (the provider's session ends, the browser's connection is lost, the Viewer restarts) keeps
@@ -49,6 +50,183 @@ function say(h: Harness, providerId: string, turns: Array<["operator" | "voice",
     event_id: `${providerId}-turn-${from + index}`, delta: text, start_ms: (from + index) * 4000, end_ms: (from + index) * 4000 + 3000 }));
 }
 const ending = (h: Harness, id: string) => h.admission.transcriptRecord(id).entries.find(row => row.kind === "session_end")?.data.reason;
+
+test("retry schedule, ticks and End are bounded by the store's runnable clock; reload only offers", async () => {
+  const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
+  let now = 0, seq = 0, starts = 0, runnable = true;
+  const timers = new Map<number, { at: number; run: () => void }>(); let timerId = 0;
+  const schedule = (run: () => void, ms: number) => { const id = ++timerId; timers.set(id, { at: now + ms, run }); return () => { timers.delete(id); }; };
+  const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+  const advance = async (ms: number) => { const end = now + ms; for (;;) { const due = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0]; if (!due) break; now = due[1].at; timers.delete(due[0]); due[1].run(); await flush(); } now = end; await flush(); };
+  let listener: (event: import("./contract").CompanionEvent) => void = () => {};
+  const sounds: string[] = []; const attempts: number[] = []; const ticks: number[] = [];
+  const adapter: import("./contract").VoiceCompanionAdapter = { mode: "official-realtime", subscribe: cb => { listener = cb; return () => {}; },
+    start: async options => { starts++; if (options.resume) { attempts.push(now); throw new Error("PROVIDER_ERROR"); } emit({ type: "session.ready", mode: "official-realtime" }); },
+    command: async () => {}, close: async () => {}, resumable: async () => ({ sessionId: "part", project: "fixture" }), reconnect: status => { sounds.push(status); if (status === "tick") ticks.push(now); } };
+  const emit = (payload: import("./contract").Payload) => listener({ ...payload, version: 1, sessionId: "part", generation: 1, seq: ++seq, eventId: `event-${seq}`, atMs: now } as import("./contract").CompanionEvent);
+  const store = createCompanionStore(adapter, { now: () => now, random: () => 0.5, schedule, runnable: () => runnable });
+  const dispose = store.connect(); await flush(); await advance(60_000);
+  expect(starts).toBe(0); expect(store.get().resumable?.sessionId).toBe("part");
+  await store.start({ project: "fixture", locale: "en" });
+  emit({ type: "transcript.snapshot", speaker: "companion", itemId: "reply", text: "The build passed.", final: true });
+  emit({ type: "error", code: "CONNECTION_LOST", recoverable: false });
+  expect(store.get().phase).toBe("reconnecting");
+  await advance(3_150);
+  expect(attempts).toEqual([60_150, 61_150, 63_150]);
+  runnable = false; await advance(90_000); expect(attempts).toHaveLength(3);
+  runnable = true; await advance(60_000);
+  expect(attempts).toHaveLength(8); expect(store.get().phase).toBe("offline");
+  expect(store.get().error).toBe("RECONNECT_GAVE_UP"); expect(sounds.filter(x => x === "gave-up")).toHaveLength(1);
+  expect(sounds).toContain("tick"); expect(store.get().resumable?.sessionId).toBe("part");
+  expect(ticks.slice(1).every((time, index) => time - ticks[index] === 5_000)).toBe(true);
+  await store.stop(); dispose(); expect(timers.size).toBe(0);
+});
+
+test("slow attempts stop at sixty runnable seconds before reaching eight attempts", async () => {
+  const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
+  let now = 0, attempts = 0, seq = 0;
+  const timers = new Set<{ at: number; run: () => void }>();
+  const schedule = (run: () => void, ms: number) => { const timer = { run, at: now + ms }; timers.add(timer); return () => { timers.delete(timer); }; };
+  let listener: (event: import("./contract").CompanionEvent) => void = () => {};
+  const emit = (payload: import("./contract").Payload) => listener({ ...payload, version: 1, sessionId: "part", generation: 1, seq: ++seq, eventId: `event-${seq}`, atMs: now } as import("./contract").CompanionEvent);
+  const adapter: import("./contract").VoiceCompanionAdapter = { mode: "official-realtime", subscribe: cb => { listener = cb; return () => {}; }, command: async () => {}, close: async () => {},
+    start: async options => {
+      if (options.resume) { attempts++; await new Promise<void>((_, reject) => options.signal!.addEventListener("abort", () => reject(new Error("PROVIDER_ERROR")), { once: true })); }
+      else emit({ type: "session.ready", mode: "official-realtime" });
+    } };
+  const store = createCompanionStore(adapter, { now: () => now, schedule, random: () => 0.5 }); const dispose = store.connect();
+  try {
+    await store.start({ project: "fixture", locale: "en" }); emit({ type: "transcript.final", speaker: "companion", itemId: "reply", text: "The build passed." }); emit({ type: "error", code: "CONNECTION_LOST", recoverable: false });
+    for (now = 100; now <= 60_000; now += 100) {
+      for (const timer of [...timers].filter(timer => timer.at <= now)) { timers.delete(timer); timer.run(); }
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      if (now < 60_000) expect(store.get().phase).toBe("reconnecting");
+    }
+    expect(attempts).toBe(4); expect(store.get().phase).toBe("offline"); expect(store.get().error).toBe("RECONNECT_GAVE_UP");
+  } finally { await store.stop(); dispose(); }
+  expect(timers.size).toBe(0);
+});
+
+test("same-key replay keeps the minted resume open; a new key leases the newest unpolled part across restart", async () => {
+  const h = harness();
+  const p = await start(h);
+  say(h, p.providerId, [["voice", "The build passed."]]); await h.service.drain(p.sessionId);
+  await h.service.close(p.sessionId, "transport", "ice-failed");
+  const input = { project: "fixture", locale: "en" as const, sdp: "v=0", startedBy: operator, resume: p.sessionId, requestId: "resume-one" };
+  const n = await h.service.start(input);
+  expect(await h.service.start(input)).toEqual(n);
+  expect(h.admission.session(n.sessionId).closed).toBe(false);
+  const n2 = await h.service.start({ ...input, requestId: "resume-two" });
+  expect(h.provider.attached).toBe(1);
+  expect(h.admission.transcriptRecord(n.sessionId).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause: "answer-lost" });
+  expect(h.admission.transcriptRecord(n2.sessionId).entries.find(row => row.kind === "session_start")?.data.resumes).toBe(n.sessionId);
+  expect(h.storage.read().sessions[p.sessionId].resumedBy).toBe(n.sessionId);
+  await expect(h.service.start(input)).rejects.toThrow("SESSION_CLOSED");
+  await h.service.close(n2.sessionId, "transport");
+  const state = new CompanionStorage(h.now);
+  const gate = new CompanionAdmission(state, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, h.now);
+  const restarted = h.build(state, gate);
+  const n3 = await restarted.start({ ...input, requestId: "resume-three" });
+  expect(gate.transcriptRecord(n3.sessionId).entries.find(row => row.kind === "session_start")?.data.resumes).toBe(n2.sessionId);
+  await restarted.close(n3.sessionId);
+});
+
+test("concurrent same-key resumes join the pending mint after recovery", async () => {
+  const h = harness(); const p = await start(h);
+  say(h, p.providerId, [["voice", "The build passed."]]); await h.service.drain(p.sessionId); await h.service.close(p.sessionId, "transport");
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), reached = new Promise<void>(resolve => { entered = resolve; });
+  const create = h.provider.create.bind(h.provider);
+  h.provider.create = async (...args) => { entered(); await held; return create(...args); };
+  const input = { project: "fixture", locale: "en" as const, sdp: "v=0", requestId: "concurrent", resume: p.sessionId, startedBy: operator };
+  const one = h.service.start(input), two = h.service.start(input).then(answer => ({ answer }), error => ({ error: (error as Error).message }));
+  try {
+    await reached; expect(Object.keys(h.storage.read().sessions)).toHaveLength(2); release();
+    const first = await one; expect(await two).toEqual({ answer: first }); expect(h.provider.sessions).toHaveLength(2); expect(h.provider.attached).toBe(1);
+    await h.service.close(first.sessionId);
+  } finally { release(); }
+});
+
+test("a page following an older part cannot close a successor another page polls", async () => {
+  const h = harness(); const p = await start(h);
+  say(h, p.providerId, [["voice", "The build passed."]]); await h.service.drain(p.sessionId);
+  await h.service.close(p.sessionId, "transport");
+  const n = await start(h, { resume: p.sessionId }); await h.service.events(n.sessionId, 0);
+  await expect(start(h, { resume: p.sessionId })).rejects.toThrow("SESSION_UNAVAILABLE");
+  expect(h.admission.session(n.sessionId).closed).toBe(false); expect(h.provider.sessions).toHaveLength(2);
+  await h.service.close(n.sessionId);
+});
+
+test("a fresh process offers the persisted call without retrying, then a manual start follows its persisted lease", async () => {
+  const h = harness(); const p = await start(h);
+  say(h, p.providerId, [["voice", "The build passed."]]); await h.service.drain(p.sessionId); await h.service.close(p.sessionId, "transport");
+  const n = await start(h, { resume: p.sessionId }); await h.service.close(n.sessionId, "transport"); await h.memory.drain();
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { CompanionStorage } from "./src/lib/voiceCompanion/storage";
+    import { CompanionAdmission } from "./src/lib/voiceCompanion/admission";
+    import { CompanionLiveSessions } from "./src/lib/voiceCompanion/liveSession";
+    import { FakeLiveProvider } from "./src/lib/voiceCompanion/fakeProvider";
+    import { fixtureBoardReads } from "./src/lib/voiceCompanion/boardReads.fixture";
+    import { createCompanionStore } from "./src/hooks/useVoiceCompanion";
+    const now = () => Number(process.env.VOICE_FIXTURE_NOW);
+    const storage = new CompanionStorage(now);
+    const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, now);
+    const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), new FakeLiveProvider(), { now, timers: false, key: () => "synthetic-credential" });
+    let starts = 0, current = null; const listeners = new Set();
+    const store = createCompanionStore({ mode: "official-realtime", subscribe: cb => { listeners.add(cb); return () => listeners.delete(cb); },
+      resumable: async () => service.resumable({ operator: true }), command: async () => {},
+      start: async input => { starts++; current = await service.start({ ...input, sdp: "v=0", startedBy: { operator: true } }); for (const event of await service.events(current.sessionId, 0)) for (const listener of listeners) listener(event); },
+      close: async () => { if (current) await service.close(current.sessionId); }
+    }, { schedule: () => () => {} });
+    const dispose = store.connect(); for (let i = 0; i < 30; i++) await Promise.resolve();
+    const offered = store.get().resumable?.sessionId; const automaticStarts = starts;
+    await store.start({ project: "fixture", locale: "en", resume: process.env.VOICE_FIXTURE_RESUME });
+    const resumedFrom = admission.transcriptRecord(current.sessionId).entries.find(row => row.kind === "session_start").data.resumes;
+    await store.stop(); dispose();
+    console.log(JSON.stringify({ offered, automaticStarts, manualStarts: starts, resumedFrom }));
+  `], { cwd: process.cwd(), env: { ...process.env, VOICE_FIXTURE_NOW: String(h.now()), VOICE_FIXTURE_RESUME: p.sessionId }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text(), diagnostic = await new Response(child.stderr).text();
+  expect({ exit: await child.exited, diagnostic }).toEqual({ exit: 0, diagnostic: "" });
+  expect(JSON.parse(output)).toEqual({ offered: n.sessionId, automaticStarts: 0, manualStarts: 1, resumedFrom: n.sessionId });
+});
+
+for (const reason of ["connection_lost", "expired", "remote_hangup", "content"] as const) test(`provider close ${reason}: final usage preserves the close cause and resume eligibility`, async () => {
+  const h = harness();
+  const first = await start(h);
+  say(h, first.providerId, [["operator", "Check the build."], ["voice", "The build passed."]]);
+  await h.service.drain(first.sessionId);
+  h.provider.replay(first.providerId, { type: "session.closed", event_id: `closed-${reason}`, reason, usage: { seconds: 24 } });
+  await h.service.drain(first.sessionId);
+  const end = h.admission.transcriptRecord(first.sessionId).entries.find(row => row.kind === "session_end")!;
+  expect(end.data).toMatchObject({ reason: reason === "content" ? "content" : "transport", cause: `provider-${reason}`, seconds: 24 });
+  expect(h.service.resumable(operator)?.sessionId ?? null).toBe(reason === "content" ? null : first.sessionId);
+  // Both the persisted state and the journal reader retain the same end after restart.
+  const state = new CompanionStorage(h.now);
+  const gate = new CompanionAdmission(state, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, h.now);
+  const restarted = h.build(state, gate);
+  expect(restarted.transcriptRecord(first.sessionId).entries.find(row => row.kind === "session_end")?.data).toEqual(end.data);
+  expect(restarted.resumable(operator)?.sessionId ?? null).toBe(reason === "content" ? null : first.sessionId);
+});
+
+test("an unsolicited native Codex close is a resumable sideband drop; an operator close stays a hang-up", async () => {
+  const h = harness("codex"); const part = await start(h);
+  say(h, part.providerId, [["voice", "The build passed."]]); await h.service.drain(part.sessionId);
+  h.provider.replay(part.providerId, { type: "session.closed", event_id: "native-close" }); await h.service.drain(part.sessionId);
+  expect(h.admission.transcriptRecord(part.sessionId).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause: "sideband" });
+  expect(h.service.resumable(operator)?.sessionId).toBe(part.sessionId);
+  const next = await start(h, { resume: part.sessionId }); await h.service.close(next.sessionId);
+  expect(ending(h, next.sessionId)).toBe("operator"); expect(h.service.resumable(operator)).toBeNull();
+});
+
+test("a provider drop final arriving after End cannot turn the hang-up into a resumable call", async () => {
+  const h = harness(); const part = await start(h);
+  say(h, part.providerId, [["voice", "The build passed."]]); await h.service.drain(part.sessionId);
+  h.provider.autoClose = false;
+  const ended = h.service.close(part.sessionId, "operator");
+  h.provider.replay(part.providerId, { type: "session.closed", event_id: "late-drop-final", reason: "connection_lost", usage: { seconds: 18 } });
+  await h.service.drain(part.sessionId); await ended;
+  expect(ending(h, part.sessionId)).toBe("operator"); expect(h.service.resumable(operator)).toBeNull();
+});
 /** Waits until the dropped part is closed and its journal ends, however long the close chain takes under load. */
 async function closed(h: Harness, id: string) {
   for (let attempt = 0; attempt < 2_000; attempt += 1) {
@@ -229,6 +407,36 @@ test("a start that failed before anything was said is not offered as a call to r
   expect(h.service.resumable(operator)).toBeNull();
 });
 
+test("a reconnected call counts from its first part, and each part's turns from that part's own start", async () => {
+  const h = harness();
+  const create = h.provider.create.bind(h.provider);
+  /* Each provider start takes three seconds. */
+  h.provider.create = (...args) => create(...args).then(answer => { h.advance(3_000); return answer; });
+  const startedAt = h.now();
+  const first = await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: operator, timeZone: "Europe/Kyiv" });
+  say(h, first.providerId, [["operator", "First part."], ["voice", "Heard it."]]);
+  await h.service.drain(first.sessionId);
+  h.advance(10_000);
+  h.provider.disconnect(first.providerId);
+  await closed(h, first.sessionId);
+  h.advance(60_000);
+  const resumedAt = h.now();
+  const second = await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: operator, timeZone: "Europe/Kyiv", resume: first.sessionId });
+  expect(h.provider.sessions.at(-1)!.clock).toContain("Thursday, October 22, 2026, 15:00:00 Kyiv time");
+  h.provider.replay(second.providerId, { type: "session.input_transcript.delta", event_id: "second-turn", delta: "Second part.", start_ms: 2_000, end_ms: 2_500 });
+  h.advance(5_000);
+  h.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")]) : backendResponse(`resp_${index}`, [functionCall("clock-parts", "call_clock", { from: "t1", to: "t3" })]);
+  h.provider.replay(second.providerId, delegationCreated("clock-parts-delegation", 5_000));
+  await h.service.drain(second.sessionId);
+  expect(String(h.provider.requests[0]!.input.findLast(item => item.role === "user")!.content)).toContain("This call has run for 1 minute 21 seconds.");
+  const answer = JSON.parse(String(h.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+  const { iso } = voiceClock("Europe/Kyiv");
+  expect(answer.callStarted).toBe(iso(startedAt));
+  expect(answer.turns.filter((row: { who: string }) => row.who !== "reconnected").map((row: { who: string; time: string }) => [row.who, row.time])).toEqual([
+    ["operator", iso(startedAt + 3_000)], ["voice", iso(startedAt + 3_000 + 4_000)], ["operator", iso(resumedAt + 3_000 + 2_000)]]);
+  await h.service.close(second.sessionId);
+});
+
 test("after a Viewer restart the call it held is offered from its journal and resumes with its words", async () => {
   const h = harness();
   const first = await start(h);
@@ -244,7 +452,7 @@ test("after a Viewer restart the call it held is offered from its journal and re
   h.service = restarted;
   expect(restarted.resumable(operator)?.sessionId).toBe(first.sessionId);
   await restarted.recover();
-  expect(admission.transcriptRecord(first.sessionId).entries.find(row => row.kind === "session_end")?.data.reason).toBe("transport");
+  expect(admission.transcriptRecord(first.sessionId).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause: "viewer-restart" });
   expect(restarted.resumable(operator)?.sessionId).toBe(first.sessionId);
   const second = await start(h, { resume: first.sessionId });
   const memory = h.provider.sessions.at(-1)!.memory!;
@@ -323,4 +531,23 @@ test("a page reloaded two seconds after its last poll is offered the call withou
   expect(timers.size).toBe(1);
   gone();
   expect(timers.size).toBe(0);
+});
+
+test("a reconnect's resume note and its lines read in the browser's zone, and the journal's order stays", async () => {
+  const h = harness();
+  const first = await start(h);
+  say(h, first.providerId, [["operator", "Check the build."], ["voice", "It is green."]]);
+  await h.service.drain(first.sessionId);
+  h.advance(60_000);
+  h.provider.disconnect(first.providerId);
+  await closed(h, first.sessionId);
+  h.advance(120_000);
+  await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: operator, resume: first.sessionId, timeZone: "Asia/Tokyo" });
+  const memory = h.provider.sessions.at(-1)!.memory!;
+  // The drop came at 12:01 UTC, which is 21:01 in Tokyo.
+  expect(memory).toContain("after the connection dropped at 21:01 Tokyo time, 2 minutes ago;");
+  expect(memory).toContain("[21:00 Tokyo time] operator: Check the build.");
+  expect(memory).toContain("[21:00 Tokyo time] voice: It is green.");
+  expect(memory).not.toContain("UTC");
+  expect(h.provider.sessions.at(-1)!.clock).toContain("Asia/Tokyo");
 });

@@ -3,15 +3,26 @@ import { liveSessionConfiguration, type BackendRequest } from "./sessionConfig";
 import type { VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 
 export type LiveCommand = Record<string, unknown> & { type: string };
-export interface LiveConnection { send(event: LiveCommand): void; dispose(): void }
+/** What became of words handed to `speak`: voiced at the provider, possibly voiced, or never going to be. */
+export type SpeechOutcome = "handed" | "uncertain" | "withdrawn";
+/** Words the provider may hold. `withdraw` takes back words not yet on their way, and says whether it did. */
+export interface HeldSpeech { withdraw(): boolean }
+export interface LiveConnection {
+  send(event: LiveCommand): void;
+  dispose(): void;
+  /** For a provider that queues speech: without it, `send` returning means the provider took the words. Throws when it cannot take them. */
+  speak?(text: string, settled: (outcome: SpeechOutcome) => void): HeldSpeech;
+}
 export type LiveToolHandler = (name: string, args: unknown, callId: string, turnId: string) => Promise<unknown>;
 export interface LiveProvider {
   /** Codex owns the backing turn and the call's leased process. */
   readonly backend?: "codex";
   /** Rejects with PROVIDER_REFUSED only when the provider answered that it
    * created nothing; any other failure may have created a session. */
-  /** `tools` is the call's snapshot of added tools: its capability lines, and on Codex its namespaces. */
-  create(key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory?: string, tools?: VoiceToolSnapshot): Promise<{ id: string; sdp: string }>;
+  /** `tools` is the call's snapshot of added tools: its capability lines, and on Codex its namespaces. `clock` is the
+   * call's start-time context line: the operator's zone and the moment the call began. `timelineStart` is the moment
+   * the offsets in this provider's events count from, for a provider that knows it. */
+  create(key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory?: string, tools?: VoiceToolSnapshot, clock?: string): Promise<{ id: string; sdp: string; timelineStart?: number }>;
   attach(id: string, key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection>;
   hangup(id: string, key: string): Promise<void>;
   /** One backend response, paid for by the caller before it is asked. */
@@ -45,12 +56,12 @@ export class OpenAILiveProvider implements LiveProvider {
       return await response.json();
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
-  async create(key: string, locale: Locale, sdp: string, projectName?: string, _project?: string, memory?: string, tools?: VoiceToolSnapshot) {
+  async create(key: string, locale: Locale, sdp: string, projectName?: string, _project?: string, memory?: string, tools?: VoiceToolSnapshot, clock?: string) {
     let refused = false;
     try {
       const response = await this.http("https://api.openai.com/v1/live/sessions", { method: "POST", redirect: "error",
         headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ session: liveSessionConfiguration(locale, projectName, memory, tools), transport: { type: "webrtc", sdp } }),
+        body: JSON.stringify({ session: liveSessionConfiguration(locale, projectName, memory, tools, clock), transport: { type: "webrtc", sdp } }),
         signal: AbortSignal.timeout(15_000) });
       // A client error is the provider's answer that it created nothing. A
       // server error, a timeout or an unreadable success may hide a session.

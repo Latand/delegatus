@@ -9,6 +9,7 @@ import { matchesOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { readRetirementStatus } from "@/lib/runtime/structuredHostRetirementStatus";
 
+import { DeploymentAdmissionClosedError } from "@/lib/runtime/contracts";
 import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
 import { parseViewerDeploymentListCursor, viewerDeploymentPage } from "@/lib/runtime/contracts";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
@@ -104,7 +105,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
  * #1032 deployed a revision that never existed for six hours. Either way the
  * ledger records the exact resolved SHA.
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<NextResponse> { return deploymentPost(request, false); }
+
+/** Also mounted as POST /deployments/reconcile. An older Viewer has no such
+ * route and therefore cannot mistake reconciliation for deployment admission. */
+export async function PATCH(request: NextRequest): Promise<NextResponse> { return deploymentPost(request, true); }
+
+async function deploymentPost(request: NextRequest, reconcileOnly: boolean): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
   if (request.nextUrl.searchParams.get("kind") === "host-retirement") {
@@ -128,10 +135,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 503 },
     );
   }
-  let body: { revision?: unknown; ref?: unknown; idempotencyKey?: unknown };
+  let body: { revision?: unknown; ref?: unknown; idempotencyKey?: unknown; reconcileOnly?: unknown };
   try { body = await request.json() as typeof body; }
   catch { return NextResponse.json({ error: "invalid JSON" }, { status: 400 }); }
   if (typeof body.idempotencyKey !== "string") return NextResponse.json({ error: "idempotencyKey is required" }, { status: 400 });
+  if (reconcileOnly) body.reconcileOnly = true;
+  if (body.reconcileOnly !== undefined && typeof body.reconcileOnly !== "boolean") return NextResponse.json({ error: "invalid reconciliation flag" }, { status: 400 });
   if (body.ref !== undefined && body.revision !== undefined) {
     return NextResponse.json(
       { error: "a deployment names either revision or ref, not both", reason: "target_ambiguous" },
@@ -173,18 +182,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const decision = await service.decide();
     authorize();
     if (decision.mode !== "managed") {
-      const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey }, authorize);
+      const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey, ...(body.reconcileOnly === true ? { reconcileOnly: true } : {}) }, authorize);
       await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
         console.error("[deploy admission] could not record the seat wake", error);
       });
       return NextResponse.json(receipt, { status: receipt.state === "accepted" ? 202 : 409 });
     }
-    const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey }, authorize);
+    const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey, ...(body.reconcileOnly === true ? { reconcileOnly: true } : {}) }, authorize);
     await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
       console.error("[deploy admission] could not record the seat wake", error);
     });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {
+    if (error instanceof DeploymentAdmissionClosedError || error instanceof RuntimeHostUnavailableError && error.code === "deploy_not_admitted") {
+      return NextResponse.json({ error: "Deployment was not admitted; this request key is permanently closed.", code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false }, { status: 409 });
+    }
     if (error instanceof ProactiveExecutionFenced) return NextResponse.json({ error: error.message }, { status: 403 });
     if (error instanceof DeploymentRuntimeUnavailableError) {
       return NextResponse.json(

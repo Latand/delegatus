@@ -823,8 +823,8 @@ directory, which is removed afterwards. **In a git work tree:**
    repository's object directory.
 2. `GIT_INDEX_FILE=<tmp>/index git --git-dir <tmp>/ship.git read-tree <commit>`
    seeds the index from the exported commit. Like the index copy above, this
-   keeps tracked files that match an ignore rule, which `git archive` exported
-   (this repository tracks one, `.artifacts/form-draft-brief.md`). Then
+   keeps tracked files that match an ignore rule, which `git archive` exported.
+   Then
    `git --work-tree <export> add -A` and `write-tree` give T. In scratch, an
    unedited export gave the commit's own tree id in 422 ms, and a fresh index
    gave another id (§7).

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { Database as BunDatabase } from "bun:sqlite";
+import type { DeliveryTimingMark } from "./engineHost";
 
 import { statePath } from "@/lib/configDir";
 
@@ -72,7 +73,7 @@ export interface DeliveryProgressRecord {
   lastProgressAt: string;
   /** When the background settlement will end it if nothing else does. */
   deadlineAt: string | null;
-  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | null;
+  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | "turn-boundary" | null;
   /** When the queue looks at it next; the watchdog runs a pass once this is overdue. */
   nextWakeAt: string | null;
   /** Set when an active phase ran past the stall bound. */
@@ -92,6 +93,9 @@ export interface DeliveryProgressRecord {
   ingressAt?: string | null;
   /** First live engine user echo; replayed history supplies no arrival time. */
   engineEchoAt?: string | null;
+  /** Diagnostic observations, persisted by the next ordinary progress write. */
+  timingMarks?: Array<{ mark: DeliveryTimingMark; at: string; attempt: number }>;
+  timingMarksDropped?: number;
 }
 
 export interface DeliveryProgressNote {
@@ -114,6 +118,7 @@ export interface DeliveryProgressNote {
 
 /** The queue's view of the store; tests pass their own. */
 export interface DeliveryProgressSink {
+  mark?(operationId: string, mark: DeliveryTimingMark, at?: string): void;
   timing?(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void;
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void;
   stalled(operationId: string): void;
@@ -126,6 +131,7 @@ export interface DeliveryProgressSink {
 export const DELIVERY_PROGRESS_TERMINAL_RETENTION_MS = 14 * 24 * 60 * 60_000;
 export const DELIVERY_PROGRESS_MIN_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const DELIVERY_PHASE_HISTORY_LIMIT = 128;
+export const DELIVERY_TIMING_MARK_LIMIT = 32;
 const TERMINAL_ROW_LIMIT = 5_000;
 const OPEN_ROW_LIMIT = 5_000;
 const FLUSH_DELAY_MS = 20;
@@ -326,6 +332,10 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   deadline(operationId: string, deadlineAt: string | null, policy: DeliveryProgressRecord["deadlinePolicy"]): void {
     const current = this.record(operationId);
     if (!current || current.terminal || (current.deadlineAt === deadlineAt && current.deadlinePolicy === policy)) return;
+    // A delayed admission/checkpoint cannot erase a later live-turn observation.
+    // Explicit workflow cutoffs are enforced independently by settlement.
+    if (current.deadlinePolicy === "turn-boundary" && current.deadlineAt && deadlineAt
+      && Date.parse(current.deadlineAt) > Date.parse(deadlineAt)) return;
     this.put({ ...current, deadlineAt, deadlinePolicy: policy, updatedAt: new Date(this.now()).toISOString() });
   }
 
@@ -359,6 +369,19 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       current = { ...current, [field]: at,
         ...withPhase(current, { phase: field === "ingressAt" ? "ingress" : "engine-echo", reason: null, at }) };
       this.put(current);
+    }
+  }
+
+  /** No hydration, dirtying, timer or I/O: an ordinary progress write carries
+      these bounded observations. A crash before that write can lose marks. */
+  mark(operationId: string, mark: DeliveryTimingMark, at = new Date(this.now()).toISOString()): void {
+    const current = this.records.get(operationId);
+    if (!current || !Number.isFinite(Date.parse(at))) return;
+    const marks = current.timingMarks ??= [];
+    marks.push({ mark, at, attempt: current.attempt });
+    if (marks.length > DELIVERY_TIMING_MARK_LIMIT) {
+      marks.shift();
+      current.timingMarksDropped = (current.timingMarksDropped ?? 0) + 1;
     }
   }
 

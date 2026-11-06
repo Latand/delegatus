@@ -2,16 +2,16 @@ import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
-import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { AgentRegistry, RegistryConversation } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
-import { findPipelineRecord, loadPipelinesForRetirement } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadPipelinesForRetirement, pipelineRequiresNewerReader, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { openRuntimeSwitch } from "@/lib/pipelines/runtimeSwitch";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
-import { StructuredSendRefusedError, type EngineHost } from "./engineHost";
+import { StructuredSendRefusedError, StructuredDispatchDeferredError, type EngineHost } from "./engineHost";
 import { delegatusMessageOrigin } from "./agentMessageAuthor";
 import type { StructuredMessageRequest, StructuredMessageResult } from "./structuredMessageDelivery";
 import { interruptionObligationDirectory, accountGuardObligationRevision, accountGuardObligationStore, submittedContinuationOutcome, STAGE_CUT_RESOLUTION, REVIEWER_CUT_RESOLUTION } from "./interruptionObligations";
@@ -35,9 +35,28 @@ function pipelineOwner(conversationId: string, registry?: AgentRegistry) {
   return null;
 }
 
+/** A rollback reader retains queued work whose pipeline semantics it cannot
+ * execute. Read the raw keyed owner because ordinary projections quarantine it. */
+export function pipelineRequiresReaderUpgrade(conversationId: string, registry: AgentRegistry): boolean {
+  if (PIPELINES_SCHEMA_VERSION >= 6) return false;
+  try {
+    return registry.conversationMemberships(conversationId as ViewerConversationId).some(member => {
+      if (member.kind !== "pipeline") return false;
+      if (pipelineRequiresNewerReader(member.containerId)) return true;
+      return ["integration-resolve", "integration-review", "integration-fix"].includes(member.stageId ?? "")
+        && !findPipelineRecord(member.containerId);
+    });
+  } catch {
+    throw new StructuredDispatchDeferredError("pipeline format authority is temporarily unreadable");
+  }
+}
+
 /** A stopped attempt retains its checkout until its controller replaces it.
  * Late sends and on-demand recovery cannot take that checkout back. */
 export function assertPipelineTurnAllowed(conversationId: string, registry?: AgentRegistry): void {
+  if (registry && pipelineRequiresReaderUpgrade(conversationId, registry)) {
+    throw new StructuredDispatchDeferredError("pipeline requires a newer reader; queued input is retained");
+  }
   if (pipelineOwner(conversationId, registry)?.attempt.suspension) {
     throw new StructuredSendRefusedError("pipeline attempt is suspended; its controller owns recovery");
   }
@@ -78,7 +97,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
   const state = passes.get(registry)!;
   const store = state.store;
   const blockedAccounts = new Set(registry.quotaObservations("codex")
-    .filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
+    .filter(row => accountCreditGuardBlock("codex", row.accountId, row.limits)).map(row => row.accountId));
   const headlessStop = blockedAccounts.size ? import("@/lib/flows/engine")
     .then(({ enforceHeadlessAccountCreditGuard }) => enforceHeadlessAccountCreditGuard(registry, blockedAccounts)) : Promise.resolve();
   const stops = await Promise.allSettled([...hosts.map(async item => {
@@ -97,6 +116,8 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     const seat = activeOrchestratorSeats().find(item => item.conversationId?.startsWith("conversation_")
       && registry.canonicalConversationId(item.conversationId as ViewerConversationId) === conversation.id);
     const health = await item.host.health().catch(() => null);
+    const stillBlocked = () => accountCreditGuardBlock("codex", generation.accountId, registry.quotaObservations("codex").find(row => row.accountId === generation.accountId)?.limits);
+    if (!stillBlocked()) return;
     const turnRef = health?.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
     if (!turnRef && (health ? health.status !== "active" && health.status !== "attention" : entry.status !== "live")) return;
     const { obligation: currentCut } = await store.record({ conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId(item.key), path: generation.path,
@@ -118,6 +139,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
       }
       if (!discharged) break;
     }
+    if (!stillBlocked()) return;
     if (!await stop(item.key, item.host)) throw new Error("paid-credit guard could not confirm host termination");
   }), headlessStop]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -153,6 +175,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     const owner = pipelineOwner(conversation.id, registry);
     const eligible = () => {
+      if (pipelineRequiresReaderUpgrade(conversation.id, registry)) return false;
       const current = pipelineOwner(conversation.id, registry);
       return !current || current.pipeline.state === "running" && !current.pipeline.closedAt
         && !current.attempt.suspension && !openRuntimeSwitch(current.attempt);

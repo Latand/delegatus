@@ -2,6 +2,42 @@ import { expect, spyOn, test } from "bun:test";
 import { BOUNDED_LOOP_DIAGNOSTICS, createViewerLoopMonitor, LOOP_DIAGNOSTICS_ENV, LOOP_MEMORY_RETENTION } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
+import { MeasuredCache } from "./cacheTelemetry";
+
+test("one injected memory read feeds gap and retained samples with detached cache and Bun counters", () => {
+  let at = 0, reads = 0;
+  const usage = { rss: 9000, heapUsed: 2000, heapTotal: 4000, external: 500, arrayBuffers: 100,
+    bun: { heapSizeAfterLastCollection: 2000, heapBlockBytesAllocated: 4000, extraAndExternalMemorySize: 500 } };
+  const signals = createLoopHeapSignals(() => { reads++; return usage; }, () => ({ unavailable: "gc-entry-unsupported" }), () => at);
+  const lines: string[] = [];
+  const cache = new MeasuredCache<string, string>("sampled-payload", "monitor-test", value => value.length * 2);
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at), signals);
+  try {
+    cache.set("row", "payload");
+    for (at = 10; at < 250; at += 10) monitor.tick();
+    expect(reads).toBe(1);
+    at = LOOP_MEMORY_RETENTION.intervalMs; monitor.tick();
+    expect(reads).toBe(2);
+    const gap = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
+    const first = monitor.memorySamples().samples[0]!;
+    expect(first.memoryUsage).toEqual({ source: "memory-reader", sampleAt: at, ...usage });
+    expect(gap.memoryUsage).toEqual(first.memoryUsage);
+    expect(gap.caches).toContainEqual(expect.objectContaining({ owner: "monitor-test", name: "sampled-payload", count: 1, bytes: 14 }));
+    expect(first.caches).toEqual(gap.caches);
+    usage.rss = 12000; usage.heapUsed = 3000; usage.bun.heapSizeAfterLastCollection = 3000;
+    cache.clear();
+    at += LOOP_MEMORY_RETENTION.intervalMs; monitor.tick();
+    expect(reads).toBe(3);
+    const history = monitor.memorySamples().samples;
+    expect(history[0]!.memoryUsage).toMatchObject({ rss: 9000, heapUsed: 2000, bun: { heapSizeAfterLastCollection: 2000 } });
+    expect(history[1]!.memoryUsage).toMatchObject({ rss: 12000, heapUsed: 3000 });
+    first.memoryUsage.bun!.heapSizeAfterLastCollection = 0;
+    first.memoryUsage.rss = 0; first.caches.length = 0;
+    expect(monitor.memorySamples().samples[0]!.memoryUsage.bun!.heapSizeAfterLastCollection).toBe(2000);
+    expect(monitor.memorySamples().samples[0]!.caches.length).toBeGreaterThan(0);
+    expect(reads).toBe(3); // Diagnostic reads never trigger another native read.
+  } finally { cache.clear(); monitor.stop(); }
+});
 
 test("memory history retains gap labels across polls, identity and detached bounded samples", async () => {
   let at = 0;

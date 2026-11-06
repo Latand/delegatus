@@ -79,6 +79,39 @@ the forge's merge composer mailbox, empty values and malformed identities
 refuse the launch with an error that withholds the configured values. These
 settings apply to newly launched agents after the next deploy.
 
+## Release tags from pipeline stages
+
+Release preparation merges current `origin/main` before review, bringing the
+current verifier and project hook into older production cuts. The release lane
+ends after the shots and release reviews pass. The ordinary merge queue admits
+that completed lane, refreshes its branch when main moves, waits for protection
+checks and merges the PR without an admin bypass.
+
+The release controller reads the queue's persisted `merge.state`, `mergeCommit`
+and `prNumber` on its next reconciliation. It retains the same live release
+record and task, then creates a separate publish lane at that main commit with
+a durable replay key. Hold, release/tick/merge switches, gap and change-count
+gates still apply. The integrated main tree receives a passing review before
+the Deployer's `mode=release` stage can publish. A moved checkout requires review.
+
+Run `bun scripts/release-verify.ts --preflight --cut <cut-sha> --tag vX.Y.Z --pr <number>`.
+An open PR stops publication. Preflight refreshes `origin/main` and requires the
+merged commit to be an ancestor of main with the reviewed checkout's tree. It
+checks release-only changes against the merge's first parent so inherited main
+changes do not block an older cut. Create the annotated tag on its explicit
+`tagCommit`, then use `git push origin refs/tags/vX.Y.Z`. The native stage guard
+requires a passing review, the exact published delivery head and tree, and the
+tag target already on main. An existing matching local tag can be pushed as
+it is; a matching remote tag is verified without another push. The project hook
+accepts an identical-tree main ancestor even when a squash has a different SHA.
+Both npm and Docker workflows refuse off-main release tags.
+
+The guard refuses lightweight or nested tags, other names or targets, tag
+deletion or replacement, and every branch push from this release stage. Other
+roles and modes have no tag exception; ordinary branch publication and its
+attempt receipts retain their existing rules. The controller's approval and
+preflight instructions still apply. The separate publish lane owns its tag and post-publication checks.
+
 ## GitHub writes from launched agents and from the engine
 
 In a repository this installation declared as an App repository, a push, a
@@ -93,8 +126,12 @@ starts `Delegatus refused this GitHub write` and nothing is sent.
 **The declaration** is `forge-app-repositories.json` in the state directory, a
 JSON array of `owner/name`, for example `["acme/widgets"]`. It is off by
 default: with no file, no repository is declared and a launch adds no shim, no
-rewrite and no variable. A second repository is one more string in the array,
-after the App is installed on it and its credential item exists. The file is
+rewrite and no variable. A designated seat or the operator's session calls
+`github_app_connect` to request another repository or missing installation
+permissions. Delegatus publishes one decision form with GitHub's required links,
+watches for approval, stores and proves the credential, then adds the repository.
+The optional `permissions` map names the GitHub keys and read/write levels needed.
+An expired request reports the keys or repository access still missing. The file is
 read at every launch, so a change needs no restart, and a file that is not such
 a list refuses the launch instead of reading as empty. Every repository that is
 not listed keeps the credentials and the commands it had.
@@ -167,10 +204,12 @@ alias the operator defined with `gh alias set` is not expanded.
 - **The engine** (`src/lib/forge/autoMerge.ts`) merges through
   `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
   the plain `gh` runner for any other. A refusal blocks the merge with the
-  refusal as its reason. A behind or conflicting branch refreshes through an
-  owned pipeline that merges the base locally under the enforced machine
-  identity and publishes through the gate; the runner never calls GitHub
-  update-branch. The push that publishes a lane's branch
+  refusal as its reason. A branch that is only behind is updated by the
+  runner itself: a merge of the base tip under the machine identity, pushed
+  as a fast-forward with hooks skipped, gated by the required checks on that
+  head. A conflicting branch refreshes through an owned pipeline that merges
+  the base locally under the enforced machine identity and publishes through
+  the gate; the runner never calls GitHub update-branch. The push that publishes a lane's branch
   (`src/lib/pipelines/git.ts`) and the push and `gh pr create` that finish a
   workflow (`src/lib/workflows/provision.ts`) run with `engineForgeWriteEnv()`,
   the same push rewrite and the same `gh` and `git` shims.
@@ -287,10 +326,15 @@ Enable once in each clone (linked worktrees inherit the setting):
 git config core.hooksPath .githooks
 ```
 
-Pre-commit checks staged whitespace, privacy using the committed known-value
-fingerprints, and eslint on staged source files. These checks read working-tree
-content, including unstaged edits in a partially staged file. Pre-push checks
-publication including commit messages and identities, incremental TypeScript,
+Pre-commit checks staged whitespace and eslint on staged source files. ESLint
+reads working-tree content, including unstaged edits in a partially staged file.
+Pre-push privacy reads each commit in the publication range: added lines with
+three context lines, and each new binary blob, including content removed before
+HEAD. It retains the committed known-value fingerprints, supplied learned-rule
+texts, commit messages and identities. Working-tree, staged and untracked edits
+are outside that privacy selection. `bun run privacy:check` uses the same
+selection; commit the intended changes before running it. The required hosted
+privacy check retains whole-file coverage. Pre-push also checks incremental TypeScript,
 changed-file lint, and touched test files. ESLint in both hooks and the merger
 compares each changed file with its version at the merge base with `origin/main`.
 Only additional errors block: counts are matched per file, rule and message,
@@ -539,11 +583,21 @@ start one recording in the engine's background-command facility:
 bash scripts/gate-slot.sh --record "$TMPDIR/check.log" bun run test <file>
 ```
 
-After `recording started`, one blocking wait is optional:
-`bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`. A wait takes at most
+After `recording started`, a native Codex stage calls `wait_for_check` once
+with the absolute `log` path and a short `reason`. It waits through admission,
+execution and cleanup under the recorder's original deadline. Keep the stage
+alive until the call returns; this path needs no recorded-check custody.
+Use it for individual checks, comparators and campaign drivers in every role.
+Do not launch a separate progress observer or poll `write_stdin`. Claude stages
+await their engine's background completion notification.
+
+The shell waiter remains available for other callers:
+`bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`. It takes at most
 540 seconds and prints the state and a bounded log tail. A queued/running
 answer with exit 124 means the command has no terminal receipt yet. A finished
 answer returns the actual wrapper exit, including 124. Waiters take no slot.
+A stage without the native tool may use one bounded shell wait, then report an
+unfinished check as unknown. See [stage check waits](docs/design/stage-check-waits.md).
 
 A Codex stage that yields while a check runs must first obtain verified custody.
 Use the `buildManifest` export in `scripts/gate-wait.ts` (also exported by the

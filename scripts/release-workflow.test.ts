@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { expect, test } from "bun:test";
 import {
   chmodSync,
@@ -100,4 +101,45 @@ process.stdout.write(process.env.GH_TEST_PUBLISH_CONCLUSION);
       rmSync(directory, { recursive: true, force: true });
     }
   }
+});
+
+
+test.each(["off-main", "main-ancestor"])("Docker tag publication: %s", scenario => {
+  const workflow = Bun.YAML.parse(readFileSync(new URL("../.github/workflows/docker-image.yml", import.meta.url), "utf8")) as {
+    jobs: { build: { steps: { name?: string; if?: string; run?: string; uses?: string; with?: { push?: boolean } }[] } };
+  };
+  const steps = workflow.jobs.build.steps;
+  const guard = steps.findIndex(step => step.name === "Require release tag on main");
+  const push = steps.findIndex(step => step.with?.push === true);
+  expect(push).toBeGreaterThan(0);
+  const gate = steps[guard];
+  if (gate) expect(guard).toBeLessThan(push);
+  const root = mkdtempSync(join(tmpdir(), "docker-tag-"));
+  try {
+    const env = { ...process.env, GIT_CONFIG_COUNT: "0", GIT_CONFIG_GLOBAL: join(root, "no-config"), GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid",
+      GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z", RELEASE_REF: "refs/tags/v1.2.0" };
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    git("init", "--bare", "--initial-branch=main", "origin.git");
+    git("init", "--initial-branch=main");
+    git("commit", "--allow-empty", "-m", "base");
+    git("remote", "add", "origin", join(root, "origin.git"));
+    git("push", "origin", "main");
+    if (scenario === "off-main") git("checkout", "-b", "release");
+    git("commit", "--allow-empty", "-m", "candidate");
+    git("tag", "-a", "v1.2.0", "-m", "release");
+    if (scenario === "main-ancestor") {
+      git("commit", "--allow-empty", "-m", "newer main");
+      git("push", "origin", "main");
+    }
+    // Execute the workflow's actual gate and record whether the later push
+    // step is reachable under Actions' default success() semantics.
+    const marker = join(root, "docker-push");
+    const condition = gate?.if?.replaceAll("github.ref_type", "'tag'");
+    const admitted = condition === undefined || Function(`return (${condition})`)() === true;
+    const run = spawnSync("bash", ["-e", "-o", "pipefail", "-c", (admitted ? gate?.run ?? "" : "") + '\nprintf pushed > "$PUSH_MARKER"'],
+      { cwd: root, env: { ...env, PUSH_MARKER: marker }, encoding: "utf8" });
+    expect(run.status, run.stderr).toBe(scenario === "off-main" ? 1 : 0);
+    expect(Bun.file(marker).size > 0).toBe(scenario !== "off-main");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -1,5 +1,5 @@
 import { recordedCheckInput } from "./input";
-import { openRecordedChecks, recordedExecutionState } from "./store";
+import { openRecordedChecks, recordedExecutionState, RecordedCheckCapacityError } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, consumerPermitted, acknowledgeRecordedCheck } from "./service";
 import { observeRecordedCheck } from "./observer";
 import { statePath } from "@/lib/configDir";
@@ -16,7 +16,16 @@ export async function recordedCheck(args: Record<string, unknown>, caller: strin
   let row;
   if (input.action === "handoff") {
     if (!input.ticket) throw new RecordedCheckRefusal("handoff requires the existing recorded ticket", { status: 400 });
-    row = await handoffRecordedCheck(caller, String(clientRequestId), input.ticket, { binding: callingAttempt, verify: verifyLiveCustody, observe: observeRecordedCheck });
+    try {
+      row = await handoffRecordedCheck(caller, String(clientRequestId), input.ticket, { binding: callingAttempt, verify: verifyLiveCustody, observe: observeRecordedCheck });
+    } catch (error) {
+      if (!(error instanceof RecordedCheckCapacityError)) throw error;
+      const binding = callingAttempt(caller);
+      const holders = error.holders.filter(holder => holder.project === binding.project);
+      return { status: "waiting", execution: "unknown", retryable: true, retryAfterMs: 250,
+        reason: "Native custody is still occupied. Retry this ticket with a fresh request identity within its original deadline; keep the stage running.",
+        holders: holders.slice(0, 16), holderCount: error.holders.length, truncated: holders.length > 16 };
+    }
   } else {
     const store = await openRecordedChecks();
     try { row = input.receiptId ? store.get(input.receiptId) : null; } finally { store.close(); }
@@ -39,12 +48,13 @@ export async function recordedCheck(args: Record<string, unknown>, caller: strin
   const cursor = start + page.length;
   const terminal = row.result?.terminal;
   const report = terminal?.report;
-  return ({ receiptId: row.id, status: row.admission === "accepted" ? "custody-accepted" : "interrupted-unknown",
-    execution: recordedExecutionState(row), executionScope: "this-registered-run",
+  const execution = recordedExecutionState(row);
+  return ({ receiptId: row.id, status: execution === "not-started" ? "not-started" : row.admission === "accepted" ? "custody-accepted" : "interrupted-unknown",
+    execution, executionScope: "this-registered-run",
     deadline: row.descriptor.manifest.deadline, sourceDigest: row.descriptor.descriptorDigest, reason: row.reason,
     observerFault: row.observerFault,
     result: row.result ? { ...row.result, history: undefined, evidence: page,
-      terminal: terminal ? { wrapperExit: terminal.wrapperExit, wrapperSignal: terminal.wrapperSignal,
+      terminal: terminal ? { wrapperExit: terminal.wrapperExit, wrapperSignal: terminal.wrapperSignal, dispatch: terminal.dispatch,
         cancellation: terminal.cancellation, closedAt: terminal.closedAt,
         report: report ? { commandExit: report.commandExit, commandSignal: report.commandSignal, cleanup: report.cleanup, phase: report.phase, kind: report.kind } : null } : null } : null,
     evidenceDirectory: statePath("evidence", "recorded-checks", row.binding.pipeline, row.id),

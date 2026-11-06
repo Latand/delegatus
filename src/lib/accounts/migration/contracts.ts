@@ -56,6 +56,8 @@ export function normalizeProjectOwnership(value: unknown): ConversationProjectOw
 }
 
 export interface LaunchProfile {
+  /** Server-attributed team launch; copied on resume, migration and delegation. */
+  workspace?: { memberId: string; workspaceId: string | null };
   /** Stage request; null/absent inherits project and role settings at launch. */
   agentMemoryMaxBytes?: number | null;
   /** Text-free role variant selector for resource planning after restart. */
@@ -341,7 +343,7 @@ export interface HeldDeliveryCommand {
       turn "append this to the thread" into "answer this", which is a different
       instruction to the model and a turn the operator never asked for. */
   kind: "send" | "steer" | "inject";
-  policy: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  policy: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   /** Message authorship stamped at admission (#1117), persisted on the held

@@ -6,75 +6,21 @@ import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
-import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited } from "../src/lib/runtime/signalSandboxContext";
+import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
 
-// Leave one minute of the engines' ten-minute foreground window for startup
-// and printing the final state and tail. Custom waits share this ceiling.
-const MAX_WAIT_MS = 9 * 60_000;
+import { waitForGate } from "../src/lib/runtime/gateWait";
+export { waitForGate, waitForGateCompletion, gateSnapshot, logTail } from "../src/lib/runtime/gateWait";
+
+// A native dynamic tool can hold a model call beyond the exec tool's yield.
+// This is a foreground hold, with no claim of custody across a stage exit.
+export const COMPLETION_WAIT_MS = 4 * 60 * 60_000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
 
-export function logTail(log: string): string {
-  const fd = fs.openSync(log, "r");
-  try {
-    const size = fs.fstatSync(fd).size;
-    const buffer = Buffer.alloc(Math.min(size, TAIL_BYTES));
-    fs.readSync(fd, buffer, 0, buffer.length, Math.max(0, size - buffer.length));
-    return buffer.toString("utf8").trimEnd().split("\n").slice(-20).join("\n");
-  } finally { fs.closeSync(fd); }
-}
-
-export function gateSnapshot(log: string): { state: string; code: number; tail: string } {
-  const dir = directory(log);
-  const owner = JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"));
-  const ownerAlive = cpuOwnerStatus(owner) === "alive" && !cpuOwnerExited(owner);
-  const tail = logTail(log);
-  if (fs.existsSync(path.join(dir, "exit"))) {
-    const result = fs.readFileSync(path.join(dir, "exit"), "utf8");
-    if (!/^\d+\n$/.test(result) || Number(result) > 255) throw new Error("invalid gate exit record");
-    return { state: `finished exit=${Number(result)}`, code: Number(result), tail };
-  }
-  if (!ownerAlive) {
-    throw new Error("gate recorder ownership unavailable; no exit result recorded");
-  }
-  if (fs.existsSync(path.join(dir, "running"))) return { state: "running", code: 124, tail };
-  const queued = path.join(dir, "queued");
-  const reason = fs.existsSync(queued) ? fs.readFileSync(queued, "utf8")
-    : tail.split("\n").findLast(line => line.startsWith("gate-slot: Waiting"));
-  // A slot-only wait is eligible at the head of the CPU queue; the admission
-  // helper prints an ordinal when pressure or another ticket holds it back.
-  const position = reason?.match(/\b(\d+)(?:st|nd|rd|th)\b/)?.[1]
-    ?? (reason?.startsWith("gate-slot: Waiting for a heavy command slot") ? "1" : "pending");
-  return { state: `queued position=${position} reason=${reason?.slice("gate-slot: ".length) ?? "admission starting"}`, code: 124, tail };
-}
-
-/** Subscribe before checking so a completion racing the first read wakes us.
- * Only the final snapshot reads the tail; log activity does not extend the bound. */
-export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise<ReturnType<typeof gateSnapshot>> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error("invalid wait deadline");
-  const dir = directory(log);
-  if (!fs.existsSync(path.join(dir, "owner.json"))) throw new Error("unknown gate log (no recording ticket)");
-  return await new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let watcher: fs.FSWatcher | undefined;
-    const finish = () => {
-      clearTimeout(timer); watcher?.close();
-      try { resolve(gateSnapshot(log)); } catch (error) { reject(error); }
-    };
-    try {
-      watcher = fs.watch(dir, (_event, name) => { if ((!name || name.toString() === "exit") && fs.existsSync(path.join(dir, "exit"))) finish(); });
-      watcher.on("error", error => { clearTimeout(timer); watcher?.close(); reject(error); });
-      timer = setTimeout(finish, timeoutMs);
-      // An already finished run returns immediately, including after restart.
-      if (fs.existsSync(path.join(dir, "exit"))) finish();
-      else if (cpuOwnerStatus(JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"))) !== "alive") finish();
-    } catch (error) { clearTimeout(timer); watcher?.close(); reject(error); }
-  });
-}
-
 export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
+  log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
   if (manifest) {
     await verifyManifest(manifest);
@@ -102,7 +48,9 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   let code = 127;
   let wrapperSignal: string | null = null;
   let cancellation: Terminal["cancellation"] = null;
-  const originalRemaining = descriptor ? Math.max(0, descriptor.deadlineUptimeMs - custodyClock()) : Infinity;
+  const deadlineUptimeMs = descriptor?.deadlineUptimeMs ?? custodyClock() + COMPLETION_WAIT_MS;
+  fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify({ recorder: cpuOwnerIdentity(process.pid), directoryIdentity: physical(dir), deadlineUptimeMs }), { mode: 0o600, flag: "wx" });
+  const originalRemaining = Math.max(0, deadlineUptimeMs - custodyClock());
   const monotonicDeadline = performance.now() + originalRemaining;
   const inheritedAllowance = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
   const executionAllowance = Math.min(manifest?.executionMs ?? Infinity,
@@ -146,7 +94,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       if (remaining <= 0) cancel("deadline", "SIGTERM");
       else deadlineTimer = setTimeout(armDeadline, Math.min(remaining, 2_147_483_647));
     };
-    if (manifest) armDeadline();
+    armDeadline();
     process.on("SIGTERM", terminate); process.on("SIGINT", interrupt);
     try {
       code = await new Promise<number>((resolve, reject) => {
@@ -178,7 +126,8 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     cancellation ??= reports.map(entry => entry.cancellation).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
       .sort((left, right) => left.atUptimeMs - right.atUptimeMs)[0] ?? null;
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports } satisfies Terminal);
+      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports,
+      dispatch: fs.existsSync(path.join(dir, "running")) || report || reports.length ? "started" : "not-started" } satisfies Terminal);
   }
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
   try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }

@@ -1,3 +1,5 @@
+import { AccountsPanel } from "@/components/AccountsPanel";
+import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
 import { RoundDeck } from "@/components/flows/RoundDeck";
 import { directReviewFlows } from "@/components/flows/directReviewGroups";
@@ -13,6 +15,8 @@ import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
 import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
+import { appConnectForm } from "@/lib/forge/appConnectForm";
+import type { AppConnectRow } from "@/lib/forge/appConnectTypes";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
@@ -38,7 +42,7 @@ import { createRoot } from "react-dom/client";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
-import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
+import { COMPANION_HEAD, COMPANION_OVER, COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
@@ -47,6 +51,7 @@ import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScena
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { reconnectEvidence } from "@/components/voiceCompanion/reconnectEvidence.fixture";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
@@ -955,6 +960,11 @@ if (RAIL) {
     localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
   } else localStorage.removeItem("llvArchivedProjects");
 }
+/* A project row's menu (docs/design/project-rail-context-menu/README.md): the names chosen through it and the
+   server's archive shelf, which /api/projects/settings writes and /api/files reads back, as the routes do. */
+const railNames = new Map<string, string | null>();
+const railShelf = new Set<string>();
+const railNamed = (project: string, fallback: string | undefined) => railNames.get(project) ?? fallback;
 
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
@@ -1804,7 +1814,17 @@ const cloudChecks = createChecksFixtureRoute((new URLSearchParams(location.searc
 const cloudChecksPipelines: Pipeline[] = CLOUD_CHECKS ? [pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
   [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
   { stageId: "implement", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=stage-place`: one lane whose stage ran in the cloud, whose next one moved to this machine and keeps its cause, and one still configured for the cloud. */
+const STAGE_PLACE = SCENARIO === "stage-place";
+const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-place", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "t-stage-place", "running",
+  [stage("implement", "builder", "review", { runtime: "claude-cloud" }), stage("review", "builder", "verify", { runtime: "claude-cloud" }), stage("verify", "builder", null, { runtime: "claude-cloud" })],
+  [
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * MIN), definition: { runtime: "claude-cloud" }, cloud: { phase: "completed" } })] },
+    { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
+  ],
+  { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
 const pipelines: Pipeline[] = [
+  ...stagePlacePipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
@@ -2181,6 +2201,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(STAGE_PLACE ? [task("t-stage-place", "assigned", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "", 5 * MIN)] : []),
   ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
@@ -2935,6 +2956,49 @@ function transcriptOf(pathname: string): string {
 
 const params = new URLSearchParams(location.search);
 const PIPELINE_INIT = params.get("pipelineinit");
+/* A draft prepared from a pasted PR or issue link (docs/research/competitors-2026-10.md rank 4):
+   the picker with one answer per pasted link, or the draft's editor. */
+const PIPELINE_LINK = params.get("pipelinelink");
+const LINK_SHA = "4f1c2a9e7b3d5c8a0e6f1b2d4c7a9e3f5b8d0c1a";
+const linkTasks = [
+  { id: "link-task-1", text: "Start pipelines from a pasted pull request link", updatedAt: "2026-10-22T09:00:00Z" },
+  { id: "link-task-2", text: "Review the board's pull request flow on the phone", updatedAt: "2026-10-20T09:00:00Z" },
+];
+const LONG_REPOSITORY = ("atlasmirror" + "forlongrepositorynames".repeat(5)).slice(0, 100);
+function linkSourceAnswer(link: string): Response {
+  const pr = (number: number, head: Record<string, unknown>, tasks: typeof linkTasks) => ({
+    ok: true, repoDir: "/project", source: {
+      kind: "pr", repository: "example/atlas", number, url: `https://github.com/example/atlas/pull/${number}`,
+      title: "Resolve the base and head of a pasted pull request before drafting a pipeline", state: number === 42 ? "draft" : "open",
+      base: { branch: "main" }, head: { sha: LINK_SHA, ...head }, tasks,
+      request: { task: `PR #${number}`, spec: "", baseBranch: "main", delivery: { branch: `refs/heads/${String(head.branch)}`, remote: String(head.remote), pr: number, ...(head.fork ? { prRepository: "example/atlas" } : {}) } },
+      attachLink: null,
+    },
+  });
+  if (link.includes("/pull/41")) return json(pr(41, { branch: "feature/link-source-preview", repository: "example/atlas", remote: "origin", fork: false, maintainerCanModify: null }, linkTasks));
+  if (link.includes("/pull/42")) return json(pr(42, { branch: "main", repository: "contributor/atlas", remote: "https://github.com/contributor/atlas.git", fork: true, maintainerCanModify: false }, []));
+  /* A valid repository name as long as GitHub allows, with no place to break. */
+  if (link.includes("/pull/44")) return json(pr(44, { branch: "main", repository: `contributor/${LONG_REPOSITORY}`, remote: `https://github.com/contributor/${LONG_REPOSITORY}.git`, fork: true, maintainerCanModify: true }, []));
+  if (link.includes("/pull/45")) return json({ ok: false, code: "remote_rewritten", params: { repository: `contributor/${LONG_REPOSITORY}` },
+    error: `this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/${LONG_REPOSITORY}.git to another repository than contributor/${LONG_REPOSITORY}` }, 409);
+  if (link.includes("/issues/7")) return json({ ok: true, repoDir: "/project", source: {
+    kind: "issue", repository: "example/atlas", number: 7, url: "https://github.com/example/atlas/issues/7", title: "Start work from an issue link", state: "open",
+    base: { branch: "main" }, head: null, tasks: [], request: { task: "Issue #7", spec: "", baseBranch: "main" }, attachLink: "example/atlas#7",
+  } });
+  /* The checkout's Git URL rewrites send the fork's URL elsewhere: the longest refusal the picker shows. */
+  if (link.includes("/pull/43")) return json({ ok: false, code: "remote_rewritten", params: { repository: "contributor/atlas" },
+    error: "this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/atlas.git to another repository than contributor/atlas" }, 409);
+  return json({ ok: false, code: "merged", error: "PR #9 in example/atlas is already merged", params: { repository: "example/atlas", number: 9 } }, 409);
+}
+const linkDraft = {
+  id: "link-draft", task: "PR #41: Resolve the base and head of a pasted pull request before drafting a pipeline", project: "atlas", repoDir: "/project",
+  worktreeDir: "/project-pipeline-link-draft", branch: "pipeline/link-draft", baseBranch: "main", baseRef: LINK_SHA, lastPassedCommit: LINK_SHA, baseRefPinned: false,
+  spec: "Source: https://github.com/example/atlas/pull/41",
+  stages: [{ id: "implement", kind: "run", role: { roleId: "builder" }, prompt: "{{task}}", next: null, onFail: null }],
+  runs: [{ stageId: "implement", attempts: [] }], cursor: { stageId: "implement", state: "pending", input: null, activatedBy: null },
+  state: "draft", taskIds: [], createdAt: "2026-10-23T09:00:00Z", closedAt: null,
+  delivery: { target: { repository: "repo-atlas", remote: "origin", branch: "refs/heads/feature/link-source-preview", pr: 41 }, disposition: "owner", publish: "enabled", ownerId: "link-draft", epoch: 1, active: true },
+} as unknown as Pipeline;
 
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
    tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
@@ -3085,6 +3149,8 @@ const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
+  pipelineStageRuntime: "local" as "local" | "codex-cloud",
+  refusePipelineStageRuntime: false,
   presence: [] as Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>,
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
@@ -3759,6 +3825,20 @@ if (DECISIONS) {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
   }
+  if (DECISIONS?.startsWith("forge-connect")) {
+    const privateApp = DECISIONS === "forge-connect-private", permissions = DECISIONS === "forge-connect-permissions";
+    const row: AppConnectRow = { kind: "request", key: "example-owner/example-repo", requestId: "fixture-connect", repository: "example-owner/example-repo",
+      project: PROJECT, conversationId: "conversation_fixture", permissions: permissions ? { issues: "write", metadata: "read" } : { contents: "write", pull_requests: "write", metadata: "read" },
+      ownRepository: true, absentAtRequest: !permissions, createdAt: 0, expiresAt: 86_400_000, nextAt: 30_000, checks: 1, repositoryId: 1,
+      state: permissions ? "missing_permissions" : "awaiting_click",
+      discovery: { context: { appId: 1, slug: "example-app", accountId: 2, accountType: "users", settingsUrl: "https://github.com/settings/apps/example-app", prerequisite: privateApp ? "app_private" : "none" },
+        covered: permissions, installationId: permissions ? 3 : null, installationUrl: permissions ? "https://github.com/settings/installations/3" : null,
+        missingPermissions: permissions ? ["issues"] : [], missingAppPermissions: permissions ? ["issues"] : [], pending: false } };
+    const form = appConnectForm(row, UK ? "uk" : "en");
+    Object.assign(seatRounds[0]!, { title: form.title, questions: form.questions });
+    seatRounds.splice(1);
+    for (const task of Object.keys(protoRounds)) delete protoRounds[task];
+  }
   protoPublish();
   Object.assign(window, { decisionPosts });
 }
@@ -4105,9 +4185,10 @@ const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
-  if (["stale-working", "finished-work", "task-summary"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
+  if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
+  if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   /* The lane review case answers these from the driver's own server, through
      the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
@@ -4119,6 +4200,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
   }
+  if (PIPELINE_LINK && url.pathname === "/api/pipelines/preflight") return json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
+  if (PIPELINE_LINK && url.pathname === "/api/pipelines/source") return linkSourceAnswer(String(JSON.parse(String(init?.body)).link));
   if ((PIPELINE_INIT || SCENARIO === "retired-review") && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
     ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
     : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
@@ -4194,6 +4277,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
   if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
   if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
+  /* What the OpenAI key serves (docs/design/openai-key-services.md): `&openai=1` hands the provider routes to the driver's real handlers. */
+  if (SCENARIO === "keys" && new URLSearchParams(location.search).has("openai")
+    && (url.pathname === "/api/openai-services" || url.pathname === "/api/voice-companion/settings" || url.pathname === "/api/asks-you")) return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
@@ -4201,6 +4287,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/board/maintenance/worktrees") return serverFetch(url.pathname, init);
   if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
+  /* The create-by-name case answers the create request from the driver's own server (docs/design/create-project-by-name.md §7). */
+  if (url.pathname === "/api/projects/create") return serverFetch(url.pathname, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
@@ -4406,12 +4494,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
       ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
-        files: shown,
+        files: RAIL && railNames.size ? shown.map((file) => (railNames.has(file.project) ? { ...file, projectName: railNamed(file.project, file.projectName) } : file)) : shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
-        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
+        }).concat(railCatalog.map((entry) => ({ ...entry, displayName: railNamed(entry.project, entry.displayName)!, ...(WORKSPACES ? { projectRoot: `/srv/projects/${entry.project}` } : {}) })), TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
+        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"], archivedProjects: [...railShelf] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
@@ -4487,15 +4575,29 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
+    let asked = url.searchParams.get("project") ?? PROJECT;
     if (method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { project?: string; mergeOnReview?: unknown; bridgeReports?: unknown; pipelineStageRuntime?: unknown; name?: unknown; archived?: unknown };
       evidence.settingWrites.push(body);
+      if (body.pipelineStageRuntime === "local" || body.pipelineStageRuntime === "codex-cloud") {
+        if (evidence.refusePipelineStageRuntime) return json({ error: "could not persist the setting" }, 500);
+        evidence.pipelineStageRuntime = body.pipelineStageRuntime;
+      }
       if (typeof body.mergeOnReview === "boolean") MERGE_SETTING.enabled = body.mergeOnReview;
       if (typeof body.bridgeReports === "boolean") BRIDGE_SETTING.enabled = body.bridgeReports;
+      if (body.project) asked = body.project;
+      /* The routes' own refusals: a member writes no name and no shelf. */
+      if ((body.name !== undefined || body.archived !== undefined) && WORKSPACES && WORKSPACE_PARAMS.has("member")) return json({ error: "project access changed", code: "workspace_denied" }, 403);
+      if (body.name === null || typeof body.name === "string") railNames.set(asked, typeof body.name === "string" ? body.name.trim() : null);
+      if (body.archived === true) railShelf.add(asked);
+      if (body.archived === false) railShelf.delete(asked);
     }
     return json({
       ok: true,
+      name: railNames.get(asked) ?? null,
+      archived: railShelf.has(asked),
       project: PROJECT,
+      pipelineStageRuntime: evidence.pipelineStageRuntime,
       mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       reportTelegram: REPORT_TELEGRAM,
@@ -4997,7 +5099,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
-  if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
+  if (url.pathname === "/api/conversations") {
+    const own = RAIL && url.searchParams.get("project") ? files.filter((file) => file.project === url.searchParams.get("project")) : files;
+    return json({ items: own, total: own.length, nextCursor: null });
+  }
   if (url.pathname === "/api/orchestrator/seat" && method === "POST" && FM_SEAT) {
     fm.posts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     fm.confirmed = true;
@@ -5312,6 +5417,8 @@ function voiceCompanionScene() {
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
      the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
   const underlay = params.get("surface") === "underlay";
+  const reconnect = params.has("reconnect") ? reconnectEvidence(UK ? "uk" : "en") : null;
+  if (reconnect) Object.assign(window, { voiceReconnect: reconnect.controls });
   const buttons = params.get("surface") === "buttons";
   const clicks: Record<string, number> = {};
   Object.assign(window, { voiceUnderlayClicks: clicks });
@@ -5330,7 +5437,7 @@ function voiceCompanionScene() {
           ))}
         </div>
       ) : <Viewer />}
-      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={reconnect?.adapter ?? shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} over={COMPANION_OVER} head={COMPANION_HEAD} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
     </>
   );
 }
@@ -5460,8 +5567,17 @@ function SpeedDraftScene({ mode }: { mode: string }) {
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
+function SpendCreditsScene() {
+  const state = useEngineAccounts("codex");
+  return <main className="relative flex min-h-screen items-start justify-center bg-canvas p-2 pt-4 text-primary">
+    <div className="relative w-full max-w-[480px]"><AccountsPanel state={state} onClose={() => {}} placement="header" /></div>
+  </main>;
+}
+
+createRoot(document.getElementById("root")!).render(SCENARIO === "spend-credits" ? <SpendCreditsScene /> : SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
+  /* `attach`: the draft is created and attaching its issue fails, so the picker keeps it with the reason. */
+  : PIPELINE_LINK ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => (PIPELINE_LINK === "attach" ? { pipeline: linkDraft, warning: "the pipeline store is busy; retry" } : {})} onCreated={() => {}} onClose={() => {}} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />

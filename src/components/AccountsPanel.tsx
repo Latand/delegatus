@@ -23,6 +23,7 @@ import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, 
 import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
 
 import { EngineMark } from "@/components/EngineMark";
+import { AccountSpendCredits, paidSpendingActive } from "./AccountSpendCredits";
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
 import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, HiddenAccountOffer } from "./AccountRemovalSummary";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
@@ -89,7 +90,7 @@ export function limitRows(quota: ReconciledQuota, t: TFunction): LimitRow[] {
   return candidates.filter((row): row is LimitRow => row.window != null);
 }
 
-function CapacityChip({ quota, engine }: { quota: ReconciledQuota; engine: "claude" | "codex" }) {
+function CapacityChip({ account, quota, engine }: { account: AccountOption; quota: ReconciledQuota; engine: "claude" | "codex" }) {
   const { t } = useLocale();
   const effective = effectiveQuota(quota);
   if (!effective) return null;
@@ -99,7 +100,9 @@ function CapacityChip({ quota, engine }: { quota: ReconciledQuota; engine: "clau
     ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
     : t(effective.window === "weekly" ? "limits.windowWeekly" : "limits.windowSession");
   const stale = effective.stale;
-  const color = capacityColor(effective.percent, tint.color);
+  const spent = capacityColor(effective.percent, tint.color);
+  // Red reads as stopped; an account running on paid credits past its window is not.
+  const color = spent === "var(--color-danger)" && paidSpendingActive(account) ? "var(--color-warning)" : spent;
   return (
     <span
       className={`shrink-0 rounded-full border border-border bg-canvas px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${stale ? "opacity-55" : ""}`}
@@ -205,11 +208,15 @@ function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideL
         </button>
       </div>
       {exhausted.length > 0 ? (
-        <div className="text-[10px] font-semibold text-danger">
-          {rateLimitedUntil === null
-            ? t("rateLimit.badge")
-            : t("rateLimit.badgeUntil", { time: formatResetClock(rateLimitedUntil, now) })}
-        </div>
+        // With paid spending on and a balance left the account keeps working
+        // past its window, so the line must not read as "stopped".
+        paidSpendingActive(account)
+          ? <div className="text-[10px] font-semibold text-secondary">{t("accounts.pastLimitOnPaid")}</div>
+          : <div className="text-[10px] font-semibold text-danger">
+              {rateLimitedUntil === null
+                ? t("rateLimit.badge")
+                : t("rateLimit.badgeUntil", { time: formatResetClock(rateLimitedUntil, now) })}
+            </div>
       ) : null}
       {rows.length > 0 ? (
         <div className={`flex flex-col gap-1 ${stale ? "opacity-70" : ""}`}>
@@ -374,7 +381,7 @@ function AccountRow({ account, engine, quota, activeId, nextChosen = false, onSe
           {nextChosen ? <span className="block pt-0.5 text-[10px] font-semibold text-accent">{t("accounts.nextForUnpinned")}</span> : null}
           <AuthIdentity account={account} />
         </span>
-        <CapacityChip quota={quota} engine={engine} />
+        <CapacityChip account={account} quota={quota} engine={engine} />
         <StateChip state={state} />
       </button>
       {children}
@@ -1064,6 +1071,7 @@ export function AccountsPanel({
                 const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
                 return (
                   <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} nextChosen={account.nextChosen} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
+                    {engine === "codex" ? <AccountSpendCredits account={account} state={state} quota={quota} /> : null}
                     {showLimits ? account.provider ? <div className="px-3 pb-2 pl-[30px] text-[10px] text-muted">{t("accounts.provider.limitsUnknown")}</div> : <AccountLimitsBlock
                         account={account}
                         engine={engine}
@@ -1302,7 +1310,9 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
   // The active card lists its windows right below, so a weekly figure up here
   // would state the same number twice; the corner stays for a card that is
   // collapsed and for an expanded one that has no week to list.
-  const corner = state === "active" && summary?.left !== null ? null : summary;
+  const shown = state === "active" && summary?.left !== null ? null : summary;
+  // Red reads as stopped; an account running on paid credits past its window is not.
+  const corner = shown && paidSpendingActive(account) && shown.tone === "danger" ? { ...shown, tone: "warning" as const } : shown;
   const plan = planLabel(account.plan ?? quota.plan, t);
   const observed = limitRows(quota, t).map((row) => row.window.observedAt).filter((value): value is number => value !== null);
   const checked = observed.length ? formatCheckedClock(new Date(Math.min(...observed) * 1000).toISOString()) : null;
@@ -1406,6 +1416,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
         ) : (
           <div className={rowClass}>{head}</div>
         )}
+        <AccountSpendCredits account={account} state={engineState} quota={quota} phone />
         {state === "pending" || deviceAuth ? <MobilePendingSignIn account={account} engine={engine} state={engineState} loginBusy={loginBusy} deviceAuth={deviceAuth} onCancel={onCancelSignIn} /> : null}
         {engine === "claude" && state === "needsSignIn" && account.login?.result?.status === "failure"
           ? <ClaudeLoginRow key={account.login.operationId} account={account} state={engineState} loginBusy={loginBusy} />
@@ -1428,6 +1439,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
       <div className={rowClass}>
         <MobileAccountHead account={account} engine={engine} state={state} quota={quota} t={t} />
       </div>
+      <AccountSpendCredits account={account} state={engineState} quota={quota} phone />
       {account.provider ? <div className="py-1 text-label text-muted">{t("accounts.provider.limitsUnknown")}</div> : <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-[5px] pr-2 pt-0.5">
         {rows.length === 0 ? <div className="text-label text-muted">{t("mobile2.accounts.noReading")}</div> : null}
         {rows.map(({ key, label, window }) => {

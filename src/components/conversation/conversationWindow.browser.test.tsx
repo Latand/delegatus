@@ -2009,6 +2009,363 @@ describe("#2075 every image an agent looks at", () => {
   }, 240_000);
 });
 
+describe("Viewer MCP calls read the same in Claude and Codex conversations", () => {
+  /*
+   * Rendered evidence for docs/design/codex-mcp-call-rendering-brief.md: the
+   * same Viewer calls written as Claude tool_use/tool_result records and as
+   * Codex code-mode batches (plus a partial batch and a direct call), through
+   * the production parser into the production rows, on the board's policy and
+   * in the dock's. A Codex batch keeps its group with its count, an opened
+   * group draws the named card per call, the agent calls stand alone with
+   * their link, and a spawn whose conversation is not listed yet reads as
+   * starting. Readings go to `evidence/mcp-calls/frames.json`; frames to
+   * `.artifacts/mcp-calls/`, which is not committed.
+   */
+  const OUT = path.resolve(process.env.LLV_MCP_CALLS_OUT ?? ".artifacts/mcp-calls");
+  const EVIDENCE = path.resolve("evidence/mcp-calls");
+  const FRAMES = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-1000", width: 1000, height: 700, touch: false },
+    { name: "desktop-900", width: 900, height: 900, touch: false },
+    { name: "tablet-645", width: 645, height: 900, touch: true },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  const SCHEMES = ["light", "dark"] as const;
+  /* The calls the fixture folds in a Codex batch, as (tool, args, result); the
+     partial batch's call the script never finished has no result. */
+  const FOLDED: Array<[string, Record<string, unknown>, Record<string, unknown> | null]> = [
+    ["list_tasks", { project: "repo-demo", openOnly: true }, { count: 4, total: 4 }],
+    ["get_pipeline", { pipelineId: "pipe_parser_lane" }, { pipelineId: "pipe_parser_lane", state: "running" }],
+    ["leave_lesson", { rule: "" }, { ok: false, error: "Input validation error: rule must not be empty", code: "tool_failed", retryable: true }],
+    ["get_task", { taskId: "task_parser_lane" }, { taskId: "task_parser_lane", task: { id: "task_parser_lane", status: "assigned" } }],
+    ["update_task", { taskId: "task_parser_lane", status: "done" }, { taskId: "task_parser_lane", ok: true }],
+    ["list_pipelines", { project: "repo-demo" }, { count: 2 }],
+    ["get_flow", { flowId: "flow_review" }, null],
+  ];
+
+  interface McpCallsReading {
+    sections: Array<{
+      engine: string;
+      surface: string;
+      groups: Array<{ block: boolean; header: string; counted: number | null; members: number; cards: number; errorCards: number; titles: string[]; failedRows: number }>;
+      standaloneTitles: string[];
+      agentCardsInGroups: number;
+    }>;
+    readyHrefs: string[];
+    pendingChips: string[];
+    startingAnchors: number;
+    errorLines: string[];
+    liveLinks: number;
+    viewerPrefixed: number;
+    cutTitles: string[];
+    cutRowParts: string[];
+    wholeOutcomes: Record<string, number>;
+    droppedMeta: number;
+    replayedStarting: Array<{ titleWidth: number; badge: string; chip: string; outcome: string; time: string; glyphs: number }>;
+    shortTargets: string[];
+    titleCutBeforeMeta: string[];
+    dotGaps: { header: number[]; card: number[] };
+    overflowX: number;
+  }
+
+  browserTest("named calls, kept groups, agent links and a starting spawn in every frame", async () => {
+    const { describeMcpCall } = await import("@/lib/mcp/presentation");
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const readings: Record<string, McpCallsReading> = {};
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const frame of FRAMES) for (const lang of LANGS) for (const scheme of SCHEMES) {
+        const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
+        const folded = FOLDED.map(([tool, args, result]) => describeMcpCall(tool, args, result, t).title);
+        const { context, page, pageErrors } = await openFixture(
+          browser, `${served.base}?case=mcp-calls&lang=${lang}`, { width: frame.width, height: frame.height }, scheme, lang, "no-preference", frame.touch,
+        );
+        try {
+          await page.waitForSelector('[data-evidence-case="mcp-calls"]');
+          await page.waitForSelector('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]');
+          const key = `${frame.name}-${lang}-${scheme}`;
+          await page.screenshot({ path: path.join(OUT, `${key}-closed.png`), fullPage: true });
+          /* Open every closed group: a details summary, the phone's fold row, the phone's failed block. */
+          await page.evaluate(() => {
+            for (const summary of document.querySelectorAll<HTMLElement>("summary[data-tool-row=group]")) {
+              const details = summary.parentElement as HTMLDetailsElement;
+              if (!details.open) summary.click();
+            }
+            for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-tool-row=group], [data-mobile-run=failed] > button")) {
+              if (button.getAttribute("aria-expanded") === "false") button.click();
+            }
+          });
+          await page.waitForFunction(() => document.querySelectorAll("[data-tool-row=group], [data-mobile-run=failed]").length > 0);
+          const reading: McpCallsReading = await page.evaluate(() => {
+            const groupOf = (element: Element) => element.closest("details:has(> summary[data-tool-row=group]), [data-mobile-run]");
+            const sections = [...document.querySelectorAll<HTMLElement>("section[data-evidence-surface]")].map((section) => {
+              const groups = [...section.querySelectorAll("details:has(> summary[data-tool-row=group]), [data-mobile-run=done], [data-mobile-run=failed]")]
+                .filter((group) => group.matches("[data-mobile-run=failed]") || group.querySelector("[data-tool-row=group]"))
+                .map((group) => {
+                  /* The phone's failed block of Viewer calls is their cards, one per
+                     call, with no header; a group header counts its MCP calls. */
+                  const block = group.matches("[data-mobile-run=failed]");
+                  const header = block ? "" : group.querySelector("summary[data-tool-row=group] span.truncate, button[data-tool-row=group] span.truncate")?.textContent ?? "";
+                  const match = /(\d+) MCP calls?|викликів MCP: (\d+)/.exec(header);
+                  const list = block ? group : group.querySelector("ol");
+                  const cards = list ? [...list.querySelectorAll("[data-testid=mcp-call-card]")] : [];
+                  return {
+                    block,
+                    header,
+                    counted: match ? Number(match[1] ?? match[2]) : null,
+                    members: block ? cards.length + group.querySelectorAll("[data-mobile-run-row]").length : list ? list.children.length : 0,
+                    cards: cards.length,
+                    errorCards: cards.filter((card) => card.getAttribute("data-state") === "error").length,
+                    titles: cards.map((card) => card.querySelector("[data-mcp-title]")?.textContent ?? ""),
+                    failedRows: block
+                      ? group.querySelectorAll("[data-mobile-run-row=failed]").length
+                      : list ? [...list.querySelectorAll(":scope > li")].filter((li) => !li.querySelector("[data-testid=mcp-call-card]") && /err|failed|danger/.test(li.innerHTML)).length : 0,
+                  };
+                });
+              const cards = [...section.querySelectorAll("[data-testid=mcp-call-card]")];
+              return {
+                engine: section.dataset.evidenceEngine ?? "",
+                surface: section.dataset.evidenceSurface ?? "",
+                groups,
+                standaloneTitles: cards.filter((card) => !groupOf(card)).map((card) => card.querySelector("[data-mcp-title]")?.textContent ?? ""),
+                agentCardsInGroups: cards.filter((card) => card.querySelector("[data-testid=mcp-link-conversation]") && groupOf(card)).length,
+              };
+            });
+            const visible = (element: Element) => element.getBoundingClientRect().height > 0;
+            const cutTitles: string[] = [];
+            for (const title of document.querySelectorAll<HTMLElement>("[data-mcp-title]")) {
+              if (!visible(title)) continue;
+              if (title.scrollWidth > title.clientWidth + 1 && title.getAttribute("title") !== title.textContent) cutTitles.push(title.textContent ?? "");
+            }
+            for (const chip of document.querySelectorAll<HTMLElement>("[data-link-pending]")) {
+              if (chip.scrollWidth > chip.clientWidth + 1) cutTitles.push(`pending chip: ${chip.textContent}`);
+            }
+            /* Every text range and glyph of a card's one-line row is measured against
+               each clipping ancestor and the window: it is whole on screen, or, only
+               inside the trailing metadata or the server label, wholly out of view.
+               A title or chip label that ends in an ellipsis is judged by its own
+               box; screen-reader-only text is not drawn. */
+            const cutRowParts: string[] = [];
+            const wholeOutcomes: Record<string, number> = {};
+            let droppedMeta = 0;
+            /* The window's side edges; the frames are full-page, so its height is not an edge. */
+            const viewport = { left: 0, right: innerWidth, top: -Infinity, bottom: Infinity } as DOMRect;
+            for (const summary of document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary")) {
+              if (!visible(summary)) continue;
+              const clipsOf = (element: Element) => {
+                const clips: DOMRect[] = [];
+                for (let node: Element | null = element; node && node !== document.documentElement; node = node.parentElement) {
+                  if (getComputedStyle(node).overflowX !== "visible") clips.push(node.getBoundingClientRect());
+                  if (node === summary) break;
+                }
+                return clips;
+              };
+              const judge = (box: DOMRect, element: Element, label: string) => {
+                if (box.width === 0 && box.height === 0) return "empty";
+                const clips = [...clipsOf(element), viewport];
+                const inside = clips.every((clip) => box.left >= clip.left - 0.5 && box.right <= clip.right + 0.5 && box.top >= clip.top - 0.5 && box.bottom <= clip.bottom + 0.5);
+                if (inside) return "whole";
+                const outside = clips.some((clip) => box.right <= clip.left + 0.5 || box.left >= clip.right - 0.5 || box.bottom <= clip.top + 0.5 || box.top >= clip.bottom - 0.5);
+                /* The trailing metadata and the server label leave whole, onto the
+                   hidden second line of their own one-line box. */
+                if (outside && element.closest("[data-mcp-meta], [data-mcp-server]")) { droppedMeta += 1; return "dropped"; }
+                cutRowParts.push(`${label} [${box.left.toFixed(2)}–${box.right.toFixed(2)}] in «${summary.textContent?.slice(0, 50)}»`);
+                return "cut";
+              };
+              const walker = document.createTreeWalker(summary, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const host = node.parentElement!;
+                if (!node.textContent?.trim()) continue;
+                const style = getComputedStyle(host);
+                if (style.position === "absolute" && host.getBoundingClientRect().width <= 1) continue;
+                const ellipsis = host.closest<HTMLElement>("[data-mcp-title], .truncate");
+                if (ellipsis && summary.contains(ellipsis)) {
+                  judge(ellipsis.getBoundingClientRect(), ellipsis, `ellipsis «${ellipsis.textContent}»`);
+                  continue;
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) judge(rect, host, `text «${node.textContent}»`);
+              }
+              for (const glyph of summary.querySelectorAll("svg")) judge(glyph.getBoundingClientRect(), glyph, `glyph ${glyph.getAttribute("class")?.split(" ").find((name) => name.startsWith("lucide-")) ?? "svg"}`);
+              const outcome = summary.querySelector<HTMLElement>("[data-mcp-outcome]");
+              if (outcome && judge(outcome.getBoundingClientRect(), outcome, `outcome ${outcome.dataset.mcpOutcome}`) === "whole") {
+                const state = outcome.dataset.mcpOutcome ?? "";
+                wholeOutcomes[state] = (wholeOutcomes[state] ?? 0) + 1;
+              }
+            }
+            /* The replayed spawn whose child is not listed yet is the row's densest
+               state: replay badge, starting word, outcome glyph and the time. */
+            const replayedStarting = [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary:has([data-testid=mcp-replay]):has([data-link-pending])")]
+              .filter(visible)
+              .map((summary) => {
+                const state = (element: Element | null) => {
+                  if (!element) return "absent";
+                  const box = element.getBoundingClientRect();
+                  let left = Math.max(0, box.left), right = Math.min(innerWidth, box.right), top = box.top, bottom = box.bottom;
+                  for (let node = element.parentElement; node && node !== summary.parentElement; node = node.parentElement) {
+                    const style = getComputedStyle(node);
+                    const clip = node.getBoundingClientRect();
+                    if (style.overflowX !== "visible") { left = Math.max(left, clip.left); right = Math.min(right, clip.right); }
+                    if (style.overflowY !== "visible") { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); }
+                  }
+                  if (right - left <= 0.5 || bottom - top <= 0.5) return "hidden";
+                  return left <= box.left + 0.5 && right >= box.right - 0.5 && top <= box.top + 0.5 && bottom >= box.bottom - 0.5 ? "whole" : "cut";
+                };
+                const time = [...summary.querySelectorAll("[data-mcp-meta] span")].find((span) => /^\d\d:\d\d(:\d\d)?$/.test(span.textContent ?? "")) ?? null;
+                return {
+                  titleWidth: summary.querySelector("[data-mcp-title]")!.getBoundingClientRect().width,
+                  badge: state(summary.querySelector("[data-testid=mcp-replay]")),
+                  chip: state(summary.querySelector("[data-link-pending]")),
+                  outcome: state(summary.querySelector("[data-mcp-outcome]")),
+                  time: state(time),
+                  glyphs: summary.querySelectorAll("svg").length,
+                };
+              });
+            /* A title cut by its ellipsis while any part of its metadata or the
+               server label is still drawn gave its width to a lower-value fact. */
+            const titleCutBeforeMeta: string[] = [];
+            for (const summary of document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary")) {
+              if (!visible(summary)) continue;
+              const title = summary.querySelector<HTMLElement>("[data-mcp-title]")!;
+              if (title.scrollWidth <= title.clientWidth + 0.5) continue;
+              const drawn = (element: HTMLElement | null, clip: HTMLElement) => {
+                if (!element || getComputedStyle(element).display === "none") return false;
+                const box = element.getBoundingClientRect();
+                const area = clip.getBoundingClientRect();
+                return box.width > 0.5 && box.left < area.right - 0.5 && box.right > area.left + 0.5 && box.top < area.bottom - 0.5 && box.bottom > area.top + 0.5;
+              };
+              const meta = summary.querySelector<HTMLElement>("[data-mcp-meta]");
+              const metaLeft = meta ? [...meta.querySelectorAll<HTMLElement>("span")].filter((span) => span.childElementCount === 0 && span.textContent?.trim() && drawn(span, meta)).map((span) => span.textContent!.trim()) : [];
+              const server = summary.querySelector<HTMLElement>("[data-mcp-server]");
+              if (drawn(server, summary.querySelector<HTMLElement>("[data-mcp-heading]") ?? summary)) metaLeft.push(server!.textContent!.trim());
+              if (metaLeft.length) titleCutBeforeMeta.push(`«${title.textContent}» beside ${metaLeft.join(", ")}`);
+            }
+            /* The dot between a duration and its tokens sits as far from each on a
+               group header as on the cards under it. */
+            const dotGap = (row: Element) => {
+              const tokens = row.querySelector<HTMLElement>("[data-context-tokens]");
+              const dot = tokens?.querySelector<HTMLElement>("[aria-hidden]");
+              const duration = tokens?.previousElementSibling;
+              if (!tokens || !dot || !duration || !visible(dot)) return null;
+              return Math.round((dot.getBoundingClientRect().left - duration.getBoundingClientRect().right) * 100) / 100;
+            };
+            const dotGaps = {
+              header: [...document.querySelectorAll("summary[data-tool-row=group]")].map(dotGap).filter((gap): gap is number => gap !== null),
+              card: [...document.querySelectorAll("[data-testid=mcp-call-card] [data-mcp-meta]")].map(dotGap).filter((gap): gap is number => gap !== null),
+            };
+            const coarse = matchMedia("(pointer: coarse)").matches;
+            const shortTargets = coarse
+              ? [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] summary, summary[data-tool-row=group], button[data-tool-row=group]")]
+                .filter((target) => visible(target) && target.getBoundingClientRect().height < 44)
+                .map((target) => target.textContent?.slice(0, 60) ?? "")
+              : [];
+            return {
+              sections,
+              readyHrefs: [...document.querySelectorAll('a[data-testid="mcp-link-conversation"]')].map((link) => link.getAttribute("href") ?? ""),
+              pendingChips: [...document.querySelectorAll("[data-link-pending]")].map((chip) => chip.textContent ?? ""),
+              startingAnchors: document.querySelectorAll('a[href*="conversation_child_starting"]').length,
+              errorLines: [...document.querySelectorAll('[data-testid=mcp-call-card][data-state=error] > div')].map((line) => line.textContent ?? ""),
+              liveLinks: document.querySelectorAll("[data-evidence-engine=live] a").length,
+              /* A Viewer call never reads as the generic «viewer · tool» summary, in its
+                 card, a group header or a source-parsed row of a stopped script. */
+              viewerPrefixed: [...document.querySelectorAll("[data-mcp-title], [data-tool-row=group], [data-evidence-surface] li")]
+                .filter((node) => /(^|\s)viewer · /.test(node.textContent ?? "")).length,
+              cutTitles,
+              cutRowParts,
+              wholeOutcomes,
+              droppedMeta,
+              replayedStarting,
+              shortTargets,
+              titleCutBeforeMeta,
+              dotGaps,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+            };
+          });
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(OUT, `${key}-open.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+
+          for (const section of reading.sections) {
+            const where = `${key} ${section.engine} ${section.surface}`;
+            // The agent calls of both engines are their own rows, never inside a group.
+            expect(section.agentCardsInGroups, where).toBe(0);
+            if (section.engine === "claude") {
+              // Claude writes no batches: no group holds a Viewer call.
+              expect(section.groups.reduce((sum, group) => sum + group.cards, 0), where).toBe(0);
+              expect(section.standaloneTitles.length, where).toBe(9);
+              continue;
+            }
+            // Codex: batch A (3, one failed), batch B's two reads, the stopped script's
+            // returned call and the call it never finished, each one named card.
+            expect(section.groups.map((group) => group.cards), where).toEqual([3, 2, 2]);
+            for (const group of section.groups) expect(group.counted, `${where} ${group.header}`).toBe(group.block ? null : group.cards);
+            for (const group of section.groups) expect(group.members, `${where} ${group.header}`).toBe(group.cards);
+            expect(section.groups.flatMap((group) => group.titles), where).toEqual(folded);
+            expect(section.groups.map((group) => group.errorCards), where).toEqual([1, 0, 1]);
+            expect(section.groups.map((group) => group.failedRows), where).toEqual([0, 0, 0]);
+            // Two spawns, a message, the seat message and the direct call stand alone.
+            expect(section.standaloneTitles.length, where).toBe(5);
+          }
+          // The ready child links in every section, the seat in every section; the starting child never does.
+          expect(reading.readyHrefs.filter((href) => href === "#c=conversation_child_ready").length).toBe(4 * 2 + 2);
+          expect(reading.readyHrefs.filter((href) => href === "#c=conversation_seat").length).toBe(4);
+          expect(reading.startingAnchors).toBe(0);
+          expect(reading.pendingChips).toEqual(Array(4).fill(t("mcp.link.pending")));
+          // The rejected lesson in all four sections, the stopped script's call in the two Codex ones.
+          expect(reading.errorLines.length).toBe(6);
+          expect(reading.errorLines.filter((line) => line.includes("Input validation error: rule must not be empty")).length).toBe(4);
+          expect(reading.errorLines.filter((line) => line.includes("flow_review: request timed out")).length).toBe(2);
+          expect(reading.liveLinks).toBe(0);
+          expect(reading.viewerPrefixed).toBe(0);
+          expect(reading.cutTitles).toEqual([]);
+          // No part of a row is cut by its own edge: the starting spawn's word and glyph and the
+          // retryable failure's badge and glyph are whole in every section, metadata leaves whole.
+          expect(reading.cutRowParts).toEqual([]);
+          // The starting chip is the row's one clock: no outcome glyph repeats it.
+          expect(reading.wholeOutcomes.starting ?? 0).toBe(0);
+          expect(reading.wholeOutcomes.error).toBe(6);
+          // A wide window keeps every row whole; narrower ones give the title its width first.
+          if (frame.width >= 1000) expect(reading.droppedMeta).toBe(0);
+          // The replayed starting spawn keeps its title floor, badge, word and glyph whole in
+          // every section, and its time is whole or wholly out of view, never a fragment.
+          expect(reading.replayedStarting.length).toBe(4);
+          for (const row of reading.replayedStarting) {
+            expect(row.titleWidth).toBeGreaterThanOrEqual(95.5);
+            expect([row.badge, row.chip, row.outcome]).toEqual(["whole", "whole", "absent"]);
+            // The tool's own icon and the chip's clock.
+            expect(row.glyphs).toBe(2);
+            expect(["whole", "hidden"]).toContain(row.time);
+          }
+          expect(reading.shortTargets).toEqual([]);
+          // A title keeps its natural width until the metadata and the server label have left.
+          expect(reading.titleCutBeforeMeta).toEqual([]);
+          // Header and cards space «880ms · ~4» alike.
+          expect(reading.dotGaps.header.length).toBeGreaterThan(0);
+          expect(reading.dotGaps.card.length).toBeGreaterThan(0);
+          expect(new Set([...reading.dotGaps.header, ...reading.dotGaps.card]).size, JSON.stringify(reading.dotGaps)).toBe(1);
+          expect(reading.overflowX).toBe(0);
+
+          // The ready chip opens the child's conversation.
+          await page.locator('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]').first().click();
+          expect(new URL(page.url()).hash).toBe("#c=conversation_child_ready");
+        } finally {
+          await context.close();
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "frames.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 480_000);
+});
+
 describe("older history of a long conversation keeps its rows, its frames and its text", () => {
   /*
    * A 2,800-line Claude conversation whose window starts at its last 400
@@ -2530,6 +2887,174 @@ describe("delivery check card", () => {
       console.error(`delivery check card: closed owned browser PID ${browserPid}`);
       served.stop();
     }
+  }, 300_000);
+});
+
+describe("a consumed queued send leaves the composer by its own id", () => {
+  /*
+   * The `consumed-delivery` fixture: the production composer bar with Codex's
+   * queue panel (the production projection of journal-shaped entries) and the
+   * receipt list over two unconfirmed sends with the same words, plus an unsent
+   * draft with a staged image. The list waits behind the undelivered chip in
+   * the pane's own slot, and the chip opens it. «Prove» lands the canonical
+   * proof for one id. Afterwards that id has no queue row, no hint and no card
+   * and the chip counts one less, the other unconfirmed send keeps its card and
+   * status, the same-text message Codex still holds keeps its row, and the
+   * draft and its image are untouched. The composer's box keeps the pane's
+   * bound, so the transcript keeps its floor. Readings go
+   * to `evidence/consumed-delivery/frames.json`; frames to
+   * `.artifacts/consumed-delivery/`, which is not committed.
+   */
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "pane-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("before and after the proof, at 1440, 900 and 390 px, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/consumed-delivery");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=consumed-delivery&lang=${lang}`,
+          { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", viewport.touch);
+        const key = `${viewport.name}-${lang}-${scheme}`;
+        try {
+          await page.locator('[data-testid="native-queue-panel"]').waitFor();
+          await page.waitForSelector('[data-testid="attachment-tile"][data-status="ready"]');
+          await page.evaluate(() => document.fonts.ready);
+          const read = () => page.evaluate(() => {
+            /* Whole text: every text range of a shown element sits inside the
+               window and inside each ancestor that clips. */
+            const whole = (element: Element) => {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              const clips: DOMRect[] = [];
+              for (let node = element.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX !== "visible" || style.overflowY !== "visible") clips.push(node.getBoundingClientRect());
+              }
+              return rects.length > 0 && rects.every((rect) => rect.left >= -0.5 && rect.right <= innerWidth + 0.5
+                && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5
+                && clips.every((clip) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+                  && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5));
+            };
+            const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
+            const cards = [...document.querySelectorAll("[data-delivery-check-card]")];
+            const notice = document.querySelector('[data-testid="native-queue-notice"]');
+            const chip = document.querySelector<HTMLElement>("[data-receipts-chip]");
+            const chipShown = Boolean(chip && chip.getClientRects().length > 0);
+            return {
+              chip: chipShown ? chip!.innerText.trim() : null,
+              chipAria: chip?.getAttribute("aria-label") ?? null,
+              chipWhole: !chipShown || whole(chip!),
+              listOpen: (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open ?? false,
+              listShown: (document.querySelector('[data-testid="composer-receipts"]')?.getClientRects().length ?? 0) > 0,
+              /* The composer's box against the column it shares with the
+                 transcript, and the transcript's own words. */
+              box: (() => {
+                const column = document.querySelector<HTMLElement>("[data-evidence-case=consumed-delivery]")!;
+                const style = getComputedStyle(column);
+                const content = column.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+                const form = column.querySelector("form")!.getBoundingClientRect();
+                return { height: Math.round(form.height), share: Math.round(form.height / content * 1000) / 1000 };
+              })(),
+              transcriptWhole: whole(document.querySelector("[data-evidence-transcript] > div")!),
+              images: document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length,
+              rows: rows.map((row) => row.getAttribute("data-entry")),
+              rowsWhole: rows.every((row) => whole(row.querySelector("p") ?? row)),
+              notice: notice?.textContent?.trim() ?? null,
+              count: document.querySelector('[data-testid="native-queue-count"]')?.textContent?.trim() ?? null,
+              cards: cards.map((card) => card.getAttribute("data-operation")),
+              cardText: cards.map((card) => card.textContent ?? ""),
+              cardsWhole: cards.every((card) => [...card.querySelectorAll("[data-receipt-message], [data-receipt-uncertain-why]")].every(whole)),
+              notices: [...document.querySelectorAll("[data-delivery-notice] [data-delivery-notice-cause]")].map((line) => line.textContent?.trim()),
+              draft: document.querySelector("textarea")?.value ?? null,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          /* The chip in the composer's own row opens the list behind it; the
+             list's header closes it again, as the pane does. */
+          const openList = async () => {
+            await page.locator("[data-receipts-chip]").click();
+            await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === true);
+          };
+          const closeList = async () => {
+            await page.locator("[data-runtime-receipt-stack] > summary").click();
+            /* Closed once the chip is drawn again: a phone hides its status
+               line while the list is open. */
+            await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === false
+              && (document.querySelector("[data-receipts-chip]")?.getClientRects().length ?? 0) > 0);
+          };
+          const beforeRest = await read();
+          await page.screenshot({ path: path.join(out, `before-rest-${key}.png`), fullPage: true });
+          await openList();
+          const before = await read();
+          await page.screenshot({ path: path.join(out, `before-${key}.png`), fullPage: true });
+          await closeList();
+          await page.evaluate(() => (document.querySelector("[data-prove-consumed]") as HTMLButtonElement).click());
+          await page.waitForFunction(() => document.querySelector("[data-evidence-case=consumed-delivery]")?.hasAttribute("data-proven")
+            && document.querySelector<HTMLElement>('[data-testid="composer-receipts"]')?.hidden === true);
+          const afterRest = await read();
+          await page.screenshot({ path: path.join(out, `after-rest-${key}.png`), fullPage: true });
+          await openList();
+          const after = await read();
+          await page.screenshot({ path: path.join(out, `after-${key}.png`), fullPage: true });
+          readings[key] = { beforeRest, before, afterRest, after };
+          expect(pageErrors).toEqual([]);
+          /* At rest the list waits behind the chip, which counts the sends
+             whose fate is open: two before the proof, one after it. */
+          for (const [rest, count] of [[beforeRest, 2], [afterRest, 1]] as const) {
+            expect(rest.listOpen).toBe(false);
+            expect(rest.listShown).toBe(false);
+            expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipAria", { count }));
+            expect(rest.chip).not.toBeNull();
+            expect([translate(lang, "runtime.receipt.chip", { count }), String(count)]).toContain(rest.chip ?? "");
+            expect(rest.chipWhole).toBe(true);
+            expect(rest.images).toBe(1);
+            expect(rest.draft).toBe("an unsent draft");
+          }
+          /* The transcript keeps its floor (2026-10-11): the composer's box
+             takes at most 40% of the column, a phone's at most 38dvh, and the
+             transcript stays readable in every state. */
+          for (const state of [beforeRest, before, afterRest, after]) {
+            if (viewport.touch) expect(state.box.height).toBeLessThanOrEqual(Math.min(0.38 * viewport.height, 320) + 0.5);
+            else expect(state.box.share).toBeLessThanOrEqual(0.401);
+            expect(state.transcriptWhole).toBe(true);
+          }
+          expect(before.listOpen).toBe(true);
+          expect(after.listOpen).toBe(true);
+          expect(before.images).toBe(1);
+          expect(after.images).toBe(1);
+          expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);
+          expect(before.notice).toBe(translate(lang, "queue.noticePending", { count: 1 }));
+          expect([...before.cards].sort()).toEqual(["consumed-tick", "unknown-send"]);
+          expect(after.rows).toEqual(["held-same-text"]);
+          expect(after.notice).toBeNull();
+          expect(after.count).toBe(translate(lang, "queue.count", { count: 1 }));
+          expect(after.cards).toEqual(["unknown-send"]);
+          expect(after.cardText[0]).toContain(translate(lang, "composer.deliveryCheckEnded"));
+          expect(after.draft).toBe("an unsent draft");
+          expect(before.draft).toBe("an unsent draft");
+          /* Before the proof the queue and the list hold more than their
+             share and scroll inside it, which is the panels' own behaviour and
+             is recorded, not gated. On a phone the box's 38dvh bound keeps
+             that true after the proof as well, so there it is recorded too;
+             on the desktop the state the proof leaves is whole. */
+          expect(before.overflowX).toBe(0);
+          expect(after.overflowX).toBe(0);
+          if (!viewport.touch) {
+            expect(afterRest.rowsWhole).toBe(true);
+            expect(after.cardsWhole).toBe(true);
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/consumed-delivery", { recursive: true });
+      fs.writeFileSync("evidence/consumed-delivery/frames.json", JSON.stringify({ driver: "src/components/conversation/conversationWindow.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
   }, 300_000);
 });
 

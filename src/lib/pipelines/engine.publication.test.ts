@@ -261,6 +261,21 @@ test("a default lane with origin publishes before review and a refused push cann
   } finally { f.cleanup(); }
 });
 
+test.each([true, false])("a recursive publication pass restores caller branch protections, accepted=%s", async accepted => {
+  const f = await repository();
+  try {
+    const remote = await f.addRemote(); const lane = await f.start();
+    if (!accepted) fs.writeFileSync(path.join(remote, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+    const protections = new Map();
+    f.h.ports.stageBranchProtections = protections;
+    fs.writeFileSync(path.join(lane.worktreeDir, "result.txt"), "publication work\n");
+    await f.pass(1);
+    expect(f.pushes()).toBeGreaterThan(0);
+    expect(f.h.ports.stageBranchProtections).toBe(protections);
+    expect(f.current().cursor?.stageId).toBe(accepted ? "review" : "build");
+  } finally { f.cleanup(); }
+});
+
 test("a local reviewer cannot accept a different committed head", async () => {
   const f = await repository();
   try {
