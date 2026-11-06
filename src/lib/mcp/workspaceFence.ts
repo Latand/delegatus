@@ -15,7 +15,7 @@ import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
 import { McpToolRefusal, retainResponseAuthority, type McpToolBindings, type McpToolService } from "./server";
-import { resolveBoardProject, type ViewerMcpDomainDependencies } from "./bindings";
+import { captureBoardCaller, resolveBoardProject, type ViewerMcpDomainDependencies } from "./bindings";
 import { runWithMcpCallerResolution } from "./callerContext";
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
@@ -77,6 +77,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       };
       const project = principal || boardRead ? conversationProject(callerId ?? "") : null;
       const responseProjects: string[] = [];
+      const boardCaller = boardRead ? captureBoardCaller(dependencies, { ...context, responseAuthority: undefined }) : undefined;
       const assertBoardCaller = () => runWithMcpCallerResolution(() => {
         context?.assertCaller?.();
         const current = dependencies.attentionAuthority();
@@ -88,6 +89,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           const currentAccess = workspacePrincipalAccess(principal);
           if (!currentAccess(project) || !responseProjects.every(currentAccess)) denied();
         }
+        boardCaller?.assert();
       });
       // Even an unrestricted caller and an early resolver refusal must retain
       // current workspace authority through the final service/SDK await.

@@ -340,6 +340,8 @@ export interface McpToolCallContext {
   responseAuthority?: McpResponseAuthority;
   /** Board selection and current authority captured before normalization can await. */
   boardRead?: McpBoardRead;
+  /** Authenticated in-process operator selection; never read from tool arguments. */
+  operatorBoardProject?: string;
   /** Trusted read projection; never accepted from serialized tool arguments. */
   redactText?: (text: string) => string;
   signal?: AbortSignal;
@@ -2819,17 +2821,6 @@ export function createMcpToolService(
           () => callTool(toolName, logicalArgs, context));
       }
       const typedTool = toolName as McpToolName;
-      if (BOARD_READ_TOOLS.has(typedTool)) {
-        try {
-          const boardRead = bindings[typedTool].captureBoardRead?.(args, context);
-          context = { ...context, boardRead };
-          if (boardRead) {
-            args = { ...args, project: boardRead.project };
-            retainResponseAuthority(context, boardRead.assert);
-            boardRead.assert();
-          }
-        } catch (error) { return boardReadFailure(toolName, args, error); }
-      }
       const pageCaller = mcpPageCursorCaller();
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       let effectiveArgs = normalized.args;
@@ -3815,13 +3806,33 @@ export function createMcpToolService(
     try { return await runWithMcpCallerResolution(() => service.callTool(tool, args, context)); }
     finally { finish(); }
   } });
-  return { async callTool(tool, args, context = {}) {
-    const authority = context.responseAuthority ?? (BOARD_READ_TOOLS.has(tool) ? { checks: [] } : undefined);
+  return { callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+    const board = BOARD_READ_TOOLS.has(tool);
+    // Establish native proof and the canonical board before cursor filter matching.
+    if (board && "nativeCallerProof" in args) {
+      const { nativeCallerProof, ...logicalArgs } = args;
+      if (nativeCallerProof !== undefined && (typeof nativeCallerProof !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(nativeCallerProof))) {
+        return failure(tool, clientRequestId(args), "invalid_request", "nativeCallerProof must be a hook-generated proof; do not invent or copy it", false);
+      }
+      return runWithNativeCallProof(typeof nativeCallerProof === "string" ? nativeCallerProof : undefined, tool, logicalArgs,
+        () => callTool(tool, logicalArgs, context));
+    }
+    const authority = context.responseAuthority ?? (board ? { checks: [] } : undefined);
+    context = { ...context, responseAuthority: authority };
     try {
-      const result = await paged.callTool(tool, args, { ...context, responseAuthority: authority });
+      if (board) {
+        const boardRead = runWithMcpCallerResolution(() => bindings[tool as McpToolName].captureBoardRead?.(args, context));
+        if (boardRead) {
+          context = { ...context, boardRead };
+          args = { ...args, project: boardRead.project };
+          retainResponseAuthority(context, boardRead.assert);
+          boardRead.assert();
+        }
+      }
+      const result = await paged.callTool(tool, args, context);
       return responseAuthorityResult(tool, args, authority, result);
     } catch (error) {
-      if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
+      if (board) return responseAuthorityResult(tool, args, authority, boardReadFailure(tool, args, error));
       throw error;
     }
   } };

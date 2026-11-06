@@ -21,6 +21,7 @@ import { viewerMcpBindings, viewerReadTools, productionDomainDependencies, type 
 import { createViewerMcpServer, createMcpToolService, SqliteMcpReceiptStore, requestDigest, McpToolRefusal,
   type McpToolArgs, type McpToolService, type McpToolResult, type McpReceiptStore } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
+import { McpPageCursorStore } from "./pageCursors";
 
 const AT = "2026-11-06T12:00:00.000Z";
 const OWN = "repo-11111111111111111111111111111111", FOREIGN = "repo-22222222222222222222222222222222";
@@ -30,9 +31,14 @@ const TOOLS = ["list_tasks", "list_pipelines"] as const;
 type Tool = typeof TOOLS[number];
 let root: string;
 let previousState: string | undefined;
+const cursorStoreKey = Symbol.for("delegatus.mcp.pageCursors");
+const cursorStores = globalThis as typeof globalThis & { [cursorStoreKey]?: McpPageCursorStore };
+let previousCursorStore: McpPageCursorStore | undefined;
 const close: Array<() => void | Promise<void>> = [];
 beforeEach(() => {
   setSystemTime(new Date(AT));
+  previousCursorStore = cursorStores[cursorStoreKey];
+  cursorStores[cursorStoreKey] = new McpPageCursorStore();
   root = fs.mkdtempSync(path.join(os.tmpdir(), "board-project-"));
   previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -42,6 +48,7 @@ afterEach(async () => {
   for (const release of close.splice(0).reverse()) await release();
   resetTeamStoreForTests();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  cursorStores[cursorStoreKey] = previousCursorStore;
   setSystemTime();
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -515,4 +522,69 @@ test("direct pipeline reader checks an inherited effective principal after the r
   expect(await viewerReadTools(h.domain).list_pipelines({ project: OWN, limit: 1 })).toMatchObject({ total: 251 });
   h.onRows(() => { queueMicrotask(() => teamStore().admitConversationMember(parent, "m_reader")); });
   await expect(viewerReadTools(h.domain).list_pipelines({ project: OWN, limit: 1 })).rejects.toMatchObject({ details: { code: "project_scope_refused" } });
+});
+
+for (const tool of TOOLS) for (const fence of ["direct", "unrestricted", "workspace"] as const) {
+  for (const keyed of [false, true]) for (const change of ["unchanged", "revoked", "generation", "epoch"] as const) {
+    test(`${tool}: early suggestions retain caller authority fence=${fence} keyed=${keyed} change=${change}`, async () => {
+      const h = await harness(fence !== "direct");
+      h.mode("manager");
+      if (fence === "unrestricted") delete h.reader.generations[0]!.launchProfile.workspace;
+      const designate = (key: string, conversationId: string) => {
+        beginOrchestratorSeatIntent({ project: OWN, mandate: "Read board", clientRequestId: key, mode: "existing", conversationId });
+        completeOrchestratorSeatIntent({ project: OWN, clientRequestId: key, conversationId, path: null });
+      };
+      designate("first", CALLER);
+      h.atSdkReturn(() => {
+        if (change === "revoked") designate("second", "conversation_successor");
+        if (change === "epoch") designate("second", CALLER);
+        if (change === "generation") h.reader.generations[0]!.id = "replacement";
+      });
+      const answer = await h.call(tool, { project: "Example Boar", ...(keyed ? { clientRequestId: "unknown-read" } : {}) });
+      expect(answer.ok).toBe(false);
+      if (change === "unchanged") {
+        refused(answer, "unknown_project");
+        expect(h.wire()).toContain("Example Board");
+      } else {
+        expect(answer).toMatchObject({ retryable: false });
+        for (const value of [OWN, "Example Board"]) expect(h.wire()).not.toContain(value);
+        for (const field of ["tasks", "pipelines", "nextCursor"]) expect(answer).not.toHaveProperty(field);
+      }
+      expect(h.rowReads()).toBe(0);
+    });
+  }
+}
+
+for (const tool of TOOLS) for (const workspace of [false, true]) {
+  for (const spelling of ["unchanged", "key", "folder", "root", "alias"] as const) {
+    test(`${tool}: equivalent continuation workspace=${workspace} spelling=${spelling}`, async () => {
+      const h = await harness(workspace); h.many();
+      const own = loadTasks().find(row => row.project === OWN);
+      if (!own) throw new Error("own task required");
+      saveTasks([...loadTasks(), { ...own, id: "task_another", text: "Second task" }]);
+      const first = await h.call(tool, { project: "Example Board", limit: 1 });
+      expect(first).toMatchObject({ ok: true, hasMore: true });
+      const project = { unchanged: "Example Board", key: OWN, folder: "WidgetsRepo", root: h.folder, alias: "legacy-board" }[spelling];
+      const second = await h.call(tool, { project, limit: 1, cursor: first.nextCursor });
+      expect(second).toMatchObject({ ok: true });
+      expect(second.cursorReset).not.toBe(true);
+      const field = tool === "list_tasks" ? "tasks" : "pipelines";
+      expect(second[field]).not.toEqual(first[field]);
+      const foreign = await h.call(tool, { project: FOREIGN, limit: 1, cursor: first.nextCursor });
+      refused(foreign, workspace ? "workspace_forbidden" : "cross_project_refused");
+      setSystemTime(new Date(Date.parse(AT) + 300_001));
+      expect(await h.call(tool, { project, limit: 1, cursor: first.nextCursor })).toMatchObject({ ok: true, cursorReset: true, [field]: first[field] });
+    });
+  }
+}
+
+for (const tool of TOOLS) test(`${tool}: serialized operator context cannot bypass native admission or name ambiguity`, async () => {
+  const h = await harness();
+  h.domain.attentionAuthority = () => ({ kind: "unidentified", admission: nativeCallerRefusal("capability-unresolved") });
+  h.domain.callerAttribution = () => ({ kind: "gateway", conversationId: null, role: null });
+  refused(await h.call(tool, { project: OWN, operatorBoardProject: OWN }), "caller_unidentified");
+  h.domain.attentionAuthority = () => ({ kind: "worker", conversationId: CALLER, role: "orchestrator" });
+  persistProjectAliases([{ source: "collision", target: FOREIGN, displayName: OWN }]);
+  h.domain.authorizedSeats = () => [];
+  refused(await h.call(tool, { project: OWN, operatorBoardProject: OWN }), "ambiguous_project");
 });

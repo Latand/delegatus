@@ -301,6 +301,7 @@ import {
   type McpToolBinding,
   type McpToolCallContext,
   type McpBoardRead,
+  retainResponseAuthority,
   type McpToolName,
   type McpToolPayload,
 } from "./server";
@@ -6329,22 +6330,18 @@ function boardReadProject(requested: string, dependencies: ViewerMcpDomainDepend
   return own;
 }
 
-/** One selection per call; fresh authority at every read/disclosure boundary. */
-function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): McpBoardRead {
-  const named = text(args.project);
-  const requested = named ? resolveBoardProject(named, dependencies) : "";
-  const aliases = projectAliasSnapshot({ strict: true }).aliases;
-  const aliasKey = Object.keys(aliases).find(key => key.toLowerCase() === named.toLowerCase()) ?? named;
-  const alias = aliases[aliasKey];
+/** Pin caller authority before resolution, including refusals with suggestions. */
+export function captureBoardCaller(dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): { fingerprint: string; assert(): void } {
   const refuse = (): never => { throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false }); };
   const snapshot = () => runWithMcpCallerResolution(() => {
     context.assertCaller?.();
-    assertWorkspaceMcpCall();
-    const authority = dependencies.attentionAuthority?.();
+    const caller = attributionOf(dependencies);
+    const operator = context.operatorBoardProject !== undefined;
+    if (operator && (caller.kind !== "gateway" || caller.conversationId !== null)) refuse();
+    const authority = operator ? undefined : dependencies.attentionAuthority?.();
     if (authority?.kind === "unidentified" && authority.admission) {
       throw new McpToolRefusal("board caller identity is unavailable", { code: "caller_unidentified", retryable: false });
     }
-    const caller = attributionOf(dependencies);
     const id = authority && authority.kind !== "unidentified" ? authority.conversationId : caller.via?.deputy ?? caller.conversationId;
     const registry = dependencies.registrySnapshot?.();
     const lookup = registry ? readOnlyConversationLookupFromSnapshot(registry) : null;
@@ -6362,18 +6359,39 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
     const generation = record?.generations.at(-1);
     if (record?.supersededBy || generation?.archivedAt) refuse();
     const seat = caller.conversationId ? orchestratorSeatIdentityForConversation(caller.conversationId) : null;
-    const project = boardReadProject(requested, dependencies);
     const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry ?? (() => null), id);
-    return { project, fingerprint: JSON.stringify([caller, authority, principal, record ? [record.id, record.projectOwnership,
-      generation?.id, generation?.path, generation?.launchProfile.project, generation?.launchProfile.cwd, generation?.launchProfile.workspace] : null, seat]) };
+    return JSON.stringify([caller, authority, principal, record ? [record.id, record.projectOwnership,
+      generation?.id, generation?.path, generation?.launchProfile.project, generation?.launchProfile.cwd, generation?.launchProfile.workspace] : null, seat]);
   });
   const pinned = snapshot();
-  return { project: pinned.project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([pinned.project, pinned.fingerprint])).digest("hex")}`, assert() {
-    // Alias removal and redirection must not turn a captured request into a new board.
-    if (canonicalProject(pinned.project) !== pinned.project
-      || alias !== projectAliasSnapshot({ strict: true }).aliases[aliasKey]) refuse();
-    const current = snapshot();
-    if (current.project !== pinned.project || current.fingerprint !== pinned.fingerprint) refuse();
+  const assert = () => { if (snapshot() !== pinned) refuse(); };
+  retainResponseAuthority(context, assert);
+  return { fingerprint: pinned, assert };
+}
+
+/** One selection per call; fresh authority at every read/disclosure boundary. */
+function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): McpBoardRead {
+  assertWorkspaceMcpCall();
+  const caller = captureBoardCaller(dependencies, context);
+  const named = text(args.project);
+  const operatorProject = context.operatorBoardProject;
+  // The voice adapter passes the canonical selection already proved by its reader.
+  // Only an in-process context can carry this; serialized tool arguments cannot.
+  if (operatorProject !== undefined && named !== operatorProject) {
+    throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
+  }
+  const requested = operatorProject !== undefined ? canonicalProject(operatorProject) : named ? resolveBoardProject(named, dependencies) : "";
+  const aliases = projectAliasSnapshot({ strict: true }).aliases;
+  const aliasKey = Object.keys(aliases).find(key => key.toLowerCase() === named.toLowerCase()) ?? named;
+  const alias = aliases[aliasKey];
+  const project = boardReadProject(requested, dependencies);
+  return { project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([project, caller.fingerprint])).digest("hex")}`, assert() {
+    assertWorkspaceMcpCall();
+    caller.assert();
+    if (canonicalProject(project) !== project || alias !== projectAliasSnapshot({ strict: true }).aliases[aliasKey]
+      || boardReadProject(requested, dependencies) !== project) {
+      throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false });
+    }
   } };
 }
 
