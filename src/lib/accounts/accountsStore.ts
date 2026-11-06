@@ -546,7 +546,8 @@ export function readAccountSpawnFence(key: string, directory = accountsStateDire
   const gap = collection.get(fencesSource.gapKey);
   if (gap) {
     const recorded = isRecord(gap.v) ? gap.v : {};
-    return { kind: "gap", reason: typeof recorded.reason === "string" ? recorded.reason : "fence import unavailable", preservedAs: null };
+    return { kind: "gap", reason: typeof recorded.reason === "string" ? recorded.reason : "fence import unavailable",
+      preservedAs: typeof recorded.preservedAs === "string" ? recorded.preservedAs : null };
   }
   const raw = collection.get(`raw:${FENCES_SOURCE}`);
   if (raw) return { kind: "collection", body: raw.v };

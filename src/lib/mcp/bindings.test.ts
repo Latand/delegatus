@@ -4362,7 +4362,9 @@ test("spawn recovery requires an exact durable admission fence and keeps a bare 
   });
 });
 
-test("spawn binding derives predecessor lineage from the active same-project seat", async () => {
+test("spawn recovery authorizes durable lineage through the current same-project seat", async () => {
+  const at = "2026-09-08T12:00:00.000Z";
+  setSystemTime(new Date(at));
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-spawn-seat-lineage-"));
   sandboxes.push(sandbox);
   process.env.LLV_STATE_DIR = sandbox;
@@ -4464,9 +4466,23 @@ test("spawn binding derives predecessor lineage from the active same-project sea
       kind: "worker",
       conversationId: finalSuccessor,
       project: "proj-a",
-      predecessors: [successor, predecessor],
     },
   });
+  const current = recoverable.spawn_agent!.currentCaller!();
+  const recorded: McpRequestBinding = { ...binding, version: 1, toolName: "spawn_agent", clientRequestId: "seat-lineage-bind",
+    caller: { kind: "worker", conversationId: predecessor, project: "proj-a", seatEpoch: 1 },
+    claimedAt: at, owner: captureProcessIdentity(process.pid) };
+  const mayRecover = recoverable.spawn_agent!.canRecoverCaller!;
+  expect(mayRecover(recorded, current)).toBe(true);
+  expect(mayRecover({ ...recorded, caller: { ...recorded.caller, project: "proj-b" } }, current)).toBe(false);
+  expect(mayRecover(recorded, { ...current, conversationId: "conversation_unrelated", predecessors: [predecessor] })).toBe(false);
+  expect(mayRecover(recorded, { ...current, project: "proj-b", conversationId: "conversation_other_project", predecessors: [predecessor] })).toBe(false);
+
+  beginOrchestratorSeatIntent({ project: "proj-a", mandate: "replacement mandate", clientRequestId: "seat-lineage-replacement",
+    mode: "existing", conversationId: "conversation_replacement" });
+  expect(completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "seat-lineage-replacement",
+    conversationId: "conversation_replacement", path: "/repo/replacement.jsonl" }).kind).toBe("activated");
+  expect(mayRecover(recorded, current)).toBe(false);
 });
 
 

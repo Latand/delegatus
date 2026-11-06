@@ -33,7 +33,8 @@ export async function expireSpawnAdmission(binding: McpRequestBinding, assertInv
 /** Resolve the durable binding, never an asserted launcher/header identity.
  * The returned callback is synchronous at reservation and every later effect. */
 export async function receivingSpawnAdmission(request: Request, body: Record<string, unknown>): Promise<() => void> {
-  const required = new URL(request.url).pathname === "/api/spawn/admission";
+  // In-process report and relay producers supply headers/json without a URL.
+  const required = typeof request.url === "string" && new URL(request.url).pathname === "/api/spawn/admission";
   if (typeof body.clientAttemptId !== "string" || !body.clientAttemptId.startsWith("mcp_spawn_")) {
     if (required) throw new Error("guarded launch requires a durable binding");
     return () => {};
