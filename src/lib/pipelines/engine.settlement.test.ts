@@ -2507,13 +2507,20 @@ test("a publication that cannot land parks the pass without losing the commit", 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  // The first line names the cause and the next step; the evidence follows it.
-  expect(parked.stateDetail!.split("\n")[0]).toBe("publishing the passed stage: git push was refused (exit 1): ! [remote rejected] (shallow update not allowed). Fix it on this branch or on the base branch, then retry-stage.");
+  // Keep the remote diagnostic and accepted pass without attributing the
+  // refusal to a local check or spending the producer's repair allowance.
+  expect(parked.stateDetail!.split("\n")[0]).toContain("git push was refused (exit 1): ! [remote rejected] (shallow update not allowed)");
   expect(parked.stateDetail).toContain("\npublishing the pipeline branch: exit 1");
-  /* The stage's work is committed and recorded — the park is recoverable, and a
-     retry resets to this commit rather than discarding the builder's output. */
+  expect(parked.publicationRecovery?.[box.passedSha]).toMatchObject({ failures: 0, totalAttempts: 1,
+    history: [{ cause: "remote-refusal", retryAt: null }] });
+  const attempt = parked.runs[0]!.attempts[0]!;
+  expect(attempt.verdict?.status).toBe("pass");
+  expect(attempt.publicationRepair).toBeUndefined();
+  expect(attempt.publicationRetry).toBeUndefined();
   expect(parked.lastPassedCommit).toBe(box.passedSha);
   expect(parked.publishedCommit ?? null).toBeNull();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.publicationRecovery).toEqual(parked.publicationRecovery);
   expect(box.order).toEqual(["commit", "push-rejected"]);
   expect(h.flows.size).toBe(0);
 });
