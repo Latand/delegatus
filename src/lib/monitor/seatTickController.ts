@@ -2620,7 +2620,7 @@ function kickTurboWork(project: string, kick: ((project: string) => void) | unde
   }
 }
 
-export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord[]> {
+export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}, requestedProjects?: readonly string[]): Promise<SeatTickRunRecord[]> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
   if (!await (dependencies.ownsTraffic ?? releaseOwnsTraffic)()) {
@@ -2647,12 +2647,14 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     stopSeatTick();
     return [];
   }
+  // A foreground resume uses the same handoff/drain fence as the clock.
+  if (requestedProjects && (activeRestartGate(statePath("self-update", "auto-admission.json")) || activeDrain())) return [];
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
-  const projects = new Set(seatTickProjects(sources));
+  const projects = new Set(requestedProjects?.map(canonicalOrchestratorProject) ?? seatTickProjects(sources));
   // Recovery must settle a curator whose project no longer has a seat or open work.
   const incumbent = machinePass();
-  if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
+  if (incumbent && !requestedProjects) projects.add(canonicalOrchestratorProject(incumbent.project));
   // Each project starts independently. Its own deadline includes every phase;
   // an overdue project never holds the roster behind its await.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {

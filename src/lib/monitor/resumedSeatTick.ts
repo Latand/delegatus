@@ -1,7 +1,8 @@
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
+import type { SeatTickControllerDependencies } from "./seatTickController";
 
 type Seat = { state: string; conversationId: string | null; project: string };
-type Dependencies = { seats?: () => readonly Seat[]; check?: (project: string) => Promise<unknown> };
+type Dependencies = { seats?: () => readonly Seat[]; controller?: SeatTickControllerDependencies };
 const globals = globalThis as typeof globalThis & { __llvResumedSeatTicks?: Map<string, Promise<void>> };
 const pending = globals.__llvResumedSeatTicks ??= new Map<string, Promise<void>>();
 
@@ -13,8 +14,7 @@ export function requestResumedSeatTick(conversationId: string, dependencies: Dep
     const seat = (dependencies.seats ?? activeOrchestratorSeats)().find(row =>
       row.state === "active" && row.conversationId === conversationId);
     if (!seat) return;
-    const check = dependencies.check ?? (await import("./seatTickController")).runSeatTickCheck;
-    await check(seat.project);
+    await (await import("./seatTickController")).reconcileSeatTick(dependencies.controller, [seat.project]);
   });
   pending.set(conversationId, work);
   void work.finally(() => { if (pending.get(conversationId) === work) pending.delete(conversationId); }).catch(() => {});

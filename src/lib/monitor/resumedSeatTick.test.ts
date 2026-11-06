@@ -1,31 +1,58 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { harness, PROJECT, CONVERSATION, OPEN_LANE, OVERDUE, stopSeatTick } from "./seatTickController.fixture";
+import { reconcileSeatTick, seatTickIdle } from "./seatTickController";
 import { requestResumedSeatTick } from "./resumedSeatTick";
 
+const seats = () => [{ state: "active", conversationId: CONVERSATION, project: PROJECT }];
+function rig() {
+  const value = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  Object.assign(value.deps, { ownsTraffic: () => true, recordSuccessions: () => [], curation: null, release: null, maintenance: null });
+  return value;
+}
+afterEach(stopSeatTick);
+
 test("a resumed current seat rechecks its project immediately", async () => {
-  const checked: string[] = [];
-  await requestResumedSeatTick("current", { seats: () => [{ state: "active", conversationId: "current", project: "project" }],
-    check: async project => { checked.push(project); } });
-  expect(checked).toEqual(["project"]);
+  const value = rig();
+  await requestResumedSeatTick(CONVERSATION, { seats, controller: value.deps });
+  expect(value.sent).toHaveLength(1);
 });
 
 test("a resumed worker or former seat cannot wake another seat", async () => {
-  const checked: string[] = [];
-  await requestResumedSeatTick("previous", { seats: () => [{ state: "active", conversationId: "current", project: "project" }],
-    check: async project => { checked.push(project); } });
-  expect(checked).toEqual([]);
+  const value = rig();
+  await requestResumedSeatTick("previous", { seats, controller: value.deps });
+  expect(value.sent).toHaveLength(0);
 });
 
-test("concurrent resumes share one check and a failed check permits a later retry", async () => {
-  const gate = Promise.withResolvers<void>();
+test("resume obeys the same lost-traffic fence as the normal sweep", async () => {
+  const value = rig();
+  value.deps.ownsTraffic = () => false;
+  expect(await reconcileSeatTick(value.deps)).toEqual([]);
+  await requestResumedSeatTick(CONVERSATION, { seats, controller: value.deps });
+  expect(value.sent).toHaveLength(0);
+  expect(value.journal.map(record => record.verdict)).toEqual(["refused", "refused"]);
+});
+
+test("resume during a normal project check coalesces one fresh follow-up", async () => {
+  const value = rig();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
   let checks = 0;
-  const dependencies = { seats: () => [{ state: "active", conversationId: "coalesced", project: "project" }],
-    check: async () => { checks++; await gate.promise; throw new Error("check unavailable"); } };
-  const first = requestResumedSeatTick("coalesced", dependencies);
-  const second = requestResumedSeatTick("coalesced", dependencies);
-  expect(second).toBe(first);
-  gate.resolve();
-  await expect(first).rejects.toThrow("check unavailable");
-  await expect(second).rejects.toThrow("check unavailable");
-  await requestResumedSeatTick("coalesced", { ...dependencies, check: async () => { checks++; } });
+  value.deps.workStarted = () => { checks++; };
+  value.deps.sources!.prepareRead = async () => { entered.resolve(); await release.promise; };
+  const normal = reconcileSeatTick(value.deps);
+  await entered.promise;
+  const immediate = requestResumedSeatTick(CONVERSATION, { seats, controller: value.deps });
+  const repeated = requestResumedSeatTick(CONVERSATION, { seats, controller: value.deps });
+  expect(repeated).toBe(immediate);
+  try {
+    await Bun.sleep(20);
+    expect(checks).toBe(1);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([normal, immediate]);
+  }
+  for (let attempt = 0; attempt < 100 && !seatTickIdle(); attempt++) await Bun.sleep(5);
+  expect(seatTickIdle()).toBeTrue();
   expect(checks).toBe(2);
+  expect(value.sent).toHaveLength(1);
 });
