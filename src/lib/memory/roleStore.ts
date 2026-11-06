@@ -19,7 +19,7 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { activeProfileBasis, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import type { ProfileRulesView } from "./profile";
 import { renderLearnedRulesSelection } from "./roleRender";
@@ -889,8 +889,7 @@ export function storedLessonRevision(): string {
     const cached = privacyRevisionHost.__llvLessonPrivacyRevision;
     if (cached?.file === file && cached.signature === signature) return cached.revision;
     const held = roleMemoryCollection();
-    const stat = held ? fs.statSync(held.filename, { bigint: true }) : null;
-    const revision = held && stat ? `${stat.dev}:${stat.ino}:${held.signature()}` : "";
+    const revision = held ? privacyRuleRevision() : "";
     if (`${identity()}:${stateDatabaseSignature(file)}` === signature) privacyRevisionHost.__llvLessonPrivacyRevision = { file, signature, revision };
     return revision;
   } catch (error) { throw unreadableRoleMemory(error); }
@@ -958,7 +957,7 @@ function compileStoredLessonMatchers(signature: string): LessonMatcher[] {
       chunk.push(source);
     }
     compile(chunk);
-    if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+    if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE, { cause: new PrivacyWorkError("store-changed") });
     matcherHost.__delegatusLessonMatcher = { key: signature, matchers, skipped, texts };
     if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
   }

@@ -16,6 +16,8 @@ const owner = globalThis as typeof globalThis & {
   __llvCurationVersionReader?: { file: string; db: Database; generation: number };
   __llvRoleViewReader?: { file: string; db: Database; generation: number };
   __llvProfileBasisReader?: { file: string; db: Database; generation: number };
+  __llvPrivacyRevisionReader?: { file: string; db: Database; generation: number };
+  __llvPrivacyRuleVersion?: { file: string; identity: string; generation: string; revision: number; value: string };
   __llvRoleViewGeneration?: number;
   __llvCurationRules?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: CurationRuleInput | null; bytes: number }> };
@@ -24,7 +26,7 @@ const owner = globalThis as typeof globalThis & {
   __llvCurationScopeProjection?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: RoleMemoryScopeRow; bytes: number }> };
 };
-type ReaderSlot = "__llvRoleViewReader" | "__llvCurationVersionReader" | "__llvProfileBasisReader";
+type ReaderSlot = "__llvRoleViewReader" | "__llvCurationVersionReader" | "__llvProfileBasisReader" | "__llvPrivacyRevisionReader";
 function reader(slot: ReaderSlot = "__llvRoleViewReader") {
   const file = statePath("state.sqlite");
   if (owner[slot]?.file === file) return owner[slot].db;
@@ -32,13 +34,44 @@ function reader(slot: ReaderSlot = "__llvRoleViewReader") {
   owner[slot] = undefined;
   const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = openCurrentDatabase(file, () => {
-    const opened = observeSqlite(new sqlite.Database(file, { readonly: true, strict: true }), "memory.view");
+    const opened = observeSqlite(new sqlite.Database(file, { readonly: true, strict: true }), slot === "__llvPrivacyRevisionReader" ? "memory.privacy.revision" : "memory.view");
     opened.exec("PRAGMA busy_timeout = 0");
     return opened;
   });
   const generation = owner.__llvRoleViewGeneration = (owner.__llvRoleViewGeneration ?? 0) + 1;
   owner[slot] = { file, db, generation };
   return db;
+}
+
+/** Rule rows include archived texts and reasons. Request and scope bookkeeping
+ * cannot invalidate privacy work. This reader never shares a history snapshot. */
+export function privacyRuleRevision(): string {
+  const file = statePath("state.sqlite");
+  const identity = databaseFileIdentity(file)!;
+  const db = reader("__llvPrivacyRevisionReader");
+  db.exec("BEGIN");
+  try {
+    const meta = db.query<{ revision: number; change_floor: number; imported_at: string }, []>(
+      "SELECT revision, change_floor, imported_at FROM state_collections WHERE collection='role_memory'").get();
+    if (!meta) return "";
+    const cached = owner.__llvPrivacyRuleVersion;
+    const sameGeneration = cached?.file === file && cached.identity === identity && cached.generation === meta.imported_at;
+    let value: string;
+    if (sameGeneration && (cached.revision === meta.revision || cached.revision < meta.revision
+      && cached.revision >= meta.change_floor && !db.query<{ row_key: string }, [number, number]>(`
+        SELECT row_key FROM state_changes WHERE collection='role_memory' AND revision>? AND revision<=?
+          AND row_key >= 'r:' AND row_key < 'r;' LIMIT 1
+      `).get(cached.revision, meta.revision))) value = cached.value;
+    else {
+      const rows = db.query<{ latest: number | null; count: number }, []>(`
+        SELECT MAX(row_revision) AS latest, COUNT(*) AS count FROM state_rows
+        WHERE collection='role_memory' AND row_key >= 'r:' AND row_key < 'r;'
+      `).get()!;
+      value = JSON.stringify([identity, meta.imported_at, rows.latest, rows.count]);
+    }
+    owner.__llvPrivacyRuleVersion = { file, identity, generation: meta.imported_at, revision: meta.revision, value };
+    return value;
+  } finally { db.exec("ROLLBACK"); }
 }
 
 /** Version tokens belong to the same shared connection as the memo's reads.
