@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { NextRequest } from "next/server";
 import { checkEnvironment } from "../../../scripts/gate-cache";
@@ -60,7 +61,7 @@ async function fixture(engine: "codex" | "claude" = "codex", closed = false, wor
     const src = mirror && name === "creator" ? path.join(sharedClaudeProjectsRoot(), "fixture", `${id}.jsonl`) : native;
     fs.mkdirSync(path.dirname(src), { recursive: true }); fs.writeFileSync(src, "");
     const started = registry.beginSpawnRequest({ engine, cwd: root, explicitProject: project, transport: "structured", conversationId: id,
-      role: "builder", clientAttemptId: id, launchProfile: emptyLaunchProfile({ cwd: root, project, title: "Source fixture", role: "builder", workspace }) });
+      role: "builder", clientAttemptId: id, launchProfile: emptyLaunchProfile({ cwd: root, project, title: "Source fixture", role: "worker", workspace }) });
     if (started.kind !== "created") throw new Error("fixture spawn not created");
     registry.settleSpawn(started.receipt.launchId, { key: { engine, sessionId: id }, artifactPath: src, cwd: root, accountId: "default",
       status: "unhosted", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
@@ -99,7 +100,7 @@ async function fixture(engine: "codex" | "claude" = "codex", closed = false, wor
   }));
   const args = (key: string, fields: Record<string, unknown> = {}) => ({ pipelineId: pipeline.id, action: "set-src", src: source.src, clientRequestId: `${n}-${key}`, ...fields });
   return { client, caller, source, other, pipeline, registry, bindings, listener,
-    args, call: (key: string, fields: Record<string, unknown> = {}) => client.callTool({ name: "pipeline_action", arguments: args(key, fields) }),
+    args, call: async (key: string, fields: Record<string, unknown> = {}) => CallToolResultSchema.parse(await client.callTool({ name: "pipeline_action", arguments: args(key, fields) })),
     row: () => getPipeline(pipeline.id)!, count: () => dispatches,
     ports: (value: Partial<Ports>) => { ports = value; }, before: (value: () => void) => { beforeDispatch = value; },
     reopen: () => { receipts!.close(); receipts = new SqliteMcpReceiptStore(path.join(root, `receipts-${n}.sqlite`)); service = makeService(); },
@@ -266,7 +267,7 @@ function designate(project: string, conversationId: string, src: string, key: st
 test("deputy source resolves to its current seat and ordinary replacement removes the deputy", async () => {
   const f = await fixture(), before = f.row();
   const now = new Date("2026-11-06T00:00:00.000Z");
-  setSystemTime(now); cleanups.push(() => setSystemTime());
+  setSystemTime(now); cleanups.push(() => { setSystemTime(); });
   designate(f.pipeline.project, f.other.id, f.other.src, "source-deputy-seat");
   const begun = beginDeputy({ project: f.pipeline.project, seatConversationId: f.other.id,
     seatEpoch: orchestratorSeatFor(f.pipeline.project).active!.seatEpoch, seatPath: f.other.src,
@@ -376,7 +377,7 @@ test("seat replacement during writer admission refuses overwrite without changin
 test("a deputy loses its seat authority during source resolution", async () => {
   const f = await fixture(), before = f.row();
   const now = new Date("2026-11-06T00:00:00.000Z");
-  setSystemTime(now); cleanups.push(() => setSystemTime());
+  setSystemTime(now); cleanups.push(() => { setSystemTime(); });
   designate(f.pipeline.project, f.source.id, f.source.src, "source-calling-deputy-seat");
   const begun = beginDeputy({ project: f.pipeline.project, seatConversationId: f.source.id,
     seatEpoch: orchestratorSeatFor(f.pipeline.project).active!.seatEpoch, seatPath: f.source.src,
