@@ -421,6 +421,32 @@ const stateSchema = [
     PRIMARY KEY(collection, row_key),
     FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
   )`,
+  // Keep the privacy clock outside the pruned change journal and surviving
+  // rows. All writers, including imports and physical deletes, advance it in
+  // their own transaction; request and scope bookkeeping leave it untouched.
+  `CREATE TABLE IF NOT EXISTS role_memory_privacy_revision (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0)
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_insert AFTER INSERT ON state_rows
+    WHEN NEW.collection='role_memory' AND NEW.row_key >= 'r:' AND NEW.row_key < 'r;'
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_update AFTER UPDATE ON state_rows
+    WHEN (OLD.collection='role_memory' AND OLD.row_key >= 'r:' AND OLD.row_key < 'r;')
+      OR (NEW.collection='role_memory' AND NEW.row_key >= 'r:' AND NEW.row_key < 'r;')
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_delete AFTER DELETE ON state_rows
+    WHEN OLD.collection='role_memory' AND OLD.row_key >= 'r:' AND OLD.row_key < 'r;'
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
   `CREATE INDEX IF NOT EXISTS pipeline_integration_format
     ON state_rows(collection,row_key) WHERE ${PIPELINE_INTEGRATION_FORMAT}`,
   `CREATE TABLE IF NOT EXISTS pipeline_request_receipts (

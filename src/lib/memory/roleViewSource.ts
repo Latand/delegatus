@@ -16,6 +16,7 @@ const owner = globalThis as typeof globalThis & {
   __llvCurationVersionReader?: { file: string; db: Database; generation: number };
   __llvRoleViewReader?: { file: string; db: Database; generation: number };
   __llvProfileBasisReader?: { file: string; db: Database; generation: number };
+  __llvPrivacyRevisionReader?: { file: string; db: Database; generation: number };
   __llvRoleViewGeneration?: number;
   __llvCurationRules?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: CurationRuleInput | null; bytes: number }> };
@@ -24,7 +25,7 @@ const owner = globalThis as typeof globalThis & {
   __llvCurationScopeProjection?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: RoleMemoryScopeRow; bytes: number }> };
 };
-type ReaderSlot = "__llvRoleViewReader" | "__llvCurationVersionReader" | "__llvProfileBasisReader";
+type ReaderSlot = "__llvRoleViewReader" | "__llvCurationVersionReader" | "__llvProfileBasisReader" | "__llvPrivacyRevisionReader";
 function reader(slot: ReaderSlot = "__llvRoleViewReader") {
   const file = statePath("state.sqlite");
   if (owner[slot]?.file === file) return owner[slot].db;
@@ -32,13 +33,30 @@ function reader(slot: ReaderSlot = "__llvRoleViewReader") {
   owner[slot] = undefined;
   const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = openCurrentDatabase(file, () => {
-    const opened = observeSqlite(new sqlite.Database(file, { readonly: true, strict: true }), "memory.view");
+    const opened = observeSqlite(new sqlite.Database(file, { readonly: true, strict: true }), slot === "__llvPrivacyRevisionReader" ? "memory.privacy.revision" : "memory.view");
     opened.exec("PRAGMA busy_timeout = 0");
     return opened;
   });
   const generation = owner.__llvRoleViewGeneration = (owner.__llvRoleViewGeneration ?? 0) + 1;
   owner[slot] = { file, db, generation };
   return db;
+}
+
+/** Rule rows include archived texts and reasons. Request and scope bookkeeping
+ * cannot invalidate privacy work. This reader never shares a history snapshot. */
+export function privacyRuleRevision(): string {
+  const file = statePath("state.sqlite");
+  const identity = databaseFileIdentity(file)!;
+  const db = reader("__llvPrivacyRevisionReader");
+  db.exec("BEGIN");
+  try {
+    const meta = db.query<{ imported_at: string }, []>(
+      "SELECT imported_at FROM state_collections WHERE collection='role_memory'").get();
+    if (!meta) return "";
+    const clock = db.query<{ revision: string }, []>(
+      "SELECT CAST(revision AS TEXT) AS revision FROM role_memory_privacy_revision WHERE singleton=1").get();
+    return JSON.stringify([identity, meta.imported_at, clock?.revision ?? "0"]);
+  } finally { db.exec("ROLLBACK"); }
 }
 
 /** Version tokens belong to the same shared connection as the memo's reads.
