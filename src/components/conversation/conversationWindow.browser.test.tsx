@@ -7202,15 +7202,20 @@ describe("message document links", () => {
         expect(response.status).toBe(status); await response.arrayBuffer();
       }
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 605, 820, 1050, 1280]) {
+        const phone = width === 390;
         const query = new URLSearchParams({ case: "document-links", lang, cwd: source, parent, denied });
-        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: width === 390 ? 844 : 900 }, theme, lang);
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: phone ? 844 : 900 }, theme, lang, "no-preference", phone);
         await context.addCookies([{ name: MEMBER_COOKIE, value: owner.value, url: served.base }]);
         try {
+          const input = await page.evaluate(() => ({ coarse: matchMedia("(pointer: coarse)").matches, touchPoints: navigator.maxTouchPoints }));
+          expect(input.coarse).toBe(phone);
+          expect(input.touchPoints > 0).toBe(phone);
           const entry = page.getByRole("link", { name: "Source report", exact: true });
           await entry.waitFor();
           const initial = page.url();
           const start = reads.length;
-          await entry.focus(); await page.keyboard.press("Enter");
+          if (phone) await entry.tap();
+          else { await entry.focus(); await page.keyboard.press("Enter"); }
           const pane = page.locator("[data-artifact-preview]");
           await pane.waitFor();
           const target = pane.locator("[data-preview-target]");
@@ -7233,20 +7238,29 @@ describe("message document links", () => {
             expect(await pane.evaluate(element => element.contains(document.activeElement))).toBe(true);
           }
           const close = pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true });
+          if (phone) {
+            const box = await close.boundingBox();
+            expect(box!.width).toBeGreaterThanOrEqual(44);
+            expect(box!.height).toBeGreaterThanOrEqual(44);
+          }
           await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-source.png`) });
-          await close.click(); await pane.waitFor({ state: "detached" });
-          await page.getByRole("link", { name: "Heading", exact: true }).click();
+          if (phone) await close.tap(); else await close.click();
+          await pane.waitFor({ state: "detached" });
+          const heading = page.getByRole("link", { name: "Heading", exact: true });
+          if (phone) await heading.tap(); else await heading.click();
           await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
-          await pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true }).click();
-          await page.getByRole("link", { name: "Invisible", exact: true }).click();
+          if (phone) await close.tap(); else await close.click();
+          const invisible = page.getByRole("link", { name: "Invisible", exact: true });
+          if (phone) await invisible.tap(); else await invisible.click();
           await pane.locator("[data-preview-target]").waitFor();
           expect(await pane.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
-          await pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true }).click();
+          if (phone) await close.tap(); else await close.click();
           for (const [label, key] of [["Missing", "preview.missing"], ["Denied", "preview.denied"], ["Changed", "preview.changed"]] as const) {
-            await page.getByRole("link", { name: label, exact: true }).click();
+            const link = page.getByRole("link", { name: label, exact: true });
+            if (phone) await link.tap(); else await link.click();
             await pane.getByText(translate(lang, key), { exact: true }).waitFor();
             await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${label.toLowerCase()}.png`) });
-            await pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true }).click();
+            if (phone) await close.tap(); else await close.click();
           }
           const fragment = "#a=" + encodeURIComponent(report);
           await page.evaluate(hash => { location.hash = hash; }, fragment);
@@ -7254,14 +7268,15 @@ describe("message document links", () => {
           await page.goBack(); await pane.waitFor({ state: "detached" });
           await context.route("https://example.com/**", route => route.fulfill({ body: "External fixture" }));
           const popupPromise = context.waitForEvent("page");
-          await page.getByRole("link", { name: "External", exact: true }).click();
+          const external = page.getByRole("link", { name: "External", exact: true });
+          if (phone) await external.tap(); else await external.click();
           const popup = await popupPromise;
           await popup.waitForLoadState();
           expect(popup.url()).toBe("https://example.com/guide");
           expect(await popup.evaluate(() => window.opener === null)).toBe(true);
           await popup.close();
           expect(pageErrors).toEqual([]);
-          evidence.push({ lang, theme, width, sourceHash: sha256(bytes), geometry, reads: reads.slice(start).map(read => ({ ...read, path: read.path === report ? "source/docs/report.md" : read.path?.startsWith(source) ? "source/docs/" + path.basename(read.path) : "private/report.md" })) });
+          evidence.push({ lang, theme, width, input, sourceHash: sha256(bytes), geometry, reads: reads.slice(start).map(read => ({ ...read, path: read.path === report ? "source/docs/report.md" : read.path?.startsWith(source) ? "source/docs/" + path.basename(read.path) : "private/report.md" })) });
         } finally { await context.close(); }
       }
       // A vanished source checkout must not select either duplicate.
