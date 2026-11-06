@@ -5,10 +5,11 @@ import { loadTasks, saveTasks } from "./store";
 import { taskRevision } from "./revision";
 import { expect, test } from "bun:test";
 import { createTask, patchTask } from "./commands";
-import type { BoardTask } from "./types";
+import { TASK_HOLD_KINDS, type BoardTask } from "./types";
 
 const NOW = "2026-10-02T10:00:00.000Z";
 const LATER = "2026-10-02T11:00:00.000Z";
+const DUE = "2026-10-03T10:00:00.000Z";
 function task(overrides: Partial<BoardTask> = {}): BoardTask {
   return { id: "hold-task", project: "fixture", text: "Finish the remaining work", status: "inbox", placement: "unplaced", assignments: [], createdAt: NOW, updatedAt: NOW, ...overrides };
 }
@@ -16,6 +17,60 @@ function ok<T extends { ok: boolean }>(result: T): Extract<T, { ok: true }> {
   expect(result.ok).toBe(true);
   return result as Extract<T, { ok: true }>;
 }
+
+test.each([...TASK_HOLD_KINDS, "banana", " External ", " POSTPONED "])("commands report discarded until for %s while preserving deadlines and stored holds", kind => {
+  const normalized = kind.trim().toLowerCase();
+  const expectedKind = normalized === "banana" ? "unstated" : normalized;
+  const supported = expectedKind === "limit" || expectedKind === "postponed";
+  const hold = { kind, note: "Wait for the dependency", until: LATER };
+  const notes = [
+    ...(kind === "banana" ? ['Unknown hold kind "banana" normalized to unstated.'] : []),
+    ...(!supported ? [`hold.until ignored for hold kind "${expectedKind}"; only limit and postponed store until. Use dueAt for the task deadline.`] : []),
+  ];
+  const created = ok(createTask([], { project: "fixture", text: "Wait for dependency", placement: "unplaced", dueAt: DUE, dueTz: "UTC", hold }, [],
+    { now: () => NOW, id: () => "dated-hold", actor: "agent", conversationId: "conversation_fixture" }));
+  const updated = ok(patchTask([task({ dueAt: DUE, dueTz: "UTC" })], "hold-task", { hold }, NOW, { actor: "agent", conversationId: "conversation_fixture" }));
+  const step = ok(patchTask([task({ dueAt: DUE, dueTz: "UTC" })], "hold-task", {
+    steps: [{ id: "dependency", text: "Wait for dependency", state: "open", hold }],
+  }, NOW, { actor: "agent", conversationId: "conversation_fixture" }));
+  const expectedHold = { kind: expectedKind, note: hold.note, since: NOW, by: "agent", conversationId: "conversation_fixture", ...(supported ? { until: LATER } : {}) };
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "dated-hold-"));
+  try {
+    for (const result of [created, updated, step]) {
+      expect(result.notes).toEqual(notes.length ? notes : undefined);
+      expect(result.task.dueAt).toBe(DUE);
+      expect(result.task.dueTz).toBe("UTC");
+      expect(result === step ? result.task.steps?.[0]?.hold : result.task.hold).toEqual(expectedHold);
+      const file = path.join(directory, "tasks.json");
+      saveTasks(result.tasks, file);
+      const stored = loadTasks(file)[0]!;
+      expect(stored.hold).toEqual(result.task.hold);
+      expect(stored.steps).toEqual(result.task.steps);
+      expect(stored.dueAt).toBe(DUE);
+      expect(stored.dueHistory).toEqual(result.task.dueHistory);
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("omitted until is quiet and malformed holds keep their forgiving normalization", () => {
+  for (const kind of TASK_HOLD_KINDS) {
+    const result = ok(patchTask([task()], "hold-task", { hold: { kind } }, NOW));
+    expect(result.notes).toBeUndefined();
+    expect(result.task.hold).not.toHaveProperty("until");
+  }
+  for (const until of ["bad date", "", null, 123, {}]) {
+    for (const kind of ["limit", "postponed", "external"]) {
+      const result = ok(patchTask([task()], "hold-task", { hold: { kind, until } }, NOW));
+      expect(result.task.hold).toEqual({ kind, note: "", since: NOW, by: "operator" });
+      expect(result.notes?.length).toBe(kind === "external" ? 1 : undefined);
+    }
+  }
+  for (const hold of ["bad hold", [], 42, {}]) {
+    const result = ok(patchTask([task()], "hold-task", { hold }, NOW));
+    expect(result.task.hold).toEqual({ kind: "unstated", note: "", since: NOW, by: "operator" });
+    expect(result.notes).toBeUndefined();
+  }
+});
 
 test("a hold moves work to Waiting, preserves its age on edits, and clears by the owner rule", () => {
   const original = task();
