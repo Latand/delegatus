@@ -4378,6 +4378,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     publication: z.enum(["internal", "remote-branch"]).optional().describe("Omitted: publish when the owner delivery target has a remote, local-only when it has none. internal: never push while the lane runs. remote-branch: requires a remote, pushes every accepted revision and fences reviews on the delivery branch. Without baseRef, the controller fetches origin/<baseBranch> time-bounded, or resolves local <baseBranch> when origin is absent."),
   }).passthrough(),
   pipeline_action: z.object({
+    src: z.string().optional().describe("set-src: creator transcript path; required for this action."),
+    overwrite: z.boolean().optional().describe("set-src: true authorizes replacing existing creator lineage; defaults to false."),
     resumeCondition: pipelineResumeConditionSchema.optional().describe("pause: remind when this date arrives or fresh cached usage for the named account/window falls below belowPercent. Omit for a reminder after 24 hours. Reminders never resume a lane automatically."),
     remote: z.string().optional().describe("set-delivery-remote: configured Git remote name (default origin). Fills an empty delivery target after a remote is added; never redirects an existing target."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),

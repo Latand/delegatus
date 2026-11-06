@@ -17122,8 +17122,42 @@ export async function patchPipeline(
     }
   }
 
+  if (req.action === "set-src") {
+    const unknown = Object.keys(req).find(key => !["action", "srcPath", "overwrite"].includes(key));
+    if (unknown) return { error: `unsupported set-src field: ${unknown}`, status: 400 };
+    if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") return { error: "overwrite must be a boolean", status: 400 };
+    // Source roots may initialize account storage. Do that before taking the
+    // pipeline writer, then resolve again under admission against the current row.
+    const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
+    if (!creator.lineage) return { error: creator.error, status: creator.status };
+  }
   let linkRepositories: string[] = [];
-  const patched = await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
+  const patched = req.action === "set-src" ? await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
+      assertAuthority?.();
+      const pipeline = tx.get(id);
+      if (!pipeline) return { error: "pipeline not found", status: 404 };
+      if (legacyAction(pipeline)) return STAGE_RETIREMENT;
+      const guardShape = stageGuardShapeError(req);
+      if (guardShape) return guardShape;
+      if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
+        return { error: "overwrite must be a boolean", status: 400 };
+      }
+      const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
+      if (!creator.lineage) return { error: creator.error, status: creator.status };
+      const hasLineage = pipeline.srcPath !== null || pipeline.srcConversationId !== null;
+      const sameLineage = pipeline.srcPath === creator.lineage.srcPath
+        && pipeline.srcConversationId === creator.lineage.srcConversationId;
+      if (hasLineage && !sameLineage && req.overwrite !== true) {
+        return { error: "pipeline creator lineage already exists; pass overwrite: true to replace it", status: 409 };
+      }
+      assertAuthority?.();
+      pipeline.srcPath = creator.lineage.srcPath;
+      pipeline.srcConversationId = creator.lineage.srcConversationId;
+      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
+      else delete pipeline.srcDeputyConversationId;
+      tx.put(pipeline);
+      return { pipeline };
+    }, 2) : await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) {
       if ((req.action === "convert-legacy-review" || req.action === "revert-legacy-review") && findPipelineRecord(id)) {
@@ -17181,23 +17215,7 @@ export async function patchPipeline(
     let graphEdit: PipelineGraphEdit | null = null;
     let legacyAnswer: Pick<PipelineMutationResult, "convertedStages" | "legacyReview"> = {};
 
-    if (req.action === "set-src") {
-      if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
-        return { error: "overwrite must be a boolean", status: 400 };
-      }
-      const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
-      if (!creator.lineage) return { error: creator.error, status: creator.status };
-      const hasLineage = pipeline.srcPath !== null || pipeline.srcConversationId !== null;
-      const sameLineage = pipeline.srcPath === creator.lineage.srcPath
-        && pipeline.srcConversationId === creator.lineage.srcConversationId;
-      if (hasLineage && !sameLineage && req.overwrite !== true) {
-        return { error: "pipeline creator lineage already exists; pass overwrite: true to replace it", status: 409 };
-      }
-      pipeline.srcPath = creator.lineage.srcPath;
-      pipeline.srcConversationId = creator.lineage.srcConversationId;
-      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
-      else delete pipeline.srcDeputyConversationId;
-    } else if (req.action === "link-task") {
+    if (req.action === "link-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
       const tasks = loadTasks();
