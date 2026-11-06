@@ -1,6 +1,6 @@
 # Repair document links in agent messages
 
-Originating requirement, 2026-10-30, operator task: «періодично воно дає такі лінки які не відкриваються, треба якусь інструкцію поправити або навіть спосіб відкриття».
+Originating requirement, 2026-10-30: make document links in agent messages reliably open the intended file, adjusting link guidance or the opening behavior as needed.
 
 The operator repeated the requirement on 2026-11-05: an agent's document link opens a 404 in another window. Open the intended file through authenticated Delegatus on desktop and phone. The full incident quote, source identities, destinations and provenance remain in the private task and primary transcripts. This brief uses neutral examples throughout.
 
