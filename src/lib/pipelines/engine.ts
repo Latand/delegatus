@@ -42,7 +42,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./fencedFirstMessage";
 import { stageRepairDelivery } from "./repairDelivery";
-import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
 import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
@@ -5116,6 +5116,9 @@ function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: R
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
   }
   if (!failure) return `publishing the passed stage: ${published.error}`;
+  if (publicationRemoteRefusal(failure)) {
+    return `publishing the passed stage: ${publicationFailureCause(failure)}. The remote cause is unknown; the accepted head is preserved. Inspect the remote refusal before using publish to try again.\n${published.error}`;
+  }
   const action = commitsRefusedByPrivacy(failure)
     ? "The commits this push carries were refused: correct their author, message or content on this branch, then retry-stage."
     : failure.changedFiles === 0
@@ -5139,8 +5142,9 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
  * Execution deadlines without a decisive refusal retry on the same bounded
  * backoff as other interruptions. Each failed operation is counted once on
  * the attempt; the limit is durable across ticks and restarts.
- * A refused stage that changed files, or whose commits privacy refused,
- * proceeds to its bounded producer repair.
+ * A remote refusal after completed checks parks with the accepted head intact.
+ * Other refused stages that changed files, or whose commits privacy refused,
+ * proceed to their bounded producer repair.
  */
 async function retryRefusedPublication(
   pipeline: Pipeline,
@@ -5156,7 +5160,7 @@ async function retryRefusedPublication(
   if (!operation || operation.state !== "settled") return false;
   const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
+    cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
     detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error).slice(0, 400),
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
@@ -5200,7 +5204,7 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
   const notLanded = publicationNotLanded(result);
   const deadlineOnly = failure?.retryableDeadline === true;
   recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
+    cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
     detail: (deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
     recoverable: result.remote === "unreachable" || recoverablePublication(result) },
@@ -5881,9 +5885,10 @@ async function requestStagePublicationRepair(
   const operation = pipeline.delivery?.operation;
   // The producer judges the refusal. Custom hooks and bounded log tails can
   // omit the phase marker, so it cannot gate this repair. A head that changes
-  // no files cannot have caused a refusal other than privacy's: that one has
-  // had its retries and parks with its cause, with no producer turn.
+  // no files cannot have caused a refusal other than privacy's. An explicit
+  // remote refusal also parks with its cause, with no producer turn.
   if (attempt.publicationRepair || !failure || failure.retryableApp403 === true || failure.retryableDeadline === true || !operation || publicationNotLanded(published)
+    || publicationRemoteRefusal(failure)
     || failure.step !== "publishing the pipeline branch"
     || (failure.changedFiles === 0 && !commitsRefusedByPrivacy(failure))) return false;
   const ownOutputs = stage.kind === "run" && (attempt.effectiveRole.access === "read-write" || !!attemptStage(stage, attempt).outputs?.length);
