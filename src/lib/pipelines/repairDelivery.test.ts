@@ -1,5 +1,6 @@
 import { expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -95,4 +96,53 @@ test("a queued repair admitted near its deadline is fenced at the original cutof
     expect(journal.effectBatch(100, ["runtime.send"])).toEqual([]);
     expect(() => journal.transitionOperation(operationId, "delivering")).toThrow();
   } finally { journal.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); setSystemTime(); }
+});
+
+test("an unreserved repair expires at its original cutoff across a process restart", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "repair-unreserved-"));
+  const filename = path.join(root, "registry.json");
+  const registry = new AgentRegistry(filename);
+  const conversation = registry.ensureForkedConversation("codex", path.join(root, "stage.jsonl"), null, emptyLaunchProfile({ cwd: root }));
+  registry.close();
+  try {
+    for (const now of [DEADLINE - 1, DEADLINE, DEADLINE + 1]) {
+      const child = spawnSync(process.execPath, ["-e", `
+        const { AgentRegistry } = await import("./src/lib/agent/registry");
+        const { stageRepairDelivery } = await import("./src/lib/pipelines/repairDelivery");
+        const registry = new AgentRegistry(${JSON.stringify(filename)});
+        const delivery = await stageRepairDelivery(registry, ${JSON.stringify(conversation.id)}, "unreserved-repair", ${DEADLINE},
+          { now: () => ${now}, client: null, progress: null });
+        const { pipelineCorpus } = await import("./src/lib/pipelines/fixtures/corpus");
+        const { savePipelines, findPipelineRecord } = await import("./src/lib/pipelines/store");
+        const lane = pipelineCorpus(2, 1)[1];
+        lane.runs[0].attempts[0].publicationRepair = { sha: "a".repeat(40), baseSha: "b".repeat(40),
+          operationId: "repair-publication", stageId: "build", attempt: 1,
+          refusedAt: new Date(${START}).toISOString(), detail: "fixture refusal", paths: [], messageTs: null, delivery };
+        savePipelines([lane]);
+        console.log(JSON.stringify(findPipelineRecord(lane.id).runs[0].attempts[0].publicationRepair.delivery));
+        registry.close();
+      `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 20_000 });
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual({ operationId: null,
+        state: now < DEADLINE ? "unreserved" : "failed", safeToReplace: true });
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("unknown legacy delivery history becomes bounded failure at the original deadline", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "repair-unknown-history-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const conversation = registry.ensureForkedConversation("codex", path.join(root, "legacy.jsonl"), null, emptyLaunchProfile({ cwd: root }));
+  registry.deliveryAdmissionForKey = (() => ({ outcome: "unknown", reason: "legacy delivery history is unavailable" })) as typeof registry.deliveryAdmissionForKey;
+  try {
+    const result = await stageRepairDelivery(registry, conversation.id, "legacy-repair", DEADLINE,
+      { now: () => DEADLINE, client: null, progress: null });
+    expect(result).toEqual({ operationId: null, state: "failed", safeToReplace: false });
+    registry.deliveryAdmissionForKey = (() => ({ outcome: "admitted", operationId: "unreadable-operation",
+      deliveryId: "unreadable-delivery", state: "delivery-uncertain" })) as typeof registry.deliveryAdmissionForKey;
+    expect(await stageRepairDelivery(registry, conversation.id, "legacy-repair", DEADLINE,
+      { now: () => DEADLINE, client: null, progress: null })).toEqual({
+      operationId: "unreadable-operation", state: "failed", safeToReplace: false,
+    });
+  } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

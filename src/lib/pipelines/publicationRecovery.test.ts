@@ -1,4 +1,4 @@
-import { expect, test, fs, os, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
+import { expect, test, fs, os, path, tickPipelines, createPipelineFromRequest, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
 import { realExec } from "@/lib/workflows/provision";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -252,10 +252,11 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
     expect((await act()).status).toBe(409);
     clock++;
     const result = await act();
-    if (shape === "running" || shape === "fresh-busy") {
+    if (shape === "running" || shape === "fresh-busy" || shape === "queued") {
       expect(result.status).toBe(409);
       expect(result.error).toContain("turn build/1");
       expect(result.error).toContain("age 1200s");
+      if (shape === "queued") expect(result.error).toContain("delivery in-flight");
       expect(current().runs[0]!.attempts[0]!.publicationRepairAbandonment).toBeUndefined();
     } else {
       expect(result.error).toBeUndefined();
@@ -485,8 +486,14 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
       ...(action === "resolve-decision" ? { clientRequestId: `terminal-${kind}`, answer: "Continue after the terminal repair.",
         expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) } : {}),
     }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.error).toBeUndefined();
-    expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+    if (kind === "stale-turn") {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("may still be running or queued");
+      expect(current().runs[0]!.attempts).toHaveLength(1);
+    } else {
+      expect(result.error).toBeUndefined();
+      expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+    }
   } finally { f.close(); }
 });
 
@@ -733,7 +740,7 @@ test.each(["failed", "unreserved", "live", "uncertain", "background", "outstandi
       const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `delivery-${kind}`,
         answer: "Continue after the repair settled.", expectedStageId: "build", expectedAttempt: 1,
         expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-      if (kind === "failed" || kind === "unreserved" || kind === "uncertain" || kind === "outstanding") expect(result.error).toBeUndefined();
+      if (kind === "failed" || kind === "unreserved" || kind === "uncertain") expect(result.error).toBeUndefined();
       else {
         expect(result.status).toBe(409);
         expect(result.error).toContain("repair-delivery");

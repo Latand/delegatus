@@ -131,3 +131,20 @@ describe("explicit parallel profile generation", () => {
     expect(run.latest.run!.state).toBe("failed");
   });
 });
+
+
+test("saved profile reads use the lightweight basis while explicit generation still reads complete rules", async () => {
+  const h = harness();
+  let fullReads = 0, basisReads = 0;
+  const full = h.ports.rules;
+  const service = createProfileService({ ...h.ports,
+    rules: () => { fullReads++; return full(); },
+    readRules: () => { basisReads++; return { project: h.rules.project, enabled: h.rules.enabled,
+      scopes: h.rules.scopes.map(({ scope, kind, roleId, active }) => ({ scope, kind, roleId, active: active.map(({ id, changedAt }) => ({ id, changedAt })) })) }; },
+  });
+  expect(service.read("garden", "en")).toEqual(h.service.read("garden", "en"));
+  expect(fullReads).toBe(0); expect(basisReads).toBe(1); expect(h.preparations()).toBe(0);
+  await service.start("garden", "en").done;
+  expect(fullReads).toBeGreaterThan(0); expect(h.preparations()).toBe(1);
+  expect(service.read("garden", "en").overall).not.toBeNull();
+});
