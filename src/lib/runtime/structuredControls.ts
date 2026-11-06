@@ -325,7 +325,20 @@ export async function dispatchStructuredControl(
             sessionId: generation.id,
           });
           if (!republished) {
-            return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
+            // A native Codex process can survive its Viewer connection. Reclaim
+            // that verified socket before reporting the conversation resumed.
+            const recovered = conversation.engine === "codex"
+              ? await (dependencies.recover ?? recoverDeadStructuredConversation)({
+                path: request.path || generation.path,
+                conversationId: conversation.id,
+                reconnectLiveHost: true,
+              }, { registry })
+              : null;
+            if (!recovered || recovered.conversationId !== conversation.id || recovered.reconnected !== true) {
+              return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
+            }
+            return { status: 200, body: { ok: true, structured: true, target: conversation.id,
+              outcome: "resumed", spawned: recovered.spawned } };
           }
           return {
             status: 200,

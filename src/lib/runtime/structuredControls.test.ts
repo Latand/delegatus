@@ -566,6 +566,49 @@ test("resume converges on and republishes an already live structured successor",
   });
 });
 
+test("resume reconnects a surviving Codex process missing its Viewer adapter", async () => {
+  const fixture = structuredConversation();
+  const recoveries: unknown[] = [];
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "resume" }, {
+    registry: fixture.registry,
+    client: null,
+    enabled: () => true,
+    hostProcessAlive: () => true,
+    republish: async () => false,
+    recover: async (request) => {
+      recoveries.push(request);
+      return { target: null, path: fixture.path, conversationId: fixture.conversationId as `conversation_${string}`, spawned: false, reconnected: true };
+    },
+  });
+  expect(recoveries).toEqual([{ path: fixture.path, conversationId: fixture.conversationId, reconnectLiveHost: true }]);
+  expect(result).toEqual({ status: 200, body: { ok: true, structured: true, target: fixture.conversationId, outcome: "resumed", spawned: false } });
+});
+
+for (const reconnected of [false, undefined]) {
+  test(`resume refuses an unconfirmed native reconnect (${reconnected})`, async () => {
+    const fixture = structuredConversation();
+    const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "resume" }, {
+      registry: fixture.registry, client: null, enabled: () => true,
+      hostProcessAlive: () => true, republish: async () => false,
+      recover: async () => ({ target: null, path: fixture.path,
+        conversationId: fixture.conversationId as `conversation_${string}`, spawned: false, reconnected }),
+    });
+    expect(result).toMatchObject({ status: 503, body: { error: "structured recovery ownership is unavailable" } });
+  });
+}
+
+test("a missing live Claude adapter does not enter native Codex reconnect", async () => {
+  const fixture = structuredConversation({ engine: "claude" });
+  let recovered = false;
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "resume" }, {
+    registry: fixture.registry, client: null, enabled: () => true,
+    hostProcessAlive: () => true, republish: async () => false,
+    recover: async () => { recovered = true; return null; },
+  });
+  expect(recovered).toBeFalse();
+  expect(result).toMatchObject({ status: 503 });
+});
+
 test("stale-live Codex resume recovers the production conversation identity", async () => {
   const fixture = structuredConversation();
   const conversation = fixture.registry.conversation(fixture.conversationId as `conversation_${string}`)!;
