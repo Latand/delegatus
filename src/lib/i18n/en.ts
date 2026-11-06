@@ -2358,6 +2358,7 @@ export const en = {
   "files.unavailable.commits": "This lane's commits are no longer in the repository.",
   "files.unavailable.busy": "Still reading this lane.",
   "files.unavailable.failed": "Couldn't read this lane's changes.",
+  "files.unavailable.omitted": "Files for this lane aren't available here.",
   "files.olderLanes": "Show older lanes",
   "files.olderFailed": "Couldn't load older lanes. Press Show older lanes to try again.",
   "files.rowAria": "{name}, {state}, in {dir}. Open",

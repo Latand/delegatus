@@ -104,6 +104,80 @@ describe("revisions", () => {
   });
 });
 
+describe("a task's interval", () => {
+  test("registered committed files stay listed and readable after the lane lands on main, the branch is swept and the cache resets", async () => {
+    const fixture = keep(createTaskFixture());
+    const head = fixture.headSha();
+    const before = okLane(await laneFiles(fixture.lane(), deps()));
+    /* A landing: origin/main now contains the head, so the merge base is the head itself. */
+    fixture.git("update-ref", "refs/remotes/origin/main", head);
+    const landed = okLane(await laneFiles(fixture.lane(), deps()));
+    expect(landed.files).toEqual(before.files);
+    expect(landed.total).toBe(before.total);
+    expect(landed.base).toBe(fixture.lane().baseRef);
+    const opened = await resolveFile(fixture.lane(), head, "docs/handoff/summary.md", deps());
+    expect("status" in opened).toBe(false);
+    /* The branch swept: the last passed commit still names the head. */
+    fixture.git("branch", "-q", "-D", LANE_BRANCH);
+    const swept = okLane(await laneFiles({ ...fixture.lane(), lastPassedCommit: head }, deps()));
+    expect(swept.files).toEqual(before.files);
+    expect(swept).toMatchObject({ headSource: "last-passed" });
+    const read = await resolveFile({ ...fixture.lane(), lastPassedCommit: head }, head, "docs/handoff/summary.md", deps());
+    expect("status" in read).toBe(false);
+  });
+
+  test("a head from before the task's base is refused, cold and warm, with and without a remote ref", async () => {
+    const fixture = keep(createTaskFixture());
+    const historical = fixture.headSha();
+    fixture.git("checkout", "-q", LANE_BRANCH);
+    fixture.write("docs/handoff/summary.md", "# Changed before the task started\n");
+    const taskBase = fixture.commit("before the task");
+    fixture.write("docs/result.md", "# This task's result\n");
+    fixture.commit("task output");
+    fixture.git("checkout", "-q", "--detach");
+    for (const remote of [false, true]) {
+      if (remote) fixture.git("update-ref", "refs/remotes/origin/main", taskBase);
+      else fixture.git("update-ref", "-d", "refs/remotes/origin/main");
+      const lane = { ...fixture.lane(), baseRef: taskBase, stages: [] };
+      const shared = deps();
+      for (const round of ["cold", "warm"]) {
+        const refused = await resolveFile(lane, historical, "docs/handoff/summary.md", shared);
+        expect({ remote, round, refused }).toMatchObject({ refused: { status: 409, code: "head_unknown" } });
+      }
+      const tip = await resolveFile(lane, fixture.headSha(), "docs/result.md", shared);
+      expect("status" in tip).toBe(false);
+    }
+  });
+
+  test("an earlier lane revision stays readable after the lane landed", async () => {
+    const fixture = keep(createTaskFixture());
+    const first = fixture.headSha();
+    fixture.git("checkout", "-q", LANE_BRANCH);
+    fixture.write("docs/later.md", "# later\n");
+    fixture.commit("later");
+    fixture.git("checkout", "-q", "--detach");
+    fixture.git("update-ref", "refs/remotes/origin/main", fixture.headSha());
+    const shared = deps();
+    expect("status" in await resolveFile(fixture.lane(), first, "docs/handoff/summary.md", shared)).toBe(false);
+    expect("status" in await resolveFile(fixture.lane(), fixture.headSha(), "docs/later.md", shared)).toBe(false);
+  });
+
+  test("a lane shares nothing but Git facts with another lane on the same commit pair", async () => {
+    const fixture = keep(createTaskFixture());
+    const shared = deps();
+    const first = fixture.lane();
+    const second = { ...fixture.lane(), id: "lane-second", stages: [{ id: "second", name: "Second", outputs: ["src/added.ts"] }] as unknown as typeof first.stages };
+    await laneFiles(first, shared);
+    const warm = await laneFiles(second, shared);
+    expect(warm).toEqual(await laneFiles(second, deps()));
+    expect(byPath(okLane(warm).files, "src/added.ts")).toMatchObject({ group: "declared", declaredBy: "second" });
+    expect(byPath(okLane(warm).files, "docs/handoff/summary.md").declaredBy).toBeUndefined();
+    /* A changed declaration on the same lane and commits is read afresh. */
+    const redeclared = { ...first, stages: [{ id: "design", name: "design", outputs: ["data"] }] as unknown as typeof first.stages };
+    expect(await laneFiles(redeclared, shared)).toEqual(await laneFiles(redeclared, deps()));
+  });
+});
+
 describe("caches", () => {
   test("a second identical list spawns only the revision commands", async () => {
     const fixture = keep(createTaskFixture());

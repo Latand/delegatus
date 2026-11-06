@@ -25,7 +25,8 @@ import { cleanTitle } from "@/lib/title";
 const VISIBLE_ROWS = 24;
 const VISIBLE_GROUPS = new Set<TaskFile["group"]>(["declared", "document", "image"]);
 
-type LaneState = TaskFilesLane | "loading";
+/** `omitted`: the answer left this lane out (stale, unbound or not readable by the caller). It says no more than that. */
+type LaneState = TaskFilesLane | "loading" | "omitted";
 type FilesAnswer = { lanes: TaskFilesLane[]; omitted: number };
 
 const exactTime = (ts: number) => new Date(ts).toLocaleString();
@@ -96,8 +97,12 @@ export function TaskFiles({ taskId, pipelines }: { taskId: string; pipelines: re
       const body = (await res.json()) as FilesAnswer;
       setAnswers((held) => {
         const next = { ...held };
-        for (const id of ids) delete next[id];
-        for (const lane of body.lanes) next[lane.lane] = lane;
+        const answered = new Set(body.lanes.map((lane) => lane.lane));
+        for (const id of ids) {
+          if (answered.has(id)) delete next[id];
+          else next[id] = "omitted";
+        }
+        for (const lane of body.lanes) if (ids.includes(lane.lane)) next[lane.lane] = lane;
         return next;
       });
       if (kind === "initial") setFailed(false);
@@ -145,7 +150,7 @@ export function TaskFiles({ taskId, pipelines }: { taskId: string; pipelines: re
   const hasOlder = lanes.length > requested;
   const everyLaneEmpty = shown.length > 0 && shown.every((lane) => {
     const answer = answers[lane.id];
-    return answer !== "loading" && answer?.status === "ok" && answer.files.length === 0;
+    return typeof answer === "object" && answer.status === "ok" && answer.files.length === 0;
   });
 
   if (failed && shown.length === 0) {
@@ -207,7 +212,7 @@ function LaneSection({ taskId, pipeline, answer, expanded, onToggle, onRetry }: 
 }) {
   const { t } = useLocale();
   const title = laneTitle(pipeline, pipeline.id);
-  const ok = answer !== "loading" && answer.status === "ok" ? answer : null;
+  const ok = typeof answer === "object" && answer.status === "ok" ? answer : null;
   return (
     <section data-task-files-lane={pipeline.id} className="flex flex-col gap-2">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -224,6 +229,8 @@ function LaneSection({ taskId, pipeline, answer, expanded, onToggle, onRetry }: 
         <p role="status" className="m-0 flex items-center gap-2 text-label font-semibold text-muted">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> {t("common.loadingCap")}
         </p>
+      ) : answer === "omitted" ? (
+        <p data-task-files-unavailable="omitted" className="m-0 text-label text-muted">{t("files.unavailable.omitted")}</p>
       ) : answer.status === "unavailable" ? (
         <div data-task-files-unavailable={answer.reason} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-muted">
           <span>{t(`files.unavailable.${answer.reason === "repository-missing" ? "repository" : answer.reason === "commits-gone" ? "commits" : answer.reason}`)}</span>

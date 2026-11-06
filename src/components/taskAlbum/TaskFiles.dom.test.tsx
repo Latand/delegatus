@@ -248,6 +248,29 @@ test("a view with no committed file says so; a failed read says so with Retry", 
   expect(text()).toContain("a.md");
 });
 
+test("a lane the answer leaves out settles into its own note, beside the lanes that answered, and older lanes stay reachable", async () => {
+  const lanes = Array.from({ length: 7 }, (_, i) => pipeline(`l${i}`, `2026-11-0${i + 1}T00:00:00Z`));
+  lanesAnswer = (ids) => ({ lanes: ids.filter((id) => id !== "l5").map((id) => okLane(id, [file(`docs/${id}.md`)])), omitted: 1 });
+  const host = await mount(lanes);
+  await openFiles(host);
+  expect(document.querySelector("[data-task-files-loading]")).toBeNull();
+  expect(document.querySelector("[data-task-files-lane='l5'] [data-task-files-unavailable='omitted']")!.textContent).toBe("Files for this lane aren't available here.");
+  expect(document.querySelector("[data-task-files-lane='l5'] button")).toBeNull();
+  expect(text()).toContain("l6.md");
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-task-files-older]")!.click());
+  await settle();
+  expect(document.querySelectorAll("[data-task-files-lane]")).toHaveLength(7);
+});
+
+test("a view whose every lane is left out settles instead of loading forever", async () => {
+  lanesAnswer = () => ({ lanes: [], omitted: 1 });
+  const host = await mount([pipeline("a", "2026-11-01T00:00:00Z")]);
+  await openFiles(host);
+  expect(document.querySelector("[data-task-files-loading]")).toBeNull();
+  expect(document.querySelector("[data-task-files-unavailable='omitted']")).not.toBeNull();
+  expect(document.querySelector("[data-task-files-empty]")).toBeNull();
+});
+
 test("lanes are read newest first, five at a time, older ones on request", async () => {
   const lanes = Array.from({ length: 7 }, (_, i) => pipeline(`l${i}`, `2026-11-0${i + 1}T00:00:00Z`));
   lanesAnswer = (ids) => ({ lanes: ids.map((id) => okLane(id, [file(`docs/${id}.md`)])), omitted: 0 });

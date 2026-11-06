@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { classifyArtifact, type ArtifactKind } from "@/lib/artifact/classify";
-import { LANE_CHANGE_LIMITS, laneChangeFiles, resolveLaneRevisions, type LaneChangeFile, type LaneChangeOp, type LaneRevisions } from "@/lib/pipelines/laneChanges";
+import { LANE_CHANGE_LIMITS, laneChangeFiles, resolveLaneRevisions, type LaneChangeError, type LaneChangeFile, type LaneChangeOp, type LaneRevisions } from "@/lib/pipelines/laneChanges";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { ExecOptions, ExecPort } from "@/lib/workflows/provision";
@@ -142,8 +143,16 @@ export function sortRows<T extends Pick<TaskFile, "path" | "op" | "group">>(rows
   });
 }
 
-function pairKey(realRepo: string, base: string, head: string): string {
-  return `${realRepo}\0${base}\0${head}`;
+/** The part of a lane that shapes the shown rows without being a Git fact: the
+    outputs its stages declare, in order. Two lanes (or one lane whose
+    declarations changed) with the same commit pair never share rows. */
+function declarationsKey(lane: LanePipeline): string {
+  const declared = (lane.stages ?? []).map((stage) => [stage.id, (stage.outputs ?? []).map(normalizeOutput)]);
+  return createHash("sha1").update(JSON.stringify(declared)).digest("hex");
+}
+
+function pairKey(lane: LanePipeline, realRepo: string, base: string, head: string): string {
+  return `${realRepo}\0${base}\0${head}\0${declarationsKey(lane)}`;
 }
 
 function listBytes(list: PairList): number {
@@ -164,7 +173,7 @@ export type PairResult = { list: PairList } | { failed: true };
 /** The change list of one commit pair, from the cache or from Git. Concurrent
     identical reads share one computation. */
 export async function pairList(lane: LanePipeline, realRepo: string, base: string, head: string, deps: TaskFilesDeps, signal?: AbortSignal): Promise<PairResult> {
-  const key = pairKey(realRepo, base, head);
+  const key = pairKey(lane, realRepo, base, head);
   const cached = deps.caches.lists.get(key) as PairList | undefined;
   if (cached) return { list: cached };
   return deps.caches.listFlights.join(key, signal, async () => {
@@ -196,6 +205,33 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+/** The commits a task's files are read between. Head is the lane's tip (its
+    branch, else the last passed commit). Base is the merge base with the
+    fetched base branch while the lane is unlanded; once the head is reachable
+    from that branch the merge base is the head itself, so the base the lane
+    was created from (`baseRef`) takes over and the files stay listed after
+    the lane lands, the branch is swept and `origin/<base>` moves on. The base
+    must be an ancestor of the head, or the pair would not be the task's own
+    interval. */
+export async function taskRevisions(lane: LanePipeline, exec: ExecPort): Promise<LaneRevisions | LaneChangeError> {
+  const resolved = await resolveLaneRevisions(lane, exec);
+  if ("error" in resolved) return resolved;
+  let revisions = resolved;
+  if (revisions.base === revisions.head && lane.baseRef) {
+    const created = await exec("git", ["rev-parse", "--verify", "--quiet", "--end-of-options", `${lane.baseRef}^{commit}`], lane.repoDir, undefined, GIT_OPTIONS);
+    const sha = created.stdout.trim();
+    if (created.code === 0 && SHA_RE.test(sha)) revisions = { ...revisions, base: sha, baseSource: "base-ref" };
+  }
+  /* A merge base is an ancestor of the head by construction; a base the lane
+     was created from is checked. */
+  if (revisions.baseSource === "base-ref" && revisions.base !== revisions.head) {
+    const within = await isAncestor(lane, revisions.base, revisions.head, exec);
+    if (within === "failed") return { error: "git did not answer in time", code: "git_failed" };
+    if (!within) return { error: "the lane's base is not part of its history", code: "base_unavailable" };
+  }
+  return revisions;
+}
+
 /** One lane's answer. A deadline, a full line or a failure never throws. The
     slot is held until the lane's own Git work ends, so a deadline that
     answers `busy` never lets more work run than the line allows. */
@@ -209,8 +245,8 @@ export async function laneFiles(lane: LanePipeline, deps: TaskFilesDeps, options
     const work = withViewerOperation("pipelines.laneChanges", async (): Promise<TaskFilesLane> => {
       let realRepo: string;
       try { realRepo = await fs.realpath(lane.repoDir); } catch { return unavailable("repository-missing"); }
-      const revisions = await resolveLaneRevisions(lane, deps.exec);
-      if ("error" in revisions) return unavailable("commits-gone");
+      const revisions = await taskRevisions(lane, deps.exec);
+      if ("error" in revisions) return unavailable(revisions.code === "git_failed" ? "failed" : "commits-gone");
       const result = await pairList(lane, realRepo, revisions.base, revisions.head, deps, signal);
       if ("failed" in result) return unavailable("failed");
       const { list } = result;
@@ -245,8 +281,8 @@ export type ResolvedFile = {
 
 const fail = (status: number, code: string, error: string, retryAfter?: number): FileFailure => ({ status, code, error, ...(retryAfter ? { retryAfter } : {}) });
 
-async function isAncestor(lane: LanePipeline, head: string, of: string, deps: TaskFilesDeps): Promise<boolean | "failed"> {
-  const result = await deps.exec("git", ["merge-base", "--is-ancestor", head, of], lane.repoDir, undefined, GIT_OPTIONS);
+async function isAncestor(lane: LanePipeline, head: string, of: string, exec: ExecPort): Promise<boolean | "failed"> {
+  const result = await exec("git", ["merge-base", "--is-ancestor", head, of], lane.repoDir, undefined, GIT_OPTIONS);
   if (result.code === 0) return true;
   /* 1: not an ancestor; 128: git does not know the object. */
   if (result.code === 1 || result.code === 128) return false;
@@ -283,14 +319,17 @@ export async function resolveFile(lane: LanePipeline, head: string, file: string
 }
 
 async function resolveUncached(lane: LanePipeline, head: string, file: string, realRepo: string, key: string, deps: TaskFilesDeps, signal: AbortSignal): Promise<ResolvedFile | FileFailure> {
-  const current = await resolveLaneRevisions(lane, deps.exec);
-  if ("error" in current) return fail(409, "head_unknown", "the lane has no commit to read from");
+  const current = await taskRevisions(lane, deps.exec);
+  if ("error" in current) return current.code === "git_failed" ? fail(503, "busy", "git did not answer in time", 2) : fail(409, "head_unknown", "the lane has no commit to read from");
   let revisions: LaneRevisions = current;
   if (head !== current.head) {
-    /* An earlier head stays readable while it is an ancestor of the lane's tip. */
-    const pinned = await resolveLaneRevisions({ ...lane, branch: "", lastPassedCommit: head }, deps.exec);
+    /* An earlier head stays readable while it is an ancestor of the lane's tip
+       and the task's own base is an ancestor of it: a commit from before the
+       task started is no task output, whatever it shares with the tip. */
+    const pinned = await taskRevisions({ ...lane, branch: "", lastPassedCommit: head }, deps.exec);
+    if ("error" in pinned && pinned.code === "git_failed") return fail(503, "busy", "git did not answer in time", 2);
     if ("error" in pinned || pinned.head !== head) return fail(409, "head_unknown", "this commit is not known to the lane");
-    const ancestor = await isAncestor(lane, head, current.head, deps);
+    const ancestor = await isAncestor(lane, head, current.head, deps.exec);
     if (ancestor === "failed") return fail(503, "busy", "git did not answer in time", 2);
     if (!ancestor) return fail(409, "head_unknown", "this commit is not part of the lane's history");
     revisions = { ...pinned, headSource: current.headSource };

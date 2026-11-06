@@ -2311,6 +2311,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "files.unavailable.commits": "Комітів цієї лінії вже немає в репозиторії.",
   "files.unavailable.busy": "Ще читаю цю лінію.",
   "files.unavailable.failed": "Не вдалося прочитати зміни цієї лінії.",
+  "files.unavailable.omitted": "Файли цієї лінії тут недоступні.",
   "files.olderLanes": "Показати старіші лінії",
   "files.olderFailed": "Не вдалося завантажити старіші лінії. Натисніть «Показати старіші лінії», щоб спробувати ще раз.",
   "files.rowAria": "{name}, {state}, у {dir}. Відкрити",
