@@ -45,6 +45,7 @@ import {
 } from "./registry";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { didStructuredHostStartupFail, structuredStartupStatus } from "./startupStatus";
+import * as startupStatus from "./startupStatus";
 import { adoptStructuredHostsAtStartup, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
 import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
@@ -1761,7 +1762,7 @@ test.skipIf(process.platform === "win32").each(["current", "previous", "missing-
   }
 });
 
-test.skipIf(process.platform === "win32").each(["current", "rotated", "paused"] as const)("startup keeps an adopted idle seat through final reconciliation only while designated (%s)", async scenario => {
+test.skipIf(process.platform === "win32").each(["current", "rotated", "paused", "finalization", "adapter-health", "post-publication"] as const)("startup keeps an adopted idle seat through final reconciliation only while designated (%s)", async scenario => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retain-"));
   fs.chmodSync(directory, 0o700);
   const socket = path.join(directory, "rpc.sock");
@@ -1782,18 +1783,38 @@ test.skipIf(process.platform === "win32").each(["current", "rotated", "paused"] 
   const client = runtimeJournalClient(journal);
   let seats = [activeSeat("seat-retain", 1, conversation.id, artifactPath)];
   let released = false;
+  let finalizing = false;
+  const progress = startupStatus.markStructuredHostStartupProgress;
+  const progressSpy = spyOn(startupStatus, "markStructuredHostStartupProgress").mockImplementation(value => {
+    progress(value);
+    if (value.phase === "finalizing structured delivery") {
+      finalizing = true;
+      if (scenario === "finalization") seats = [];
+    }
+    if (scenario === "post-publication" && value.phase === "recovering pending spawns") seats = [];
+  });
   const ledger = createFakeDeliveryLedger();
   const host = Object.assign(new FakeEngineHost(ledger, {
     status: "idle", sessionKey: sessionId, endpoint: `codex-unix:${socket}`, pid: process.pid,
     processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fake-v1",
     activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
   }), { onStateChange: () => () => {}, release: async () => { released = true; } });
+  const health = host.health.bind(host);
+  host.health = async () => {
+    if (scenario === "adapter-health" && finalizing) seats = [];
+    return health();
+  };
   try {
     const adopted = await adoptStructuredHostsAtStartup({ registry, client, orchestratorSeats: () => seats,
       schedule: () => ({ unref() {} }),
-      adopt: async (received, _options, _env, shouldAdopt = () => true) => {
+      adopt: async (received, _options, _env, shouldAdopt = () => true, _progress, hooks) => {
         expect(shouldAdopt(received.readOnlySnapshot().entries[`codex:${sessionId}`]!)).toBe(true);
-        return [{ key, host: host as never }];
+        const claimed = received.claimStructuredHost(key, identity, { allowUnhosted: true,
+          reconnectCodex: { endpoint: `codex-unix:${socket}`, process: identity } });
+        expect(claimed).not.toBeNull();
+        const item = { key, host: host as never };
+        if (scenario !== "adapter-health") hooks?.onAdopted?.(item);
+        return [item];
       },
       adoptClaude: async () => {
         if (scenario === "rotated") seats = [activeSeat("seat-retain", 2, "conversation_successor", artifactPath)];
@@ -1803,10 +1824,12 @@ test.skipIf(process.platform === "win32").each(["current", "rotated", "paused"] 
     });
     expect(released).toBe(scenario !== "current");
     expect(adopted.some(item => item.key.sessionId === sessionId)).toBe(scenario === "current");
+    expect(hasStructuredDeliveryHost(key)).toBe(scenario === "current");
     expect(registry.conversation(conversation.id)?.turn.state).toBe("terminal");
     expect(ledger.writes).toEqual([]);
     expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
   } finally {
+    progressSpy.mockRestore();
     await bindStructuredDeliveryQueue([], { registry, client: null });
     await new Promise<void>(resolve => server.close(() => resolve()));
     journal.close();

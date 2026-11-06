@@ -62,6 +62,7 @@ import {
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
   releaseStructuredDeliveryHostsForDemotion,
+  releaseStructuredDeliveryHost,
   type DemotionInterruptionOptions,
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -203,8 +204,12 @@ async function revalidateRetainedStartupHosts(
     if (!startupHostInScope(registry, sessionKeyId(item.key))
       || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys, currentSeats())) current.push(item);
     else {
-      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, () => item.host.release());
-      await flushStructuredHostPersistence(item.host);
+      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
+        if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
+          await item.host.release();
+          await flushStructuredHostPersistence(item.host);
+        }
+      });
     }
   });
   return current;
@@ -2722,7 +2727,9 @@ async function adoptStructuredHostsPass(
       const owns = async (): Promise<boolean> => {
         try { assertActive(); } catch { return false; }
         if (heldHostKeys.has(key) || deferredHostKeys.has(key) || skippedHostKeys.has(key)) return false;
-        const current = startupHostSnapshot(registry, item.key).entries[key];
+        const snapshot = startupHostSnapshot(registry, item.key);
+        const current = snapshot.entries[key];
+        if (!retainedStartupHostIsCurrent(snapshot, item, retainedRecoveryHostKeys(), orchestratorSeats())) return false;
         if (!current?.structuredHost || current.status === "dead" || current.status === "unhosted"
           || current.claimOwner !== claimOwner || current.claimEpoch !== claimEpoch
           || current.structuredHost.writerClaimEpoch !== writerEpoch) return false;
@@ -3157,7 +3164,6 @@ async function adoptStructuredHostsPass(
       }));
     }
     assertActive();
-    adoptedHosts = nextAdoptedHosts;
     const retryEntryKeys = new Map(retryEntries.map(entry => [sessionKeyId(entry.key), entry.key] as const));
     for (const key of new Set([...heldHostKeys, ...failures.keys()])) {
       const entry = publicationSnapshot.entries[key] ?? initialSnapshot.entries[key];
@@ -3209,6 +3215,13 @@ async function adoptStructuredHostsPass(
         { signal: dependencies.signal, assertActive: dependencies.assertActive }, retryDependencies, schedule);
       rowRetries.schedule(key, schedule, retry.run);
     }
+    // Publication, health and recovery all await. Re-read designation after
+    // the final await so a seat changed during those phases leaves no adapter.
+    nextAdoptedHosts = await revalidateRetainedStartupHosts(
+      registry, nextAdoptedHosts, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
+    );
+    adoptedHosts = nextAdoptedHosts;
+    rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
         rememberDeferredStructuredStartup(

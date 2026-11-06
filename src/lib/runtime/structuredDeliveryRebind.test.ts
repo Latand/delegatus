@@ -544,6 +544,24 @@ test("a delivery admitted while the successor is still registering lands exactly
   await close();
 });
 
+test("startup cleanup for a prior adapter leaves its successor registered", async () => {
+  const { registry, directory, client, close } = fixture("retained-successor");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const { key } = seedConversation(registry, directory, "retained-successor-session");
+  const prior = releaseCountingHost();
+  const successor = releaseCountingHost();
+  try {
+    await publishStructuredDeliveryHost({ key, host: prior.host });
+    await publishStructuredDeliveryHost({ key, host: successor.host });
+    expect(await releaseStructuredDeliveryHost(key, prior.host)).toBe(false);
+    expect(successor.releases.count).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBe(true);
+    expect(await releaseStructuredDeliveryHost(key, successor.host)).toBe(true);
+    expect(successor.releases.count).toBe(1);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+  } finally { await close(); }
+});
+
 test("a carried-over host released mid-registration is released once and stays gone (#1191)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-release");
   await bindStructuredDeliveryQueue([], { registry, client });

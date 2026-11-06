@@ -2556,11 +2556,14 @@ export async function republishStructuredDeliveryHost(key: SessionKey): Promise<
   return await state.republishActiveHost?.(key) ?? false;
 }
 
-export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<boolean> {
+export async function releaseStructuredDeliveryHost(key: SessionKey, expectedHost?: EngineHost): Promise<boolean> {
   const id = sessionKeyId(key);
+  // Startup may finish after another adapter has taken this key. Both release
+  // paths claim their host synchronously before awaiting; retain a successor.
+  const pending = unpublishedLaunchHosts.get(id);
+  if (expectedHost && (pending?.host ?? state.activeHosts?.get(id)) !== expectedHost) return false;
   const inFlight = unpublishedLaunchReleases.get(id);
   if (inFlight) return inFlight;
-  const pending = unpublishedLaunchHosts.get(id);
   if (!pending) return await state.releaseActiveHost?.(key) ?? false;
   // Claim before awaiting. Pending lifecycle release does not depend on the
   // runtime projection whose outage prevented publication in the first place.
