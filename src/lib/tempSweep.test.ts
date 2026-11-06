@@ -963,7 +963,7 @@ test("temp cleanup protects a live owner without loading full registry history",
     cwd:held,status:"live",host:null,accountId:null,claimEpoch:0,claimOwner:null,pendingAction:null});
   const full=spyOn(registry,"readOnlySnapshot").mockImplementation(()=>{throw new Error("full history must not be read for cwd protection");});
   try {
-    const report=await runTempSweepInHelper({LLV_TEMP_SWEEP:"dry-run",LLV_TEMP_SWEEP_MAX_AGE_HOURS:"24"},{
+    const report=await runTempSweepInHelper({NODE_ENV:"test",LLV_TEMP_SWEEP:"dry-run",LLV_TEMP_SWEEP_MAX_AGE_HOURS:"24"},{
       roots:[{path:root,via:""}],scan:{ownNamespace:null,processes:[]},now:()=>Date.now()+3*86400000});
     expect(report?.failed).not.toBe(true);
     expect(report?.kept.inUse).toBe(1);
