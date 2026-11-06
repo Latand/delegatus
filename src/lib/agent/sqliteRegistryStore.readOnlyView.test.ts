@@ -10,6 +10,8 @@ import { registryHasLookupIndex, registryRowsMatching, SqliteAgentRegistryStore 
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { cacheSizes } from "@/lib/cacheTelemetry";
+import { registryLockHolder } from "./registryLockHolderFixture";
+import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 
 /* The shared read-only registry view (viewer-hot-path-clones): every reader of
    `readOnlySnapshot` holds the same objects, so none may change them, and every
@@ -41,6 +43,146 @@ function fixture() {
   };
   return { filename, open, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
 }
+
+// Observe ownership without changing admission or replacing the real reader.
+function transactionState(store: SqliteAgentRegistryStore) {
+  return store as unknown as { db: Database; writerHeld: boolean };
+}
+
+for (const prepared of [false, true]) {
+  for (const admission of ["optimistic", "async", "immediate"] as const) {
+    test(`nested keyed read preserves ${admission} mutation ownership, prepared=${prepared}`, async () => {
+      const { open, kept } = fixture();
+      const store = open();
+      if (prepared) await store.prepareReadOnlySnapshot();
+      const state = transactionState(store);
+      const write = (fail: boolean) => store.mutate(file => {
+        expect(state.db.inTransaction).toBe(true);
+        expect(state.writerHeld).toBe(false);
+        expect(store.read(inner => inner.receipts[kept]!.error)).toBeNull();
+        const failure = new Error("nested reader refused");
+        expect(() => store.read(() => { throw failure; })).toThrow(failure);
+        expect(state.db.inTransaction).toBe(true);
+        file.receipts[kept]!.error = "committed by parent";
+        if (fail) throw failure;
+      }, false);
+      const run = async (fail: boolean) => {
+        if (admission === "async") return store.withWriter(() => write(fail));
+        if (admission === "immediate") return store.tryWriter(() => write(fail));
+        return write(fail);
+      };
+      await expect(run(true)).rejects.toThrow("nested reader refused");
+      expect(state.db.inTransaction).toBe(false);
+      expect(state.writerHeld).toBe(false);
+      expect(store.read(file => file.receipts[kept]!.error)).toBeNull();
+      await run(false);
+      expect(state.db.inTransaction).toBe(false);
+      expect(state.writerHeld).toBe(false);
+      expect(open().read(file => file.receipts[kept]!.error)).toBe("committed by parent");
+      expect(await store.withWriter(() => store.read(file => file.receipts[kept]!.error)))
+        .toEqual({ acquired: true, value: "committed by parent" });
+      expect(state.db.inTransaction).toBe(false);
+      expect(state.writerHeld).toBe(false);
+    });
+  }
+
+  test(`nested readers share one revision across a peer commit, prepared=${prepared}`, async () => {
+    const { open, kept } = fixture();
+    const reader = open(), peer = open();
+    if (prepared) await reader.prepareReadOnlySnapshot();
+    reader.read(outer => {
+      expect(outer.receipts[kept]!.error).toBeNull();
+      peer.mutate(file => { file.receipts[kept]!.error = "peer commit"; }, false);
+      expect(reader.read(inner => inner.receipts[kept]!.error)).toBeNull();
+      expect(outer.receipts[kept]!.error).toBeNull();
+    });
+    expect(reader.read(file => file.receipts[kept]!.error)).toBe("peer commit");
+    expect(transactionState(reader).db.inTransaction).toBe(false);
+  });
+}
+
+test("nested read-only errors leave the parent open and standalone errors close it", () => {
+  const { filename, open, kept } = fixture();
+  const initial = open().snapshot().file;
+  const reader = new SqliteAgentRegistryStore(filename, { readOnly: true, initialSnapshot: initial, normalize: normalizeRegistry });
+  stores.push(reader);
+  const state = transactionState(reader);
+  const refusal = new Error("read refused");
+  reader.read(() => {
+    expect(() => reader.read(() => { throw refusal; })).toThrow(refusal);
+    expect(state.db.inTransaction).toBe(true);
+    expect(reader.read(file => file.receipts[kept]!.error)).toBeNull();
+  });
+  expect(state.db.inTransaction).toBe(false);
+  expect(() => reader.read(() => reader.read(() => { throw refusal; }))).toThrow(refusal);
+  expect(state.db.inTransaction).toBe(false);
+  expect(state.writerHeld).toBe(false);
+  expect(() => reader.mutate(file => { file.receipts[kept]!.error = "forbidden"; }, false)).toThrow();
+  expect(reader.read(file => file.receipts[kept]!.error)).toBeNull();
+});
+
+test("nested reads preserve mutation-batch savepoints and earlier committed members", async () => {
+  const { open, kept, removed } = fixture();
+  const store = open();
+  await store.withWriter(() => store.withMutationBatch(() => {
+    store.mutate(file => { file.receipts[kept]!.error = "first member"; }, false);
+    expect(() => store.mutate(file => {
+      expect(store.read(inner => inner.receipts[kept]!.error)).toBe("first member");
+      file.receipts[removed]!.error = "rolled back";
+      store.read(() => { throw new Error("member refused"); });
+    }, false)).toThrow("member refused");
+    expect(transactionState(store).writerHeld).toBe(true);
+    expect(transactionState(store).db.inTransaction).toBe(true);
+    store.mutate(file => { file.receipts[removed]!.error = "last member"; }, false);
+  }));
+  expect(transactionState(store).writerHeld).toBe(false);
+  expect(transactionState(store).db.inTransaction).toBe(false);
+  const reopened = open();
+  expect(reopened.read(file => [file.receipts[kept]!.error, file.receipts[removed]!.error]))
+    .toEqual(["first member", "last member"]);
+});
+
+test("nested reservation guards release expired writers and preserve FIFO progress", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nested-reservation-bound-"));
+  directories.push(directory);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false, undefined,
+    { sqliteMode: "sqlite", sqliteWriterDeadlineMs: 80 });
+  const store = (registry as unknown as { sqliteStore: SqliteAgentRegistryStore }).sqliteStore;
+  const holder = registryLockHolder(store.filename);
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    const conversation = registry.ensureConversation("claude", path.join(directory, "session.jsonl"), null);
+    const admitted: string[] = [];
+    const reserve = (key: string) => registry.holdDeliveryOffLoop(conversation.id, "wake", key, "text", [], null, {}, {
+      admissionGuard: () => {
+        expect(runtimeSwitchRetirementReason(conversation.id, registry)).toBeNull();
+        admitted.push(key);
+      },
+    });
+    await holder.hold();
+    let pulses = 0;
+    timer = setInterval(() => pulses++, 5);
+    const started = performance.now();
+    expect(await Promise.all([reserve("expired-one"), reserve("expired-two")])).toEqual([null, null]);
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(75);
+    expect(elapsed).toBeLessThan(1000);
+    expect(pulses).toBeGreaterThan(2);
+    expect(admitted).toEqual([]);
+    expect(Object.keys(registry.snapshot().heldDeliveries)).toEqual([]);
+    await holder.release();
+    const accepted = await Promise.all([reserve("first"), reserve("second")]);
+    expect(admitted).toEqual(["first", "second"]);
+    expect(accepted.map(item => item?.state)).toEqual(["assigned", "assigned"]);
+    expect(transactionState(store).writerHeld).toBe(false);
+    expect(transactionState(store).db.inTransaction).toBe(false);
+    console.info(JSON.stringify({ case: "nested-reservation-bound", deadlineMs: 80, elapsedMs: elapsed, pulses }));
+  } finally {
+    if (timer) clearInterval(timer);
+    await holder.close();
+    registry.close();
+  }
+});
 
 test("real registry parse-cache counters follow replacement, deletion and retained owner lifetime", () => {
   const { open, conversation } = fixture();
