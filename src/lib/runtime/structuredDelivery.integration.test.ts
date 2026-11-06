@@ -5761,7 +5761,11 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
   `;
   const open = async (resume: boolean, input?: StructuredSpawnInput) => {
     const options = await claudeStructuredHostOptions(input ?? {
-      spec: { cwd: directory, transcript: artifactPath, launchProfile: profile }, account,
+      spec: {
+        engine: "claude", command: "claude", windowName: "terminal-recovery",
+        cwd: directory, transcript: artifactPath, launchProfile: profile,
+      } satisfies StructuredSpawnInput["spec"],
+      account,
     }, { env: { ...process.env }, host: {} });
     const hostOptions = {
       ...options, sessionId, eventStore: events, deliveryLedger: deliveries, requestTimeoutMs: 1_000,
