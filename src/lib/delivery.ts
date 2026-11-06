@@ -744,12 +744,12 @@ export interface ConversationMessage {
   origin?: MessageOrigin;
   /** How a structured host treats a turn already running. Absent keeps the
       send default, which interrupts it; `queue` waits until the host is idle,
-      which is what a seat tick wake asks for. Only the structured transport
-      reads it. A conversation whose current owner is a legacy pane host is
+      and `context-or-queue` adds native context to a supported active host.
+      Only the structured transport reads it. A conversation whose current owner is a legacy pane host is
       not recovered into a structured send, so its message takes the legacy
       ladder, which never reads the policy and types the text into the pane
       the way it types every other message. */
-  policy?: "queue" | "steer-or-queue";
+  policy?: "queue" | "context-or-queue" | "steer-or-queue";
 }
 
 export interface DeliveryOverrides {

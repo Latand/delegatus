@@ -3772,7 +3772,7 @@ test("a stale synchronization-held steer fails safely across Codex and Claude re
   }
 });
 
-for (const policy of ["queue", "steer-or-queue"] as const) {
+for (const policy of ["queue", "steer-or-queue", "context-or-queue"] as const) {
 test(`a published Codex successor receives its migration-held ${policy} message once, under the original operation (#1709)`, async () => {
   const directory = path.join(sandbox, `migration-${policy}`);
   fs.mkdirSync(directory);

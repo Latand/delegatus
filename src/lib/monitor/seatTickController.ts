@@ -1270,7 +1270,7 @@ async function reconcileOutstandingWake(context: {
       try {
         outcome = await dispatchCall.run({ clientMessageId: wake.clientMessageId, token }, () => context.deliver!({
           pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" }));
+          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "context-or-queue" }));
         redispatched = deliveryOutcomeLabel(outcome);
         redispatchReason = sendRefusalDetail(outcome);
       } catch (error) {
@@ -2341,10 +2341,10 @@ async function check(
             if (accounting && !token) throw new Error("wake dispatch already claimed");
             const admission = await admissionFor(input.seat);
             if (!admission) throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
-            /* A wake waits for the seat to go idle: the default policy would
-               interrupt a turn the seat or the operator has running. */
+            /* The executor chooses native context on a supported running host,
+               or a normal wake when idle, under this one durable key. */
             const message = { pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "queue" as const,
+              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "context-or-queue" as const,
               admissionGuard: admission.guard, recoveryAuthorityGuard: admission.authorityGuard };
             outcome = token ? await dispatchCall.run({ clientMessageId, token }, () => deliverWake(message)) : await deliverWake(message);
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };

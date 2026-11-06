@@ -15,7 +15,7 @@ import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
  * own, records the engine write where the parent can count it, and then holds
  * the send open forever so the parent can end the process exactly in that gap.
  */
-const [journalPath, ledgerPath, claim] = process.argv.slice(2);
+const [journalPath, ledgerPath, claim, mode] = process.argv.slice(2);
 if (!journalPath || !ledgerPath || !claim) {
   throw new Error("structured delivery crash child arguments are incomplete");
 }
@@ -35,20 +35,28 @@ const host: EngineHost = {
   interrupt: async () => {},
   answer: async () => {},
   health: async (): Promise<HostState> => ({
-    status: "idle",
-    sessionKey: "crash-session",
+    status: mode === "context" ? "active" : "idle",
+    sessionKey: mode === "context" ? "thread-context" : "crash-session",
     endpoint: "crash:host",
     pid: process.pid,
     processStartIdentity: String(process.pid),
     eventCursor: 0,
     protocolVersion: "crash-v1",
-    activeTurnRef: null,
+    activeTurnRef: mode === "context" ? "turn-context" : null,
     pendingAttention: [],
-    activeFlags: [],
+    activeFlags: mode === "context" ? ["native-inject"] : [],
     account: null,
   }),
   release: async () => {},
 };
+
+if (mode === "context") Object.assign(host, {
+  inject: async (request: { operationId: string }) => {
+    fs.appendFileSync(ledgerPath, `${request.operationId}\n`);
+    return { placement: "pending-input", turnId: "turn-context", observe: () =>
+      new Promise<boolean>(resolve => { setTimeout(() => resolve(false), 10 * 60_000); }) };
+  },
+});
 
 const queue = new StructuredDeliveryQueue({
   effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
@@ -57,6 +65,7 @@ const queue = new StructuredDeliveryQueue({
   },
   status: async (operationId) => journal.operationResult(operationId)?.receipt ?? null,
   hostClaim: () => claim,
+  injectionBinding: () => ({ threadId: "thread-context", accountId: null, writerClaim: claim }),
 }, () => host);
 
 await queue.drain();

@@ -171,6 +171,69 @@ test("dead Viewer MCP withholds a recordless refusal retry under its original ke
   expect(fixture.row().outstandingWake).toBeNull();
 });
 
+test.each(["delivered", "uncertain"] as const)("recordless wake retry preserves native context and accounting identity (%s)", async result => {
+  const clock = spyOn(Date, "now").mockReturnValue(NOW);
+  const fixture = childFixture(`recordless-context-${result}`);
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
+  fixture.seed();
+  const { journal, client } = hostedSeat(fixture);
+  const ledger = createFakeDeliveryLedger();
+  const host = new FakeEngineHost(ledger, {
+    status: "active", sessionKey: "seat-session", endpoint: "fixture:seat-host", pid: 1, processStartIdentity: "fixture:1",
+    eventCursor: 0, protocolVersion: "fixture-v1", activeTurnRef: "turn-running", pendingAttention: [], activeFlags: ["native-inject"], account: null,
+  });
+  const inject = host.inject.bind(host);
+  host.inject = async request => ({ ...await inject(request), observe: async () => result === "delivered" });
+  let interrupts = 0;
+  host.interrupt = async () => { interrupts++; };
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+    status: async id => journal.operationResult(id)?.receipt ?? null,
+    settled: () => false,
+    injectionBinding: () => ({ threadId: "seat-session", accountId: null, writerClaim: "seat-owner" }),
+    hostClaim: () => "seat-owner",
+  }, () => host);
+  try {
+    await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true,
+      deliverWith: refuseBeforeReservation(503),
+    }).deps);
+    const original = fixture.row().outstandingWake!;
+    expect(original).toMatchObject({ operationId: null, dispatch: { state: "refused" } });
+    expect(await resolveOriginalSend(original, { registry: fixture.registry, client })).toEqual({ kind: "absent" });
+    const retry = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 5 * MINUTE,
+      settlementNow: () => NOW, deliverWith: realTransport(fixture, client),
+    });
+    await runSeatTickCheck(fixture.project, retry.deps);
+    expect(retry.sent).toHaveLength(1);
+    expect(retry.sent[0]!.clientMessageId).toBe(original.clientMessageId);
+    const pending = fixture.row().outstandingWake!;
+    expect(pending).toMatchObject({ clientMessageId: original.clientMessageId, dispatch: { state: "returned" } });
+    expect(pending.operationId).not.toBeNull();
+    expect(fixture.acknowledged()).toEqual([]);
+    await queue.drain();
+    expect(ledger.injections.map(request => request.operationId)).toEqual([pending.operationId!]);
+    expect(journal.operationResult(pending.operationId!)?.receipt).toMatchObject({ status: result, idempotencyKey: original.clientMessageId });
+    const observed = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 5 * MINUTE + 1_000,
+      settlementNow: () => NOW, deliverWith: realTransport(fixture, client),
+    });
+    await runSeatTickCheck(fixture.project, observed.deps);
+    expect(observed.sent).toEqual([]);
+    if (result === "delivered") {
+      expect(fixture.row().outstandingWake).toBeNull();
+      expect(fixture.acknowledged()).toEqual([child.id]);
+    } else {
+      expect(fixture.row().outstandingWake).toMatchObject({ clientMessageId: original.clientMessageId, operationId: pending.operationId });
+      expect(fixture.acknowledged()).toEqual([]);
+    }
+    await queue.drain();
+    expect(ledger.injections).toHaveLength(1);
+    expect(ledger.writes).toEqual([]);
+    expect(interrupts).toBe(0);
+  } finally { journal.close(); clock.mockRestore(); }
+});
+
 test("a dead-host original-key retry refreshes its snapshot and recovers without acknowledging early", async () => {
   const fixture = childFixture("dead-host-same-key");
   setAgentRegistryForTests(fixture.registry);
@@ -1270,7 +1333,7 @@ test("a released wake is raised again as a new message the journal admits, throu
   }
 });
 
-test("a wake waits out the seat's running turn instead of interrupting it, and reaches the seat once, when it is idle", async () => {
+test.each(["claude", "codex"])("%s seat wake uses context when supported and otherwise waits safely for idle", async engine => {
   const fixture = childFixture("busy-seat-wake");
   setAgentRegistryForTests(fixture.registry);
   const child = fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 20) });
@@ -1280,7 +1343,7 @@ test("a wake waits out the seat's running turn instead of interrupting it, and r
      started is running when the queue reaches the wake. */
   const seatHost: HostState = {
     status: "active", sessionKey: "seat-session", endpoint: "fixture:seat-host", pid: 1, processStartIdentity: "fixture:1",
-    eventCursor: 0, protocolVersion: "fixture-v1", activeTurnRef: "turn:operator", pendingAttention: [], activeFlags: [], account: null,
+    eventCursor: 0, protocolVersion: "fixture-v1", activeTurnRef: "turn:operator", pendingAttention: [], activeFlags: engine === "codex" ? ["native-inject"] : [], account: null,
   };
   const ledger = createFakeDeliveryLedger();
   let interrupts = 0;
@@ -1292,6 +1355,8 @@ test("a wake waits out the seat's running turn instead of interrupting it, and r
     transition: async (id, status, details) => { journal.transitionOperation(id, status, details); },
     status: async (id) => journal.operationResult(id)?.receipt ?? null,
     settled: () => false,
+    injectionBinding: () => ({ threadId: "seat-session", accountId: null, writerClaim: "seat-owner" }),
+    hostClaim: () => "seat-owner",
   }, () => new SeatHost(ledger, seatHost));
   const live = () => Date.now();
   try {
@@ -1299,24 +1364,33 @@ test("a wake waits out the seat's running turn instead of interrupting it, and r
     expect(await runSeatTickCheck(fixture.project, raised.deps)).toMatchObject({ verdict: "wake", delivery: { outcome: "queued" } });
     const wake = fixture.row().outstandingWake!;
     expect(wake.operationId).not.toBeNull();
-    expect(journal.effectBatch(100, ["runtime.send"]).map((effect) => effect.payload.policy)).toEqual(["queue"]);
+    const admittedPolicies = journal.effectBatch(100, ["runtime.send"]).map(effect => effect.payload.policy);
 
     await queue.drain();
     expect(interrupts).toBe(0);
     expect(ledger.writes).toEqual([]);
-    expect(journal.operationResult(wake.operationId!)?.receipt.status).toBe("queued");
+    if (engine === "codex") {
+      expect(ledger.injections.map(entry => entry.operationId)).toEqual([wake.operationId!]);
+      expect(journal.operationResult(wake.operationId!)?.receipt).toMatchObject({ status: "delivered", reason: expect.stringContaining("injected input") });
+    } else {
+      expect(ledger.injections).toEqual([]);
+      expect(journal.operationResult(wake.operationId!)?.receipt.status).toBe("queued");
+    }
+    expect(admittedPolicies).toEqual(["context-or-queue"]);
     /* A check while the turn runs sends nothing and keeps the same wake. */
-    const busy = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 5 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
-    await runSeatTickCheck(fixture.project, busy.deps);
-    expect(busy.sent).toEqual([]);
-    expect(fixture.row().outstandingWake).toMatchObject({ clientMessageId: wake.clientMessageId, operationId: wake.operationId });
+    if (engine === "claude") {
+      const busy = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 5 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
+      await runSeatTickCheck(fixture.project, busy.deps);
+      expect(busy.sent).toEqual([]);
+      expect(fixture.row().outstandingWake).toMatchObject({ clientMessageId: wake.clientMessageId, operationId: wake.operationId });
+    }
 
     /* The turn ends; the next pass hands the wake over, once, under its key. */
     Object.assign(seatHost, { status: "idle", activeTurnRef: null });
     await queue.drain();
     await queue.drain();
     expect(interrupts).toBe(0);
-    expect(ledger.writes.map((entry) => entry.id)).toEqual([wake.operationId!]);
+    expect(ledger.writes.map((entry) => entry.id)).toEqual(engine === "claude" ? [wake.operationId!] : []);
     expect(journal.operationResult(wake.operationId!)?.receipt).toMatchObject({ status: "delivered", idempotencyKey: wake.clientMessageId });
     const landed = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 10 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
     await runSeatTickCheck(fixture.project, landed.deps);
