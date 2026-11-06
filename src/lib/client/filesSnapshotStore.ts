@@ -27,6 +27,30 @@ const DB_NAME = "delegatus-boot";
 const STORE = "snapshot";
 const KEY = "files";
 
+export const CREATION_RECEIPT_LIMIT = 8;
+export const CREATION_LOCATORS_MAX_BYTES = 64 * 1024;
+export interface CreationLocator {
+  id: string;
+  /** A pending attachment is offered on the same stored ID, never replayed. */
+  link?: { attachLink: string; kind: "issue" | "pr" };
+}
+export interface CreationLocators { owner: string; scope?: string; entries: CreationLocator[] }
+
+export function usableCreationLocators(value: unknown): value is CreationLocators {
+  if (!value || typeof value !== "object") return false;
+  const record = value as CreationLocators;
+  return typeof record.owner === "string" && record.owner.length > 0 && record.owner.length <= 256
+    && (record.scope === undefined || (typeof record.scope === "string" && record.scope.length <= CREATION_LOCATORS_MAX_BYTES))
+    && Array.isArray(record.entries) && record.entries.length <= CREATION_RECEIPT_LIMIT
+    && new Set(record.entries.map(entry => entry?.id)).size === record.entries.length
+    && record.entries.every(entry => typeof entry?.id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(entry.id)
+      && (!entry.link || (typeof entry.link.attachLink === "string" && entry.link.attachLink.length <= 2048
+        && ["issue", "pr"].includes(entry.link.kind))))
+    && new TextEncoder().encode(JSON.stringify({ owner: record.owner, scope: record.scope,
+      entries: record.entries.map(entry => ({ id: entry.id, link: entry.link && { attachLink: entry.link.attachLink, kind: entry.link.kind } })),
+    })).byteLength <= CREATION_LOCATORS_MAX_BYTES;
+}
+
 export interface FilesSnapshotRecord {
   version: number;
   /** Epoch ms of the write. */
@@ -34,12 +58,15 @@ export interface FilesSnapshotRecord {
   etag: string;
   /** The raw global-scope body, exactly as the cache certified it. */
   text: string;
+  /** Independently retained known IDs. Never part of the ETag's catalog. */
+  creations?: CreationLocators;
 }
 
 export interface FilesSnapshotStore {
   read(): Promise<FilesSnapshotRecord | null>;
-  write(record: FilesSnapshotRecord): Promise<void>;
-  clear(): Promise<void>;
+  write(record: FilesSnapshotRecord, current?: () => boolean): Promise<void>;
+  clear(owner?: string): Promise<void>;
+  updateCreations?(owner: string, add: CreationLocator[], remove: string[], current: () => boolean, certified?: FilesSnapshotRecord, scope?: string): Promise<CreationLocators>;
 }
 
 /** A record the next document may paint: this version, not too old, not too
@@ -100,22 +127,69 @@ export function indexedDbFilesSnapshotStore(): FilesSnapshotStore | null {
     async read() {
       try {
         const record = await run("readonly", (store) => store.get(KEY) as IDBRequest<unknown>);
-        return usableSnapshot(record, Date.now()) ? record : null;
+        if (usableSnapshot(record, Date.now())) return record;
+        const creations = (record as FilesSnapshotRecord | null)?.creations;
+        return usableCreationLocators(creations) ? { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), text: "", etag: "", creations } : null;
       } catch {
         return null;
       }
     },
-    async write(record) {
-      if (record.text.length > FILES_SNAPSHOT_MAX_BYTES) return;
-      try {
-        await run("readwrite", (store) => store.put(record, KEY));
-      } catch {
-        /* quota, a closing page: the next certified answer tries again */
-      }
+    async write(record, current = () => true) {
+      if (record.text.length > FILES_SNAPSHOT_MAX_BYTES) throw new Error("snapshot is too large");
+      const db = await open();
+      if (!current()) throw new Error("snapshot owner changed");
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        const store = tx.objectStore(STORE);
+        const read = store.get(KEY);
+        read.onsuccess = () => {
+          try {
+            if (!current()) { tx.abort(); return; }
+            if (!read.result || record.savedAt >= read.result.savedAt) store.put({ ...record, creations: read.result?.creations }, KEY);
+          } catch { tx.abort(); }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = tx.onabort = () => reject(tx.error ?? new Error("snapshot write failed"));
+      });
     },
-    async clear() {
+    async updateCreations(owner, add, remove, current, certified, scope) {
+      const db = await open();
+      if (!current()) throw new Error("creation owner changed");
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        const store = tx.objectStore(STORE);
+        const read = store.get(KEY);
+        let creations: CreationLocators;
+        read.onsuccess = () => {
+          try {
+            if (!current()) { tx.abort(); return; }
+            const previous = read.result as FilesSnapshotRecord | undefined;
+            const entries = new Map((previous?.creations?.owner === owner && usableCreationLocators(previous.creations)
+              ? previous.creations.entries : []).filter(entry => !remove.includes(entry.id)).map(entry => [entry.id, entry]));
+            for (const entry of add) entries.set(entry.id, entry);
+            creations = { owner, scope, entries: [...entries.values()] };
+            if (!usableCreationLocators(creations)) { tx.abort(); return; }
+            if (certified && certified.text.length > FILES_SNAPSHOT_MAX_BYTES) { tx.abort(); return; }
+            const compatible = previous?.creations?.owner === owner && previous.creations.scope === scope;
+            store.put({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: "", text: "", ...(compatible ? previous : {}), ...certified, creations }, KEY);
+          } catch { tx.abort(); }
+        };
+        tx.oncomplete = () => current() ? resolve(creations!) : reject(new Error("creation owner changed"));
+        tx.onerror = tx.onabort = () => reject(tx.error ?? new Error("creation recovery write failed"));
+      });
+    },
+    async clear(owner) {
       try {
-        await run("readwrite", (store) => store.delete(KEY));
+        if (owner === undefined) { await run("readwrite", (store) => store.delete(KEY)); return; }
+        const db = await open();
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE, "readwrite");
+          const store = tx.objectStore(STORE);
+          const read = store.get(KEY);
+          read.onsuccess = () => { if (read.result?.creations?.owner === owner) store.delete(KEY); };
+          tx.oncomplete = () => resolve();
+          tx.onerror = tx.onabort = () => reject(tx.error);
+        });
       } catch {
         /* nothing stored, or storage gone */
       }
@@ -129,12 +203,26 @@ export function memoryFilesSnapshotStore(initial: FilesSnapshotRecord | null = n
   let record = initial;
   return {
     current: () => record,
-    read: async () => (usableSnapshot(record, Date.now()) ? record : null),
-    write: async (next) => {
-      if (next.text.length <= FILES_SNAPSHOT_MAX_BYTES) record = next;
+    read: async () => (usableSnapshot(record, Date.now()) || usableCreationLocators(record?.creations) ? record : null),
+    write: async (next, current = () => true) => {
+      if (!current()) throw new Error("snapshot owner changed");
+      if (next.text.length > FILES_SNAPSHOT_MAX_BYTES) throw new Error("snapshot is too large");
+      if (!record || next.savedAt >= record.savedAt) record = { ...next, creations: record?.creations };
     },
-    clear: async () => {
-      record = null;
+    updateCreations: async (owner, add, remove, current, certified, scope) => {
+      if (!current()) throw new Error("creation owner changed");
+      const entries = new Map((record?.creations?.owner === owner ? record.creations.entries : [])
+        .filter(entry => !remove.includes(entry.id)).map(entry => [entry.id, entry]));
+      for (const entry of add) entries.set(entry.id, entry);
+      const creations = { owner, scope, entries: [...entries.values()] };
+      if (!usableCreationLocators(creations)) throw new Error("creation recovery capacity reached");
+      if (certified && certified.text.length > FILES_SNAPSHOT_MAX_BYTES) throw new Error("snapshot is too large");
+      const compatible = record?.creations?.owner === owner && record.creations.scope === scope;
+      record = { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: "", text: "", ...(compatible ? record : {}), ...certified, creations };
+      return creations;
+    },
+    clear: async (owner) => {
+      if (owner === undefined || record?.creations?.owner === owner) record = null;
     },
   };
 }

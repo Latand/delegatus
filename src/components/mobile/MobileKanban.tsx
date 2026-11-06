@@ -1,4 +1,5 @@
 "use client";
+import { useMaterializedCreationIds } from "@/hooks/useFiles";
 
 import { CardStatusBadge } from "@/components/CardStatusBadge";
 
@@ -38,7 +39,7 @@ import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kan
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { cardWaitsForCpu, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
-import { PipelineBlock, stageAt } from "@/components/pipelines/PipelineBlock";
+import { PipelineBlock, PipelineCreationBlock, stageAt } from "@/components/pipelines/PipelineBlock";
 import { attemptNavTarget, resolveStageNavFile } from "@/components/pipelines/pipelineModel";
 import { latestAttempt } from "@/lib/pipelines/stageChip";
 import { formatConversationHash } from "@/lib/accounts/identity";
@@ -584,6 +585,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
       ) : motion}
       {item.kind === "task" && card.task && hasTaskMeta(card.task) ? <span className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></span> : null}
       <TaskStepsLine summary={card.stepSummary} />
+      {card.creations?.map(creation => <PipelineCreationBlock key={creation.id} creation={creation} controls={false} />)}
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
@@ -969,6 +971,36 @@ export function MobileKanban(props: MobileKanbanProps) {
     if (smooth && typeof element.scrollTo === "function") element.scrollTo({ left, behavior: reducedMotion() ? "auto" : "smooth" });
     else element.scrollLeft = left;
   }, []);
+  const revealedCreations = useRef(new Set<string>());
+  const revealedMaterialized = useRef(new Set<string>());
+  const materializedCreationIds = useMaterializedCreationIds();
+  const [creationOpen, setCreationOpen] = useState<string | null>(null);
+  const creationCards = [...model.unlinkedShown, ...Object.values(model.columns).flatMap(column => column.shown)]
+    .flatMap(card => card.creations ?? []);
+  const openedCreation = creationCards.find(creation => creation.id === creationOpen);
+  useEffect(() => {
+    const cards = [...model.unlinkedShown, ...Object.values(model.columns).flatMap(column => column.shown)];
+    for (const id of materializedCreationIds) {
+      const card = cards.find(card => card.pipelines.some(summary => summary.pipeline.id === id));
+      if (card && !revealedMaterialized.current.has(id)) {
+        revealedMaterialized.current.add(id);
+        writePlace(project, { column: card.status }); place(card.status, false);
+      }
+    }
+    for (const id of revealedMaterialized.current) if (!materializedCreationIds.includes(id)) revealedMaterialized.current.delete(id);
+    const current = new Set(cards.flatMap(card => card.creations?.map(creation => creation.id) ?? []));
+    for (const id of revealedCreations.current) if (!current.has(id)) {
+      revealedCreations.current.delete(id);
+      const materialized = cards.find(card => card.pipelines.some(summary => summary.pipeline.id === id));
+      if (materialized) { writePlace(project, { column: materialized.status }); place(materialized.status, false); }
+    }
+    for (const card of cards) for (const creation of card.creations ?? []) {
+      if (revealedCreations.current.has(creation.id)) continue;
+      revealedCreations.current.add(creation.id);
+      writePlace(project, { column: card.status });
+      place(card.status, false);
+    }
+  }, [model, project, place, materializedCreationIds]);
   /* The board opens where the operator left it: the column, then each page's
      offset, before the first paint. */
   useLayoutEffect(() => {
@@ -1220,6 +1252,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   };
 
   const open = (item: PhoneCard): (() => void) | null => {
+    if (!item.card.task && item.card.creations?.length) return () => setCreationOpen(item.card.creations![0]!.id);
     if (item.kind === "task") {
       const task = item.card.task;
       return task ? () => props.onOpenTask(tasksById.current.get(task.id) ?? task) : null;
@@ -1362,6 +1395,9 @@ export function MobileKanban(props: MobileKanbanProps) {
         })}
       </div>
       <ColumnDock />
+      {openedCreation ? <MobileSheet name="card" title={openedCreation.receipt?.title ?? t("pipelineCreation.restoring")} onClose={() => setCreationOpen(null)}>
+        <div className="p-3"><PipelineCreationBlock creation={openedCreation} /></div>
+      </MobileSheet> : null}
       {sheetItem ? (
         <CardSheet
           title={t("kanban.cardActions", { title: shortTitle(t, sheetItem) })}

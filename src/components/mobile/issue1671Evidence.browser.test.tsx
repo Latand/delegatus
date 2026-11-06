@@ -56,6 +56,18 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
 
+describe("accepted queued creation continuity", () => {
+  browserTest("real create, missing catalogs, reload and terminal readback on the phone", async () => {
+    const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "accepted-creation-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { expect(await captureAcceptedCreation(browser, out, true)).toHaveLength(8); }
+    finally { await browser.close(); sockets.close(); }
+  }, 600_000);
+});
+
 describe("GitHub App connection forms", () => {
   browserTest("GitHub links and confirmation fit the phone Decisions sheet", async () => {
     await withAppConnectBrowserTemp(async () => {

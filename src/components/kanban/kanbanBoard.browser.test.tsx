@@ -69,6 +69,18 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("accepted queued creation continuity", () => {
+  browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
+    const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "accepted-creation-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { expect(await captureAcceptedCreation(browser, out, false)).toHaveLength(16); }
+    finally { await browser.close(); sockets.close(); }
+  }, 600_000);
+});
+
 describe("per-account paid spending", () => {
   browserTest("account row switch and balance fit in both locales and themes", async () => {
     const out = path.resolve(".artifacts/account-spend-credits"); fs.mkdirSync(out, { recursive: true });

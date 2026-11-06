@@ -1,7 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 
 import { PIPELINE_TEMPLATES, createDraftPipeline } from "./pipelineModel";
+import { setTeamViewForTests } from "@/components/team/teamClient";
+import { attachPipelineCreationLink, retryPipelineCreationRead, resetFilesClientCacheForTests } from "@/hooks/useFiles";
+import { memoryFilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
+import * as filesClient from "@/hooks/useFiles";
 
 /* createDraftPipeline posts a preflight-approved repository as a draft. */
 const dom = new Window();
@@ -13,7 +17,17 @@ Object.assign(globalThis, {
 });
 
 const realFetch = globalThis.fetch;
+let storage = memoryFilesSnapshotStore();
+beforeEach(() => {
+  setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
+    approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
+  } });
+  storage = memoryFilesSnapshotStore();
+  resetFilesClientCacheForTests(storage);
+});
 afterEach(() => {
+  resetFilesClientCacheForTests();
+  setTeamViewForTests(null);
   globalThis.fetch = realFetch;
 });
 
@@ -91,6 +105,94 @@ const PR_SOURCE = {
   attachLink: null,
 };
 
+test("accepted source draft keeps one ID across reload and reads the stored links before a manual attachment", async () => {
+  const pipeline = { id: "queued-source", project: "demo", task: "Attach the source", taskIds: [], state: "draft", createdAt: "2030-01-01T00:00:00Z", stages: [], runs: [], workLinks: [] as unknown[] };
+  const source = { ...PR_SOURCE, kind: "issue" as const, attachLink: "owner/project#7" };
+  const calls: string[] = [];
+  let materialized = false;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (init?.method === "POST") return Response.json({ pipeline, queued: { queuedAt: pipeline.createdAt, reason: "store_unavailable" } }, { status: 202 });
+    if (init?.method === "PATCH") {
+      pipeline.workLinks = [{ repository: "owner/project", number: 7, kind: "issue" }];
+      // The write completed; its acknowledgement was lost.
+      throw new Error("acknowledgement unavailable");
+    }
+    return materialized ? Response.json({ pipeline }) : Response.json({ code: "pipeline_queued", queuedCreation: {
+      id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: pipeline.createdAt, state: "queued", reason: "store_unavailable",
+    } }, { status: 404 });
+  }) as typeof fetch;
+  const result = await createDraftPipeline("demo", "/repo", undefined, undefined, { source, taskId: null });
+  expect(result.accepted).toBe(true);
+  expect(result.pipeline?.id).toBe(pipeline.id);
+  expect(calls).toEqual(["POST /api/pipelines"]);
+  expect((await storage.read())?.creations?.entries).toEqual([{ id: pipeline.id, link: { attachLink: source.attachLink, kind: "issue" } }]);
+  resetFilesClientCacheForTests(storage);
+  await Promise.resolve(); await Promise.resolve();
+  await retryPipelineCreationRead();
+  materialized = true;
+  await retryPipelineCreationRead();
+  expect(calls.filter(call => call.startsWith("PATCH"))).toHaveLength(0);
+  expect(await attachPipelineCreationLink(pipeline.id)).toBeTruthy();
+  expect(await attachPipelineCreationLink(pipeline.id)).toBeNull();
+  expect(calls.filter(call => call.startsWith("POST"))).toHaveLength(1);
+  expect(calls.filter(call => call.startsWith("PATCH"))).toHaveLength(1);
+});
+
+test.each(["response", "body"])("create completion loses its authority during %s without opening or attaching", async phase => {
+  let release!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    calls.push(url);
+    if (phase === "response") { started(); await pending; }
+    return { ok: true, status: 201, json: async () => {
+      if (phase === "body") { started(); await pending; }
+      return { pipeline: { id: "late-source", project: "demo", task: "Private title" } };
+    } };
+  }) as unknown as typeof fetch;
+  const result = createDraftPipeline("demo", "/repo", undefined, undefined, { source: { ...PR_SOURCE, kind: "issue", attachLink: "owner/project#7" }, taskId: null });
+  await entered;
+  setTeamViewForTests(null);
+  release();
+  expect(await result).toEqual({ error: "Access unavailable" });
+  expect(calls).toEqual(["/api/pipelines"]);
+  expect((await storage.read())?.creations?.entries ?? []).toEqual([]);
+});
+
+test.each([false, true])("dispatch rechecks the completed reservation (revoked=%s)", async revoked => {
+  const prepare = filesClient.preparePipelineCreation;
+  const observer = spyOn(filesClient, "preparePipelineCreation").mockImplementation(async () => {
+    const reservation = await prepare();
+    if (revoked) queueMicrotask(() => setTeamViewForTests(null));
+    return reservation;
+  });
+  let posts = 0;
+  globalThis.fetch = (async () => { posts++; return Response.json({ pipeline: { id: "fresh-create" } }, { status: 201 }); }) as typeof fetch;
+  try {
+    const result = await createDraftPipeline("demo", "/repo");
+    expect(posts).toBe(revoked ? 0 : 1);
+    expect(result.pipeline?.id).toBe(revoked ? undefined : "fresh-create");
+    if (revoked) expect(result.error).toBe("Access unavailable");
+  } finally { observer.mockRestore(); }
+});
+
+test("eight concurrent intents reserve capacity before POST and the ninth never dispatches", async () => {
+  let posts = 0;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  globalThis.fetch = (async () => { posts++; await held; return Response.json({ error: "refused" }, { status: 400 }); }) as typeof fetch;
+  const pending = Array.from({ length: 9 }, () => createDraftPipeline("demo", "/repo"));
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  expect(posts).toBe(8);
+  release();
+  const results = await Promise.all(pending);
+  expect(results.filter(result => result.error === "refused")).toHaveLength(8);
+  expect(results[8]?.error).toContain("tracking is full");
+});
+
 test("a PR source drafts with its title, followed base, PR delivery and linked task, and attaches nothing", async () => {
   const requests: Array<{ url: string; body?: unknown }> = [];
   globalThis.fetch = (async (url: string, init?: { body?: string }) => {
@@ -99,7 +201,7 @@ test("a PR source drafts with its title, followed base, PR delivery and linked t
   }) as unknown as typeof fetch;
 
   const result = await createDraftPipeline("demo", "/repo", undefined, undefined, { source: PR_SOURCE, taskId: "task-1" });
-  expect(result).toEqual({ pipeline: { id: "p12" } as never });
+  expect(result).toMatchObject({ pipeline: { id: "p12" } as never });
   expect(requests).toEqual([{ url: "/api/pipelines", body: {
     task: "PR #41: Links", repoDir: "/repo",
     stages: [{ id: "implement", kind: "run", role: { roleId: "builder" }, prompt: "{{task}}", next: null }],

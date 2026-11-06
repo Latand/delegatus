@@ -210,6 +210,343 @@ export function browserCase(enabled: boolean) {
   };
 }
 
+/** Real browser producer and real durable queue, with deliberately lagging catalogs. */
+export async function captureAcceptedCreation(browser: Browser, out: string, phone: boolean) {
+  const { execFileSync } = await import("node:child_process");
+  const { NextRequest } = await import("next/server");
+  const { POST } = await import("@/app/api/pipelines/route");
+  const { GET } = await import("@/app/api/pipelines/[id]/route");
+  const { GET: taskListGET } = await import("@/app/api/tasks/route");
+  const { GET: taskGET } = await import("@/app/api/tasks/[id]/route");
+  const { withPipelineMutation, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const { admitQueuedPipelineCreations, pipelineCreationQueueDir } = await import("@/lib/pipelines/creationQueue");
+  const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const { MAX_TASK_LENGTH } = await import("@/lib/pipelines/limits");
+  const creationTitle = "Keep the accepted creation visible through catalog refresh and reload. ".repeat(MAX_TASK_LENGTH).slice(0, MAX_TASK_LENGTH);
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "accepted-browser-"));
+  const repo = path.join(root, "repo");
+  const git = (...args: string[]) => execFileSync("git", args, { stdio: "pipe", env: { ...process.env,
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" } });
+  const unregister = registerPipelineTick(async () => {});
+  const priorWait = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "100";
+  let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+  let release: (() => void) | undefined;
+  let holder: Promise<unknown> | undefined;
+  const results: unknown[] = [];
+  // Freeze rendering beyond every creation in this bounded run. The real
+  // server keeps its own clock; age labels must never describe future rows.
+  const frameNow = new Date(Date.now() + 60 * 60 * 1000);
+  try {
+    git("init", "--template=", "--initial-branch=main", repo);
+    fs.writeFileSync(path.join(repo, "README.md"), "Accepted creation fixture\n");
+    git("-C", repo, "add", "README.md"); git("-C", repo, "-c", "commit.gpgsign=false", "commit", "-m", "Seed fixture");
+    git("-C", repo, "remote", "add", "origin", "https://example.invalid/accepted-creation.git");
+    const project = projectForCwd(repo)!;
+    const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    const { codexSessionRoots } = await import("@/lib/accounts/codex");
+    const registry = agentRegistry();
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: repo, role: "builder", origin: { kind: "operator" } });
+    if (begun.kind !== "created") throw new Error("fixture creator was refused");
+    const sessionId = "00000000-0000-0000-0000-000000000000";
+    const source = path.join(codexSessionRoots()[0], `caller-${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+    const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId },
+      artifactPath: source, cwd: repo, accountId: "terra", status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    if (settled.kind !== "settled") throw new Error("fixture creator did not settle");
+    const controlTask: import("@/lib/tasks/types").BoardTask = { id: "accepted-control-task", project,
+      text: "Preserve the two existing review lanes", status: "assigned", placement: "unplaced", assignments: [],
+      createdAt: frameNow.toISOString(), updatedAt: frameNow.toISOString() };
+    saveTasks([controlTask]);
+    const controls: import("@/lib/pipelines/types").Pipeline[] = [];
+    for (let index = 0; index < 3; index++) {
+      const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", { method: "POST",
+        headers: { host: "127.0.0.1", "content-type": "application/json", cookie: `llv_operator=${soloBrowserSession()}` },
+        body: JSON.stringify({ task: `Existing review lane ${index + 1}`, repoDir: repo, src: source, autoStart: false,
+          ...(index ? { taskIds: [controlTask.id] } : {}), stages: [{ id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "{{task}}", next: null }] }) }));
+      expect(response.status, await response.clone().text()).toBe(201);
+      controls.push((await response.json()).pipeline);
+    }
+    let posts = 0, catalogs = 0, showStored = false, retainLink = false;
+    const readAnswers: Array<{ id: string; status: number; code?: string }> = [];
+    let readMode: "normal" | "unavailable" | "denied" = "normal";
+    let holdRead: Promise<void> | undefined;
+    let releaseRead: (() => void) | undefined;
+    const responses: Record<string, unknown> = {
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/api/tasks": (request: Request) => taskListGET(new NextRequest(request)),
+      "/api/tasks/accepted-control-task": (request: Request) => taskGET(new NextRequest(request), { params: Promise.resolve({ id: controlTask.id }) }),
+      "/fixture/config": () => Response.json({ task: creationTitle, repoDir: repo, src: source, autoStart: false,
+        ...(retainLink ? { savedLink: { attachLink: "sample/project#7", kind: "issue" } } : {}),
+        ...(phone && !retainLink ? { taskIds: [controlTask.id] } : {}),
+        stages: [{ id: "implement", kind: "run", role: { roleId: "builder" }, prompt: "{{task}}", next: null }] }),
+      "/api/files": () => {
+        catalogs++;
+        return Response.json({ files: [], pipelines: showStored ? loadPipelines() : controls, tasks: [controlTask], flows: [], workflows: [],
+          projectCatalog: [{ project, displayName: "Atlas", conversations: 0, smt: 1 }], projectCwds: { [project]: repo },
+          systemHealth: { tmux: { status: "healthy" } } }, { headers: { ETag: `"catalog-${catalogs}"` } });
+      },
+      "/api/pipelines": async (request: Request) => {
+        if (request.method !== "POST") return Response.json({ pipelines: showStored ? loadPipelines() : [] });
+        posts++;
+        const headers = new Headers(request.headers); headers.set("cookie", `llv_operator=${soloBrowserSession()}`);
+        const response = await POST(new NextRequest(request.url, { method: "POST", headers, body: await request.text() }));
+        const body = await response.clone().json();
+        if (body.pipeline) responses[`/api/pipelines/${body.pipeline.id}`] = async (read: Request) => {
+          if (holdRead) await holdRead;
+          if (readMode !== "normal") return Response.json({ error: "read unavailable" }, { status: readMode === "denied" ? 403 : 503 });
+          const answer = await GET(new NextRequest(read), { params: Promise.resolve({ id: body.pipeline.id }) });
+          readAnswers.push({ id: body.pipeline.id, status: answer.status, code: (await answer.clone().json()).code });
+          return answer;
+        };
+        return response;
+      },
+    };
+    server = await serveEvidenceFixture(path.join(out, "bundle"), undefined, responses);
+    for (const width of phone ? [390] : [900, 1440]) for (const locale of ["en", "uk"] as const)
+      for (const theme of ["light", "dark"] as const) for (const terminal of ["materialized", "refused"] as const) {
+        showStored = false;
+        retainLink = terminal === "materialized";
+        readMode = "normal";
+        const beforePosts = posts;
+        let acquired!: () => void;
+        const ready = new Promise<void>(resolve => { acquired = resolve; });
+        const held = new Promise<void>(resolve => { release = resolve; });
+        holder = withPipelineMutation(async () => { acquired(); await held; });
+        await ready;
+        const { page, context, pageErrors } = await openFixture(browser,
+          `${server.base}?scenario=accepted-creation&project=${encodeURIComponent(project)}`,
+          { width, height: phone ? 844 : 900 }, theme, locale, "reduce", phone, 1, frameNow);
+        try {
+          await page.evaluate(project => {
+            sessionStorage.setItem("llvDraftPane:accepted-control:text", "Keep this unsent agent draft intact.");
+            localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { [project]: true }, placement: "top", width: null }));
+          }, project);
+          await page.reload();
+          await page.waitForFunction(() => typeof (window as unknown as { createAcceptedEvidence?: unknown }).createAcceptedEvidence === "function");
+          if (terminal === "refused") await page.evaluate(() => {
+            const put = IDBObjectStore.prototype.put;
+            Object.assign(window, { restoreCreationStorage: () => { IDBObjectStore.prototype.put = put; } });
+            IDBObjectStore.prototype.put = function (value, key) {
+              if (value?.creations?.entries?.length) throw new DOMException("Fixture storage refusal", "QuotaExceededError");
+              return put.call(this, value, key!);
+            };
+          });
+          const created = await page.evaluate(() => (window as unknown as { createAcceptedEvidence(): Promise<{ id?: string; accepted?: boolean; error?: string }> }).createAcceptedEvidence());
+          expect(created.error).toBeUndefined(); expect(created.id).toBeTruthy();
+          const visibleId = `[data-creation="${created.id}"], [data-pipeline="${created.id}"]`;
+          await page.locator(visibleId).first().waitFor({ state: "attached" });
+          const selector = `[data-creation="${created.id}"]`;
+          const frames: unknown[] = [];
+          const capture = async (state: string) => {
+            const card = page.locator(selector).first(); await card.waitFor();
+            await card.scrollIntoViewIfNeeded();
+            expect(await page.locator(selector).count()).toBe(1);
+            const geometry = await card.evaluate(element => {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const rects = [...range.getClientRects()].filter(rect => rect.width && rect.height);
+              const clipped: string[] = [];
+              const contrast: number[] = [];
+              const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+              const luminance = (color: number[]) => color.slice(0, 3).map(value => {
+                const v = value / 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+              }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const text = walker.currentNode;
+                if (!text.textContent?.trim()) continue;
+                const foreground = rgb(getComputedStyle(text.parentElement!).color);
+                for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+                  const background = rgb(getComputedStyle(parent).backgroundColor);
+                  if (background.length >= 3 && (background.length === 3 || background[3] === 1)) {
+                    const a = luminance(foreground), b = luminance(background);
+                    contrast.push((Math.max(a, b) + .05) / (Math.min(a, b) + .05)); break;
+                  }
+                }
+                const leaf = document.createRange(); leaf.selectNodeContents(text);
+                for (const rect of leaf.getClientRects()) for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+                  if ((/(hidden|clip|auto|scroll)/.test(style.overflowX) && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1))
+                    || (/(hidden|clip|auto|scroll)/.test(style.overflowY) && (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1))) clipped.push(text.textContent!);
+                }
+              }
+              return { whole: rects.every(rect => rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight),
+                clipped, text: element.textContent, contrast,
+                buttons: [...element.querySelectorAll("button")].map(button => button.getBoundingClientRect().height) };
+            });
+            expect(geometry.whole).toBe(true);
+            expect(geometry.clipped).toEqual([]);
+            expect(Math.min(...geometry.contrast)).toBeGreaterThanOrEqual(4.5);
+            for (const height of geometry.buttons) expect(height).toBeGreaterThanOrEqual(44);
+            frames.push({ state, geometry });
+            expect(await page.evaluate(() => sessionStorage.getItem("llvDraftPane:accepted-control:text"))).toBe("Keep this unsent agent draft intact.");
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-${state}.png`) });
+            if (phone) {
+              expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches && navigator.maxTouchPoints > 0)).toBe(true);
+              await page.locator(`[data-phone-card]:has(${selector})`).tap();
+              const linked = terminal === "refused";
+              const detail = page.locator(linked ? '[data-mobile2-screen="task"]' : '[data-mobile2-sheet="card"]');
+              await detail.waitFor();
+              expect(await detail.locator(selector).count()).toBe(1);
+              await detail.locator(selector).scrollIntoViewIfNeeded();
+              for (const button of await detail.locator(`${selector} button`).all()) expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+              await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-${state}-detail.png`) });
+              for (let step = 0; !linked && step < 5; step++) {
+                await page.keyboard.press("Tab");
+                expect(await detail.evaluate(element => element.contains(document.activeElement))).toBe(true);
+              }
+              await detail.locator(linked ? "[data-mobile2-back]" : "[data-mobile2-close]").tap();
+              await detail.waitFor({ state: "detached" });
+            }
+          };
+          if (created.accepted) await capture("accepted");
+          if (terminal === "refused" && created.accepted) {
+            await capture("persistence");
+            await page.evaluate(() => (window as unknown as { restoreCreationStorage(): void }).restoreCreationStorage());
+          }
+          const beforeCatalogs = catalogs;
+          for (let index = 0; index < 2; index++) {
+            const answered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/files" && response.status() === 200);
+            await page.evaluate(() => window.dispatchEvent(new Event("llv:pipelines-changed")));
+            const catalog = await (await answered).json();
+            expect(catalog.pipelines.some((row: { id: string }) => row.id === created.id)).toBe(false);
+            await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          }
+          expect(catalogs - beforeCatalogs).toBeGreaterThanOrEqual(2);
+          await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          expect(await page.locator(visibleId).count()).toBe(1);
+          expect(created.accepted).toBe(true);
+          await capture("lagging");
+          readMode = "unavailable";
+          await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          await page.locator(`${selector}[data-creation-state="unavailable"]`).first().waitFor();
+          await capture("unavailable");
+          if (phone) await page.locator(`[data-phone-card]:has(${selector})`).tap();
+          const detailSelector = terminal === "refused" ? '[data-mobile2-screen="task"]' : '[data-mobile2-sheet="card"]';
+          const retry = phone ? page.locator(detailSelector).locator(`${selector} button`) : page.locator(`${selector} button`);
+          // Opening a task subscribes to readback. Settle that unavailable
+          // read before allowing the user's retry to recover the receipt.
+          await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          await retry.scrollIntoViewIfNeeded();
+          const retryBox = await retry.boundingBox();
+          expect(await retry.isEnabled()).toBe(true);
+          readMode = "normal";
+          if (phone) await page.touchscreen.tap(retryBox!.x + retryBox!.width / 2, retryBox!.y + retryBox!.height / 2);
+          else await retry.click();
+          await (phone ? page.locator(detailSelector) : page.locator("body")).locator(`${selector}[data-creation-state="lagging"]`).waitFor();
+          if (phone) await page.locator(detailSelector).locator(terminal === "refused" ? "[data-mobile2-back]" : "[data-mobile2-close]").tap();
+          holdRead = new Promise<void>(resolve => { releaseRead = resolve; });
+          await page.reload();
+          await page.locator('[data-creation-notice="restoring"]').waitFor();
+          expect(await page.locator(selector).count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-restoring.png`) });
+          frames.push({ state: "restoring" });
+          releaseRead!(); holdRead = undefined; releaseRead = undefined;
+          await page.locator(selector).first().waitFor();
+          await capture("reloaded");
+          await page.goto("about:blank");
+          await page.goBack();
+          await page.locator(selector).first().waitFor();
+          expect(posts - beforePosts).toBe(1);
+          release!(); await holder; release = undefined; holder = undefined;
+          if (terminal === "refused") {
+            const file = path.join(pipelineCreationQueueDir(), `${created.id}.json`);
+            const queued = JSON.parse(fs.readFileSync(file, "utf8"));
+            queued.pipeline.stages[0].kind = "review-loop";
+            fs.writeFileSync(file, JSON.stringify(queued));
+          }
+          await admitQueuedPipelineCreations(); await admitQueuedPipelineCreations();
+          await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          if (terminal === "refused") {
+            await page.locator(`${selector}[data-creation-state="refused"]`).first().waitFor();
+            await capture("refused");
+          } else {
+            expect(loadPipelines().filter(pipeline => pipeline.id === created.id)).toHaveLength(1);
+            await page.locator(`${selector}[data-creation-state="linkPending"]`).first().waitFor();
+            await capture("link-pending");
+            // Model a previously completed attachment whose acknowledgement
+            // was lost. The visible action reads the same ID and sends no PATCH.
+            savePipelines(loadPipelines().map(pipeline => pipeline.id === created.id ? { ...pipeline,
+              workLinks: [{ repository: "sample/project", number: 7, kind: "issue", addedAt: frameNow.toISOString(), addedBy: "operator" }],
+            } : pipeline));
+            if (phone) await page.locator(`[data-phone-card]:has(${selector})`).tap();
+            const action = phone ? page.locator('[data-mobile2-sheet="card"]').locator(`${selector} button`) : page.locator(`${selector} button`);
+            if (phone) await action.tap(); else await action.click();
+            if (phone) await page.locator('[data-mobile2-sheet="card"]').waitFor({ state: "detached" });
+            await page.locator(`[data-pipeline="${created.id}"]`).first().waitFor();
+            await page.locator(selector).waitFor({ state: "detached" });
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-stored.png`) });
+            frames.push({ state: "stored" });
+          }
+          // Reload the actual terminal answer while the catalog still omits
+          // this ID. The retained locator must read the same operation again.
+          await page.reload();
+          if (terminal === "refused") {
+            await page.locator(`${selector}[data-creation-state="refused"]`).first().waitFor();
+            await capture("refused-reloaded");
+          } else {
+            await page.locator(`[data-pipeline="${created.id}"]`).first().waitFor();
+            expect(await page.locator(selector).count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-stored-reloaded.png`) });
+            frames.push({ state: "stored-reloaded" });
+          }
+          expect(posts - beforePosts).toBe(1); expect(pageErrors).toEqual([]);
+          expect(loadPipelines().filter(pipeline => controls.some(control => control.id === pipeline.id))).toEqual(controls);
+          expect(controls.filter(pipeline => pipeline.taskIds.includes(controlTask.id))).toHaveLength(2);
+          if (terminal === "refused") {
+            if (phone) await page.locator(`[data-phone-card]:has(${selector})`).tap();
+            const dismiss = phone ? page.locator(detailSelector).locator(`${selector} button`) : page.locator(`${selector} button`);
+            if (phone) await dismiss.tap(); else await dismiss.click();
+            await page.waitForFunction(selector => !document.querySelector(selector), selector);
+            if (phone) await page.locator(detailSelector).locator("[data-mobile2-back]").tap();
+            await page.reload();
+            await page.waitForFunction(() => typeof (window as unknown as { createAcceptedEvidence?: unknown }).createAcceptedEvidence === "function");
+            expect(await page.locator(selector).count()).toBe(0);
+            expect(posts - beforePosts).toBe(1);
+          } else {
+            readMode = "denied";
+            await page.reload();
+            await page.locator('[data-creation-notice="revoked"]').waitFor();
+            expect(await page.locator(selector).count()).toBe(0);
+            expect(await page.locator(`[data-pipeline="${created.id}"]`).count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-revoked.png`) });
+            frames.push({ state: "revoked" });
+          }
+          results.push({ width, locale, theme, terminal, clock: frameNow.toISOString(), id: created.id, posts: posts - beforePosts, missingCatalogs: catalogs - beforeCatalogs,
+            controls: controls.map(pipeline => pipeline.id), frames });
+        } catch (error) {
+          fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ pageErrors, readAnswers,
+            cards: await page.locator('[data-creation], [data-pipeline], .card[data-id]').evaluateAll(elements => elements.map(element => ({ html: element.outerHTML.slice(0, 2500) }))),
+          }, null, 2));
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-failure.png`) });
+          fs.writeFileSync(path.join(out, "failure.txt"), await page.locator("body").innerText());
+          throw error;
+        } finally { releaseRead?.(); holdRead = undefined; releaseRead = undefined; await context.close(); release?.(); await holder; release = undefined; holder = undefined; }
+      }
+    fs.writeFileSync(path.join(out, "results.json"), JSON.stringify(results, null, 2));
+    return results;
+  } finally {
+    release?.(); await holder; server?.stop(); unregister();
+    if (priorWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = priorWait;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** Linux's proc alias keeps Chrome's socket name short while its directory
+ * remains inside the caller's isolated export. Only the browser gets TMPDIR. */
+export function ownedBrowserSocketEnvironment() {
+  const directory = fs.mkdtempSync(path.join(process.cwd(), ".browser-sockets-"));
+  return { env: { ...process.env, TMPDIR: process.platform === "linux"
+    ? `/proc/${process.pid}/cwd/${path.basename(directory)}` : directory },
+    close: () => fs.rmSync(directory, { recursive: true, force: true }) };
+}
+
 export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",

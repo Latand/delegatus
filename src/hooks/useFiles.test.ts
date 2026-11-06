@@ -1,6 +1,153 @@
 import { expect, test } from "bun:test";
 
 import { createFilesClientCache, filesApiUrl, filesPollCadence, filesRequestHeaders, type FilesData } from "./useFiles";
+import { memoryFilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
+import { buildPipeline } from "@/lib/pipelines/store";
+
+const creationPipeline = (id: string) => buildPipeline({ id, project: "project-a", task: "Accepted work",
+  taskIds: [], repoDir: "/fixture/repo", srcPath: null, srcConversationId: null,
+  now: "2030-01-01T00:00:00Z", stages: [], state: "draft" });
+
+test("accepted creation survives missing catalogs, reload and authorized refusal with one ID", async () => {
+  const owner = { owner: "member-a", signature: "member-a:project-a" };
+  const storage = memoryFilesSnapshotStore();
+  const pipeline = creationPipeline("queued-card");
+  const queuedAt = "2030-01-01T00:00:00Z";
+  let state = "queued";
+  let reads = 0;
+  const fetcher = async (url: string) => {
+    if (url.startsWith("/api/pipelines/")) {
+      reads++;
+      return Response.json({ code: state === "queued" ? "pipeline_queued" : "pipeline_creation_refused",
+        queuedCreation: { id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt, state,
+          reason: state === "queued" ? "store_unavailable" : "creation_refused" } }, { status: 404 });
+    }
+    return Response.json({ files: [], pipelines: [] }, { headers: { ETag: '"same-catalog"' } });
+  };
+  const cache = createFilesClientCache(fetcher, { authority: () => owner, creationStore: () => storage });
+  const intent = cache.reserveCreation()!;
+  expect(await intent.accept(pipeline, queuedAt)).toBe(true);
+  intent.release();
+  expect(cache.creationCards()[0]?.status).toBe("accepted");
+  await cache.revalidate(); await cache.reconcileCreations();
+  await cache.revalidate(); await cache.reconcileCreations();
+  expect(cache.creationCards().map(card => card.receipt?.id)).toEqual([pipeline.id]);
+  expect(cache.read().pipelines).toEqual([]);
+  const saved = await storage.read();
+  expect(saved?.creations?.entries).toEqual([{ id: pipeline.id }]);
+  expect(saved?.text).not.toContain(pipeline.task);
+  cache.dispose();
+  const restored = createFilesClientCache(fetcher, { authority: () => owner, creationStore: () => storage });
+  restored.restoreCreations(saved!.creations!);
+  expect(restored.creationCards()[0]).toEqual({ id: pipeline.id, status: "restoring" });
+  state = "refused";
+  await restored.reconcileCreations();
+  expect(restored.creationCards()[0]).toMatchObject({ id: pipeline.id, status: "refused", receipt: { id: pipeline.id } });
+  await restored.dismissCreation(pipeline.id);
+  expect(restored.creationCards()).toEqual([]);
+  expect((await storage.read())?.creations?.entries).toEqual([]);
+  expect(reads).toBeGreaterThanOrEqual(3);
+  restored.dispose();
+});
+
+test("creation capacity reserves before effects and authority changes fence late body decoding", async () => {
+  let owner = { owner: "member-a", signature: "member-a:project-a" };
+  let decode!: (body: unknown) => void;
+  let decoding!: () => void;
+  const started = new Promise<void>(resolve => { decoding = resolve; });
+  const cache = createFilesClientCache(async () => ({ status: 404, ok: false,
+    json: () => { decoding(); return new Promise(resolve => { decode = resolve; }); },
+  }) as Response, { authority: () => owner, creationStore: () => memoryFilesSnapshotStore() });
+  const intents = Array.from({ length: 8 }, () => cache.reserveCreation()!);
+  expect(intents.every(Boolean)).toBe(true);
+  expect(cache.reserveCreation()).toBeNull();
+  const pipeline = creationPipeline("queued-private");
+  await intents[0]!.accept(pipeline, "2030-01-01T00:00:00Z");
+  intents.forEach(intent => intent.release());
+  const pending = cache.reconcileCreations();
+  await started;
+  owner = { owner: "member-b", signature: "member-b:project-a" };
+  cache.refreshCreationAuthority();
+  decode({ code: "pipeline_queued", queuedCreation: { id: pipeline.id, project: pipeline.project, title: pipeline.task,
+    taskIds: [], queuedAt: "2030-01-01T00:00:00Z", state: "queued", reason: "store_unavailable" } });
+  await pending;
+  expect(cache.creationCards()).toEqual([{ id: "", status: "revoked" }]);
+  expect(intents[0]!.current()).toBe(false);
+  expect(cache.reserveCreation()).not.toBeNull();
+  cache.dispose();
+});
+
+test("dismissal keeps the terminal card until its durable removal and fences a replaced owner", async () => {
+  for (const outcome of ["saved", "failed", "revoked"] as const) {
+    let owner = { owner: "member-a", signature: "member-a:project-a" };
+    const storage = memoryFilesSnapshotStore();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let removals = 0;
+    const update = storage.updateCreations!;
+    storage.updateCreations = async (...args) => {
+      if (args[2].length) {
+        removals++;
+        entered(); await held;
+        if (outcome === "failed") throw new Error("storage unavailable");
+      }
+      return update(...args);
+    };
+    const pipeline = creationPipeline("dismissed-card");
+    const cache = createFilesClientCache(async () => Response.json({ code: "pipeline_creation_refused",
+      queuedCreation: { id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [],
+        queuedAt: "2030-01-01T00:00:00Z", state: "refused", reason: "creation_refused" } }, { status: 404 }),
+    { authority: () => owner, creationStore: () => storage });
+    const intent = cache.reserveCreation()!;
+    await intent.accept(pipeline, "2030-01-01T00:00:00Z"); intent.release();
+    await cache.reconcileCreations();
+    const pending = cache.dismissCreation(pipeline.id);
+    await started;
+    await cache.dismissCreation(pipeline.id);
+    expect(removals).toBe(1);
+    expect(cache.creationCards()[0]?.status).toBe("refused");
+    expect((await storage.read())?.creations?.entries).toEqual([{ id: pipeline.id }]);
+    if (outcome === "revoked") {
+      owner = { owner: "member-b", signature: "member-b:project-a" };
+      cache.refreshCreationAuthority();
+    }
+    release(); await pending;
+    if (outcome === "saved") {
+      expect(cache.creationCards()).toEqual([]);
+      expect((await storage.read())?.creations?.entries).toEqual([]);
+    } else if (outcome === "failed") {
+      expect(cache.creationCards()[0]).toMatchObject({ status: "refused", recoveryUnavailable: true });
+      expect((await storage.read())?.creations?.entries).toEqual([{ id: pipeline.id }]);
+    } else expect(cache.creationCards()).toEqual([{ id: "", status: "revoked" }]);
+    cache.dispose();
+  }
+});
+
+test("an ID read materializes once and reload retains its locator until a certified catalog is saved", async () => {
+  const owner = { owner: "solo", signature: "solo" };
+  const storage = memoryFilesSnapshotStore();
+  const pipeline = creationPipeline("queued-stored");
+  let catalog = false;
+  const cache = createFilesClientCache(async url => url.startsWith("/api/pipelines/")
+    ? Response.json({ pipeline }) : Response.json({ files: [], pipelines: catalog ? [pipeline] : [] }, { headers: { ETag: catalog ? '"new"' : '"old"' } }),
+  { authority: () => owner, creationStore: () => storage });
+  await cache.revalidate();
+  const intent = cache.reserveCreation()!;
+  await intent.accept(pipeline, "2030-01-01T00:00:00Z"); intent.release();
+  await cache.reconcileCreations();
+  expect(cache.read().pipelines.map(row => row.id)).toEqual([pipeline.id]);
+  expect(cache.readScope().pipelines.map(row => row.id)).toEqual([pipeline.id]);
+  expect(cache.creationCards()).toEqual([]);
+  expect((await storage.read())?.creations?.entries).toEqual([{ id: pipeline.id }]);
+  catalog = true;
+  await cache.revalidate();
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  expect(cache.read().pipelines.map(row => row.id)).toEqual([pipeline.id]);
+  expect((await storage.read())?.text).toContain(pipeline.id);
+  cache.dispose();
+});
 
 test("filesApiUrl keeps project switches on the bounded scheme feed", () => {
   expect(filesApiUrl()).toBe("/api/files?view=summary");
@@ -908,4 +1055,167 @@ test("an unconfirmed task overlay outlives every scan until it is confirmed or r
   rows = [taskRow("task-a", "Echo")];
   await cache.revalidate();
   expect(cache.read().tasks.map((task) => task.text)).toEqual(["Echo"]);
+});
+
+
+test.each(["headers", "body"] as const)("a catalog materialization fences a stale queue refusal at %s", async seam => {
+  const pipeline = creationPipeline("materialized-before-read");
+  const storage = memoryFilesSnapshotStore();
+  let resume!: () => void;
+  const held = new Promise<void>(resolve => { resume = resolve; });
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const cache = createFilesClientCache(async url => {
+    if (!url.startsWith("/api/pipelines/")) return Response.json({ files: [], pipelines: [pipeline] }, { headers: { ETag: '"stored"' } });
+    if (seam === "headers") { entered(); await held; }
+    const response = Response.json({ code: "pipeline_creation_refused", queuedCreation: {
+      id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: pipeline.createdAt,
+      state: "refused", reason: "creation_refused",
+    } }, { status: 404 });
+    if (seam === "body") {
+      const json = response.json.bind(response);
+      response.json = async () => { entered(); await held; return json(); };
+    }
+    return response;
+  }, { authority: () => ({ owner: "solo", signature: "solo" }), creationStore: () => storage });
+  const reservation = cache.reserveCreation()!;
+  await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+  const read = cache.reconcileCreations();
+  await started;
+  await cache.revalidate();
+  resume(); await read;
+  expect(cache.creationCards()).toEqual([]);
+  expect(cache.read().pipelines.map(row => row.id)).toEqual([pipeline.id]);
+  cache.dispose();
+});
+
+test("a same-member scope change hides receipts until fresh authorized readback, then permits regrant", async () => {
+  const pipeline = creationPipeline("scope-change");
+  const storage = memoryFilesSnapshotStore();
+  let signature = "member-a:allowed", status = 404;
+  const cache = createFilesClientCache(async () => Response.json({ code: "pipeline_queued", queuedCreation: {
+    id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: pipeline.createdAt,
+    state: "queued", reason: "store_unavailable",
+  } }, { status }), { authority: () => ({ owner: "member-a", signature }), creationStore: () => storage });
+  const reservation = cache.reserveCreation()!;
+  await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+  const task: import("@/lib/tasks/types").BoardTask = { id: "protected-overlay", project: pipeline.project,
+    text: "Protected task", status: "inbox", placement: "unplaced", assignments: [], createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt };
+  cache.applyTask(task, false);
+  expect(cache.readScope().tasks).toEqual([task]);
+  signature = "member-a:changed";
+  cache.refreshCreationAuthority();
+  expect(cache.readScope().tasks).toEqual([]);
+  expect(cache.creationCards()).toEqual([{ id: pipeline.id, status: "restoring" }]);
+  status = 403;
+  await cache.reconcileCreations();
+  expect(cache.creationCards()).toEqual([{ id: "", status: "revoked" }]);
+  signature = "member-a:regranted"; status = 404;
+  const fresh = cache.reserveCreation()!;
+  expect(fresh.current()).toBe(true);
+  await fresh.accept(creationPipeline("fresh-after-regrant"), pipeline.createdAt); fresh.release();
+  expect(cache.creationCards().some(card => card.id === "fresh-after-regrant")).toBe(true);
+  cache.dispose();
+});
+
+
+test("repeated cross-document restoration keeps memory bounded without evicting accepted IDs", () => {
+  const cache = createFilesClientCache(async () => Response.json({}), {
+    authority: () => ({ owner: "solo", signature: "solo" }), creationStore: () => memoryFilesSnapshotStore(),
+  });
+  const entries = Array.from({ length: 8 }, (_, index) => ({ id: `original-${index}` }));
+  cache.restoreCreations({ owner: "solo", entries });
+  for (let round = 0; round < 4; round++) cache.restoreCreations({ owner: "solo", entries: [{ id: `later-${round}` }] });
+  expect(cache.creationCards().map(card => card.id)).toEqual(entries.map(entry => entry.id));
+  expect(cache.reserveCreation()).toBeNull();
+  cache.dispose();
+});
+
+
+test("conditional and pinned catalogs retain an accepted ID; missing readback remains unresolved", async () => {
+  const pipeline = creationPipeline("conditional-accepted");
+  const storage = memoryFilesSnapshotStore();
+  let catalogReads = 0;
+  const cache = createFilesClientCache(async url => {
+    if (url.startsWith("/api/pipelines/")) return Response.json({ error: "not found" }, { status: 404 });
+    catalogReads++;
+    return catalogReads === 2 ? new Response(null, { status: 304 })
+      : Response.json({ files: [], pipelines: [] }, { headers: { ETag: '"conditional"' } });
+  }, { authority: () => ({ owner: "solo", signature: "solo" }), creationStore: () => storage });
+  const reservation = cache.reserveCreation()!;
+  await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+  await cache.revalidate(); await cache.revalidate(); await cache.revalidate("/fixture/pin.jsonl");
+  expect(cache.creationCards().map(card => card.id)).toEqual([pipeline.id]);
+  await cache.reconcileCreations();
+  expect(cache.creationCards()[0]).toMatchObject({ id: pipeline.id, status: "unavailable" });
+  expect((await storage.read())?.creations?.entries).toEqual([{ id: pipeline.id }]);
+  cache.dispose();
+});
+
+test.each(["headers", "body"] as const)("the creation deadline settles a hung %s read even when abort is ignored", async seam => {
+  const pipeline = creationPipeline("deadline-accepted");
+  let resume!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { resume = resolve; });
+  const cache = createFilesClientCache(async () => {
+    if (seam === "headers") { entered(); await held; }
+    const response = Response.json({ pipeline });
+    if (seam === "body") {
+      const json = response.json.bind(response);
+      response.json = async () => { entered(); await held; return json(); };
+    }
+    return response;
+  }, { authority: () => ({ owner: "solo", signature: "solo" }), creationStore: () => memoryFilesSnapshotStore() });
+  const reservation = cache.reserveCreation()!;
+  await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+  const original = globalThis.setTimeout;
+  let expire!: () => void;
+  globalThis.setTimeout = new Proxy(original, { apply(target, receiver, args) {
+    if (args[1] === 5000) expire = () => Reflect.apply(args[0], undefined, args.slice(2));
+    return Reflect.apply(target, receiver, args);
+  } });
+  try {
+    const read = cache.reconcileCreations();
+    expect(cache.reconcileCreations()).toBe(read);
+    await started;
+    expire(); await read;
+    expect(cache.creationCards()[0]?.status).toBe("unavailable");
+    resume(); await Promise.resolve(); await Promise.resolve();
+    expect(cache.readScope().pipelines).toEqual([]);
+  } finally { resume(); globalThis.setTimeout = original; cache.dispose(); }
+});
+
+test("a stalled snapshot transaction never accumulates persistence retries", async () => {
+  const pipeline = creationPipeline("stalled-persistence");
+  const store = memoryFilesSnapshotStore();
+  const update = store.updateCreations!;
+  let release!: () => void, started!: () => void, expire!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  let writes = 0;
+  store.updateCreations = async (...args) => { writes++; started(); await held; return update(...args); };
+  const cache = createFilesClientCache(async () => Response.json({ code: "pipeline_queued", queuedCreation: {
+    id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: pipeline.createdAt,
+    state: "queued", reason: "store_unavailable",
+  } }, { status: 404 }), { authority: () => ({ owner: "solo", signature: "solo" }), creationStore: () => store });
+  const original = globalThis.setTimeout;
+  globalThis.setTimeout = new Proxy(original, { apply(target, receiver, args) {
+    if (args[1] === 1500) expire = () => Reflect.apply(args[0], undefined, args.slice(2));
+    return Reflect.apply(target, receiver, args);
+  } });
+  try {
+    const reservation = cache.reserveCreation()!;
+    const accepted = reservation.accept(pipeline, pipeline.createdAt);
+    await entered; expire();
+    expect(await accepted).toBe(false); reservation.release();
+    for (let index = 0; index < 20; index++) await cache.reconcileCreations();
+    expect(writes).toBe(1);
+    expect(cache.creationCards()[0]?.recoveryUnavailable).toBe(true);
+    release();
+    await held; await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    await cache.reconcileCreations();
+    expect(writes).toBeLessThanOrEqual(2);
+    expect(cache.creationCards()[0]?.id).toBe(pipeline.id);
+  } finally { release(); globalThis.setTimeout = original; cache.dispose(); }
 });

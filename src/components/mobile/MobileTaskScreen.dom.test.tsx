@@ -719,3 +719,32 @@ test("«Pipeline from conversation…» on the phone: a create with no answer ke
     globalThis.fetch = realFetch;
   }
 });
+
+test("an accepted creation joins its task without replacing the existing lanes or task navigation", async () => {
+  const { setTeamViewForTests } = await import("@/components/team/teamClient");
+  const { resetFilesClientCacheForTests, reservePipelineCreation } = await import("@/hooks/useFiles");
+  const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ error: "temporarily unavailable" }, { status: 503 })) as typeof fetch;
+  setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
+    approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
+  } });
+  resetFilesClientCacheForTests(memoryFilesSnapshotStore());
+  try {
+    const accepted = buildPipeline({ id: "accepted-task", project: "fixture", task: "Accepted follow-up", taskIds: [theTask.id],
+      repoDir: "/repo", srcPath: null, srcConversationId: null, stages: [], now: iso(0) });
+    const reservation = reservePipelineCreation()!;
+    expect(await reservation.accept(accepted, iso(0))).toBe(true);
+    reservation.release();
+    const { host, nav } = mount(taskPorts([]), noPipelinePorts);
+    expect(q(host, '[data-creation="accepted-task"]')).not.toBeNull();
+    expect(qa(host, "[data-phone-task-lane]").length).toBeGreaterThan(1);
+    expect(q(host, "[data-phone-task-title]")?.textContent).toContain(theTask.text.split("\n")[0]);
+    expect(nav.getState().stack.at(-1)?.kind).toBe("task");
+  } finally {
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    resetFilesClientCacheForTests(); setTeamViewForTests(null); globalThis.fetch = realFetch;
+  }
+});

@@ -4,6 +4,19 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "pipelineCreation.accepted": "Accepted — waiting to create",
+  "pipelineCreation.linkPending": "Created — source link awaits attachment",
+  "pipelineCreation.attach": "Attach saved link",
+  "pipelineCreation.lagging": "Still waiting to create",
+  "pipelineCreation.refused": "Creation refused",
+  "pipelineCreation.unavailable": "Creation status unavailable",
+  "pipelineCreation.restoring": "Checking accepted creation",
+  "pipelineCreation.revoked": "Access unavailable",
+  "pipelineCreation.persistence": "Reload recovery unavailable",
+  "pipelineCreation.capacity": "Creation tracking is full or access is still being checked. Read the accepted results before creating another pipeline.",
+  "pipelineCreation.reason": "The server could not admit this creation. Nothing was created.",
+  "pipelineCreation.retry": "Check status",
+  "pipelineCreation.dismiss": "Dismiss result",
   "projectSetup.title": "Project setup",
   "projectSetup.running": "Project setup running",
   "projectSetup.passed": "Project setup done",

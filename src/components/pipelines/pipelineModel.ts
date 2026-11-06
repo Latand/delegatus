@@ -2,7 +2,7 @@ import { DEFAULT_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES } from "@/lib/pipelines/l
 import { roleNameById } from "@/components/builderCopy";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { currentConversationFile, currentMemberPath, isArchivedPredecessor } from "@/lib/accounts/identity";
-import { applyPipelineSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles";
+import { applyPipelineSnapshot, preparePipelineCreation, revertPipelineSnapshot } from "@/hooks/useFiles";
 import { getLocale, translate, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -1230,6 +1230,9 @@ export type PipelineClientResult = {
   code?: PipelineRepoPreflightErrorCode;
   field?: "repoDir";
   path?: string;
+  accepted?: boolean;
+  queued?: { queuedAt: string; reason: string };
+  current?: () => boolean;
 };
 
 /** A resolved PR or issue link, and the linked task the draft joins (null: none). */
@@ -1280,22 +1283,34 @@ export async function preflightPipelineRepository(
   }
 }
 
-export async function createPipeline(req: CreatePipelineRequest): Promise<PipelineClientResult> {
+export async function createPipeline(req: CreatePipelineRequest, link?: { attachLink: string; kind: "issue" | "pr" }): Promise<PipelineClientResult> {
+  const reservation = await preparePipelineCreation();
+  if (!reservation) return { error: translate(getLocale(), "pipelineCreation.capacity") };
   try {
+    if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
     const response = await fetch("/api/pipelines", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(req),
     });
+    if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
     const json = (await response.json().catch(() => null)) as PipelineClientResult | null;
+    if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
     if (response.ok && json?.pipeline) {
+      if (response.status === 202) {
+        if (!json.queued || !Number.isFinite(Date.parse(json.queued.queuedAt))) return { error: translate(getLocale(), "pipelineCreation.unavailable") };
+        const recovered = await reservation.accept(json.pipeline, json.queued.queuedAt, link);
+        if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
+        return { pipeline: json.pipeline, accepted: true, current: reservation.current,
+          ...(!recovered ? { warning: translate(getLocale(), "pipelineCreation.persistence") } : {}) };
+      }
       /* The POST echo IS the new record — apply it straight into the client
          cache so the draft's builder appears immediately (issue #221 §3). An
          auto-started pipeline also spawns agents, so only that path still pays
          the full board refetch. */
       applyPipelineSnapshot(json.pipeline, true);
       if (req.autoStart !== false) window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
-      return { pipeline: json.pipeline };
+      return { pipeline: json.pipeline, current: reservation.current };
     }
     return {
       error: json?.error ?? translate(getLocale(), "pipelineModel.failed", { status: response.status }),
@@ -1303,7 +1318,7 @@ export async function createPipeline(req: CreatePipelineRequest): Promise<Pipeli
     };
   } catch {
     return { error: translate(getLocale(), "common.serverUnavailable") };
-  }
+  } finally { reservation.release(); }
 }
 
 /**
@@ -1369,17 +1384,18 @@ export async function createDraftPipeline(
     ...(src ? { src } : {}),
     ...(from ? { ...from.source.request, ...(from.taskId ? { taskIds: [from.taskId] } : {}) } : {}),
     autoStart: false,
-  });
-  if (!created.pipeline || !from?.source.attachLink) return created;
-  const failure = await attachDraftLink(created.pipeline.id, from.source);
+  }, from?.source.attachLink ? { attachLink: from.source.attachLink, kind: from.source.kind } : undefined);
+  if (!created.pipeline || created.accepted || !from?.source.attachLink || created.current?.() === false) return created;
+  const failure = await attachDraftLink(created.pipeline.id, from.source, created.current);
+  if (created.current?.() === false) return { error: translate(getLocale(), "pipelineCreation.revoked") };
   return failure ? { ...created, warning: failure } : created;
 }
 
 /** A new lane names nothing about an issue, so the issue is attached to the
     draft; a failed attach is retried on the same draft. Null: attached. */
-export function attachDraftLink(pipelineId: string, source: Pick<PipelineLinkSource, "attachLink" | "kind">): Promise<string | null> {
+export function attachDraftLink(pipelineId: string, source: Pick<PipelineLinkSource, "attachLink" | "kind">, current?: () => boolean): Promise<string | null> {
   if (!source.attachLink) return Promise.resolve(null);
-  return patchPipeline(pipelineId, "attach-link", { link: source.attachLink, kind: source.kind });
+  return patchPipeline(pipelineId, "attach-link", { link: source.attachLink, kind: source.kind }, undefined, current);
 }
 
 /**
@@ -1738,7 +1754,9 @@ export async function patchPipeline(
       the request so the mutation is perceived instantly, confirmed by the echo,
       rolled back on failure (issue #221 §3). */
   optimistic?: Pipeline,
+  current: () => boolean = () => true,
 ): Promise<string | null> {
+  if (!current()) return translate(getLocale(), "pipelineCreation.revoked");
   if (optimistic) applyPipelineSnapshot(optimistic, false);
   try {
     const response = await fetch(`/api/pipelines/${encodeURIComponent(id)}`, {
@@ -1747,6 +1765,7 @@ export async function patchPipeline(
       body: JSON.stringify({ action, ...extra }),
     });
     const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; error?: string } | null;
+    if (!current()) return translate(getLocale(), "pipelineCreation.revoked");
     if (response.ok) {
       /* The PATCH echo is the authoritative post-mutation record: applying it
          updates every mounted board surface without a scan refetch. */
