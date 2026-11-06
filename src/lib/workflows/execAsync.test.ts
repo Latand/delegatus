@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 
 import { realExec } from "./provision";
 
@@ -12,12 +14,30 @@ test("the production executor yields while an external command is in flight", as
   await read;
 });
 
-test("cancellation closes an owned child and its inherited pipes", async () => {
+test.each(["deadline", "cancellation"] as const)("the executor closes its owned process tree and preserves an independent child: %s", async mode => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "executor-owned-"));
+  const marker = path.join(root, "pids");
   const abort = new AbortController();
-  const command = realExec("sh", ["-c", "sleep 30 & wait"], os.tmpdir(), undefined, { signal: abort.signal });
-  setTimeout(() => abort.abort(), 30);
-  expect(await command).toMatchObject({ code: null, stderr: "command cancelled" });
-});
+  const sentinel = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+  const command = realExec("sh", ["-c", 'echo "$$" > "$OWNED_PIDS"; sleep 30 & echo "$!" >> "$OWNED_PIDS"; wait'], root,
+    { OWNED_PIDS: marker }, { signal: abort.signal, timeoutMs: mode === "deadline" ? 500 : 5_000 });
+  try {
+    for (let n = 0; n < 400 && (!fs.existsSync(marker) || fs.readFileSync(marker, "utf8").trim().split(/\s+/).length < 2); n++) await Bun.sleep(10);
+    const pids = fs.readFileSync(marker, "utf8").trim().split(/\s+/).map(Number);
+    expect(pids).toHaveLength(2);
+    if (mode === "cancellation") abort.abort();
+    expect(await command).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "deadline" ? "command timed out after 500ms" : "command cancelled" });
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (let n = 0; n < 200 && pids.some(alive); n++) await Bun.sleep(10);
+    expect(pids.map(alive)).toEqual([false, false]);
+    expect(alive(sentinel.pid)).toBe(true);
+    expect(sentinel.exitCode).toBeNull();
+  } finally {
+    abort.abort(); await command;
+    sentinel.kill(); await sentinel.exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);
 
 test("timeouts and output bounds terminate external commands", async () => {
   expect(await realExec("sh", ["-c", "sleep 30"], os.tmpdir(), undefined, { timeoutMs: 30 }))
@@ -37,4 +57,10 @@ test("byte-preserving stdout keeps Git path bytes within their original output l
     { stdoutEncoding: "latin1", maxOutputBytes: 3 });
   expect(result.code).toBe(0);
   expect(Buffer.from(result.stdout, "latin1")).toEqual(Buffer.from([195, 40, 255]));
+});
+
+test("pre-cancelled execution starts no child", async () => {
+  const abort = new AbortController(); abort.abort();
+  const result = await realExec(process.execPath, ["-e", "process.stdout.write('started')"], os.tmpdir(), undefined, { signal: abort.signal });
+  expect(result).toMatchObject({ code: null, stdout: "", stderr: "command cancelled" });
 });
