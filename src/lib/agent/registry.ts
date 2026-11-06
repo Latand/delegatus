@@ -1,5 +1,6 @@
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
+import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
 import { hostExitWriterPending, readHostExit, reclaimHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
@@ -5861,6 +5862,11 @@ export class AgentRegistry {
       return snapshot;
     }
     return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
+  }
+
+  worktreeProtectionSnapshot(): WorktreeProtection {
+    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.worktreeProtectionSnapshot() : worktreeProtection(this.readOnlySnapshot());
   }
 
   /** Prepare the recovery lookups through asynchronous writer admission. */
