@@ -195,7 +195,7 @@ test("warm launch reads reuse seat authority without rereading unchanged lineage
   } finally { observer.mockRestore(); }
 });
 
-test("a cold launch read reports projection readiness without scanning seat history synchronously", async () => {
+test("a cold launch read warms the projection asynchronously without a synchronous history scan", async () => {
   const f = await fixture();
   for (let n = 0; n < 120; n++) f.rotate();
   f.claim(777);
@@ -210,11 +210,9 @@ test("a cold launch read reports projection readiness without scanning seat hist
     return Reflect.apply(read, fs, args);
   }) as typeof fs.readFileSync);
   try {
-    expect(await f.read()).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+    expect(await f.read()).toMatchObject({ ok: true, items: [expect.objectContaining({ clientRequestId: "fixture-claim-777" })] });
     expect(reads).toBe(0);
   } finally { observer.mockRestore(); }
-  await orchestratorRecipientRefusalAsync([], () => "conversation_identity");
-  expect(await f.read()).toMatchObject({ ok: true, items: [expect.objectContaining({ clientRequestId: "fixture-claim-777" })] });
 });
 
 

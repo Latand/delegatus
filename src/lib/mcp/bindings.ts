@@ -3,7 +3,7 @@ import { listUnknownLaunchClaims } from "./unknownLaunchClaims";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { pipelineAdmissionIdentity, readCreationAdmission, recordCreationAdmission } from "@/lib/pipelines/creationAdmission";
 import { exactQueuedCreationStatus } from "@/lib/pipelines/creationQueue";
-import { currentRecoverySeat, recoverySeatCurrent, seatMayRecoverLaunch } from "@/lib/orchestrator/seats";
+import { currentRecoverySeat, prepareOrchestratorRecoveryAuthority, recoverySeatCurrent, seatMayRecoverLaunch } from "@/lib/orchestrator/seats";
 import { admittedNativeCall, runWithAdmittedNativeCall } from "@/lib/attention/nativeCallProof";
 import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { redactMonitorText } from "@/lib/monitor/redact";
@@ -4754,7 +4754,8 @@ async function namedLaunchProject(args: McpToolArgs, dependencies: ViewerMcpDoma
 
 /** Original-key lookups authenticate the caller and use the recorded target.
     A later display-name change cannot invalidate an existing launch receipt. */
-function launchRecoveryBinding(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, field: "cwd" | "repoDir"): McpRequestBindingInput {
+async function launchRecoveryBinding(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, field: "cwd" | "repoDir"): Promise<McpRequestBindingInput> {
+  if (!await prepareOrchestratorRecoveryAuthority()) throw new McpToolRefusal("seat recovery authority is not ready", { code: "recovery_authority_unavailable", retryable: true });
   const directory = field === "cwd" ? spawnCwd(args) : path.resolve(required(args, field));
   const caller = recoveryCaller(dependencies, false, false);
   if (field === "cwd" && caller.kind === "unidentified") requireMcpDeployerCaller(args, projectForCwd(directory), dependencies);
@@ -8730,7 +8731,13 @@ async function recoverPipelineAdmission(binding: McpRequestBinding, legacy: bool
   }, { caller: "mcp pipeline recovery", waitMs: Math.max(0, Math.min(4000, deadlineAt - Date.now())) });
 }
 
-function mayRecoverLaunch(binding: McpRequestBinding, current: McpRequestCaller): boolean {
+async function mayRecoverLaunch(binding: McpRequestBinding, current: McpRequestCaller,
+  dependencies: ViewerMcpDomainDependencies): Promise<boolean> {
+  if (!await prepareOrchestratorRecoveryAuthority()) return false;
+  const fresh = recoveryCaller(dependencies, true, false);
+  if (fresh.kind !== current.kind || fresh.project !== current.project || fresh.conversationId !== current.conversationId
+    || fresh.nativeProof !== current.nativeProof || fresh.authorityStamp !== current.authorityStamp) return false;
+  current = fresh;
   if (binding.caller.kind === "unidentified" || current.kind === "unidentified"
     || (binding.caller.project ? canonicalProject(binding.caller.project) : null) !== current.project) return false;
   if (binding.caller.conversationId === current.conversationId) return binding.caller.kind === current.kind
@@ -8741,12 +8748,15 @@ function mayRecoverLaunch(binding: McpRequestBinding, current: McpRequestCaller)
     binding.claimedAt, binding.caller.seatEpoch);
 }
 
+const mayRecoverLaunchFor = (dependencies: ViewerMcpDomainDependencies) =>
+  (binding: McpRequestBinding, current: McpRequestCaller) => mayRecoverLaunch(binding, current, dependencies);
+
 export function viewerMcpRecoverableTools(
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
-      canRecoverCaller: mayRecoverLaunch,
+      canRecoverCaller: mayRecoverLaunchFor(domainDependencies),
       currentCaller: () => recoveryCaller(domainDependencies, true, false),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
       bind: async (args) => {
@@ -8774,7 +8784,7 @@ export function viewerMcpRecoverableTools(
       recover: (binding, options) => recoverPipelineAdmission(binding, options.legacy, () => options.context?.assertCaller?.(), Math.min(Date.now() + 5000, options.context?.deadlineAt ?? Infinity)),
     },
     spawn_agent: {
-      canRecoverCaller: mayRecoverLaunch,
+      canRecoverCaller: mayRecoverLaunchFor(domainDependencies),
       bind: (args) => bindSpawn(args, domainDependencies),
       currentCaller: () => recoveryCaller(domainDependencies, true, false),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "cwd"),
@@ -8972,7 +8982,8 @@ export function viewerMcpBindings(
     get_flow: (args) => Promise.resolve(getFlow(args, domainDependencies)),
     flow_action: (args) => flowAction(args, domainDependencies),
     list_unknown_launch_claims: Object.assign(async (args: McpToolArgs) => listUnknownLaunchClaims(args, domainDependencies), {
-      readAuthority: () => {
+      readAuthority: async () => {
+        if (!await prepareOrchestratorRecoveryAuthority()) throw new McpToolRefusal("seat recovery authority is not ready", { code: "recovery_authority_unavailable", retryable: true });
         const caller = JSON.stringify(recoveryCaller(domainDependencies, true, false));
         return () => {
           if (JSON.stringify(recoveryCaller(domainDependencies, true, false)) !== caller) throw new McpToolRefusal("launch claim caller changed", { code: "caller_unidentified" });

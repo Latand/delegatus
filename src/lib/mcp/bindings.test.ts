@@ -33,7 +33,7 @@ import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
-import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent, orchestratorRevocations, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent, orchestratorRevocations, orchestratorSeatFor, prepareOrchestratorRecoveryAuthority } from "@/lib/orchestrator/seats";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -4468,21 +4468,22 @@ test("spawn recovery authorizes durable lineage through the current same-project
       project: "proj-a",
     },
   });
+  expect(await prepareOrchestratorRecoveryAuthority()).toBe(true);
   const current = recoverable.spawn_agent!.currentCaller!();
   const recorded: McpRequestBinding = { ...binding, version: 1, toolName: "spawn_agent", clientRequestId: "seat-lineage-bind",
     caller: { kind: "worker", conversationId: predecessor, project: "proj-a", seatEpoch: 1 },
     claimedAt: at, owner: captureProcessIdentity(process.pid) };
   const mayRecover = recoverable.spawn_agent!.canRecoverCaller!;
-  expect(mayRecover(recorded, current)).toBe(true);
-  expect(mayRecover({ ...recorded, caller: { ...recorded.caller, project: "proj-b" } }, current)).toBe(false);
-  expect(mayRecover(recorded, { ...current, conversationId: "conversation_unrelated", predecessors: [predecessor] })).toBe(false);
-  expect(mayRecover(recorded, { ...current, project: "proj-b", conversationId: "conversation_other_project", predecessors: [predecessor] })).toBe(false);
+  expect(await mayRecover(recorded, current)).toBe(true);
+  expect(await mayRecover({ ...recorded, caller: { ...recorded.caller, project: "proj-b" } }, current)).toBe(false);
+  expect(await mayRecover(recorded, { ...current, conversationId: "conversation_unrelated", predecessors: [predecessor] })).toBe(false);
+  expect(await mayRecover(recorded, { ...current, project: "proj-b", conversationId: "conversation_other_project", predecessors: [predecessor] })).toBe(false);
 
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "replacement mandate", clientRequestId: "seat-lineage-replacement",
     mode: "existing", conversationId: "conversation_replacement" });
   expect(completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "seat-lineage-replacement",
     conversationId: "conversation_replacement", path: "/repo/replacement.jsonl" }).kind).toBe("activated");
-  expect(mayRecover(recorded, current)).toBe(false);
+  expect(await mayRecover(recorded, current)).toBe(false);
 });
 
 

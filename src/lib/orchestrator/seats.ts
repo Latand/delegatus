@@ -1783,6 +1783,19 @@ function recipientAuthorityIndexKey(filePath: string, revision: string): string 
   return `${filePath}\0${revision}`;
 }
 
+/** Prepare the revisioned recovery projection outside synchronous callers. */
+export async function prepareOrchestratorRecoveryAuthority(): Promise<boolean> {
+  const filePath = seatsFile();
+  for (let attempt = 0; attempt < RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS; attempt++) {
+    const revision = await seatFileRevisionAsync(filePath);
+    if (revision === null) return false;
+    const index = await recipientAuthorityIndex(filePath, revision);
+    const current = await seatFileRevisionAsync(filePath);
+    if (current === revision) return index !== null;
+  }
+  return false;
+}
+
 async function recipientAuthorityIndex(
   filePath: string,
   revision: string,

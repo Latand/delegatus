@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { statePath } from "@/lib/configDir";
-import { recoverySeatCurrent, recoverySeatSegment } from "@/lib/orchestrator/seats";
+import { prepareOrchestratorRecoveryAuthority, recoverySeatCurrent, recoverySeatSegment } from "@/lib/orchestrator/seats";
 import { projectAliasKeys } from "@/lib/projects/aliases";
 import { mcpPageCursorStore } from "./pageCursors";
 import { recoveryCaller, type ViewerMcpDomainDependencies } from "./bindings";
@@ -8,7 +8,8 @@ import { McpToolRefusal, SqliteMcpReceiptStore, type McpToolArgs } from "./serve
 
 interface Position { owner: string; epoch: number; after: number; watermark: number; activatedAt?: string; revokedAt?: string }
 
-export function listUnknownLaunchClaims(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies) {
+export async function listUnknownLaunchClaims(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies) {
+  if (!await prepareOrchestratorRecoveryAuthority()) throw new McpToolRefusal("seat recovery authority is not ready", { code: "recovery_authority_unavailable", retryable: true });
   const caller = recoveryCaller(dependencies, true, false);
   if (!caller.project || !caller.conversationId || !caller.seatEpoch
     || !recoverySeatCurrent(caller.project, caller.conversationId, caller.seatEpoch)
