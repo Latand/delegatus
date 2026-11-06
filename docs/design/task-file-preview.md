@@ -237,7 +237,11 @@ Checks, in order. Each refusal reads no blob.
    (`git merge-base --is-ancestor`), else 409 `head_unknown`. An earlier head
    stays readable after the branch moves on, so an open preview keeps paging.
 7. Base for that head: `git merge-base <head> refs/remotes/origin/<baseBranch>`,
-   else `baseRef`. The pair's file list (list cache) must contain `file`, else
+   else `baseRef`; when `baseRef` is a descendant of that merge base (a base
+   branch that lags the lane's start, or a lane that landed) it starts the
+   interval instead. An earlier head must descend from the tip's `baseRef`,
+   else 409 `head_unknown`: the remote's base branch proves nothing about where
+   the task began. The pair's file list (list cache) must contain `file`, else
    404 `not-listed`. An entry whose op is `delete` is 404 `not-found`.
 8. `git --literal-pathspecs ls-tree -z -l <head> -- <file>` must print exactly
    one record whose path equals `file`. Mode `100644` or `100755` with type
@@ -325,12 +329,16 @@ at once costs one `cat-file`.
 503 `busy` with `retry-after: 2`. Lane list computations: 2 at once, 32 waiting,
 then the lane answers `busy`. A list request has an 8 s deadline overall.
 
-**Cancellation.** A waiter whose request aborts leaves the queue, and a queued
-read with no waiter left never starts. A Git process already running finishes
-within its 10 s timeout and 8 MiB output bound, because another request may be
-waiting on it. On the client, the Files view aborts its list read on close, and
-every pane already aborts its own fetches on close
-(`TextPane.tsx:113-121`, `ImagePane.tsx:51-75`).
+**Cancellation.** A lane list, a content resolution and a blob read each run
+once per identical caller and hold their admission slot until their own Git
+work has ended. The run's children carry the run's abort signal: when the last
+waiter leaves (a closed request or the deadline) the children are killed, and
+the slot frees only after they have closed, so cancelled requests never let
+more work run than the line allows. A queued run with no waiter left leaves the
+line and never starts. A run whose waiters all left caches nothing. On the
+client, the Files view aborts its list read on close, and every pane already
+aborts its own fetches on close (`TextPane.tsx:113-121`,
+`ImagePane.tsx:51-75`).
 
 **Fresh generation.** Nothing persists. A Viewer restart starts every cache
 empty; the first open after it pays the cold costs in §11.
