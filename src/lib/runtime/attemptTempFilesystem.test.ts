@@ -221,6 +221,70 @@ esac
   }
 });
 
+test.each([
+  ["namespace-only", "control"], ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
+  ["permission-fallback", "control"], ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
+] as const)("final namespace rmdir revalidates authority and root identity (%s, %s)", async (pathKind, change) => {
+  const parent = root(), directory = path.join(parent, "llv-stage-final-rmdir"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const originalIdentity = fs.lstatSync(directory), identity = `${originalIdentity.dev}:${originalIdentity.ino}`;
+  const docker = path.join(bin, "docker"), completion = path.join(parent, "docker-complete");
+  fs.writeFileSync(docker, `#!/bin/sh
+case "$1" in
+  ps) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    find "$source" -depth -mindepth 1 -delete || exit
+    if test "$FINAL_RMDIR_CHANGE" = root-replaced; then mv "$source" "$source-original"; mkdir "$source"; printf replacement > "$source/payload"; fi
+    printf done > "$FINAL_RMDIR_COMPLETE"
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(docker, 0o700);
+  const previous = { PATH: process.env.PATH, image: process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE,
+    change: process.env.FINAL_RMDIR_CHANGE, complete: process.env.FINAL_RMDIR_COMPLETE };
+  process.env.PATH = `${bin}${path.delimiter}${previous.PATH ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.FINAL_RMDIR_CHANGE = change;
+  process.env.FINAL_RMDIR_COMPLETE = completion;
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+    if (pathKind === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return undefined;
+  });
+  const dispatchGuard = () => !fs.existsSync(completion) || change !== "producer-changed" && change !== "checkout-unreadable";
+  try {
+    let error: unknown;
+    try { await removeAttemptTree(directory, directory, async () => true, pathKind === "namespace-only", dispatchGuard); }
+    catch (caught) { error = caught; }
+    if (change === "control") {
+      expect(error).toBeUndefined();
+      expect(fs.existsSync(directory)).toBeFalse();
+    } else {
+      expect(fs.existsSync(completion)).toBeTrue();
+      expect(String(error)).toMatch(change === "root-replaced" ? /identity changed before namespace rmdir/ : /authority changed before namespace rmdir/);
+      if (change === "root-replaced") {
+        const replacement = fs.lstatSync(directory);
+        expect(`${replacement.dev}:${replacement.ino}`).not.toBe(identity);
+        expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("replacement");
+      } else {
+        expect(`${fs.lstatSync(directory).dev}:${fs.lstatSync(directory).ino}`).toBe(identity);
+        expect(fs.readdirSync(directory)).toEqual([]);
+      }
+    }
+  } finally {
+    rm.mockRestore();
+    if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
+    if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;
+    if (previous.change === undefined) delete process.env.FINAL_RMDIR_CHANGE; else process.env.FINAL_RMDIR_CHANGE = previous.change;
+    if (previous.complete === undefined) delete process.env.FINAL_RMDIR_COMPLETE; else process.env.FINAL_RMDIR_COMPLETE = previous.complete;
+  }
+});
+
 test("a capture created during the final container observation is preserved before reclaim", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-late-capture");
   fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");

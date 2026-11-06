@@ -365,7 +365,7 @@ const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
   + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
 
 async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
-  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean) {
+  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean): Promise<{ identity: string; stdout: string }> {
   const initial = fs.lstatSync(directory);
   if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
   const identity = `${initial.dev}:${initial.ino}`;
@@ -390,10 +390,19 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
-  return run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
+  const result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
     "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
     "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, original, ...markers]);
+  return { identity, stdout: result.stdout };
+}
+
+async function removeEmptyNamespaceRoot(directory: string, identity: string, dispatchGuard?: () => boolean) {
+  const current = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (!current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== identity)
+    throw new Error("attempt identity changed before namespace rmdir");
+  if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before namespace rmdir");
+  await fs.promises.rmdir(directory);
 }
 
 /** Native find streams an arbitrarily large owned tree; the owned worker and
@@ -434,16 +443,16 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
   dispatchGuard?: () => boolean): Promise<void> {
   if (requireNoEvidence) {
-    await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
-    await fs.promises.rmdir(directory);
+    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    await removeEmptyNamespaceRoot(directory, identity, dispatchGuard);
     return;
   }
   if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
-    await fs.promises.rmdir(directory);
+    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    await removeEmptyNamespaceRoot(directory, identity, dispatchGuard);
   }
 }
 
