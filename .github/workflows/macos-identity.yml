@@ -119,10 +119,18 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/claude-provider" --ignore-scripts --no-audit --no-fund --package-lock=false "@anthropic-ai/claude-code-darwin-$arch@2.1.263"
           echo "LLV_TEST_CLAUDE_BINARY=$RUNNER_TEMP/claude-provider/node_modules/@anthropic-ai/claude-code-darwin-$arch/claude" >> "$GITHUB_ENV"
 
-      - name: Verify identity and credential recognition in isolated processes
+      - name: Verify identity, credentials and portable provisioning in isolated processes
         run: |
           python3 - <<'PYCODE'
           import os, pathlib, subprocess, tempfile
+          # The Git fixtures remove both timeout utilities from the command PATH.
+          # Executor cases also verify owned-child cleanup after deadline/abort.
+          portable_tests = {
+              "src/lib/pipelines/git.test.ts": "^(portable |async exec reports|the approval's remote head read)",
+              "src/lib/pipelines/engine.provisioning.test.ts": "^portable provisioning controller",
+              "src/lib/pipelines/stageBranch.test.ts": "^portable stage protection",
+              "src/lib/workflows/execAsync.test.ts": "^(the executor closes its owned process tree|pre-cancelled execution|timeouts and output bounds)",
+          }
           tests = [
               "src/lib/proc/darwinArgv.test.ts",
               "src/lib/proc/darwinIdentity.test.ts",
@@ -138,6 +146,7 @@ jobs:
               "src/lib/limits.test.ts",
               "src/app/api/accounts/route.test.ts",
               "src/lib/agent/cli.test.ts",
+              *portable_tests,
           ]
           failures = []
           for test in tests:
@@ -167,7 +176,18 @@ jobs:
               # This provider job exercises Claude account storage boundaries.
               if test.endswith("/cli.test.ts"):
                   command += ["--test-name-pattern", "^(managed Claude fresh and resume commands pin|Claude child environment keeps|legacy Claude fresh and resumed commands pin)"]
-              if subprocess.run(command, env=env).returncode:
+              if test in portable_tests:
+                  env["LLV_VIEWER_CONTROL_URL"] = "http://127.0.0.1:1"
+                  env["LLV_GATE_RUNNER"] = "off"
+                  command = ["bash", "scripts/gate-slot.sh", "bun", "test", "--timeout=60000", test,
+                             "--test-name-pattern", portable_tests[test]]
+                  print(f"Native portable gate: {test}; OS={os.uname().sysname}", flush=True)
+                  subprocess.run(["git", "rev-parse", "HEAD"], check=True, env=env)
+                  subprocess.run(["bun", "--version"], check=True, env=env)
+              result = subprocess.run(command, env=env)
+              if test in portable_tests:
+                  print(f"Native portable gate exit: {test}: {result.returncode}", flush=True)
+              if result.returncode:
                   failures.append(test)
           if failures:
               raise SystemExit("Failed native gates: " + ", ".join(failures))
