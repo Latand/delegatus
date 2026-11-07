@@ -7,8 +7,9 @@ import { realProvisionExec, type ProvisionExecPort } from "./git";
 import { commitAndAdoptStageBranch, observeStageBranchProtection } from "./stageBranch";
 import type { Pipeline } from "./types";
 
-test.each(["local", "no-remote", "unpublished", "unprotected", "protected", "malformed", "denied", "missing-helper", "transport", "expiry"] as const)(
+test.each(["local", "no-remote", "unpublished", "unprotected", "protected", "malformed", "denied", "missing-helper", "transport", "expiry", "expiry-delayed-start"] as const)(
   "portable stage protection uses real Git and fails closed: %s", async mode => {
+    const expires = mode === "expiry" || mode === "expiry-delayed-start";
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-protection-"));
     try {
       const repo = path.join(root, "repo"), origin = path.join(root, "origin.git"), bin = path.join(root, "bin");
@@ -36,7 +37,8 @@ test.each(["local", "no-remote", "unpublished", "unprotected", "protected", "mal
         : `exec "${Bun.which("git")!}" upload-pack "$FIXTURE_REMOTE"\n`), { mode: 0o700 });
       const calls = path.join(root, "forge-calls");
       if (mode !== "missing-helper") fs.writeFileSync(path.join(bin, "gh"),
-        `#!/bin/sh\nprintf '%s\n' "$*" >> "$FORGE_CALLS"\n` + (mode === "expiry" ? `exec "${Bun.which("sleep")!}" 30\n`
+        `#!/bin/sh\n` + (mode === "expiry-delayed-start" ? `"${Bun.which("sleep")!}" 0.25\n` : "")
+        + `printf '%s\n' "$*" >> "$FORGE_CALLS"\n` + (expires ? `exec "${Bun.which("sleep")!}" 30\n`
           : mode === "denied" ? "echo fixture-denied >&2\nexit 1\n"
           : `echo ${mode === "protected" ? "true" : mode === "malformed" ? "unexpected" : "false"}\n`), { mode: 0o700 });
       const subject = {
@@ -47,10 +49,12 @@ test.each(["local", "no-remote", "unpublished", "unprotected", "protected", "mal
       const observations: Array<{ command: string; timeoutMs?: number }> = [];
       const remote: ProvisionExecPort = async (command, args, cwd, signal, options) => {
         observations.push({ command, timeoutMs: options?.timeoutMs });
-        return realProvisionExec(command, args, cwd, signal, {
+        const result = await realProvisionExec(command, args, cwd, signal, {
           ...options, env: { ...options?.env, PATH: bin, FORGE_CALLS: calls, GIT_SSH_COMMAND: transport, GIT_SSH_VARIANT: "ssh", FIXTURE_REMOTE: origin },
-          ...(mode === "expiry" && command === "gh" ? { timeoutMs: 100 } : {}),
+          ...(expires && command === "gh" ? { timeoutMs: 100 } : {}),
         });
+        if (expires && command === "gh") expect(result).toMatchObject({ code: null, signal: "SIGKILL", stderr: "command timed out after 100ms" });
+        return result;
       };
       if (mode === "local") await git(repo, "remote", "set-url", "origin", origin);
       if (mode === "no-remote") await git(repo, "remote", "remove", "origin");
@@ -65,10 +69,15 @@ test.each(["local", "no-remote", "unpublished", "unprotected", "protected", "mal
       if (!["unpublished", "transport"].includes(mode)) expect(observations[1]).toEqual({ command: "gh", timeoutMs: 5_000 });
       const error = mode === "protected" ? "the stage is on a protected forge branch"
         : mode === "transport" ? "the stage branch's remote protection cannot be verified"
-        : ["malformed", "denied", "missing-helper", "expiry"].includes(mode) ? "the stage branch's forge protection cannot be verified" : null;
+        : expires || ["malformed", "denied", "missing-helper"].includes(mode) ? "the stage branch's forge protection cannot be verified" : null;
       expect(observation?.error).toBe(error);
       if (mode === "unpublished" || mode === "transport" || mode === "missing-helper") expect(fs.existsSync(calls)).toBe(false);
-      else expect(fs.readFileSync(calls, "utf8").trim()).toBe("api repos/fixture/project/branches/stage%2Ftopic --jq .protected");
+      // Expiry may stop the helper before its first write; its timeout result
+      // above and the refusal below must hold on either side of that write.
+      else {
+        const recordedCall = fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim() : "";
+        if (!expires || recordedCall) expect(recordedCall).toBe("api repos/fixture/project/branches/stage%2Ftopic --jq .protected");
+      }
       if (mode === "unprotected") {
         await git(repo, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "advanced stage");
         expect(await commitAndAdoptStageBranch(subject, "build", realExec, () => [subject], undefined, () => { throw new Error("stale observation must not record adoption"); }, observation))
