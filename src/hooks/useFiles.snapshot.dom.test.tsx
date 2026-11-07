@@ -180,13 +180,14 @@ test("a refused browser drops what it stored and stops painting the restored ans
   }
 });
 
-test("a refusal after this document certified its own answer leaves that answer alone", async () => {
+test("a refusal after this document certified its answer removes protected rows and conditional bytes", async () => {
   let status = 200;
   const cache = createFilesClientCache(async () => (status === 200 ? new Response(JSON.stringify(BODY), { status: 200, headers: { ETag: ETAG } }) : new Response("", { status })));
   await cache.revalidate();
   status = 403;
   await cache.revalidate().catch(() => undefined);
-  expect(cache.readScope().files.length).toBe(2);
+  expect(cache.readScope().files).toEqual([]);
+  expect(cache.certifiedGlobal()).toBeNull();
 });
 
 test("a snapshot is never painted over an answer this document already has", async () => {
@@ -303,4 +304,93 @@ test("a visible board heartbeats through files HEAD even with live streaming, an
     runtimeEnabled = false;
     delete (document as unknown as { visibilityState?: string }).visibilityState;
   }
+});
+
+
+test("quiet live boards read accepted IDs on the existing health cadence without another catalog or POST", async () => {
+  const { setTeamViewForTests } = await import("@/components/team/teamClient");
+  const { reservePipelineCreation, usePipelineCreationCards, retryPipelineCreationRead } = await import("./useFiles");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
+    approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
+  } });
+  resetFilesClientCacheForTests(memoryFilesSnapshotStore());
+  runtimeEnabled = true;
+  const originalInterval = globalThis.setInterval;
+  let tick!: () => void;
+  globalThis.setInterval = ((callback: () => void, ms: number) => {
+    if (ms === 10_000) tick = callback;
+    return originalInterval(callback, 100_000);
+  }) as typeof setInterval;
+  const pipeline = buildPipeline({ id: "quiet-accepted", project: "atlas", task: "Quiet accepted work", taskIds: [],
+    srcPath: null, srcConversationId: null, repoDir: "/fixture/repo", now: "2030-01-01T00:00:00Z", stages: [], state: "draft" });
+  let reads = 0, catalogs = 0, terminal = false;
+  let readDone!: () => void;
+  let done = new Promise<void>(resolve => { readDone = resolve; });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    expect(init?.method ?? "GET").not.toBe("POST");
+    if (String(input).startsWith("/api/pipelines/")) {
+      reads++;
+      const response = Response.json({ code: terminal ? "pipeline_creation_refused" : "pipeline_queued", queuedCreation: {
+        id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: pipeline.createdAt,
+        state: terminal ? "refused" : "queued", reason: terminal ? "creation_refused" : "store_unavailable",
+      } }, { status: 404 });
+      const json = response.json.bind(response);
+      response.json = async () => { const result = await json(); queueMicrotask(readDone); return result; };
+      return response;
+    }
+    if (String(input).includes("view=storage-health")) return Response.json({ state: "ok", freeBytes: null, since: null });
+    if (String(input).startsWith("/api/files")) catalogs++;
+    return Response.json(BODY);
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host as unknown as Element);
+  function Board() { useFiles(); return <span>{usePipelineCreationCards().map(card => card.status).join(",")}</span>; }
+  try {
+    flushSync(() => root.render(<Board />));
+    const reservation = reservePipelineCreation()!;
+    await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+    tick(); await done;
+    await retryPipelineCreationRead();
+    const beforeCatalogs = catalogs;
+    terminal = true;
+    done = new Promise<void>(resolve => { readDone = resolve; });
+    tick(); await done;
+    await retryPipelineCreationRead();
+    flushSync(() => root.render(<Board />));
+    expect(host.textContent).toBe("refused");
+    expect(reads).toBe(2);
+    expect(catalogs).toBe(beforeCatalogs);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.setInterval = originalInterval;
+    runtimeEnabled = false;
+    setTeamViewForTests(null);
+    resetFilesClientCacheForTests();
+  }
+});
+
+
+test("receipt envelopes merge concurrent documents, survive expired catalogs, and fence old owners", async () => {
+  const { usableCreationLocators, CREATION_LOCATORS_MAX_BYTES } = await import("@/lib/client/filesSnapshotStore");
+  const store = memoryFilesSnapshotStore(record({ savedAt: Date.now() - FILES_SNAPSHOT_MAX_AGE_MS - 1 }));
+  await Promise.all([
+    store.updateCreations!("member-a", [{ id: "first" }], [], () => true, undefined, "scope-a"),
+    store.updateCreations!("member-a", [{ id: "second" }], [], () => true, undefined, "scope-a"),
+  ]);
+  expect((await store.read())?.creations?.entries).toEqual([{ id: "first" }, { id: "second" }]);
+  await store.write(record());
+  expect((await store.read())?.creations?.entries).toEqual([{ id: "first" }, { id: "second" }]);
+  await store.updateCreations!("member-a", [], ["first"], () => true, undefined, "scope-a");
+  expect((await store.read())?.creations?.entries).toEqual([{ id: "second" }]);
+  await expect(store.updateCreations!("member-a", [{ id: "late" }], [], () => false)).rejects.toThrow("owner changed");
+  await store.updateCreations!("member-b", [{ id: "new-owner" }], [], () => true, undefined, "scope-b");
+  await store.clear("member-a");
+  expect((await store.read())?.creations).toEqual({ owner: "member-b", scope: "scope-b", entries: [{ id: "new-owner" }] });
+  expect((await store.read())?.text).toBe("");
+  expect(usableCreationLocators({ owner: "member-a", scope: "x".repeat(CREATION_LOCATORS_MAX_BYTES), entries: [] })).toBe(false);
+  const maximum = { owner: "member-a", entries: Array.from({ length: 8 }, (_, index) => ({ id: `accepted-${index}` })) };
+  expect(usableCreationLocators(maximum)).toBe(true);
+  expect(new TextEncoder().encode(JSON.stringify(maximum)).byteLength).toBeLessThan(1024);
+  expect(usableCreationLocators({ ...maximum, entries: [...maximum.entries, { id: "ninth" }] })).toBe(false);
 });

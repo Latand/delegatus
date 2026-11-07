@@ -1,3 +1,4 @@
+import { structuredDeliveryMcpObservation } from "@/lib/runtime/structuredDeliveryController";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bindResumedSeatTick } from "./resumedSeatTick";
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm } from "./seatTickWatchdog";
@@ -1749,9 +1750,10 @@ async function check(
       const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
       const health = dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
         ?? seatMcpHealth(receipt, seat.designatedAt ?? null,
-          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
+          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio",
+          structuredDeliveryMcpObservation(seat.conversationId, sources.registry()));
       return { ...health, ...(receipt?.viewerMcpTransport ? { transport: receipt.viewerMcpTransport } : {}) };
-    } catch { return { status: "untracked", detail: "MCP liveness could not be read" }; }
+    } catch { return { status: "dead", detail: "MCP liveness could not be read" }; }
   };
   // A missing MCP heartbeat cannot distinguish a finished dead host from a
   // live host with a broken pipe. Only the liveness plane can admit recovery.

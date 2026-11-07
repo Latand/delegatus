@@ -4,6 +4,19 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "pipelineCreation.accepted": "Прийнято — очікує створення",
+  "pipelineCreation.linkPending": "Створено — джерельне посилання очікує приєднання",
+  "pipelineCreation.attach": "Приєднати збережене посилання",
+  "pipelineCreation.lagging": "Досі очікує створення",
+  "pipelineCreation.refused": "У створенні відмовлено",
+  "pipelineCreation.unavailable": "Стан створення недоступний",
+  "pipelineCreation.restoring": "Перевіряємо прийняте створення",
+  "pipelineCreation.revoked": "Доступ втрачено",
+  "pipelineCreation.persistence": "Відновлення після перезавантаження недоступне",
+  "pipelineCreation.capacity": "Список прийнятих створень заповнений або доступ ще перевіряється. Перегляньте прийняті результати перед створенням наступного пайплайна.",
+  "pipelineCreation.reason": "Сервер не зміг прийняти це створення. Нічого не створено.",
+  "pipelineCreation.retry": "Перевірити стан",
+  "pipelineCreation.dismiss": "Прибрати результат",
   "projectSetup.title": "Підготовка проєкту",
   "projectSetup.running": "Підготовка проєкту триває",
   "projectSetup.passed": "Підготовку проєкту виконано",
