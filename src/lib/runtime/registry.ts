@@ -75,6 +75,7 @@ function registryProcess(state: HostState): ProcessIdentity | null {
 export function codexHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
     ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
+    ...(state.viewerMcp ? { viewerMcp: state.viewerMcp } : {}),
     kind: "codex-app-server",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -186,7 +187,8 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 }
 
 function sameMaterialHostState(left: HostState, right: HostState): boolean {
-  return left.status === right.status
+  return isDeepStrictEqual(left.viewerMcp, right.viewerMcp)
+    && left.status === right.status
     && left.endpoint === right.endpoint
     && left.pid === right.pid
     && left.processStartIdentity === right.processStartIdentity

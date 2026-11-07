@@ -41,6 +41,10 @@ let again = false;
 let pendingWrites = 0;
 let visibilityWatched = false;
 
+/** Confirmed membership only; selection and optimistic placement are views. */
+export const readConfirmedWorkspaces = () => store.confirmed;
+export const subscribeConfirmedWorkspaces = (listener: () => void) => subscribe(listener);
+
 function emit(next: Store): void {
   store = next;
   for (const listener of listeners) listener();
