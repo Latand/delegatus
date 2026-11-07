@@ -19,22 +19,42 @@ export function publicationPrivacyRefusal(line: string): boolean {
   return /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line.trim());
 }
 
-/** The hook's last phase or failed group member. Shared by publication and
+const TRANSPORT_ADMITTED = "pre-push: verified completed checks for this publication; transport admitted";
+
+export function publicationRemoteRefusalLine(output: string): string | undefined {
+  return output.split("\n").map(line => line.trim()).find(line =>
+    /^(?:remote:.*fatal error|!\s+\[remote rejected\])/.test(line));
+}
+
+/** The hook's unfinished phase or failed group member. Shared by publication and
  * takeover so neither can reset or reclassify the same failed operation. */
 export function publicationFailurePhase(failure: Pick<PipelinePublicationFailure, "outputTail"> & Partial<PipelinePublicationFailure>): string | null {
   const lines = failure.outputTail.split("\n").map(line => line.trim());
   if (lines.some(publicationPrivacyRefusal)) return "privacy";
+  const failed = lines.findLast(line => /^pre-push: [^;:]{1,60}: failed \(/.test(line));
+  if (failed) return /^pre-push: ([^;:]{1,60}):/.exec(failed)![1]!;
+  if (lines.includes(TRANSPORT_ADMITTED) || publicationRemoteRefusalLine(failure.outputTail)) return null;
+  let privacyPassed = false;
   for (const line of lines.reverse()) {
-    const member = /^pre-push: ([^;:]{1,60}): failed \(/.exec(line);
-    if (member) return member[1]!;
+    if (line === "PRIVACY GATE: PASS") privacyPassed = true;
+    if (line === "pre-push: privacy" && privacyPassed) continue;
     if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
   }
   return null;
 }
 
+/** A completed hook or an explicit remote ref refusal proves that asking the
+ * producer to edit accepted content is unsupported. The remote cause is unknown. */
+export function publicationRemoteRefusal(failure: PipelinePublicationFailure | undefined): boolean {
+  return failure?.step === "publishing the pipeline branch" && !failure.retryableApp403 && !failure.retryableDeadline
+    && publicationFailurePhase(failure) === null
+    && (failure.outputTail.split("\n").some(line => line.trim() === TRANSPORT_ADMITTED)
+      || !!publicationRemoteRefusalLine(failure.outputTail));
+}
+
 export function recoverablePublication(result: { error: string; failure?: PipelinePublicationFailure; outcome?: "not-landed" }): boolean {
   return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || publicationInterrupted(result)
-    || result.failure?.changedFiles === 0 && publicationFailurePhase(result.failure) !== "privacy";
+    || result.failure?.changedFiles === 0 && publicationFailurePhase(result.failure) !== "privacy" && !publicationRemoteRefusal(result.failure);
 }
 
 /** One failed operation owns one cause and one retry time, even when its
@@ -55,7 +75,12 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
   if (recorded) return recorded;
   const result = operation.result ?? operation.executor?.result;
   const cause = result?.ok === false && publicationEnvironmentFailure(result) || input.detail.startsWith("stage environment:")
-    ? "environment" : input.cause;
+    ? "environment" : input.cause === "check-failure" && result?.ok === false && publicationRemoteRefusal(result.failure)
+      ? "remote-refusal" : input.cause;
+  // Takeover's legacy writer passes the beginning of the push output. A long
+  // successful hook log can fill it before the remote explains its refusal.
+  const remoteLine = cause === "remote-refusal" && result?.failure && publicationRemoteRefusalLine(result.failure.outputTail);
+  const detail = remoteLine ? `remote publication was refused; underlying cause is unknown: ${remoteLine}`.slice(0, 400) : input.detail;
   if (input.cause === "app-git-403") {
     const result = operation.result ?? operation.executor?.result;
     // Older receipts have no observation field. Their immutable refusal journal
@@ -77,7 +102,7 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
       : new Date(Math.min(end, Date.parse(input.at) + PUBLICATION_RETRY_DELAYS_MS[Math.min(count, PUBLICATION_RETRY_DELAYS_MS.length - 1)]!)).toISOString();
   }
   const record = { operationId: input.operationId, epoch: input.epoch, at: input.at,
-    cause, detail: input.detail, retryAt };
+    cause, detail, retryAt };
   recovery.totalAttempts++;
   recovery.history = [...recovery.history, record].slice(-HISTORY_LIMIT);
   return record;
@@ -113,7 +138,7 @@ export function isPublicationRecovery(value: unknown): boolean {
       && new Set(row.history.map(entry => entry?.operationId)).size === row.history.length
       && row.history.every(entry => entry && typeof entry.operationId === "string" && !!entry.operationId
         && Number.isSafeInteger(entry.epoch) && entry.epoch > 0 && typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
-        && ["infrastructure-deadline", "interrupted", "check-failure", "app-git-403", "environment"].includes(entry.cause)
+        && ["infrastructure-deadline", "interrupted", "check-failure", "app-git-403", "environment", "remote-refusal"].includes(entry.cause)
         && typeof entry.detail === "string" && entry.detail.length <= 400
         && (entry.retryAt === null || typeof entry.retryAt === "string" && Number.isFinite(Date.parse(entry.retryAt))));
   });
