@@ -171,6 +171,7 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
+import { withPrivacyWorkerOwner } from "@/lib/memory/privacyDiagnostics";
 import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
 import { RoleMemoryChanged, withCurrentRoleMemory, withRoleMemoryRetry, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
@@ -8229,6 +8230,15 @@ async function spawnRunStage(
   ports: PipelinePorts, persist: () => void | Promise<void>,
   prepareInput = false,
 ): Promise<void> {
+  return withPrivacyWorkerOwner(pipeline.id, stage.id, attempt.n,
+    () => spawnCorrelatedRunStage(pipeline, stage, attempt, spawnInput, ports, persist, prepareInput));
+}
+
+async function spawnCorrelatedRunStage(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0],
+  ports: PipelinePorts, persist: () => void | Promise<void>, prepareInput: boolean,
+): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
   let roleMemoryWaitReady = false;
   let admissionStartedAt = attempt.activation?.admissionStartedAt;
@@ -9059,7 +9069,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           await checkpoint(); continue;
         }
       }
-      await driveRuntimeSwitch(pipeline, stage, attempt, outside, checkpoint, async role => {
+      await withPrivacyWorkerOwner(pipeline.id, stage.id, attempt.n, () => driveRuntimeSwitch(pipeline, stage, attempt, outside, checkpoint, async role => {
         const bound = attemptStage(stage, attempt);
         const memory = stageMemoryForLaunch(pipeline, stage, role.roleId ?? null);
         const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec);
@@ -9070,7 +9080,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace, supersedes: record.from.conversationId,
           membership: { kind: "pipeline", containerId: pipeline.id, role: role.roleId ?? "agent", slot: `${stage.id}:${attempt.n}`,
             stageId: stage.id, stageOrder: pipeline.stages.indexOf(stage), round: attempt.n, parentConversationId: null } };
-      });
+      }));
       if (parked && ["committed", "rolled-back", "superseded"].includes(record.phase)) {
         pipeline.state = "running";
         pipeline.stateDetail = null;
@@ -9681,7 +9691,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         }
         if (abort.signal.aborted) throw new Error(`${label} operation timed out`);
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) return;
-        const prepareCloudPrompt = async (threadId?: string) => {
+        const prepareCloudPrompt = (threadId?: string) => withPrivacyWorkerOwner(pipeline.id, stage.id, n, async () => {
           const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
           const prompt = (await composeCloudStageInput(pipeline, bound, attempt.effectiveRole,
             previousOutput, undefined, threadId ? {
@@ -9699,7 +9709,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
             'End with one fenced JSON verdict: {"status":"pass|fail|needs_decision","findings":["P1 — file:line and defect"]}. Use the same findings and verdict contract as a local stage. A pass has no findings.',
           ].join("\n\n"));
           return [prompt, runtime].join("\n\n");
-        };
+        });
         const prompt = await prepareCloudPrompt();
         const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
           environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
