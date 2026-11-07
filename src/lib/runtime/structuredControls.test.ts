@@ -79,7 +79,7 @@ function structuredConversation(
   if (engine === "codex") {
     fs.writeFileSync(pathname, JSON.stringify({ type: "session_meta", payload: { id } }) + "\n", { mode: 0o600 });
     sourceAccounts.set(pathname, { engine, accountId: options.accountId ?? `${engine}-subscription`, kind: "managed",
-      home: sandbox, transcriptRoot: sandbox, env: {} });
+      home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } });
   }
   const registry = options.registry
     ?? new AgentRegistry(path.join(sandbox, `${id}.registry.json`), undefined, undefined, { sqliteMode: "off" });

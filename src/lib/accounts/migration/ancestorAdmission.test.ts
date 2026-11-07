@@ -56,7 +56,7 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
     registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: sourceId }, artifactPath: sourcePath, cwd: base, accountId: "source", status: "idle", host: null,
         structuredHost: { kind: "codex-app-server", endpoint: "test:host", process: { pid: process.pid, startIdentity: "fixture" }, eventCursor: 1, protocolVersion: "test", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
         claimEpoch: 1, claimOwner: "structured-host:test", pendingAction: null, launchProfile: begun.receipt.launchProfile });
-    registry.reconcileConversations([{ engine: "codex", path: sourcePath, accountId: "source", launchProfile: profile, turn: { state: "terminal", source: "terminal", terminalAt: "2026-11-07T10:00:00.000Z" }, observedAt: "2026-11-07T10:00:00.000Z" }]);
+    registry.reconcileConversations([{ engine: "codex", path: sourcePath, accountId: "source", launchProfile: profile, turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-11-07T10:00:00.000Z" }, observedAt: "2026-11-07T10:00:00.000Z" }]);
     const events: string[] = [];
     let displaced = false;
     let pipelineAllowed = true;
@@ -66,7 +66,7 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
         displaced = true;
         if (at === "pipeline-policy") { pipelineAllowed = false; return; }
         if (at === "operation-revision") {
-            registry.claimConversationReconfigure(begun.receipt.conversationId, { operationId: "replacement-switch", revision: 100, profile: {}, accountId: "target" });
+            registry.claimConversationReconfigure(begun.receipt.conversationId, { operationId: "replacement-switch", revision: 100, profile: { model: profile.model, effort: profile.effort, fast: profile.fast }, accountId: "target" });
             return;
         }
         if (at === "admission-generation") {
@@ -124,6 +124,7 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
                     method: string;
                     params: {
                         path?: string;
+                        threadId?: string;
                     };
                 };
                 if (typeof m.id !== "number")
@@ -192,7 +193,7 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
     const commands: RuntimeOperationCommand[] = [];
     const client = { command: async (command: RuntimeOperationCommand) => { commands.push(command); const result = journal.executeOperation(command); boundary("journal-ack"); return result; }, effectBatch: async (kinds: Parameters<RuntimeJournal["effectBatch"]>[1], cursor: number) => journal.effectBatch(100, kinds, cursor), operationStatus: async (id: string) => journal.operationResult(id) };
     const admitted = await applyConversationMigration({ action: "select-account", conversationId: begun.receipt.conversationId, accountId: "target", requestOperationId: "ancestor-probe" }, { registry: () => registry,
-        dispatchControl: (request, dependencies) => dispatchStructuredControl(request, { ...dependencies, client: client as unknown as RuntimeHostClient, accountExists: () => true, attributeAccountChoice: () => { attributions++; return undefined; }, enabled: () => true, kick: () => { }, preflightSource: async (generation, _accounts, assertCurrent) => {
+        dispatchControl: (request, dependencies) => dispatchStructuredControl(request, { ...dependencies, client: client as unknown as RuntimeHostClient, accountExists: () => true, attributeAccountChoice: () => { attributions++; return null; }, enabled: () => true, kick: () => { }, preflightSource: async (generation, _accounts, assertCurrent) => {
                 await preflightCodexSource(generation, { resolveTranscriptOwner: () => source }, assertCurrent);
                 for (const at of ["admission-owner", "admission-epoch", "admission-writer", "admission-generation"])
                     boundary(at);

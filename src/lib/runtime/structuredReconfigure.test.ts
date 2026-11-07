@@ -43,7 +43,7 @@ function fixture(
   const transcript = path.join(root, `rollout-${sessionId}.jsonl`);
   fs.writeFileSync(transcript, engine === "codex"
     ? JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n" : "{}\n", { mode: 0o600 });
-  if (engine === "codex") sourceAccounts.set(transcript, { engine, accountId: "source", kind: "managed", home: root, transcriptRoot: root, env: {} });
+  if (engine === "codex") sourceAccounts.set(transcript, { engine, accountId: "source", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" } });
   const begun = beginLegacySpawnFixture(registry, {
     engine,
     cwd: root,
