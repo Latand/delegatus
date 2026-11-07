@@ -119,7 +119,25 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/claude-provider" --ignore-scripts --no-audit --no-fund --package-lock=false "@anthropic-ai/claude-code-darwin-$arch@2.1.263"
           echo "LLV_TEST_CLAUDE_BINARY=$RUNNER_TEMP/claude-provider/node_modules/@anthropic-ai/claude-code-darwin-$arch/claude" >> "$GITHUB_ENV"
 
+      - name: Preserve the legacy identity interpreter and resolve the image pin
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/identity-runtime"
+          cp "$(command -v bun)" "$RUNNER_TEMP/identity-runtime/bun"
+          echo "MACOS_IDENTITY_BUN=$RUNNER_TEMP/identity-runtime/bun" >> "$GITHUB_ENV"
+          pin=$(sed -nE 's/.*npm install -g bun@([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' Dockerfile | sort -u)
+          [[ "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'version=%s\n' "$pin" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.pin.outputs.version }}
+
       - name: Verify identity, credentials and portable provisioning in isolated processes
+        env:
+          PORTABLE_BUN_VERSION: ${{ steps.pin.outputs.version }}
         run: |
           python3 - <<'PYCODE'
           import os, pathlib, subprocess, tempfile
@@ -164,7 +182,7 @@ jobs:
               env["USER"] = "fixture-user"
               env["LLV_REQUIRE_NATIVE_CREDENTIALS"] = "1"
               env["LLV_TEST_CLAUDE_BINARY"] = os.environ["LLV_TEST_CLAUDE_BINARY"]
-              command = ["bun", "test", test]
+              command = [os.environ["MACOS_IDENTITY_BUN"], "test", test]
               # Removal traverses Linux /proc fd anchors and deliberately
               # refuses macOS. Keep this job on credential recognition; the
               # native Keychain test also exercises real catalog discovery.
@@ -183,7 +201,10 @@ jobs:
                              "--test-name-pattern", portable_tests[test]]
                   print(f"Native portable gate: {test}; OS={os.uname().sysname}", flush=True)
                   subprocess.run(["git", "rev-parse", "HEAD"], check=True, env=env)
-                  subprocess.run(["bun", "--version"], check=True, env=env)
+                  version = subprocess.check_output(["bun", "--version"], text=True, env=env).strip()
+                  print(f"Portable Bun: {version}", flush=True)
+                  if version != os.environ["PORTABLE_BUN_VERSION"]:
+                      raise SystemExit("Portable interpreter does not match the image pin")
               result = subprocess.run(command, env=env)
               if test in portable_tests:
                   print(f"Native portable gate exit: {test}: {result.returncode}", flush=True)

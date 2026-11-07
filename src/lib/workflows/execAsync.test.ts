@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
 import { realExec } from "./provision";
+import * as cpuBudget from "@/lib/runtime/cpuAdmissionBudget";
 
 test("the production executor yields while an external command is in flight", async () => {
   let readRan = false;
@@ -18,22 +19,40 @@ test.each(["deadline", "cancellation"] as const)("the executor closes its owned 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "executor-owned-"));
   const marker = path.join(root, "pids");
   const abort = new AbortController();
+  // Delay shell startup past the old 500ms deadline. Expiry is released only
+  // after both owned PIDs exist; the real timer is covered separately below.
+  const shell = path.join(root, "sh");
+  fs.writeFileSync(shell, '#!/bin/sh\n/bin/sleep 0.75\nexec /bin/sh "$@"\n', { mode: 0o700 });
+  let expire: (() => void) | undefined;
+  let timerClosed = false;
+  const timer = spyOn(cpuBudget, "cpuBudgetTimer").mockImplementation((_ms, _waited, callback) => {
+    expire = callback;
+    return () => { timerClosed = true; };
+  });
   const sentinel = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
-  const command = realExec("sh", ["-c", 'echo "$$" > "$OWNED_PIDS"; sleep 30 & echo "$!" >> "$OWNED_PIDS"; wait'], root,
-    { OWNED_PIDS: marker }, { signal: abort.signal, timeoutMs: mode === "deadline" ? 500 : 5_000 });
+  const command = realExec(shell, ["-c", 'echo "$$" > "$OWNED_PIDS"; sleep 30 & echo "$!" >> "$OWNED_PIDS"; wait'], root,
+    { OWNED_PIDS: marker }, { signal: abort.signal, timeoutMs: 500 });
   try {
     for (let n = 0; n < 400 && (!fs.existsSync(marker) || fs.readFileSync(marker, "utf8").trim().split(/\s+/).length < 2); n++) await Bun.sleep(10);
+    expect(fs.existsSync(marker), "the owned shell must report readiness").toBe(true);
     const pids = fs.readFileSync(marker, "utf8").trim().split(/\s+/).map(Number);
     expect(pids).toHaveLength(2);
-    if (mode === "cancellation") abort.abort();
-    expect(await command).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "deadline" ? "command timed out after 500ms" : "command cancelled" });
     const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    expect(pids.map(alive)).toEqual([true, true]);
+    expect(timer).toHaveBeenCalledTimes(1);
+    expect(timer.mock.calls[0][0]).toBe(500);
+    expect(expire).toBeDefined();
+    if (mode === "cancellation") abort.abort();
+    else expire!();
+    expect(await command).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "deadline" ? "command timed out after 500ms" : "command cancelled" });
+    expect(timerClosed).toBe(true);
     for (let n = 0; n < 200 && pids.some(alive); n++) await Bun.sleep(10);
     expect(pids.map(alive)).toEqual([false, false]);
     expect(alive(sentinel.pid)).toBe(true);
     expect(sentinel.exitCode).toBeNull();
   } finally {
     abort.abort(); await command;
+    timer.mockRestore();
     sentinel.kill(); await sentinel.exited;
     fs.rmSync(root, { recursive: true, force: true });
   }
