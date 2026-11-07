@@ -2386,6 +2386,324 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
   return { readings, failures };
 }
 
+/** The task album's Files view and the preview it opens (docs/design/task-file-preview.md §11.5).
+ *  The page's list and content requests are answered by the real route handlers over a real
+ *  repository the driver builds in a temporary directory, so every frame shows real
+ *  authorization, modes, sizes and bytes. Called by the board and phone cases. */
+export async function captureTaskFilesFrames(browser: Browser, out: string, phone: boolean) {
+  const os = await import("node:os");
+  const { NextRequest } = await import("next/server");
+  const sharp = (await import("sharp")).default;
+  const { translate } = await import("@/lib/i18n");
+  const { LANE_BRANCH } = await import("@/lib/laneReview/gitFixture");
+  const { createTaskFixture } = await import("@/lib/taskFiles/fixture");
+  const { createTaskFilesCaches } = await import("@/lib/taskFiles/cache");
+  const { taskFilesGET, taskFileContentGET } = await import("@/lib/taskFiles/http");
+  const { realExec } = await import("@/lib/workflows/provision");
+
+  const TASK = "t-search";
+  const LANE = "p-search";
+  const fixture = createTaskFixture();
+  const repoRoot = fixture.dir;
+  /* A valid one-page PDF, so the PDF pane has a document to draw. */
+  const pdf = (() => {
+    const stream = "BT /F1 24 Tf 40 120 Td (Handoff report) Tj ET";
+    const objects = [
+      "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+      `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    let body = "%PDF-1.4\n";
+    const offsets: number[] = [];
+    objects.forEach((object, index) => { offsets.push(body.length); body += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+    const xref = body.length;
+    body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}`;
+    return Buffer.from(`${body}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  })();
+  const overview = [
+    "# Search rebuild: handoff", "", "The index rebuild keeps **search results** in step with the board. See [the summary](handoff/summary.md) and [the data](../data/table.csv).", "",
+    "## Checklist", "", "- one **new** index", "- one old index kept for rollback", "  - nested note", "1. ordered step", "2. second step", "",
+    "## Timings", "", `| ${["Step", "Cold", "Warm", "Notes", "Owner", "State", "Run"].join(" | ")} |`, `|${" --- |".repeat(7)}`,
+    `| ${["list", "52 ms", "1 ms", "lane of 36 files", "builder", "done", "3"].join(" | ")} |`, "",
+    "```ts", "export const answer = 42;", "```", "", "> Raw markup stays text: <script>window.ran = 1</script>", "", "[not a link](javascript:window.ran=2)", "",
+  ].join("\n");
+  fixture.git("checkout", "-q", LANE_BRANCH);
+  fixture.write("docs/overview.md", overview);
+  fixture.write("docs/report.pdf", pdf);
+  fixture.write("img/shot.png", await sharp({ create: { width: 640, height: 400, channels: 3, background: "#3b5b92" } }).png().toBuffer());
+  fixture.write("data/huge.txt", Buffer.alloc(9 * 1024 * 1024, 0x61));
+  const tip = fixture.commit("driver documents");
+  for (let index = 0; index < 230; index += 1) fixture.write(`bulk/file-${String(index).padStart(3, "0")}.txt`, `${index}\n`);
+  const bulkTip = fixture.commit("many files");
+  fixture.git("checkout", "-q", "--detach");
+  const emptyTip = fixture.git("rev-parse", "refs/remotes/origin/main");
+  const setHead = (sha: string) => fixture.git("update-ref", `refs/heads/${LANE_BRANCH}`, sha);
+
+  type Phase = "ok" | "forced" | "missing" | "empty" | "truncated" | "failed" | "slow";
+  let phase: Phase = "ok";
+  let release: () => void = () => {};
+  let hold: Promise<void> | null = null;
+  const lane = () => ({ ...fixture.lane(), id: LANE, taskIds: [TASK], stages: [{ id: "implement", name: "implement", outputs: ["docs/handoff"] }] }) as unknown as import("@/lib/pipelines/types").Pipeline;
+  let caches = createTaskFilesCaches();
+  const deps = () => ({
+    task: (id: string) => (id === TASK ? { id } : null),
+    pipeline: (id: string) => (id === LANE ? (phase === "missing" ? { ...lane(), repoDir: `${repoRoot}-absent` } : lane()) : null),
+    scope: () => null,
+    exec: realExec,
+    caches,
+  });
+  const server = await serveEvidenceFixture(out, undefined, {
+    [`/api/tasks/${TASK}/files`]: async (request: Request) => {
+      if (phase === "failed") return Response.json({ error: "boom" }, { status: 500 });
+      if (phase === "slow") { hold ??= new Promise<void>((resolve) => { release = resolve; }); await hold; }
+      const response = await taskFilesGET(new NextRequest(request), TASK, deps());
+      if (phase !== "forced") return response;
+      /* A direct open of a link and of an oversized file: the list marks them openable, the route still decides. */
+      const body = await response.json() as { lanes: Array<{ files?: Array<{ path: string; previewable: boolean }> }> };
+      for (const entry of body.lanes) for (const file of entry.files ?? []) if (["link.md", "data/huge.txt"].includes(file.path)) file.previewable = true;
+      return Response.json(body);
+    },
+    [`/api/tasks/${TASK}/files/content`]: (request: Request) => taskFileContentGET(new NextRequest(request), TASK, deps()),
+    /* The PDF pane's worker, which the page's bundle resolves beside its own script. */
+    "/pdfjs-dist/build/pdf.worker.min.mjs": () => new Response(Bun.file(path.resolve("node_modules/pdfjs-dist/build/pdf.worker.min.mjs")), { headers: { "content-type": "text/javascript" } }),
+  });
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  const widths = phone ? [390] : [1440, 820];
+  const prepare = (next: Phase) => {
+    phase = next;
+    hold = null;
+    caches = createTaskFilesCaches();
+    setHead(next === "empty" ? emptyTip : next === "truncated" ? bulkTip : tip);
+  };
+  try {
+    for (const width of widths) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+      const height = phone ? 844 : 900;
+      const label = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}`;
+      const fail = (text: string) => failures.push(`${label}: ${text}`);
+      const tr = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+      prepare("ok");
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?album=1`, { width, height }, theme, lang, "reduce", phone);
+      const shot = (name: string) => page.screenshot({ path: path.join(out, `${label}-${name}.png`) });
+      /* One state's frame: its defining text is on the first screen and nothing covers it. */
+      const frame = async (state: string, selector: string, expected: string | RegExp) => {
+        const target = page.locator(selector).first();
+        await target.waitFor({ timeout: 20_000 });
+        await target.scrollIntoViewIfNeeded();
+        const reading = await target.evaluate((element, viewport) => {
+          const box = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(Math.min(viewport.width - 1, Math.max(0, box.left + Math.min(box.width / 2, 40))), Math.min(viewport.height - 1, Math.max(0, box.top + box.height / 2)));
+          return { text: (element.textContent ?? "").replace(/\s+/g, " ").trim(), inView: box.top >= 0 && box.left >= 0 && box.bottom <= viewport.height && box.right <= viewport.width && box.width > 0, hitInside: Boolean(hit && (element === hit || element.contains(hit) || hit.contains(element))) };
+        }, { width, height });
+        /* Ukrainian copy holds no-break spaces; the reading folds every space. */
+        const wanted = typeof expected === "string" ? expected.replace(/\s+/g, " ") : expected;
+        if (!(typeof wanted === "string" ? reading.text.includes(wanted) : wanted.test(reading.text))) fail(`${state}: ${selector} reads ${JSON.stringify(reading.text)}, expected ${String(expected)}`);
+        if (!reading.inView) fail(`${state}: ${selector} is not on the first screen`);
+        if (!reading.hitInside) fail(`${state}: ${selector} is covered at its centre`);
+        await shot(state);
+        readings.push({ label, state, ...reading });
+      };
+      /* Geometry of the open Files view: nothing cut, nothing sideways, targets as large as the platform asks. */
+      const geometry = async (state: string) => {
+        const reading = await page.evaluate((isPhone) => {
+          const body = document.querySelector<HTMLElement>("[data-album-files-body]")!;
+          const box = body.getBoundingClientRect();
+          const rows = [...body.querySelectorAll<HTMLElement>("[data-task-file]")];
+          const cut: string[] = [];
+          for (const row of rows) {
+            row.scrollIntoView({ block: "nearest" });
+            const rect = row.getBoundingClientRect();
+            if (rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5 || rect.left < box.left - 0.5 || rect.right > box.right + 0.5) cut.push(row.dataset.taskFile!);
+            for (const fixed of row.querySelectorAll<HTMLElement>("span.shrink-0")) if (fixed.scrollWidth > fixed.clientWidth + 1) cut.push(`${row.dataset.taskFile}: ${fixed.textContent}`);
+          }
+          body.scrollTop = 0;
+          const small = [...document.querySelectorAll<HTMLElement>("[data-task-album] button")].filter((button) => button.getBoundingClientRect().width > 0 && Math.min(button.getBoundingClientRect().height, button.getBoundingClientRect().width) < (isPhone ? 44 : 28)).map((button) => button.dataset.taskFile ?? button.textContent?.trim() ?? "?");
+          const dialog = document.querySelector<HTMLElement>("[data-task-album] [role=dialog]")!.getBoundingClientRect();
+          return { sideways: body.scrollWidth - body.clientWidth, cut, small, rows: rows.length, dialog: [dialog.left, dialog.top, dialog.right, dialog.bottom].map(Math.round), viewport: [innerWidth, innerHeight] };
+        }, phone);
+        readings.push({ label, state: `${state}-geometry`, ...reading });
+        if (reading.sideways > 0) fail(`${state}: the list scrolls sideways by ${reading.sideways}`);
+        if (reading.cut.length) fail(`${state}: cut or clipped: ${reading.cut.join("; ")}`);
+        if (reading.small.length) fail(`${state}: targets under the floor: ${reading.small.join("; ")}`);
+        if (reading.dialog[2]! > reading.viewport[0]! || reading.dialog[3]! > reading.viewport[1]!) fail(`${state}: the dialog leaves the window`);
+      };
+      const closeAlbum = async () => { await page.locator("[data-album-close]").click(); await page.locator("[data-task-album]").waitFor({ state: "detached" }); };
+      const openFiles = async () => {
+        if (phone) await page.locator(`[data-phone-task-files="${TASK}"]`).click();
+        else { await page.locator(`${"[data-kanban-board]"} .card[data-id="task:${TASK}"] [data-album-button="${TASK}"]`).click(); await page.waitForSelector("[data-album-view]"); await page.locator("[data-album-view='files']").click(); }
+      };
+      const enter = async (next: Phase) => {
+        if (await page.locator("[data-task-album]").count()) await closeAlbum();
+        prepare(next);
+        await openFiles();
+      };
+      try {
+        /* The entry. */
+        if (phone) {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+          const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+          if (await tab.count()) await tab.first().click();
+          await page.waitForTimeout(500);
+          const phoneCard = page.locator(`[data-phone-card="task:${TASK}"]`).first();
+          await phoneCard.scrollIntoViewIfNeeded();
+          await phoneCard.click();
+          const row = page.locator(`[data-phone-task-files="${TASK}"]`);
+          await row.waitFor({ timeout: 10_000 });
+          await row.scrollIntoViewIfNeeded();
+          await shot("entry");
+          const entry = await row.evaluate((element) => ({ text: element.textContent, height: Math.round(element.getBoundingClientRect().height) }));
+          readings.push({ label, state: "entry", ...entry });
+          if (!entry.text?.includes(tr("files.title")) || entry.height < 44) fail(`the task screen's Files row reads ${JSON.stringify(entry)}`);
+        } else {
+          const button = page.locator(`[data-kanban-board] .card[data-id="task:${TASK}"] [data-album-button="${TASK}"]`);
+          await button.waitFor({ timeout: 30_000 });
+          /* The picture count arrives with the board's summary read. */
+          await page.waitForFunction((id) => /\d/.test(document.querySelector(`[data-album-button="${id}"]`)?.textContent ?? ""), TASK, { timeout: 30_000 });
+          const withPictures = await button.evaluate((element) => ({ aria: element.getAttribute("aria-label"), text: element.textContent }));
+          /* A task with lanes and no pictures: the Files entry alone. */
+          const bare = page.locator(`[data-kanban-board] .card[data-id="task:t-upload"] [data-album-button="t-upload"]`);
+          await bare.waitFor({ timeout: 10_000 });
+          await page.locator(`[data-kanban-board] .card[data-id="task:t-upload"]`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.waitForTimeout(300);
+          await page.locator(`[data-kanban-board] .card[data-id="task:t-upload"]`).screenshot({ path: path.join(out, `${label}-entry-files-only.png`) });
+          const bareReading = await bare.evaluate((element) => ({ aria: element.getAttribute("aria-label"), digits: /\d/.test(element.textContent ?? "") }));
+          readings.push({ label, state: "entry", withPictures, bareReading });
+          if (bareReading.digits || !bareReading.aria?.startsWith(tr("album.buttonAriaFilesOnly", { title: "" }).split("«")[0]!)) fail(`the picture-less card's entry reads ${JSON.stringify(bareReading)}`);
+          if (!withPictures.aria || !/\d/.test(withPictures.text ?? "")) fail(`the card with pictures says ${JSON.stringify(withPictures)}`);
+        }
+
+        /* The list, every state. */
+        await enter("slow");
+        await frame("loading", "[data-task-files] [role=status]", tr("common.loadingCap"));
+        release();
+        await page.waitForSelector("[data-task-file]", { timeout: 20_000 });
+        await frame("list", "[data-task-file='docs/handoff/summary.md']", "summary.md");
+        await geometry("list");
+        const listText = await page.locator("[data-task-files]").innerText();
+        for (const word of [tr("files.at", { sha: "" }).trim().split(" ")[0]!, tr("files.running")]) if (!listText.includes(word)) fail(`list: missing «${word}»`);
+        const declared = await page.locator("[data-task-file-declared]").first().innerText();
+        if (!declared.includes(tr("files.declared", { stage: "" }).replace(/[: ]+$/, "").replace(/\{.*$/, "").trim().split(" ").pop() ?? "")) fail(`list: the declared mark reads ${declared}`);
+        if ((await page.locator("[data-task-file='link.md'] button, [data-task-file='vendor/module.md'] button, [data-task-file='data/huge.txt'] button").count()) !== 0) fail("list: a row that cannot open is a button");
+        const order = await page.locator("[data-task-file]").evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.taskFile));
+        if (order[0] !== "docs/handoff/notes.md" || order[1] !== "docs/handoff/summary.md") fail(`list: the order starts ${JSON.stringify(order.slice(0, 3))}`);
+        await page.locator("[data-task-files-fold]").click();
+        await frame("folded-open", "[data-task-files-fold]", tr("files.less"));
+        await geometry("folded-open");
+        await page.locator("[data-task-file='src/gone.ts']").scrollIntoViewIfNeeded();
+        await shot("folded-rows");
+        await enter("truncated");
+        await frame("truncated", "[data-task-files-truncated]", lang === "en" ? /more files? not listed/ : /не показано/);
+        await geometry("truncated");
+        await enter("empty");
+        await frame("empty", "[data-task-files-empty]", tr("files.empty"));
+        await enter("missing");
+        await frame("unavailable", "[data-task-files-unavailable]", tr("files.unavailable.repository"));
+        await enter("failed");
+        await frame("failed", "[data-task-files-failed]", tr("files.failed"));
+
+        /* The preview: Markdown, source, text, image, PDF, and the route's refusals. */
+        await enter("forced");
+        const open = async (file: string) => {
+          const row = page.locator(`[data-task-file="${file}"] button`);
+          await row.scrollIntoViewIfNeeded();
+          await row.focus();
+          await row.click();
+        };
+        const sheetReading = async (state: string) => {
+          const reading = await page.evaluate(({ isPhone, width: w, height: h }) => {
+            const sheet = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+            const box = sheet.getBoundingClientRect();
+            const album = document.querySelector<HTMLElement>("[data-task-album] [role=dialog]")!.getBoundingClientRect();
+            const probeX = Math.min(w - 2, Math.max(box.left + 2, isPhone ? w / 2 : box.left + 20));
+            const probeY = Math.max(0, Math.min(h - 2, box.top + box.height / 2));
+            const hit = document.elementFromPoint(probeX, probeY);
+            const controls = [...sheet.querySelectorAll<HTMLElement>("header a, header button, :scope > div:first-of-type a, :scope > div:first-of-type button")].map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0);
+            const md = sheet.querySelector<HTMLElement>("[data-md-scroll]");
+            return {
+              state: sheet.dataset.artifactState, kind: sheet.dataset.artifactKind, z: Number(getComputedStyle(sheet).zIndex),
+              albumZ: Number(getComputedStyle(document.querySelector<HTMLElement>("[data-task-album]")!).zIndex),
+              box: [box.left, box.top, box.right, box.bottom].map(Math.round), album: [album.left, album.right].map(Math.round),
+              hitInside: Boolean(hit && sheet.contains(hit)), inViewport: box.left >= 0 && box.top >= 0 && box.right <= w + 0.5 && box.bottom <= h + 0.5,
+              controlMin: controls.length ? Math.round(Math.min(...controls.map((rect) => Math.min(rect.width, rect.height)))) : null,
+              sideways: md ? md.scrollWidth - md.clientWidth : 0,
+              text: (sheet.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200),
+              scripts: sheet.querySelectorAll("script, iframe, object, embed").length, ran: (window as unknown as { ran?: number }).ran ?? null,
+            };
+          }, { isPhone: phone, width, height });
+          readings.push({ label, step: `${state}-sheet`, ...reading });
+          if (reading.z <= reading.albumZ) fail(`${state}: the sheet (z ${reading.z}) is not above the album (z ${reading.albumZ})`);
+          if (!reading.hitInside) fail(`${state}: the album shows through the sheet at its centre`);
+          if (!reading.inViewport) fail(`${state}: the sheet leaves the window ${reading.box.join(",")}`);
+          if (phone && (reading.box[0] !== 0 || reading.box[2] !== width)) fail(`${state}: the sheet does not take the phone screen`);
+          if (phone && reading.controlMin !== null && reading.controlMin < 44) fail(`${state}: a sheet control is ${reading.controlMin}px`);
+          if (reading.scripts || reading.ran !== null) fail(`${state}: active content ran or rendered (${reading.scripts} nodes, ran ${reading.ran})`);
+          return reading;
+        };
+        await open("docs/overview.md");
+        await page.waitForSelector("[data-md-scroll]", { timeout: 20_000 });
+        await page.waitForTimeout(300);
+        const md = await sheetReading("markdown");
+        if (md.state !== "ready" || !md.text.includes("Search rebuild")) fail(`markdown: ${JSON.stringify(md)}`);
+        if (md.sideways > 0) fail(`markdown: the document scrolls sideways by ${md.sideways}`);
+        await shot("markdown");
+        /* The wide table scrolls inside its own frame; the page does not. */
+        const tableFits = await page.evaluate(() => { const md = document.querySelector<HTMLElement>("[data-md-scroll]")!; return md.scrollWidth <= md.clientWidth + 1; });
+        if (!tableFits) fail("markdown: the table widens the document");
+        await page.locator("[data-preview-mode='source']").click();
+        await page.waitForSelector("[data-line-number]", { timeout: 10_000 });
+        /* The frame shows the source, not the moment it starts loading: wait until the footer no longer reads zero bytes loaded. */
+        const nothingLoaded = tr("preview.loadedOf", { loaded: "0 B", size: "" }).trim();
+        await page.waitForFunction((zero) => { const sheet = document.querySelector("[data-artifact-preview]"); return Boolean(sheet && !(sheet.textContent ?? "").includes(zero)); }, nothingLoaded, { timeout: 20_000 });
+        await shot("markdown-source");
+        /* Modal: Tab from the sheet never reaches the album rows behind it. */
+        for (let press = 0; press < 14; press += 1) await page.keyboard.press("Tab");
+        const trapped = await page.evaluate(() => Boolean(document.activeElement?.closest("[data-artifact-preview]")));
+        if (!trapped) fail("markdown: Tab left the sheet for the album behind it");
+        await page.keyboard.press("Escape");
+        await page.locator("[data-artifact-preview]").waitFor({ state: "detached" });
+        const focused = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.closest("[data-task-file]")?.getAttribute("data-task-file") ?? null);
+        if (focused !== "docs/overview.md") fail(`focus after Escape is on ${focused}`);
+        if (!await page.locator("[data-task-album]").count()) fail("Escape closed the album with the sheet");
+        for (const [state, file, wait] of [["text", "data/table.csv", "[data-line-number]"], ["image", "img/shot.png", "[data-preview-image], img[src^='blob:']"], ["pdf", "docs/report.pdf", "canvas"]] as const) {
+          await open(file);
+          await page.waitForSelector(wait, { timeout: 30_000 });
+          await page.waitForTimeout(500);
+          const reading = await sheetReading(state);
+          if (reading.state !== "ready") fail(`${state}: the sheet reads ${reading.state}`);
+          await shot(state);
+          await page.keyboard.press("Escape");
+          await page.locator("[data-artifact-preview]").waitFor({ state: "detached" });
+        }
+        /* A binary file with a text extension lists as a row that cannot open, so it never reaches a sheet whose header and body disagree. */
+        if ((await page.locator("[data-task-file='docs/binary.md'] button").count()) !== 0) fail("list: the binary file with a text extension is a button");
+        for (const [state, file, expected] of [["denied", "link.md", "denied"], ["oversized", "data/huge.txt", "oversized"]] as const) {
+          await open(file);
+          await page.waitForSelector(`[data-artifact-state="${expected}"]`, { timeout: 20_000 });
+          const reading = await sheetReading(state);
+          if (reading.state !== expected) fail(`${state}: the sheet reads ${reading.state}`);
+          await shot(state);
+          await page.keyboard.press("Escape");
+          await page.locator("[data-artifact-preview]").waitFor({ state: "detached" });
+        }
+        if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        fail(String(error).split("\n").slice(0, 4).join(" "));
+        await page.screenshot({ path: path.join(out, `${label}-error.png`) }).catch(() => undefined);
+      } finally {
+        release();
+        await context.close();
+      }
+    }
+  } finally {
+    server.stop();
+    fixture.cleanup();
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+  void os;
+  return { readings, failures };
+}
+
 /** Shared creation journey, called by the board and phone evidence drivers. */
 export async function captureTaskDueFrames(browser: Browser, base: string, out: string, phone: boolean) {
   const { defaultTaskDue, formatDue } = await import("@/lib/tasks/helpers");

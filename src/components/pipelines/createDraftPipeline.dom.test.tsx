@@ -166,10 +166,13 @@ test.each([["headers", 201], ["body", 201], ["headers", 202], ["body", 202]] as 
   const applied = spyOn(filesClient, "applyPipelineSnapshot");
   let expire!: () => void;
   const schedule = globalThis.setTimeout;
-  const timer = spyOn(globalThis, "setTimeout").mockImplementation((handler, delay, ...args) => {
-    if (delay === filesClient.CREATION_REQUEST_TIMEOUT_MS) expire = handler as () => void;
-    return schedule(handler, delay, ...args);
-  });
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(new Proxy(schedule, {
+    apply(target, receiver, args: Parameters<typeof setTimeout>) {
+      const [handler, delay] = args;
+      if (delay === filesClient.CREATION_REQUEST_TIMEOUT_MS) expire = () => handler(...args.slice(2));
+      return Reflect.apply(target, receiver, args);
+    },
+  }));
   let release!: () => void;
   let entered!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });

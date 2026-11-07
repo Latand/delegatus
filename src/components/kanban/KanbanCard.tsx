@@ -988,6 +988,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             title={title}
             pipelines={card.pipelines.map((summary) => summary.pipeline)}
             files={card.members.map((member) => member.file)}
+            filesAvailable={!remote && card.pipelines.length > 0}
           />
           {/* The orchestrator's composer takes a reference to this task as a chip
               (never text in the input). Not on the Overview, where cards of

@@ -4200,6 +4200,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && (/^\/api\/pipelines\/[^/]+\/(?:changes|review)$/.test(url.pathname) || url.pathname.startsWith("/api/runtime/operations/"))) {
     return serverFetch(url.pathname + url.search, init);
   }
+  /* The task album's Files view reads the driver's own server: real route handlers over a real repository. */
+  if (ALBUM && /^\/api\/tasks\/[^/]+\/files(?:\/content)?$/.test(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (WORKSPACES) {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;

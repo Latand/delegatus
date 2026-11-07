@@ -72,8 +72,9 @@ export async function workspaceConversationProject(identity: string): Promise<st
 }
 
 async function taskProject(id: string): Promise<string | null> {
-  const { loadTasksForList } = await import("@/lib/tasks/store");
-  return loadTasksForList().find(task => task.id === id)?.project ?? null;
+  /* A keyed read: the gate asks for one task's project, not the collection. */
+  const { loadTasksByIds } = await import("@/lib/tasks/store");
+  return loadTasksByIds(new Set([id]), undefined, 1)[0]?.project ?? null;
 }
 
 async function pipelineProject(id: string): Promise<string | null> {

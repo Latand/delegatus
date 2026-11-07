@@ -642,7 +642,7 @@ async function recoverCandidate(
             successorEpoch = claimEpoch;
             ownsSuccessor = () => !!claimOwner && registry.ownsStructuredHostClaim(current.key, claimOwner, claimEpoch);
             // The spawn supplies the claim it just acquired, before yielding.
-            // Later checks accept only this reservation and this writer.
+            // Later checks accept only this reservation, writer and current generation.
             admissionGuard = () => {
               assertAuthority();
               if (!request.authorityGuard) request.admissionGuard?.();
@@ -650,6 +650,7 @@ async function recoverCandidate(
               const receipt = snapshot.receipts[launchId];
               const entry = snapshot.entries[sessionKeyId(current.key)];
               if (!claimOwner || !receipt || receipt.conversationId !== current.conversationId
+                || registry.conversation(current.conversationId)?.generations.at(-1)?.id !== current.key.sessionId
                 || receipt.accountId !== account.accountId || receipt.purpose !== "resume-successor"
                 || receipt.state === "failed" || receipt.state === "conflicted"
                 || entry?.claimOwner !== claimOwner || entry.claimEpoch !== claimEpoch
