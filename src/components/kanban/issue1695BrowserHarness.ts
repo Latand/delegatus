@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
 import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
@@ -308,7 +309,8 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
     };
     server = await serveEvidenceFixture(path.join(out, "bundle"), undefined, responses);
     for (const width of phone ? [390] : [900, 1440]) for (const locale of ["en", "uk"] as const)
-      for (const theme of ["light", "dark"] as const) for (const terminal of ["materialized", "refused"] as const) {
+      for (const theme of ["light", "dark"] as const) for (const outcome of ["materialized", "refused", "refused-revoked"] as const) {
+        const terminal = outcome === "materialized" ? "materialized" : "refused";
         showStored = false;
         retainLink = terminal === "materialized";
         readMode = "normal";
@@ -384,7 +386,7 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
             for (const height of geometry.buttons) expect(height).toBeGreaterThanOrEqual(44);
             frames.push({ state, geometry });
             expect(await page.evaluate(() => sessionStorage.getItem("llvDraftPane:accepted-control:text"))).toBe("Keep this unsent agent draft intact.");
-            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-${state}.png`) });
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-${state}.png`) });
             if (phone) {
               expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches && navigator.maxTouchPoints > 0)).toBe(true);
               await page.locator(`[data-phone-card]:has(${selector})`).tap();
@@ -394,7 +396,7 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
               expect(await detail.locator(selector).count()).toBe(1);
               await detail.locator(selector).scrollIntoViewIfNeeded();
               for (const button of await detail.locator(`${selector} button`).all()) expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-              await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-${state}-detail.png`) });
+              await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-${state}-detail.png`) });
               for (let step = 0; !linked && step < 5; step++) {
                 await page.keyboard.press("Tab");
                 expect(await detail.evaluate(element => element.contains(document.activeElement))).toBe(true);
@@ -443,7 +445,7 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
           await page.reload();
           await page.locator('[data-creation-notice="restoring"]').waitFor();
           expect(await page.locator(selector).count()).toBe(0);
-          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-restoring.png`) });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-restoring.png`) });
           frames.push({ state: "restoring" });
           releaseRead!(); holdRead = undefined; releaseRead = undefined;
           await page.locator(selector).first().waitFor();
@@ -459,7 +461,25 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
             queued.pipeline.stages[0].kind = "review-loop";
             fs.writeFileSync(file, JSON.stringify(queued));
           }
-          await admitQueuedPipelineCreations(); await admitQueuedPipelineCreations();
+          if (terminal === "refused") {
+            // Settle with the real drainer between the reader's exact opens.
+            const open = fsPromises.open;
+            let transitioned = false;
+            const observer = spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+              if (!transitioned && String(args[0]).endsWith(`${created.id}.refused.json`)) {
+                transitioned = true;
+                await admitQueuedPipelineCreations();
+              }
+              return open(...args);
+            });
+            try {
+              await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+              expect(transitioned).toBe(true);
+              expect(readAnswers.some(answer => answer.id === created.id && answer.status === 503)).toBe(true);
+              await page.locator(`${selector}[data-creation-state="unavailable"]`).first().waitFor();
+              await capture("refusal-transition");
+            } finally { observer.mockRestore(); }
+          } else await admitQueuedPipelineCreations();
           await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
           if (terminal === "refused") {
             await page.locator(`${selector}[data-creation-state="refused"]`).first().waitFor();
@@ -479,7 +499,7 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
             if (phone) await page.locator('[data-mobile2-sheet="card"]').waitFor({ state: "detached" });
             await page.locator(`[data-pipeline="${created.id}"]`).first().waitFor();
             await page.locator(selector).waitFor({ state: "detached" });
-            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-stored.png`) });
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-stored.png`) });
             frames.push({ state: "stored" });
           }
           // Reload the actual terminal answer while the catalog still omits
@@ -491,13 +511,13 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
           } else {
             await page.locator(`[data-pipeline="${created.id}"]`).first().waitFor();
             expect(await page.locator(selector).count()).toBe(0);
-            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-stored-reloaded.png`) });
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-stored-reloaded.png`) });
             frames.push({ state: "stored-reloaded" });
           }
           expect(posts - beforePosts).toBe(1); expect(pageErrors).toEqual([]);
           expect(loadPipelines().filter(pipeline => controls.some(control => control.id === pipeline.id))).toEqual(controls);
           expect(controls.filter(pipeline => pipeline.taskIds.includes(controlTask.id))).toHaveLength(2);
-          if (terminal === "refused") {
+          if (outcome === "refused") {
             if (phone) await page.locator(`[data-phone-card]:has(${selector})`).tap();
             const dismiss = phone ? page.locator(detailSelector).locator(`${selector} button`) : page.locator(`${selector} button`);
             if (phone) await dismiss.tap(); else await dismiss.click();
@@ -509,20 +529,31 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
             expect(posts - beforePosts).toBe(1);
           } else {
             readMode = "denied";
-            await page.reload();
+            // Keep the mounted page and its last confirmed authority intact.
+            for (let index = 0; index < 2; index++) {
+              const answered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/files" && response.status() === 200);
+              await page.evaluate(() => window.dispatchEvent(new Event("llv:pipelines-changed")));
+              await answered;
+              await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+            }
             await page.locator('[data-creation-notice="revoked"]').waitFor();
             expect(await page.locator(selector).count()).toBe(0);
             expect(await page.locator(`[data-pipeline="${created.id}"]`).count()).toBe(0);
-            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-revoked.png`) });
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-revoked.png`) });
             frames.push({ state: "revoked" });
+            readMode = "normal";
+            await page.reload();
+            await page.waitForFunction(() => typeof (window as unknown as { createAcceptedEvidence?: unknown }).createAcceptedEvidence === "function");
+            expect(await page.locator(visibleId).count()).toBe(0);
+            expect(posts - beforePosts).toBe(1);
           }
-          results.push({ width, locale, theme, terminal, clock: frameNow.toISOString(), id: created.id, posts: posts - beforePosts, missingCatalogs: catalogs - beforeCatalogs,
+          results.push({ width, locale, theme, terminal, outcome, clock: frameNow.toISOString(), id: created.id, posts: posts - beforePosts, missingCatalogs: catalogs - beforeCatalogs,
             controls: controls.map(pipeline => pipeline.id), frames });
         } catch (error) {
           fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ pageErrors, readAnswers,
             cards: await page.locator('[data-creation], [data-pipeline], .card[data-id]').evaluateAll(elements => elements.map(element => ({ html: element.outerHTML.slice(0, 2500) }))),
           }, null, 2));
-          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${terminal}-failure.png`) });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-failure.png`) });
           fs.writeFileSync(path.join(out, "failure.txt"), await page.locator("body").innerText());
           throw error;
         } finally { releaseRead?.(); holdRead = undefined; releaseRead = undefined; await context.close(); release?.(); await holder; release = undefined; holder = undefined; }

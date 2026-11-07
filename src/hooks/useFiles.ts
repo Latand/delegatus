@@ -495,7 +495,10 @@ export function createFilesClientCache(
       while (pending.length && ownsCreation(generation)) {
         const id = pending.shift()!;
         const entry = creations.get(id);
-        if (!entry || entry.stored || entry.card.status === "refused") continue;
+        // Retained terminal answers still need current read authority while
+        // the catalog omits them, including revocation in another client.
+        if (!entry) continue;
+        const storedAtRead = entry.stored;
         const controller = new AbortController();
         creationControllers.add(controller);
         const timer = setTimeout(() => controller.abort(), 5000);
@@ -507,7 +510,7 @@ export function createFilesClientCache(
         try {
           const read = async () => {
             const response = await fetcher(`/api/pipelines/${encodeURIComponent(id)}`, { cache: "no-store", signal: controller.signal });
-            if (!ownsCreation(generation) || controller.signal.aborted || creations.get(id) !== entry || entry.stored) return;
+            if (!ownsCreation(generation) || controller.signal.aborted || creations.get(id) !== entry) return;
             if (response.status === 401 || response.status === 403) {
               accessNotice = true;
               creations.delete(id);
@@ -516,7 +519,7 @@ export function createFilesClientCache(
               return;
             }
             const body = await response.json();
-            if (!ownsCreation(generation) || controller.signal.aborted || creations.get(id) !== entry || entry.stored) return;
+            if (!ownsCreation(generation) || controller.signal.aborted || creations.get(id) !== entry || entry.stored !== storedAtRead) return;
             if (response.ok && body.pipeline?.id === id && typeof body.pipeline.project === "string") {
               entry.stored = body.pipeline as Pipeline;
               if (entry.locator.link) {

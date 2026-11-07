@@ -88,7 +88,12 @@ async function pipelineReadProject(id: string): Promise<string | null> {
   const stored = findPipelineRecord(id);
   if (stored) return stored.project;
   const queued = await readPipelineCreationReceipt(id);
-  return findPipelineRecord(id)?.project ?? (queued.kind === "found" ? queued.receipt.project : null);
+  const materialized = findPipelineRecord(id);
+  if (materialized) return materialized.project;
+  // A queue transition can expose both files to one read. The existing
+  // unavailable response retains the caller's locator until a later read.
+  if (queued.kind === "unavailable") throw new Error("pipeline creation ownership unavailable");
+  return queued.kind === "found" ? queued.receipt.project : null;
 }
 
 /** Handlers expand `~`, resolve lexically and the filesystem follows links,

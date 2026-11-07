@@ -63,7 +63,7 @@ describe("accepted queued creation continuity", () => {
     fs.mkdirSync(out, { recursive: true });
     const sockets = ownedBrowserSocketEnvironment();
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
-    try { expect(await captureAcceptedCreation(browser, out, true)).toHaveLength(8); }
+    try { expect(await captureAcceptedCreation(browser, out, true)).toHaveLength(12); }
     finally { await browser.close(); sockets.close(); }
   }, 600_000);
 });

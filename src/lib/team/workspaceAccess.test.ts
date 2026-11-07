@@ -161,6 +161,14 @@ describe("workspace authority", () => {
     const refused = path.join(pipelineCreationQueueDir(), `${pipeline.id}.refused.json`);
     fs.writeFileSync(refused, JSON.stringify({ ...JSON.parse(original), refusedAt: "2030-01-01T00:00:01Z" }));
     expect(await creationQueue.readPipelineCreationReceipt(pipeline.id)).toEqual({ kind: "unavailable" });
+    // Ambiguous ownership discloses no receipt, even with a permitted hint.
+    for (const actor of [owner, member, outsider]) {
+      const response = await pipelineGET(request(`/api/pipelines/${pipeline.id}?project=repo-alpha`, actor), { params: Promise.resolve({ id: pipeline.id }) });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "workspace authorization unavailable", code: "team_store_unavailable" });
+    }
+    const anonymous = await pipelineGET(new NextRequest(`http://localhost/api/pipelines/${pipeline.id}`), { params: Promise.resolve({ id: pipeline.id }) });
+    expect(anonymous.status).toBe(401);
     fs.unlinkSync(refused);
     fs.unlinkSync(file);
     fs.symlinkSync(path.join(root, "missing-private"), file);
@@ -994,4 +1002,98 @@ describe("workspace invitations", () => {
     expect(store.challenge(invite.challenge.id)?.consumedAt).toBeNull();
     expect(store.workspaceMemberships(manager.id)).toEqual([]);
   });
+});
+
+// Keep the browser's last confirmed membership until its next workspace refresh.
+test.each(["stored", "refused", "queued"] as const)("retained %s creation disappears after server membership revocation", async terminal => {
+  const { createFilesClientCache } = await import("@/hooks/useFiles");
+  const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
+  const pipeline = buildPipeline({ id: "retained-creation", project: "repo-alpha", task: "Protected accepted title", repoDir: root,
+    taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+  pipeline.state = "draft";
+  const storage = memoryFilesSnapshotStore();
+  let reads = 0;
+  let catalogs = 0;
+  const cache = createFilesClientCache(async url => {
+    if (url.startsWith("/api/pipelines/")) {
+      reads++;
+      return pipelineGET(request(url, member), { params: Promise.resolve({ id: pipeline.id }) });
+    }
+    catalogs++;
+    const scope = workspaceScope(store, member.id);
+    return Response.json(workspaceFiles(scope, { files: [], pipelines: [pipeline], tasks: [], flows: [], workflows: [], systemHealth: { tmux: { status: "healthy" } } } as FilesResponse),
+      { headers: { ETag: '"retained-catalog"' } });
+  }, { authority: () => ({ owner: member.id, signature: "last-confirmed-alpha-membership" }), creationStore: () => storage });
+  try {
+    const reservation = cache.reserveCreation()!;
+    await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+    if (terminal === "stored") savePipelines([pipeline]);
+    else {
+      queuePipelineCreation(pipeline, { repository: "repo-alpha", remote: "https://example.invalid/project.git", branch: "refs/heads/fixture" }, false, "busy");
+      if (terminal === "refused") {
+        const queued = path.join(pipelineCreationQueueDir(), pipeline.id + ".json");
+        const value = JSON.parse(fs.readFileSync(queued, "utf8"));
+        fs.writeFileSync(path.join(pipelineCreationQueueDir(), pipeline.id + ".refused.json"), JSON.stringify({ ...value, refusedAt: "2030-01-01T00:01:00Z", error: "refused" }));
+        fs.unlinkSync(queued);
+      }
+    }
+    await cache.reconcileCreations();
+    expect(reads).toBe(1);
+    await cache.reconcileCreations();
+    expect(cache.read().pipelines.some(row => row.id === pipeline.id) || cache.creationCards().some(row => row.receipt?.id === pipeline.id)).toBe(true);
+    store.removeWorkspaceMember(W1, member.id);
+    expect((await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) })).status).toBe(403);
+    await cache.revalidate(); await cache.reconcileCreations();
+    await cache.revalidate(); await cache.reconcileCreations();
+    expect(catalogs).toBe(2);
+    expect(cache.read().pipelines.some(row => row.id === pipeline.id) || cache.creationCards().some(row => row.receipt?.id === pipeline.id)).toBe(false);
+    expect(storage.current()?.creations?.entries.some(row => row.id === pipeline.id)).toBe(false);
+  } finally { cache.dispose(); }
+});
+
+// The real drainer settles between the reader's two exact file opens.
+test("refusal transition retains the accepted ID for an authorized member", async () => {
+  const { createFilesClientCache } = await import("@/hooks/useFiles");
+  const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
+  const pipeline = buildPipeline({ id: "refusal-race", project: "repo-alpha", task: "Accepted task title", repoDir: root,
+    taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+  pipeline.state = "draft";
+  queuePipelineCreation(pipeline, { repository: pipeline.project, remote: "https://example.invalid/project.git", branch: "refs/heads/fixture" }, false, "busy");
+  const queued = path.join(pipelineCreationQueueDir(), pipeline.id + ".json");
+  const value = JSON.parse(fs.readFileSync(queued, "utf8"));
+  value.pipeline.stages = [{ id: "retired", kind: "review-loop" }];
+  fs.writeFileSync(queued, JSON.stringify(value));
+  const storage = memoryFilesSnapshotStore();
+  const statuses: number[] = [];
+  const cache = createFilesClientCache(async url => {
+    const response = await pipelineGET(request(url, member), { params: Promise.resolve({ id: pipeline.id }) });
+    statuses.push(response.status);
+    return response;
+  }, { authority: () => ({ owner: member.id, signature: "current-alpha-membership" }), creationStore: () => storage });
+  const open = fsPromises.open;
+  let settled = false;
+  const observer = spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+    if (!settled && String(args[0]).endsWith(pipeline.id + ".refused.json")) {
+      settled = true;
+      await creationQueue.admitQueuedPipelineCreations();
+    }
+    return open(...args);
+  });
+  try {
+    const reservation = cache.reserveCreation()!;
+    await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+    await cache.reconcileCreations();
+    observer.mockRestore();
+    const following = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) });
+    const followingBody = await following.json();
+    expect(settled).toBe(true);
+    expect(statuses).toEqual([503]);
+    expect(cache.creationCards().some(row => row.id === pipeline.id && row.status === "unavailable")).toBe(true);
+    expect(storage.current()?.creations?.entries.map(row => row.id)).toEqual([pipeline.id]);
+    expect(following.status).toBe(404);
+    expect(followingBody.code).toBe("pipeline_creation_refused");
+    expect(workspaceScope(store, member.id).access(pipeline.project)).not.toBe("none");
+    await cache.reconcileCreations();
+    expect(cache.creationCards().some(row => row.receipt?.id === pipeline.id && row.status === "refused")).toBe(true);
+  } finally { observer.mockRestore(); cache.dispose(); }
 });

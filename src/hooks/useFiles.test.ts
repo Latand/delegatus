@@ -1058,7 +1058,7 @@ test("an unconfirmed task overlay outlives every scan until it is confirmed or r
 });
 
 
-test.each(["headers", "body"] as const)("a catalog materialization fences a stale queue refusal at %s", async seam => {
+test.each(["headers", "body", "linked-headers", "linked-body"] as const)("a catalog materialization fences a stale queue refusal at %s", async seam => {
   const pipeline = creationPipeline("materialized-before-read");
   const storage = memoryFilesSnapshotStore();
   let resume!: () => void;
@@ -1067,24 +1067,25 @@ test.each(["headers", "body"] as const)("a catalog materialization fences a stal
   const started = new Promise<void>(resolve => { entered = resolve; });
   const cache = createFilesClientCache(async url => {
     if (!url.startsWith("/api/pipelines/")) return Response.json({ files: [], pipelines: [pipeline] }, { headers: { ETag: '"stored"' } });
-    if (seam === "headers") { entered(); await held; }
+    if (seam.endsWith("headers")) { entered(); await held; }
     const response = Response.json({ code: "pipeline_creation_refused", queuedCreation: {
       id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: pipeline.createdAt,
       state: "refused", reason: "creation_refused",
     } }, { status: 404 });
-    if (seam === "body") {
+    if (seam.endsWith("body")) {
       const json = response.json.bind(response);
       response.json = async () => { entered(); await held; return json(); };
     }
     return response;
   }, { authority: () => ({ owner: "solo", signature: "solo" }), creationStore: () => storage });
   const reservation = cache.reserveCreation()!;
-  await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+  await reservation.accept(pipeline, pipeline.createdAt, seam.startsWith("linked-") ? { attachLink: "sample/project#7", kind: "issue" } : undefined); reservation.release();
   const read = cache.reconcileCreations();
   await started;
   await cache.revalidate();
   resume(); await read;
-  expect(cache.creationCards()).toEqual([]);
+  if (seam.startsWith("linked-")) expect(cache.creationCards().map(card => card.status)).toEqual(["accepted"]);
+  else expect(cache.creationCards()).toEqual([]);
   expect(cache.read().pipelines.map(row => row.id)).toEqual([pipeline.id]);
   cache.dispose();
 });
