@@ -9,8 +9,10 @@
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
+import { useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import type { TeamView, WorkspacesView } from "@/lib/team/contract";
 
 let runtimeEnabled = false;
 mock.module("./runtimeBus", () => ({
@@ -210,6 +212,129 @@ function Probe() {
   const data = useFiles();
   return <div data-loaded={String(data.loaded)} data-cached={String(Boolean(data.cached))}>{data.files.map((file) => file.path).join(",") || "empty"}</div>;
 }
+
+for (const phase of ["headers", "body"] as const) {
+  test.each(["solo confirmation", "team confirmation", "replacement", "rescope"] as const)(
+    `a live board reloads after %s while its first catalog awaits ${phase}`, async (transition) => {
+      const { setTeamViewForTests } = await import("@/components/team/teamClient");
+      const { setWorkspacesForTests } = await import("@/components/team/workspacesClient");
+      const { buildPipeline } = await import("@/lib/pipelines/store");
+      const pipeline = buildPipeline({ id: "refunds", project: "atlas", task: "Idempotent refunds", taskIds: [],
+        repoDir: "/fixture/repo", srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [], state: "draft" });
+      const stale = { ...BODY, pipelines: [{ ...pipeline, id: "stale", task: "Stale card" }] };
+      const team = (id: string): TeamView => ({ mode: "team", me: {
+        id, name: "Member", role: "member", status: "active", color: "sky", initials: "M", telegram: null,
+      }, members: [], methods: { approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false } } });
+      const workspaces = (project: string): WorkspacesView => ({ mode: "team", canManage: false,
+        workspaces: [{ id: "workspace-a", name: "Workspace", color: "sky", createdAt: "2030-01-01T00:00:00Z", projects: [project] }] });
+      setTeamViewForTests(transition.endsWith("confirmation") ? null : team("member-a"));
+      setWorkspacesForTests(workspaces("atlas"));
+      resetFilesClientCacheForTests(memoryFilesSnapshotStore());
+      runtimeEnabled = true;
+      let started!: () => void;
+      const firstRequest = new Promise<void>(resolve => { started = resolve; });
+      let answer!: () => void;
+      const requests: string[] = [];
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "HEAD") return new Response(null);
+        expect(init?.method ?? "GET").toBe("GET");
+        requests.push(String(input));
+        if (requests.length === 1) {
+          if (phase === "headers") return new Promise<Response>(resolve => {
+            answer = () => resolve(Response.json(stale));
+            started();
+          });
+          const response = Response.json(stale);
+          const read = response.text.bind(response);
+          response.text = async () => {
+            await new Promise<void>(resolve => { answer = resolve; started(); });
+            return read();
+          };
+          return response;
+        }
+        return Response.json({ ...BODY, files: [{ ...BODY.files[0], path: "/sessions/current.jsonl" }], pipelines: [pipeline] });
+      }) as typeof fetch;
+      let painted!: () => void;
+      const currentPainted = new Promise<void>(resolve => { painted = resolve; });
+      const seen: string[][] = [];
+      function Board() {
+        const data = useFiles(null, "/sessions/pinned.jsonl");
+        useEffect(() => {
+          seen.push([...data.files.map(file => file.path), ...data.pipelines.map(row => row.task)]);
+          if (data.loaded && data.pipelines[0]?.id === pipeline.id) painted();
+        }, [data]);
+        return <span>{[...data.files.map(file => file.path), ...data.pipelines.map(row => row.task)].join(",")}</span>;
+      }
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host as unknown as Element);
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        flushSync(() => root.render(<Board />));
+        await Promise.race([firstRequest, new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("initial catalog did not reach the response barrier")), 1500);
+        })]);
+        clearTimeout(deadline);
+        if (transition === "solo confirmation") setTeamViewForTests({ ...team("member-a"), mode: "solo", me: null });
+        else if (transition === "rescope") setWorkspacesForTests(workspaces("harbor"));
+        else setTeamViewForTests(team(transition === "replacement" ? "member-b" : "member-a"));
+        // A confirmed refresh with the same signature owes no additional read.
+        setWorkspacesForTests(workspaces(transition === "rescope" ? "harbor" : "atlas"));
+        answer();
+        await Promise.race([currentPainted, new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("authority replacement did not repaint the board")), 1500);
+        })]);
+        expect(host.textContent).toBe("/sessions/current.jsonl,Idempotent refunds");
+        expect(requests).toEqual([filesApiUrl(null, "/sessions/pinned.jsonl"), filesApiUrl(null, "/sessions/pinned.jsonl")]);
+        expect(seen.flat()).not.toContain("/sessions/alpha.jsonl");
+        expect(seen.flat()).not.toContain("/sessions/beta.jsonl");
+        expect(seen.flat()).not.toContain("Stale card");
+      } finally {
+        clearTimeout(deadline);
+        flushSync(() => root.unmount());
+        runtimeEnabled = false;
+        setTeamViewForTests(null);
+        setWorkspacesForTests(null);
+      }
+    },
+  );
+}
+
+test.each(["confirmation", "replacement", "rescope", "revocation"] as const)(
+  "a catalog body cannot publish across authority %s before the replacement read", async (transition) => {
+    let authority: { owner: string; signature: string } | null = transition === "confirmation"
+      ? null : { owner: "member-a", signature: "member-a:atlas" };
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let finish!: () => void;
+    let requests = 0;
+    const cache = createFilesClientCache(async () => {
+      if (++requests > 1) return Response.json(BODY);
+      const response = Response.json({ ...BODY, files: [{ ...BODY.files[0], path: "/sessions/stale.jsonl" }] });
+      const read = response.text.bind(response);
+      response.text = async () => {
+        await new Promise<void>(resolve => { finish = resolve; started(); });
+        return read();
+      };
+      return response;
+    }, { authority: () => authority });
+    const seen: string[] = [];
+    const unsubscribe = cache.subscribe(data => { seen.push(...data.files.map(file => file.path)); });
+    try {
+      const pending = cache.revalidate();
+      await reading;
+      authority = transition === "revocation" ? null : { owner: transition === "replacement" ? "member-b" : "member-a",
+        signature: transition === "rescope" ? "member-a:harbor" : "current" };
+      cache.refreshCreationAuthority();
+      finish();
+      expect((await pending).files).toEqual([]);
+      expect(seen).not.toContain("/sessions/stale.jsonl");
+      authority = { owner: "member-b", signature: "current" };
+      cache.refreshCreationAuthority();
+      expect((await cache.revalidate()).files.map(file => file.path)).toEqual(BODY.files.map(file => file.path));
+    } finally { unsubscribe(); cache.dispose(); }
+  },
+);
 
 test("the board's rows paint from the stored answer before the request answers, then certify on a 304", async () => {
   const store = memoryFilesSnapshotStore(record());
