@@ -8,6 +8,67 @@ const creationPipeline = (id: string) => buildPipeline({ id, project: "project-a
   taskIds: [], repoDir: "/fixture/repo", srcPath: null, srcConversationId: null,
   now: "2030-01-01T00:00:00Z", stages: [], state: "draft" });
 
+test.each(["confirmed", "replaced", "rescoped", "revoked", "disposed"] as const)("a catalog discarded after authority is %s releases its response body", async (transition) => {
+  let owner: { owner: string; signature: string } | null = transition === "confirmed"
+    ? null : { owner: "member-a", signature: "member-a:project-a" };
+  let received!: () => void;
+  const started = new Promise<void>(resolve => { received = resolve; });
+  let deliver!: (response: Response) => void;
+  let cancelled = 0;
+  let requests = 0;
+  const stale = new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode(JSON.stringify({ files: [], pipelines: [creationPipeline("stale")] }))); },
+    cancel() { cancelled++; },
+  }));
+  const cache = createFilesClientCache(async () => {
+    if (++requests > 1) return Response.json({ files: [], pipelines: [creationPipeline("current")] });
+    received();
+    return new Promise<Response>(resolve => { deliver = resolve; });
+  }, { authority: () => owner });
+  try {
+    const pending = cache.revalidate();
+    await started;
+    owner = transition === "revoked" ? null : transition === "rescoped"
+      ? { owner: "member-a", signature: "member-a:project-b" }
+      : { owner: "member-b", signature: "member-b:project-a" };
+    if (transition === "disposed") cache.dispose();
+    else cache.refreshCreationAuthority();
+    deliver(stale);
+    await pending;
+    expect(cancelled).toBe(1);
+    expect(cache.read().pipelines).toEqual([]);
+    if (transition !== "disposed") {
+      owner = { owner: "member-b", signature: "member-b:project-a" };
+      cache.refreshCreationAuthority();
+      await cache.revalidate();
+      expect(cache.read().pipelines.map(row => row.id)).toEqual(["current"]);
+    }
+  } finally { cache.dispose(); await stale.body?.cancel(); }
+});
+
+test.each(["pending", "rejected"] as const)("discarded catalog cancellation can be %s without holding later reads", async (outcome) => {
+  let owner = { owner: "member-a", signature: "member-a:project-a" };
+  let requests = 0;
+  let cancelled = 0;
+  let finishCancel!: () => void;
+  const cancellation = new Promise<void>(resolve => { finishCancel = resolve; });
+  const cache = createFilesClientCache(async () => {
+    if (++requests > 1) return Response.json({ files: [], pipelines: [creationPipeline("current")] });
+    owner = { owner: "member-b", signature: "member-b:project-a" };
+    cache.refreshCreationAuthority();
+    return new Response(new ReadableStream({ cancel() {
+      cancelled++;
+      return outcome === "pending" ? cancellation : Promise.reject(new Error("transport closed"));
+    } }));
+  }, { authority: () => owner });
+  try {
+    await cache.revalidate();
+    expect(cancelled).toBe(1);
+    await cache.revalidate();
+    expect(cache.read().pipelines.map(row => row.id)).toEqual(["current"]);
+  } finally { finishCancel(); cache.dispose(); }
+});
+
 test("accepted creation survives missing catalogs, reload and authorized refusal with one ID", async () => {
   const owner = { owner: "member-a", signature: "member-a:project-a" };
   const storage = memoryFilesSnapshotStore();

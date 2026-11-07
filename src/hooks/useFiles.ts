@@ -1005,7 +1005,12 @@ export function createFilesClientCache(
     } finally {
       if (completionRetry) completionRetry.controller = undefined;
     }
-    if (disposed || accessGeneration !== authorityGeneration) return snapshot;
+    if (disposed || accessGeneration !== authorityGeneration) {
+      // Release an unread body when authority changes while headers arrive.
+      // Cancellation must not hold the catalog queue if the transport stalls.
+      void response.body?.cancel().catch(() => {});
+      return snapshot;
+    }
     if (completionRetry && !ownsCompletionRetry(url, completionRetry)) return snapshot;
     const servedGeneration = responseGeneration(response, "x-llv-files-generation");
     const targetGeneration = responseGeneration(response, "x-llv-files-target-generation");
