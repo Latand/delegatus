@@ -1483,7 +1483,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (event.kind === "attention") this.attentions.set(event.id, record(event.attention) ?? {});
       if (event.kind === "attention-resolved") this.attentions.delete(event.id);
       if (event.kind === "session-status" && (event.status === "dead" || event.status === "unhosted")) {
-        restoredTurn = null;
+        // A host status is not a terminal outcome for its last started turn.
         this.attentions.clear();
       }
     }
@@ -1826,11 +1826,22 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.finishRelease();
   }
 
+  /** Settle only the turn whose start was published. Queued inputs retain
+      their existing delivery evidence; termination cannot confirm them. */
+  private endActiveTurn(): void {
+    const turnId = this.activeTurnId;
+    this.activeTurnId = null;
+    this.turnQueue.length = 0;
+    this.partialTurns.clear();
+    this.interruptedTurns.clear();
+    if (turnId) this.emit({ kind: "turn-ended", turnId, status: "error" });
+  }
+
   private finishRelease(): void {
     if (this.released) return;
     this.released = true;
     this.releasing = false;
-    this.activeTurnId = null;
+    this.endActiveTurn();
     this.attentions.clear();
     this.rejectPending(new Error("Claude stream host released"));
     this.emit({ kind: "session-status", status: "unhosted" });
@@ -1859,7 +1870,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.dead || this.released) return;
     this.recordEnd("host-fault", error.message, null, null);
     this.dead = true;
-    this.activeTurnId = null;
+    this.endActiveTurn();
     this.attentions.clear();
     this.rejectPending(error);
     this.emit({ kind: "session-status", status: "dead" });
@@ -1868,6 +1879,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private failWithoutLedger(error: Error): void {
+    if (this.dead || this.released) {
+      console.warn("[structured host] terminal event persistence failed", { reason: safeError(error) });
+    }
     if (this.released) {
       this.notifyStateListeners();
       this.closeSubscribers();

@@ -4539,3 +4539,132 @@ for (const ending of ["release", "external"] as const) test(`Claude host exit ob
     expect((await host.health()).exitProcess).toEqual(process);
   } finally { await host.release(); }
 });
+
+describe("terminal bookkeeping after host loss", () => {
+  async function fixture(eventStore: RuntimeEventStore = new MemoryEventStore(), ignoreStop = false) {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger, ignoreStop, ignoreStop);
+    const options: ClaudeStreamBrokerHostOptions = {
+      cwd: "/repo", sessionId: "00000000-0000-0000-0000-000000000077",
+      eventStore, deliveryLedger: ledger, shutdownGraceMs: 2,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [], spawnProcess: fakeSpawn(child, {}),
+    };
+    const host = await ClaudeStreamBrokerHost.start(options);
+    const send = async () => {
+      const pending = host.send({ id: "original-turn", text: "original instruction" });
+      child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "original-input",
+        message: { role: "user", content: [{ type: "text", text: "original instruction" }] } });
+      await pending;
+    };
+    const terminals = () => eventStore.load(host.identity.sessionId).filter(event => event.kind === "turn-ended");
+    return { host, child, options, eventStore, ledger, send, terminals };
+  }
+
+  for (const mode of ["idle", "active", "attention", "background"] as const) {
+    test(`${mode} child death settles only the identified turn once across release and adoption`, async () => {
+      const f = await fixture();
+      try {
+        if (mode !== "idle") await f.send();
+        if (mode === "attention") f.child.emitJson({ type: "control_request", request_id: "permission",
+          request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" } } });
+        if (mode === "background") f.child.emitJson({ type: "system", subtype: "task_started", task_id: "background-task" });
+        f.child.emit("close", 1, null);
+        f.child.emit("close", 1, null);
+        f.child.emitJson({ type: "result", subtype: "success", session_id: f.host.identity.sessionId });
+        await f.host.release();
+        expect(f.terminals()).toMatchObject(mode === "idle" ? [] : [
+          { kind: "turn-ended", turnId: "original-turn", status: "error" },
+        ]);
+        const events = f.eventStore.load(f.host.identity.sessionId);
+        if (mode !== "idle") expect(events.findIndex(e => e.kind === "turn-ended")).toBeLessThan(
+          events.findIndex(e => e.kind === "session-status" && e.status === "dead"));
+        const successor = await ClaudeStreamBrokerHost.adopt(f.host.identity.sessionId, {
+          ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+        });
+        await successor.release();
+        expect(f.terminals()).toHaveLength(mode === "idle" ? 0 : 1);
+      } finally { await f.host.release(); }
+    });
+  }
+
+  test("release waits for proven termination and preserves a result that wins the race", async () => {
+    for (const result of [null, "success", "interrupted", "error"] as const) {
+      const f = await fixture(new MemoryEventStore(), true);
+      try {
+        await f.send();
+        await expect(f.host.release()).rejects.toThrow("Claude child could not be reaped");
+        expect(f.terminals()).toEqual([]);
+        expect((await f.host.health()).activeTurnRef).toBe("original-turn");
+        if (result) f.child.emitJson({ type: "result", subtype: result, session_id: f.host.identity.sessionId });
+        f.child.emit("close", 0, "SIGTERM");
+        await f.host.release();
+        expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: result === "success" ? "completed" : result === "interrupted" ? "interrupted" : "error" }]);
+      } finally { f.child.emit("close", 0, "SIGKILL"); await f.host.release(); }
+    }
+  });
+
+  test("a written queued input without echo retains uncertainty and no invented terminal turn", async () => {
+    const f = await fixture();
+    try {
+      await f.send();
+      const queued = f.host.send({ id: "queued-input", text: "next instruction" }).catch(error => error);
+      f.child.emit("close", 1, null);
+      expect(await queued).toBeInstanceOf(Error);
+      expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: "error" }]);
+      expect(f.ledger.load(f.host.identity.sessionId).find(row => row.entry.id === "queued-input"))
+        .toMatchObject({ delivered: false, disposition: "queued-next-turn" });
+    } finally { await f.host.release(); }
+  });
+
+  for (const status of ["dead", "unhosted"] as const) {
+    test(`adoption reconciles the unmatched start across legacy ${status} status once`, async () => {
+      const events = new MemoryEventStore();
+      const f = await fixture(events);
+      await f.host.release();
+      const sessionId = f.host.identity.sessionId;
+      const cursor = events.load(sessionId).at(-1)!.seq;
+      events.append(sessionId, { seq: cursor + 1, kind: "turn-started", turnId: "legacy-turn" });
+      events.append(sessionId, { seq: cursor + 2, kind: "session-status", status });
+      for (let restart = 0; restart < 2; restart++) {
+        const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+          ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+        });
+        try {
+          expect(f.terminals()).toMatchObject([{ turnId: "legacy-turn", status: "error" }]);
+          expect((await host.health()).activeTurnRef).toBeNull();
+        } finally { await host.release(); }
+      }
+    });
+  }
+
+  test("a terminal ledger refusal publishes no persisted completion and adoption repairs the unmatched start", async () => {
+    const events = new MemoryEventStore();
+    let refuse = true;
+    const store: RuntimeEventStore = {
+      load: id => events.load(id),
+      append: (id, event) => {
+        if (refuse && event.kind === "turn-ended") throw new Error("fixture terminal storage unavailable");
+        events.append(id, event);
+      },
+    };
+    const f = await fixture(store);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await f.send();
+      f.child.emit("close", 1, null);
+      await f.host.release();
+      expect(f.terminals()).toEqual([]);
+      expect((await f.host.health()).status).toBe("dead");
+      expect(warning).toHaveBeenCalledWith("[structured host] terminal event persistence failed", {
+        reason: "runtime event ledger failed: fixture terminal storage unavailable",
+      });
+      refuse = false;
+      const successor = await ClaudeStreamBrokerHost.adopt(f.host.identity.sessionId, {
+        ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+      });
+      try { expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: "error" }]); }
+      finally { await successor.release(); }
+    } finally { warning.mockRestore(); await f.host.release(); }
+  });
+});

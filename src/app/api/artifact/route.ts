@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
-import { artifactEtag, artifactLimits, dispositionFilename, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
+import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -63,30 +63,6 @@ const FAIL_STATUS: Record<FailCode, number> = {
 
 function fail(code: FailCode, error: string): NextResponse<FailBody> {
   return NextResponse.json({ error, code }, { status: FAIL_STATUS[code] });
-}
-
-function baseHeaders(mime: string, etag: string, name: string, download: boolean): Headers {
-  const headers = new Headers({
-    "content-type": mime,
-    "x-content-type-options": "nosniff",
-    "accept-ranges": "bytes",
-    "cache-control": "private, no-store",
-    etag,
-    "content-disposition": `${download ? "attachment" : "inline"}; filename="${dispositionFilename(name)}"`,
-  });
-  /* Everything the preview serves is inert data. PDF is exempted from the
-     sandbox directive only because browser PDF viewers refuse sandboxed
-     documents on "open externally", and a PDF response can never script the
-     app origin; SVG (and everything else) stays fully sandboxed, so even a
-     direct navigation to the raw URL renders in an origin-less, script-less
-     document. */
-  headers.set(
-    "content-security-policy",
-    mime === "application/pdf"
-      ? "default-src 'none'; object-src 'none'"
-      : "sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'",
-  );
-  return headers;
 }
 
 async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | NextResponse> {
@@ -178,7 +154,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
       return fail("too-large", "artifact exceeds the configured byte bound");
     }
 
-    const headers = baseHeaders(mime, etag, name, download);
+    const headers = artifactResponseHeaders(mime, etag, name, download);
     const range = parseByteRange(req.headers.get("range"), stat.size);
     if (range === "unsatisfiable") {
       await handle.close();
