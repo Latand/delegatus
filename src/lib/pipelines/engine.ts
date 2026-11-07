@@ -9686,7 +9686,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         }
         if (abort.signal.aborted) throw new Error(`${label} operation timed out`);
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) return;
-        const prepareCloudPrompt = async (threadId?: string) => {
+        const prepareCloudPrompt = (threadId?: string) => withPrivacyWorkerOwner(pipeline.id, stage.id, n, async () => {
           const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
           const prompt = (await composeCloudStageInput(pipeline, bound, attempt.effectiveRole,
             previousOutput, undefined, threadId ? {
@@ -9704,7 +9704,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
             'End with one fenced JSON verdict: {"status":"pass|fail|needs_decision","findings":["P1 — file:line and defect"]}. Use the same findings and verdict contract as a local stage. A pass has no findings.',
           ].join("\n\n"));
           return [prompt, runtime].join("\n\n");
-        };
+        });
         const prompt = await prepareCloudPrompt();
         const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
           environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },

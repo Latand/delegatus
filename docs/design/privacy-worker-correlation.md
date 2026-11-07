@@ -9,9 +9,10 @@ evidence for future requests. The cause of the observed live incident remains
 
 ## Ownership and envelope
 
-`spawnRunStage` and the runtime-switch driver establish a process-local async
-context around preparation and dispatch. It carries a random request UUID and
-the owning attempt. Pipeline and stage labels are SHA-256 digests of their
+`spawnRunStage`, the runtime-switch driver and each invocation of the shared
+Cloud preparation callback establish a process-local async context around
+preparation. Local dispatch stays inside that context. The context carries a
+random request UUID and the owning attempt. Pipeline and stage labels are SHA-256 digests of their
 exact UTF-8 identifiers; attempt is a positive integer. This permits comparison
 with a known attempt without logging user-controlled stage names. Nested work
 for the same owner keeps the request UUID. Concurrent owners have separate
@@ -68,6 +69,11 @@ memory text, error message, account identity or filesystem path.
 
 The caller context covers initial stage composition, cached prompt preparation,
 revision retries, final pre-dispatch filtering and runtime-switch composition.
+Both Cloud runtimes use the same callback for initial composition and transport
+`preparePrompt` calls with a remote thread identity. Each invocation establishes
+its owning attempt even when a transport calls again from another async context;
+nested calls for the same owner retain their request UUID. Worker refusals retain
+the same owner and unwind the context before unrelated work runs.
 The shared worker also accepts task-export pages, report/issue scrubbing and
 curation operations without a pipeline owner; these report owner `unknown`.
 The affirmative empty-store filter shortcut creates no worker job.
