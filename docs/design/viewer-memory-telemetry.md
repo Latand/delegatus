@@ -49,6 +49,7 @@ the cache or its keys.
 | `src/app/api/files/operatorProjection` | Full representations and weak gzip bodies | 32 scopes, oldest first; gzip follows representation lifetime |
 | `boardEncoding` | Structured comparison bases | Four scopes / 96 MiB encoded size / 120 seconds |
 | `boardHistory` | Delta links and encoded/gzip answer reservations | 32 scopes, 32 links per scope, 16 MiB, 120 seconds |
+| `taskFiles/cache` | Committed-file lists per commit pair, resolved file identities, blob bytes | `lists` 128 entries / 8 MiB / 30 minutes idle; `resolved` 512 entries / 60 seconds; `blobs` 48 entries / 24 MiB / 8 MiB per entry / 10 minutes idle; oldest first, expiry checked on access, no timer |
 | `team/workspaceFilesResponse` | Authorized member response bytes | 16 entries / 32 MiB; oversized responses served without retention |
 | `state/collectionReadCache` | Shared decoded collection and controller-row slots; archive generation | Eight hot slots / 256 MiB source; one archive / 1024 MiB source; oldest hot slot first |
 | `agent/sqliteRegistryStore` | Hot parsed rows; cold readers; stable archived rows | Hot rows follow current database rows; cold readers cap at 128; stable rows retain the existing source-byte bound; a retained closed store stays counted until collected |
