@@ -247,3 +247,39 @@ The source candidate is ready for the lane's three independent review rounds.
 Publication hooks and installation verification remain subsequent boundaries;
 no push, live message, provider request, seat rotation or original-operation replay
 was performed. No performance improvement is claimed.
+
+### Publication repair: authentication fixture ownership
+
+The later publication gate exposed three new failures in
+`src/lib/monitor/seatTickController.test.ts`. A complete isolated run reproduced
+all three at `45e6c884d0` (103 passed, three failed); the same complete file at
+the matching base `9e445fa305` passed all 106 tests. Each failure occurred after
+the credential repair had correctly cleared its authentication incident: the
+fixture had no registered Codex MCP owner, so the independent health guard held
+the wake. Its registry wrapper also lacked the owner's object identity.
+
+The repair changes test setup only. The fixture adopts the real Codex adapter
+through the existing isolated protocol process, builds its registry columns
+with `codexHostColumns`, registers it with the delivery controller and supplies
+that same registry to the tick. The protocol fixture now returns the requested
+thread identity on resume. Credential readers, incident recovery, policy and
+production admission guards retain their existing behavior and assertions.
+
+The complete repaired controller file passes 107 tests, including a new control:
+credential repair with the MCP owner disconnected still withholds every wake;
+registering that owner again permits one wake. The complete adapter file passes
+318 tests, including checkpoint failure, process restart and same-key controls.
+The explicitly authorized whole-project `bunx tsc --noEmit` check also passes
+from a fresh tracked export with the repaired fixture files.
+Each file ran separately through the designated gate with fresh logs and actual
+exit codes. Evidence is retained under `$LLV_EVIDENCE_DIR/auth-repair/`.
+An initial scratch-root run produced additional child-process ownership warnings;
+it is retained separately. The comparable runs use the project's
+`createGateSandbox()` and `isolatedEnvironment()` for their private state roots.
+
+The latest main advance contains only an unrelated research document. Published
+adjacent tick and idle-delivery changes do not edit these two fixture files;
+the only observed working-file overlap is whole-file deletion in a closed lane,
+which remains untouched. The earlier gate's 40 pre-existing failures and one
+flaky result remain separate notes. Three independent review rounds and
+installed acceptance remain outstanding.

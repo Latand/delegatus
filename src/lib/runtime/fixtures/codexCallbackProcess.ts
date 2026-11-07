@@ -15,7 +15,7 @@ import { applyEvent, installSnapshot, openAttentions, type RuntimeSession } from
 
 const [mode, directory, writeLog, descriptor] = process.argv.slice(2);
 if (!directory || !writeLog) throw new Error("callback fixture needs isolated paths");
-const thread = "callback-process-thread";
+let thread = "callback-process-thread";
 const method = "item/commandExecution/requestApproval";
 
 if (mode === "engine-socket") {
@@ -109,6 +109,7 @@ if (mode === "engine-socket") {
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "thread/start":
         case "thread/resume":
+          if (message.method === "thread/resume") thread = message.params.threadId;
           reply({ thread: { id: thread, path: null, turns: [], status: { type: "idle" } } });
           if (mode === "engine-mcp") {
             const item = (phase: string, fields: Record<string, unknown>) => send({ method: `item/${phase}`,
