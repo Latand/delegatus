@@ -116,7 +116,7 @@ test("a queued tick wake is written once when the queue drains an already-idle s
   }
 });
 
-const recoveryChanges = ["none", "claim-owner", "writer-epoch", "seat-epoch", "retirement", "crash-confirmed", "crash-unverified"] as const;
+const recoveryChanges = ["none", "claim-owner", "writer-epoch", "seat-epoch", "conversation-generation", "retirement", "crash-confirmed", "crash-unverified"] as const;
 for (const change of recoveryChanges) {
   test(`recovered idle seat reserves its first wake with nested authority reads: ${change}`, async () => {
     const clock = Date;
@@ -162,6 +162,19 @@ for (const change of recoveryChanges) {
             ? { claimOwner: "replacement-owner" } : { claimEpoch: entry.claimEpoch + 1 }) });
         }
         if (change === "seat-epoch") fixture.seat.seatEpoch++;
+        if (change === "conversation-generation") {
+          const id = fixture.seat.conversationId as `conversation_${string}`;
+          const receipt = { operationId: "fixture-generation-change", nativeId: "replacement-generation",
+            path: path.join(fixture.dir, "replacement.jsonl"), continuityPaths: [], historyHash: "fixture-history",
+            host: { kind: "claude-stream" as const, identity: "replacement-generation", epoch: 1, verifiedAt: new Date(NOW).toISOString() } };
+          fixture.registry.setConversationMigration(id, { intentId: "fixture-migration", phase: "verifying",
+            targetId: "fixture-target", revision: 1, error: null, operationId: receipt.operationId,
+            providerReceipt: receipt, updatedAt: new Date(NOW).toISOString() });
+          const successor = fixture.registry.commitSuccessor(id,
+            { id: receipt.nativeId, path: receipt.path, accountId: "fixture-target" }, 1, receipt.operationId, receipt);
+          expect(successor.generations.at(-1)?.id).toBe(receipt.nativeId);
+          expect(successor.generations.at(-2)?.id).toBe(sessionId);
+        }
         if (change === "retirement") {
           const lane = pipelineCorpus(1, 1)[0]!;
           lane.project = fixture.project;
@@ -239,6 +252,11 @@ for (const change of recoveryChanges) {
           ? "runtime switch retry withdrew the old attempt's execution authority"
           : change === "seat-epoch" ? "seat-rotated" : "structured-recovery-superseded");
         expect(Object.values(fixture.registry.snapshot().heldDeliveries)).toHaveLength(0);
+        if (change === "conversation-generation") {
+          expect(refused.status).toBe(409);
+          expect(fixture.row().outstandingWake?.clientMessageId).toBe(messages[0]!.clientMessageId!);
+          expect(fixture.row().outstandingWake?.operationId).toBeNull();
+        }
         journal.close();
         fixture.registry.close();
         expect((await drainInProcess(fixture.dir, fixture.registry.filename, "refused-original-wake", "deliver"))!.held).toEqual([]);
