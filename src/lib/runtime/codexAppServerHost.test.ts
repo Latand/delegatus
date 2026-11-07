@@ -1,3 +1,5 @@
+import * as publicationSource from "@/lib/git/repositoryCommitIdentity";
+import * as telegramLaunch from "./telegramConnectorEnv";
 import * as mcpTickFixture from "../monitor/seatTickController.fixture";
 import { hostExitText, readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
@@ -154,6 +156,70 @@ test("every native host offers one gate completion callback without opening oper
     expect((await foreignReply).result).toMatchObject({ success: false });
     expect((await host.health()).pendingAttention).toEqual([]);
   } finally { await host.release(); }
+});
+
+test.each(["allowed", "protocol", "publication", "telegram", "resume-retry", "initialize", "account/read", "model/list", "modelProvider/capabilities/read", "config/read", "thread/resume", "mcpServerStatus/list", "thread/queue/list", "thread/turns/list"] as const)("adoption stops after authority changes at %s", async boundary => {
+  const server = new FakeAppServer("adoption-authority");
+  let owned = true, reached = false, spawns = 0, writesAtRevocation = 0;
+  const revoke = () => { if (reached) return; owned = false; reached = true; writesAtRevocation = server.requests.length; };
+  server.paginatedResume = boundary === "resume-retry";
+  server.on("client-request", message => { if (message.method === boundary || boundary === "resume-retry" && message.method === "thread/resume") revoke(); });
+  const restore: Array<() => void> = [];
+  if (boundary === "publication") {
+    const original = publicationSource.repositoryPublicationSource;
+    const wrapped = spyOn(publicationSource, "repositoryPublicationSource").mockImplementation(async (...args) => {
+      const result = await original(...args); revoke(); return result;
+    });
+    restore.push(() => wrapped.mockRestore());
+  }
+  if (boundary === "telegram") {
+    const original = telegramLaunch.resolveTelegramLaunchGrant;
+    const wrapped = spyOn(telegramLaunch, "resolveTelegramLaunchGrant").mockImplementation(async (...args) => {
+      const result = await original(...args); revoke(); return result;
+    });
+    restore.push(() => wrapped.mockRestore());
+  }
+  let host: CodexAppServerHost | undefined;
+  try {
+    const opening = CodexAppServerHost.adopt("adoption-authority", { cwd: metadataState, cleanMemory: true,
+      readProtocolVersion: () => { if (boundary === "protocol") revoke(); return "0.162.1"; },
+      assertCurrent: () => { if (!owned) throw new Error("adoption authority revoked"); },
+      eventStore: new MemoryEventStore(), spawnProcess: (...args) => { spawns++; return fakeSpawn(server)(...args); },
+    });
+    if (boundary === "allowed") { host = await opening; expect(spawns).toBe(1); }
+    else {
+      await expect(opening).rejects.toThrow("adoption authority revoked");
+      expect(reached).toBe(true);
+      expect(spawns).toBe(["protocol", "publication", "telegram"].includes(boundary) ? 0 : 1);
+      expect(server.requests).toHaveLength(writesAtRevocation);
+    }
+  } finally { for (const undo of restore.reverse()) undo(); await host?.release(); }
+});
+
+test.skipIf(process.platform !== "linux").each([false, true])("socket preparation rechecks launch authority after the drain wait (revoked=%s)", async revoked => {
+  const previousHome = process.env.HOME;
+  const directory = fs.openSync(metadataState, fs.constants.O_RDONLY);
+  process.env.HOME = `/proc/${process.pid}/fd/${directory}`;
+  let owned = true, reached = false, spawns = 0;
+  const open = fs.openSync;
+  const opening = spyOn(fs, "openSync").mockImplementation((file, ...args) => {
+    const result = open(file, ...args);
+    if (String(file).endsWith("startup.fifo")) { reached = true; if (revoked) owned = false; }
+    return result;
+  });
+  try {
+    await expect(CodexAppServerHost.adopt("socket-authority", { cwd: metadataState, cleanMemory: true,
+      persistentCallbacks: true, readProtocolVersion: () => "0.162.1",
+      assertCurrent: () => { if (!owned) throw new Error("socket authority revoked"); },
+      spawnProcess: () => { spawns++; throw new Error("fixture native spawn boundary"); },
+    })).rejects.toThrow(revoked ? "socket authority revoked" : "fixture native spawn boundary");
+    expect(reached).toBe(true);
+    expect(spawns).toBe(revoked ? 0 : 1);
+  } finally {
+    opening.mockRestore();
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    fs.closeSync(directory);
+  }
 });
 
 test("mocked structured host keeps launch admission out of the installed CLI prefix", async () => {
