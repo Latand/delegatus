@@ -22,7 +22,7 @@ import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type S
 import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
 import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
-import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PipelineBlock, PipelineCreationBlock } from "@/components/pipelines/PipelineBlock";
 import { BranchName } from "@/components/pipelines/BranchName";
 import { conversationSourceFile, type ConversationDraftAttempt, type ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
 import { conversationRefusalText, useConversationDraftAttempt, useConversationPreview, useDroppedFocus, useLandedDraft } from "@/components/pipelines/useConversationDraft";
@@ -1310,6 +1310,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 </section>
               ) : null}
               {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
+              {card?.creations?.map(creation => <PipelineCreationBlock key={creation.id} creation={creation} />)}
               {live.length || ended.length ? (
                 <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
                   {live.map(laneBlock)}

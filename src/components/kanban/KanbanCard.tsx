@@ -19,7 +19,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
-import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PipelineBlock, PipelineCreationBlock } from "@/components/pipelines/PipelineBlock";
 import type { ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
 import { conversationDraftLane, DraftStartButton, DraftStartNote } from "@/components/pipelines/DraftStageControls";
 import { conversationRefusalText, useConversationDraftAttempt, useDroppedFocus } from "@/components/pipelines/useConversationDraft";
@@ -746,6 +746,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : null}
       {/* The task's summary, under its state: what a returning person reads first. */}
       {!collapsed && card.task?.summary ? <TaskSummaryPanel summary={card.task.summary} pipelines={card.pipelines.map((summary) => summary.pipeline)} nowMs={nowMs} /> : null}
+      {card.creations?.map(creation => <PipelineCreationBlock key={creation.id} creation={creation} />)}
       {collapsed && topLane ? (
         <div className="card-chain" data-card-chain={topLane.pipeline.id}>
           <PipelineBlock
