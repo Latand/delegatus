@@ -480,6 +480,7 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
               await capture("refusal-transition");
             } finally { observer.mockRestore(); }
           } else await admitQueuedPipelineCreations();
+          await admitQueuedPipelineCreations();
           await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
           if (terminal === "refused") {
             await page.locator(`${selector}[data-creation-state="refused"]`).first().waitFor();
