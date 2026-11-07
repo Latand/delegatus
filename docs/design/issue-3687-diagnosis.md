@@ -283,3 +283,27 @@ the only observed working-file overlap is whole-file deletion in a closed lane,
 which remains untouched. The earlier gate's 40 pre-existing failures and one
 flaky result remain separate notes. Three independent review rounds and
 installed acceptance remain outstanding.
+
+
+### Review repair: completed-call replay
+
+An independently reproduced sequence exposed a recovery error: denial, a
+successful same-tool call, another denial, then replay of that successful call's
+start and completion. The replay received a new event sequence and cleared the
+later denial. The real JSON and SQLite owner/tick paths consequently admitted a
+wake.
+
+The adapter now retains up to 32 terminal turn/item identities, including calls
+completed before any denial. Replayed identities cannot establish recovery.
+Restoration rebuilds that bound from the existing journal and fences predecessor
+starts. Eviction, missing identities or incomplete event history prevent later
+recovery correlation; the observation retains its denial and becomes unverified.
+This conservative overflow requires independently established successor recovery.
+It adds no journal schema, permission change or effect replay.
+
+The regression fixture covers the actual claimed persistence, live owner and tick
+for both stores, before and after restoration, with a fresh same-tool call as the
+positive wake control. Process fixtures also exercise retained terminal identity
+and overflow after killing and replacing the fixture process. The existing
+32/33 denial/start and tool-length controls remain in place. Publication and
+installation acceptance remain separate, and no performance gain is claimed.

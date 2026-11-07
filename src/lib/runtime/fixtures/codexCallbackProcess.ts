@@ -114,10 +114,21 @@ if (mode === "engine-socket") {
           if (mode === "engine-mcp") {
             const item = (phase: string, fields: Record<string, unknown>) => send({ method: `item/${phase}`,
               params: { threadId: thread, turnId: "mcp-turn", item: { type: "mcpToolCall", server: "viewer", tool: "get_task", ...fields } } });
+            const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
             if (message.method === "thread/start") {
+              item("completed", { id: "initial-denial", status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+              const count = Number(descriptor ?? 1);
+              for (let index = 0; index < count; index++) {
+                item("started", { id: `terminal-${index}` });
+                item("completed", { id: `terminal-${index}`, ...success });
+              }
               item("completed", { id: "denied", status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
               item("started", { id: "before-restart" });
-            } else item("completed", { id: "before-restart", status: "completed", result: { content: [], structuredContent: { ok: true } } });
+            } else {
+              item("started", { id: "terminal-0" });
+              item("completed", { id: "terminal-0", ...success });
+              item("completed", { id: "before-restart", ...success });
+            }
           } else if (message.method === "thread/start") send({ jsonrpc: "2.0", id: "approval", method, params: { threadId: thread, turnId: "turn", itemId: "item", startedAtMs: 1 } });
           break;
         default: send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "fixture method unavailable" } });
@@ -138,7 +149,7 @@ if (mode === "engine-socket") {
       },
     }, readProtocolVersion: () => "0.162.1", requestTimeoutMs: 10_000,
     spawnProcess: (_binary: string, _args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) => spawn(process.execPath,
-      [import.meta.filename, mode.startsWith("mcp-") ? "engine-mcp" : "engine", directory, writeLog], { ...options, stdio: ["pipe", "pipe", "pipe"] }),
+      [import.meta.filename, mode.startsWith("mcp-") ? "engine-mcp" : "engine", directory, writeLog, ...(descriptor ? [descriptor] : [])], { ...options, stdio: ["pipe", "pipe", "pipe"] }),
   };
   const registry = mode.startsWith("socket-") ? new AgentRegistry(path.join(directory, "registry.json")) : null;
   const key = { engine: "codex" as const, sessionId: thread };
