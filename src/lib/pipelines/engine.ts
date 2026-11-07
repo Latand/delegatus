@@ -21,6 +21,7 @@ import { HostedCloudError } from "./cloudHostedErrors";
 import { prepareCloudPatch, applyCloudPatch } from "./cloudStagePatch";
 import { FLOW_ARCHIVE, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 import { preparePipelineSetup } from "./git";
+import { restoreMissingLaneWorktree } from "./missingWorktree";
 import { projectSetupRecipe } from "@/lib/projects/setupRecipe";
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
@@ -8233,17 +8234,14 @@ async function spawnRunStage(
   let roleMemoryWaitReady = false;
   let admissionStartedAt = attempt.activation?.admissionStartedAt;
   try {
-    // Validate Delegatus's shared graph even on a resumed stage. Other
-    // repositories release old source links before package code can run.
-    const lockedDependencies = await performanceSpans.wait("pipeline.shared",
-      () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
-    if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
+    let lockedDependencies = false;
     const setupAbort = new AbortController();
     const assertSetupCurrent = () => {
       const current = findPipelineRecord(pipeline.id);
       if (attempt.activation) {
         const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
         if (!current || activationFence(current) !== attempt.activation.fence
+          || current.repoDir !== pipeline.repoDir || current.worktreeDir !== pipeline.worktreeDir || current.branch !== pipeline.branch
           || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
       }
       assertProactivePipelineExecution(current ?? pipeline);
@@ -8252,6 +8250,15 @@ async function spawnRunStage(
       try { assertSetupCurrent(); } catch { setupAbort.abort(); }
     }, 100) : null;
     try {
+      if (!ports.worktreePresent(pipeline.worktreeDir)) {
+        await restoreMissingLaneWorktree(pipeline, ports.exec, assertSetupCurrent, setupAbort.signal);
+      }
+      assertSetupCurrent();
+      // Validate Delegatus's shared graph even on a resumed stage. Other
+      // repositories release old source links before package code can run.
+      lockedDependencies = await performanceSpans.wait("pipeline.shared",
+        () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
+      if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
       await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
     } finally { if (setupWatch) clearInterval(setupWatch); }
     if (!lockedDependencies && fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
