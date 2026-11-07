@@ -50,6 +50,44 @@ function pipeline(id: string, attempts = 1): Pipeline {
 const pipelines = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (row: Pipeline) => row.id,
   decode: (raw: unknown) => raw as Pipeline, clone: (row: Pipeline) => structuredClone(row) };
 
+test("launch admission metadata and pipeline tombstones execute on the minimum SQLite", async () => {
+  const { root, filename } = sandbox();
+  const previous = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = root;
+  try {
+    const { initializeStateCollections, SqliteStateCollection } = await import("./sqliteStateStore");
+    const { pipelineAdmissionIdentity, recordCreationAdmission, readCreationAdmission } = await import("@/lib/pipelines/creationAdmission");
+    const { SqliteMcpReceiptStore } = await import("@/lib/mcp/server");
+    initializeStateCollections(filename, [{ ...pipelines, migrationId: "fixture", loadRecords: () => [] }]);
+    expect(pipelineAdmissionIdentity(true)).toBeString();
+    const store = new SqliteStateCollection<Pipeline>(filename, pipelines);
+    try {
+      const record = pipeline("minimum_admission");
+      record.creationRequest = { key: "create_pipeline:minimum-admission", digest: "a".repeat(64) };
+      recordCreationAdmission({ request_key: record.creationRequest.key, digest: record.creationRequest.digest, candidate_id: record.id, kind: "fenced" }, () => {});
+      expect(() => store.boundedPatch(4, tx => tx.put(record))).toThrow("pipeline admission was fenced");
+      record.creationRequest.admissionProtocol = 1;
+      expect(() => store.boundedPatch(4, tx => tx.put(record))).toThrow("pipeline admission was fenced");
+      const admitted = pipeline("minimum_positive");
+      admitted.creationRequest = { key: "create_pipeline:minimum-positive", digest: "b".repeat(64), admissionProtocol: 1 };
+      store.boundedPatch(4, tx => tx.put(admitted));
+      expect(readCreationAdmission(admitted.creationRequest.key)).toMatchObject({ kind: "admitted", candidate_id: admitted.id });
+      expect(() => store.boundedPatch(4, tx => tx.put({ ...admitted, id: "minimum_replacement" }))).toThrow("pipeline admission candidate changed");
+      expect(() => store.boundedPatch(4, tx => tx.put({ ...admitted, creationRequest: {
+        key: "create_pipeline:minimum-collision", digest: "d".repeat(64), admissionProtocol: 1 } }))).toThrow("pipeline admission candidate is already held");
+    } finally { store.close(); }
+    const receipts = new SqliteMcpReceiptStore(path.join(root, "mcp-receipts.sqlite"));
+    try {
+      receipts.claim("spawn_agent:minimum-admission", "c".repeat(64), "durable", {
+        version: 1, toolName: "spawn_agent", clientRequestId: "minimum-admission", downstreamKey: "minimum-downstream",
+        caller: { kind: "worker", conversationId: "conversation_fixture", project: "fixture" },
+        target: { project: "fixture", identity: root }, owner: { pid: process.pid, startIdentity: null }, claimedAt: "2020-01-01T00:00:00Z",
+      });
+      expect(receipts.markDispatching("spawn_agent:minimum-admission", "c".repeat(64))).toBe(true);
+      expect(receipts.launchClaimPage(["fixture"], "conversation_fixture", 0, receipts.launchWatermark(), 10)).toHaveLength(1);
+    } finally { receipts.close(); }
+  } finally { if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; }
+});
+
 /** Writes `filename` on Bun's own SQLite in a child, as a newer SQLite leaves it. */
 function seed(filename: string, mode: "legacy" | "foreign" | "journal" | "journal-foreign", row: Pipeline): void {
   const child = Bun.spawnSync([process.execPath, SEED, filename, mode, JSON.stringify(row)], { stdout: "pipe", stderr: "pipe" });

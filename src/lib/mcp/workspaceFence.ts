@@ -29,11 +29,11 @@ const PROJECT_TOOLS = new Set([
   "grant_agent_browser_access",
   "spawn_agent", "send_message", "message_receipt", "create_task", "update_task", "create_pipeline", "pipeline_action", "pipeline_checks",
   "stage_report", "leave_lesson", "link_task_to_pipeline", "list_conversations", "search_transcripts", "search_memory", "get_conversation", "conversation_deliverability",
-  "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "flow_action", "list_pipelines", "list_tasks", "get_task",
+  "list_unknown_launch_claims", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "flow_action", "list_pipelines", "list_tasks", "get_task",
   "conversation_action", "conversation_migration", "agent_fleet", "agent_activity", "lifecycle_events", "bridge_report", "bridge_directive",
   "get_orchestrator", "create_orchestrator", "send_message_to_orchestrator", "ask_orchestrator_in_parallel", "rotate_orchestrator", "seat_tick_settings",
 ]);
-const COLLECTIONS = new Set(["list_conversations", "search_transcripts", "search_memory", "board_snapshot", "list_flows", "list_pipelines", "list_tasks", "agent_fleet", "agent_activity", "lifecycle_events"]);
+const COLLECTIONS = new Set(["list_unknown_launch_claims", "list_conversations", "search_transcripts", "search_memory", "board_snapshot", "list_flows", "list_pipelines", "list_tasks", "agent_fleet", "agent_activity", "lifecycle_events"]);
 const CONVERSATIONS = new Set(["conversationId", "expectedConversationId", "sourceConversationId", "srcConversationId", "seatConversationId", "parentConversationId", "launcherConversationId", "parent", "supersedes", "reviews", "src", "srcPath", "transcriptPath", "path", "paths", "voiceFor"]);
 const TASKS = new Set(["taskId", "taskIds", "parentTaskId", "sourceTaskId", "finishesTask"]);
 const PIPELINES = new Set(["pipelineId", "sourcePipelineId"]);
@@ -155,6 +155,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         }
       };
       assert();
+      if (["spawn_agent", "create_pipeline", "list_unknown_launch_claims"].includes(tool)) context?.responseAuthority?.checks.push(assert);
       let answerProjects: string[] = [];
       const answerProject = (value: string): boolean => {
         if (allowed(value)) return true;

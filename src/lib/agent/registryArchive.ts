@@ -64,6 +64,13 @@ export function installRegistryArchive(db: Database): void {
     }),
     `CREATE INDEX IF NOT EXISTS registry_archive_order ON registry_archive(collection,row_order)`,
     `CREATE INDEX IF NOT EXISTS registry_archive_key ON registry_archive(collection,row_key)`,
+    /* Keep the first admitted identity before its writer can run. The normal
+       cold mapping may disappear; this immutable version remains evidence. */
+    `CREATE TRIGGER IF NOT EXISTS registry_initial_receipt AFTER INSERT ON registry_rows
+      WHEN NEW.collection='receipts' AND json_extract(NEW.value_json,'$.clientAttemptId') GLOB 'mcp_spawn_*'
+        AND NOT EXISTS (SELECT 1 FROM registry_archive WHERE collection=NEW.collection AND row_key=NEW.row_key)
+      BEGIN INSERT INTO registry_archive(collection,row_key,value_json,row_order)
+        VALUES (NEW.collection,NEW.row_key,NEW.value_json,NEW.row_order); END`,
     ...["conversationId", "artifactPath", "clientAttemptId", "spawnCapabilityDigest", "parentConversationId", "state"].map(field =>
       `CREATE INDEX IF NOT EXISTS registry_archive_${field} ON registry_archive(collection,json_extract(value_json,'$.${field}'),row_order)`),
     `CREATE INDEX IF NOT EXISTS registry_archive_operation ON registry_archive(collection,json_extract(value_json,'$.command.operationId'),row_order)`,

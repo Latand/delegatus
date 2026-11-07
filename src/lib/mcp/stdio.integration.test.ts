@@ -1,3 +1,5 @@
+import { projectForCwd } from "@/lib/scanner/describe";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -672,11 +674,11 @@ interface CausalFixture {
   startHost(): Promise<HostProcess>;
   /** `caller: "other"` speaks as a second authenticated conversation — a
       launch receipt of its own with its own capability. */
-  mcp(options?: { identified?: boolean; name?: string; caller?: "owner" | "other" }): Promise<McpSession>;
+  mcp(options?: { identified?: boolean; name?: string; caller?: "owner" | "other"; capability?: string }): Promise<McpSession>;
   registryFile(): ReturnType<AgentRegistry["readOnlySnapshot"]>;
 }
 
-async function causalFixture(prefix: string): Promise<CausalFixture> {
+async function causalFixture(prefix: string, admittedCaller = false): Promise<CausalFixture> {
   const sandbox = sandboxDir(prefix);
   const environment = isolatedEnvironment(sandbox);
   const state = environment.LLV_STATE_DIR!;
@@ -711,6 +713,13 @@ async function causalFixture(prefix: string): Promise<CausalFixture> {
      what the MCP process presents. That is the identity the recovery contract
      binds to — server-derived, never something the arguments could say. */
   const callerReceipt = registry.beginSpawn("codex", sandbox, { cwd: sandbox, title: "Causal proof caller" });
+  if (admittedCaller) {
+    const callerPath = path.join(transcriptRoot, "caller.jsonl");
+    fs.writeFileSync(callerPath, "{}\n");
+    registry.completeSpawn(callerReceipt.launchId, { key: { engine: "codex", sessionId: "fixture-caller" },
+      artifactPath: callerPath, cwd: sandbox, accountId: null, status: "idle", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+  }
   const capability = registry.rotateSpawnCapabilityForReceipt(callerReceipt.launchId);
   const otherReceipt = registry.beginSpawn("codex", sandbox, { cwd: sandbox, title: "Causal proof other caller" });
   const otherCapability = registry.rotateSpawnCapabilityForReceipt(otherReceipt.launchId);
@@ -805,7 +814,7 @@ async function causalFixture(prefix: string): Promise<CausalFixture> {
     mcp: (options = {}) => startMcp({
       ...environment,
       LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${Number(fs.readFileSync(config.portFile, "utf8"))}`,
-      ...(options.identified === false ? {} : { LLV_SPAWN_CAPABILITY: options.caller === "other" ? otherCapability : capability }),
+      ...(options.identified === false ? {} : { LLV_SPAWN_CAPABILITY: options.capability ?? (options.caller === "other" ? otherCapability : capability) }),
     }, options.name ?? "viewer-causal-proof"),
     registryFile: () => new AgentRegistry(path.join(state, "agent-registry.json"), undefined, undefined, { resolveBackendIdentity: true }).readOnlySnapshot(),
   };
@@ -820,7 +829,7 @@ function spawnArguments(fixture: CausalFixture, clientRequestId: string, extra: 
   return { clientRequestId, cwd: fixture.sandbox, "prompt": "Inspect the fixture checkout.", title: "Causal proof launch", engine: "codex", ...extra };
 }
 
-async function call(session: McpSession, name: "send_message" | "spawn_agent", args: Record<string, unknown>) {
+async function call(session: McpSession, name: "send_message" | "spawn_agent" | "create_pipeline" | "list_unknown_launch_claims", args: Record<string, unknown>) {
   const input = session.nativeHook ? { ...args, nativeCallerProof: await session.nativeHook(name, args) } : args;
   const result = await session.client.callTool({ name, arguments: input });
   return result.structuredContent as Record<string, unknown> & { details?: Record<string, unknown> };
@@ -2331,5 +2340,275 @@ test("packaged MCP writers retain ordered task edits while the Viewer yields on 
     holder.close();
     await pending?.catch(() => {});
     await Promise.all(sessions.map(session => session.close()));
+  }
+}, 60_000);
+
+
+test("bounded launch admission fences an expired original through the production MCP boundary", async () => {
+  const fixture = await causalFixture("llv-bounded-admission-", true);
+  const host = await fixture.startHost();
+  const owner = await fixture.mcp();
+  const observer = await fixture.mcp({ name: "admission-observer" });
+  const key = "bounded-launch-original";
+  const args = spawnArguments(fixture, key, { role: "verifier", roleParams: { claims: "Inspect the isolated fixture." } });
+  let original: Promise<unknown> | undefined;
+  try {
+    fixture.control({ mode: "hold-before", settleWriter: true });
+    original = call(owner, "spawn_agent", args);
+    await Promise.race([fixture.marker("reached"), original.then(answer => { throw new Error(`original ended before its barrier: ${JSON.stringify(answer)}`); })]);
+    expect(await call(observer, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ code: "outcome_unknown" });
+    const db = new Database(path.join(fixture.state, "mcp-receipts.sqlite"));
+    try {
+      const row = db.query<{ binding_json: string }, [string]>("SELECT binding_json FROM mcp_receipts WHERE receipt_key=?").get(`spawn_agent:${key}`)!;
+      const binding = JSON.parse(row.binding_json);
+      binding.claimedAt = "2020-01-01T00:00:00.000Z";
+      if (binding.launchAdmission) binding.launchAdmission.settleAfter = Date.parse(binding.claimedAt) + 120_000;
+      db.query("UPDATE mcp_receipts SET claimed_at=?,binding_json=? WHERE receipt_key=?")
+        .run(Date.parse(binding.claimedAt), JSON.stringify(binding), `spawn_agent:${key}`);
+    } finally { db.close(); }
+    const recovered = await call(observer, "spawn_agent", { ...args, recoveryOnly: true });
+    expect(recovered).toMatchObject({ details: { outcome: "not-executed" } });
+    fixture.control({ mode: "respond", settleWriter: true });
+    fixture.release();
+    await original;
+    original = undefined;
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(0);
+    expect(Object.values(fixture.registryFile().receipts).filter(receipt => receipt.clientAttemptId === downstream("spawn_agent", key))).toHaveLength(0);
+    for (let i = 0; i < 3; i++) expect(await call(observer, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ details: { outcome: "not-executed" } });
+  } finally {
+    fixture.release(); fixture.execute();
+    if (original) await original.catch(() => {});
+    console.info(JSON.stringify({ proof: "bounded-admission-boundary", writers: fixture.effects().filter(effect => effect.kind === "writer").length,
+      reservations: Object.values(fixture.registryFile().receipts).filter(receipt => receipt.clientAttemptId === downstream("spawn_agent", key)).length }));
+    await owner.close(); await observer.close(); await host.stop();
+  }
+}, 60_000);
+
+
+test("bounded launch metadata preserves a maximum-size multibyte MCP envelope without copying its payload", async () => {
+  const fixture = await causalFixture("llv-bounded-envelope-", true), host = await fixture.startHost(), session = await fixture.mcp();
+  const parameters = { claims: "Inspect the fixture." };
+  const args = { ...spawnArguments(fixture, "bounded-envelope-original", { role: "verifier", roleParams: parameters }), evidence: [] as string[], padding: "" };
+  args.evidence = Array.from({ length: 8192 - Object.keys(args).length - Object.keys(parameters).length }, () => "ї");
+  const wire = () => JSON.stringify({ jsonrpc: "2.0", id: "0".repeat(36), method: "tools/call", params: {
+    name: "spawn_agent", arguments: args, _meta: { "delegatus/deadlineAt": 1_800_000_000_000 } } });
+  const remaining = 8 * 1024 * 1024 - Buffer.byteLength(wire());
+  args.padding = "ї".repeat(Math.floor(remaining / 2)) + (remaining % 2 ? "x" : "");
+  expect(Buffer.byteLength(wire())).toBe(8 * 1024 * 1024);
+  fixture.control({ captureInputMetadata: true, settleWriter: true });
+  try {
+    const answer = await call(session, "spawn_agent", args);
+    expect(answer, JSON.stringify(answer)).toMatchObject({ ok: true });
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    expect(fixture.effects().find(effect => effect.kind === "mcp-input")?.bytes).toBe(8 * 1024 * 1024);
+    const db = new Database(path.join(fixture.state, "mcp-receipts.sqlite"));
+    try {
+      const binding = db.query<{ binding_json: string }, [string]>("SELECT binding_json FROM mcp_receipts WHERE receipt_key=?").get(`spawn_agent:${args.clientRequestId}`)!.binding_json;
+      expect(JSON.parse(binding).launchAdmission.envelopeDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(Buffer.byteLength(binding)).toBeLessThan(8192);
+      expect(binding.includes("їїї")).toBe(false);
+    } finally { db.close(); }
+    const recovered = await call(session, "spawn_agent", { ...args, recoveryOnly: true, evidence: args.evidence.slice(1) });
+    // A changed envelope cannot inherit the original result.
+    expect(recovered).toMatchObject({ ok: false });
+    args.evidence.push("over-limit");
+    const refused = await session.client.callTool({ name: "spawn_agent", arguments: args });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused)).toContain("8192");
+    args.evidence.pop();
+    const oversize = await call(session, "spawn_agent", { ...args, clientRequestId: "bounded-envelope-oversize", padding: args.padding + "x".repeat(100) });
+    expect(oversize).toMatchObject({ ok: false });
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+  } finally { await session.close(); await host.stop(); }
+}, 60_000);
+
+test("bounded launch admission refuses a caller replaced while HTTP reservation is held", async () => {
+  const fixture = await causalFixture("llv-bounded-caller-", true);
+  const host = await fixture.startHost();
+  const owner = await fixture.mcp();
+  let original: Promise<unknown> | undefined;
+  try {
+    fixture.control({ mode: "hold-before", settleWriter: true });
+    const args = spawnArguments(fixture, "bounded-caller-switch", { role: "verifier", roleParams: { claims: "Inspect the isolated fixture." } });
+    original = call(owner, "spawn_agent", args);
+    await Promise.race([fixture.marker("reached"), original.then(answer => { throw new Error(JSON.stringify(answer)); })]);
+    fixture.registry.rotateSpawnCapabilityForConversation(fixture.caller.conversationId);
+    fixture.control({ mode: "respond", settleWriter: true }); fixture.release();
+    const answer = await original; original = undefined;
+    expect(answer).toMatchObject({ ok: false, code: "caller_unidentified" });
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(0);
+    expect(Object.values(fixture.registryFile().receipts).filter(receipt => receipt.clientAttemptId === downstream("spawn_agent", "bounded-caller-switch"))).toHaveLength(0);
+  } finally {
+    fixture.release(); fixture.execute(); if (original) await original.catch(() => {});
+    await owner.close(); await host.stop();
+  }
+}, 60_000);
+
+test("bounded launch caller authority reaches the deferred writer after admission", async () => {
+  const fixture = await causalFixture("llv-bounded-deferred-", true), host = await fixture.startHost(), owner = await fixture.mcp();
+  try {
+    fixture.control({ mode: "respond", settleWriter: true });
+    expect(await call(owner, "spawn_agent", spawnArguments(fixture, "bounded-deferred-control", { launcherConversationId: fixture.caller.conversationId }))).toMatchObject({ ok: true });
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    fixture.resetMarkers();
+    fixture.control({ mode: "respond", admission: "hold-effect", settleWriter: true });
+    const accepted = await call(owner, "spawn_agent", spawnArguments(fixture, "bounded-deferred-replaced"));
+    expect(accepted).toMatchObject({ ok: true }); await fixture.marker("admitted");
+    fixture.registry.rotateSpawnCapabilityForConversation(fixture.caller.conversationId);
+    fixture.execute(); await fixture.marker("deferred-done");
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    expect(fixture.registryFile().receipts[String(accepted.launchId)]?.state).toBe("failed");
+  } finally { fixture.execute(); await owner.close(); await host.stop(); }
+}, 60_000);
+
+for (const fault of ["none", "malformed", "ambiguous"] as const) test(`bounded launch retains admission after receipt loss and replay, retained evidence ${fault}`, async () => {
+  const fixture = await causalFixture("llv-bounded-retained-", true), host = await fixture.startHost(), owner = await fixture.mcp();
+  const args = spawnArguments(fixture, "bounded-retained-original");
+  let original: Promise<Record<string, unknown>> | undefined;
+  try {
+    fixture.control({ mode: "hold", settleWriter: true, replaySpawnAfterRelease: true });
+    original = call(owner, "spawn_agent", args);
+    await Promise.race([fixture.marker("accepted"), original.then(answer => { throw new Error(JSON.stringify(answer)); })]);
+    const effect = fixture.effects().find(effect => effect.kind === "writer")!;
+    expect(effect).toBeDefined();
+    removeDownstreamEvidence(fixture, "spawn_agent", effect);
+    if (fault !== "none") {
+      const db = new Database(defaultRegistrySqliteFilename(path.join(fixture.state, "agent-registry.json")));
+      try {
+        const row = db.query<{ id: number; row_key: string; value_json: string; row_order: number }, [string]>("SELECT id,row_key,value_json,row_order FROM registry_archive WHERE collection='receipts' AND json_extract(value_json,'$.clientAttemptId')=? ORDER BY row_order LIMIT 1")
+          .get(downstream("spawn_agent", args.clientRequestId))!;
+        if (fault === "malformed") {
+          expect(() => db.query("UPDATE registry_archive SET value_json=value_json WHERE id=?").run(row.id)).toThrow("immutable");
+          // Simulate damaged retained bytes only in this private fixture.
+          db.exec("DROP TRIGGER registry_archive_immutable_update");
+          db.query("UPDATE registry_archive SET value_json=? WHERE id=?").run(JSON.stringify({ ...JSON.parse(row.value_json), state: ["starting"] }), row.id);
+        } else {
+          db.query("INSERT INTO registry_archive(collection,row_key,value_json,row_order) VALUES ('receipts',?,?,?)")
+            .run("contradictory-admission", JSON.stringify({ ...JSON.parse(row.value_json), launchId: "contradictory-admission" }), row.row_order);
+        }
+      } finally { db.close(); }
+      const receipts = new Database(path.join(fixture.state, "mcp-receipts.sqlite"));
+      try {
+        const key = `spawn_agent:${args.clientRequestId}`;
+        const row = receipts.query<{ binding_json: string }, [string]>("SELECT binding_json FROM mcp_receipts WHERE receipt_key=?").get(key)!;
+        const binding = JSON.parse(row.binding_json); binding.launchAdmission.settleAfter = 1;
+        receipts.query("UPDATE mcp_receipts SET binding_json=? WHERE receipt_key=?").run(JSON.stringify(binding), key);
+      } finally { receipts.close(); }
+    }
+    fixture.release();
+    const recovered = await original; original = undefined;
+    const expected = fault === "none" ? { ok: true, launchId: effect.launchId, conversationId: effect.conversationId }
+      : { ok: false, code: "outcome_unknown", details: { outcome: "unknown" } };
+    expect(recovered).toMatchObject(expected);
+    const refusal = fixture.responses().at(-1)!;
+    expect(refusal.status).toBeGreaterThanOrEqual(400);
+    expect(refusal.body).toContain(fault === "none" ? "launch admission is already retained"
+      : fault === "malformed" ? "invalid retained launch admission" : "ambiguous retained launch admission");
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    expect(Object.values(fixture.registryFile().receipts).filter(receipt => receipt.clientAttemptId === downstream("spawn_agent", args.clientRequestId))).toHaveLength(0);
+    for (let n = 0; n < 3; n++) expect(await call(owner, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject(expected);
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+  } finally { fixture.release(); if (original) await original.catch(() => {}); await owner.close(); await host.stop(); }
+}, 60_000);
+
+test.skipIf(process.platform !== "linux")("bounded launch native receiving guard blocks a changed generation after dispatch", async () => {
+  const fixture = await causalFixture("llv-bounded-native-"); const host = await fixture.startHost();
+  const native = await nativeSession(fixture, NATIVE_A);
+  let original: Promise<unknown> | undefined;
+  try {
+    const control = await call(native.session, "spawn_agent", spawnArguments(fixture, "bounded-native-control"));
+    expect(control.ok).toBe(true);
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    fixture.control({ mode: "hold-before", settleWriter: true });
+    original = call(native.session, "spawn_agent", spawnArguments(fixture, "bounded-native-replaced"));
+    await Promise.race([fixture.marker("reached"), original.then(answer => { throw new Error(JSON.stringify(answer)); })]);
+    await native.lifecycle("startup");
+    fixture.control({ mode: "respond", settleWriter: true }); fixture.release();
+    expect(await original).toMatchObject({ ok: false, code: "caller_unidentified" }); original = undefined;
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    expect(Object.values(fixture.registryFile().receipts).filter(receipt => receipt.clientAttemptId === downstream("spawn_agent", "bounded-native-replaced"))).toHaveLength(0);
+  } finally {
+    fixture.release(); fixture.execute(); if (original) await original.catch(() => {});
+    await native.session.close(); await host.stop();
+  }
+}, 60_000);
+
+test("a guarded launch never falls back to a release's unguarded spawn route", async () => {
+  const fixture = await causalFixture("llv-bounded-old-receiver-", true); const host = await fixture.startHost();
+  const owner = await fixture.mcp();
+  try {
+    fixture.control({ guardedSpawnUnsupported: true });
+    const args = spawnArguments(fixture, "bounded-unsupported-receiver");
+    expect(await call(owner, "spawn_agent", args)).toMatchObject({ code: "outcome_unknown" });
+    await fixture.marker("guarded-unsupported");
+    expect(fixture.effects()).toEqual([]);
+    expect(fixture.responses().filter(row => row.pathname === "/api/spawn")).toEqual([]);
+  } finally { await owner.close(); await host.stop(); }
+}, 60_000);
+
+function fixtureState<T>(fixture: CausalFixture, operation: () => T): T {
+  const previous = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = fixture.state;
+  try { return operation(); } finally { process.env.LLV_STATE_DIR = previous; }
+}
+
+function designateFixtureSeat(fixture: CausalFixture, conversationId: string, key: string, now: string) {
+  const project = projectForCwd(fixture.sandbox)!;
+  return fixtureState(fixture, () => {
+    beginOrchestratorSeatIntent({ project, mandate: "Inspect fixture launch recovery", clientRequestId: key, mode: "existing", conversationId, now });
+    return completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId,
+      path: fixture.registry.conversation(conversationId as `conversation_${string}`)!.generations.at(-1)!.path, now });
+  });
+}
+
+function seedFixtureSuccessor(fixture: CausalFixture, number: number) {
+  const receipt = fixture.registry.beginSpawn("codex", fixture.sandbox, { cwd: fixture.sandbox, title: "Recovery successor" });
+  const transcript = path.join(fixture.sandbox, `successor-${number}.jsonl`);
+  fs.writeFileSync(transcript, "{}\n");
+  fixture.registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: `fixture-successor-${number}` },
+    artifactPath: transcript, cwd: fixture.sandbox, accountId: null, status: "idle", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null });
+  return { conversationId: receipt.conversationId, capability: fixture.registry.rotateSpawnCapabilityForReceipt(receipt.launchId) };
+}
+
+for (const nativeOwner of [false, true]) test.skipIf(nativeOwner && process.platform !== "linux")(`bounded launch recovery follows ${nativeOwner ? "native to managed succession" : "forty real seat rotations"} and rejects unrelated callers`, async () => {
+  const fixture = await causalFixture("llv-bounded-succession-", true);
+  const host = await fixture.startHost();
+  const native = nativeOwner ? await nativeSession(fixture, NATIVE_A) : null;
+  const owner = native?.session ?? await fixture.mcp();
+  designateFixtureSeat(fixture, native?.conversationId ?? fixture.caller.conversationId, "fixture-initial-seat", "2020-01-01T00:00:00Z");
+  const stranger = await fixture.mcp({ caller: "other" });
+  const args = spawnArguments(fixture, "bounded-seat-original", { role: "verifier", roleParams: { claims: "Inspect the isolated fixture." } });
+  let original: Promise<unknown> | undefined, successor: McpSession | undefined;
+  try {
+    fixture.control({ mode: "hold-before", settleWriter: true }); original = call(owner, "spawn_agent", args);
+    await Promise.race([fixture.marker("reached"), original.then(answer => { throw new Error(JSON.stringify(answer)); })]);
+    const db = new Database(path.join(fixture.state, "mcp-receipts.sqlite"));
+    try {
+      const row = db.query<{ binding_json: string }, [string]>("SELECT binding_json FROM mcp_receipts WHERE receipt_key=?").get(`spawn_agent:${args.clientRequestId}`)!;
+      const binding = JSON.parse(row.binding_json); binding.claimedAt = "2020-01-01T00:01:00Z";
+      expect(binding.caller.kind).toBe("worker");
+      if (nativeOwner) expect(binding.caller.nativeProof).toBeString();
+      if (binding.launchAdmission) binding.launchAdmission.settleAfter = Date.parse("2020-01-01T00:03:00Z");
+      db.query("UPDATE mcp_receipts SET claimed_at=?,binding_json=? WHERE receipt_key=?").run(Date.parse(binding.claimedAt),JSON.stringify(binding),`spawn_agent:${args.clientRequestId}`);
+    } finally { db.close(); }
+    let current = fixture.caller;
+    for (let i = 1; i <= (nativeOwner ? 2 : 40); i++) {
+      current = seedFixtureSuccessor(fixture, i);
+      designateFixtureSeat(fixture, current.conversationId, `fixture-rotation-${i}`, new Date(Date.parse("2020-01-01T01:00:00Z") + i * 1000).toISOString());
+    }
+    successor = await fixture.mcp({ capability: current.capability });
+    expect(await call(stranger, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ code: "recovery_not_permitted" });
+    expect(await call(owner, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ code: "recovery_not_permitted" });
+    const page = await call(successor, "list_unknown_launch_claims", { limit: 1 });
+    expect(page).toMatchObject({ ok: true });
+    expect(JSON.stringify(page)).not.toContain(args.prompt);
+    expect(await call(successor, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ details: { outcome: "not-executed" } });
+    designateFixtureSeat(fixture, native?.conversationId ?? fixture.caller.conversationId, "fixture-aba-seat", "2020-01-02T00:00:00Z");
+    expect(await call(owner, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ code: "recovery_not_permitted" });
+    fixture.control({ mode: "respond", settleWriter: true }); fixture.release(); await original; original = undefined;
+    expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(0);
+  } finally {
+    fixture.release(); fixture.execute(); if (original) await original.catch(() => {});
+    await owner.close(); await stranger.close(); await successor?.close(); await host.stop();
   }
 }, 60_000);

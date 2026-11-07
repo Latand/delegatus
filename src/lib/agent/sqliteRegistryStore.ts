@@ -1,3 +1,4 @@
+import type { SpawnReceipt } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -1085,6 +1086,29 @@ export class SqliteAgentRegistryStore {
   private assertDecided(file: DecidedRegistryFile): void {
     if (this.decidedFiles.has(file)) return;
     throw new Error("agent registry rows cannot be persisted before the MCP grant decision has run (#739)");
+  }
+
+  /** Admission continuity is pinned to this database incarnation. A restored
+      or replaced file cannot prove that an earlier writer did nothing. */
+  launchAdmissionIdentity(): string | null {
+    const trigger = this.db.query("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='registry_initial_receipt'").get();
+    return trigger ? databaseFileIdentity(this.filename) : null;
+  }
+
+  retainedSpawnAdmission(clientAttemptId: string): SpawnReceipt | null {
+    const row = this.db.query<{ row_key: string; value_json: string }, [string]>(`SELECT row_key,value_json FROM registry_archive
+      WHERE collection='receipts' AND json_extract(value_json,'$.clientAttemptId')=? ORDER BY row_order LIMIT 1`).get(clientAttemptId);
+    if (!row) return null;
+    if (this.db.query("SELECT 1 FROM registry_archive WHERE collection='receipts' AND json_extract(value_json,'$.clientAttemptId')=? AND row_key<>? LIMIT 1")
+      .get(clientAttemptId, row.row_key)) throw new Error("ambiguous retained launch admission");
+    const raw = parseSqliteJson(row.value_json, this.db) as Partial<SpawnReceipt> | null;
+    if (!raw || raw.clientAttemptId !== clientAttemptId || raw.launchId !== row.row_key
+      || typeof raw.conversationId !== "string" || !raw.conversationId || typeof raw.cwd !== "string" || !raw.cwd
+      || typeof raw.state !== "string" || !["starting", "completed", "failed", "pane-bound", "host-verified", "prompt-delivered", "path-pending", "conflicted"].includes(raw.state)) {
+      throw new Error("invalid retained launch admission");
+    }
+    const receipt = this.normalizePartial({ version: 2, entries: {}, receipts: { [row.row_key]: raw } }).receipts[row.row_key]!;
+    return receipt;
   }
 
   constructor(readonly filename: string, private readonly options: SqliteRegistryStoreOptions) {

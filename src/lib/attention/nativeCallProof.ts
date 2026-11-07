@@ -10,6 +10,7 @@ import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 interface CallProof { digest: string; generation: string; input: string; expiresAt: number }
 interface NativeGeneration { identity: string; sessionId: string; transcript: string; generation: string; ended: boolean; proofs: CallProof[] }
 interface CallContext { token?: string; input: string; admitted?: { pid: number; proof: CallProof } }
+export interface AdmittedNativeCall { pid: number; proof: CallProof }
 const calls = new AsyncLocalStorage<CallContext>();
 const filename = (pid: number) => statePath("native-callers", `${pid}.json`);
 function identity(pid: number): string | null {
@@ -90,7 +91,7 @@ export function nativeGenerationCurrent(pid: number, sessionId: string, transcri
 }
 export function nativeTranscriptCallProof(pid: number, transcript: string): string | null {
   const call = calls.getStore();
-  if (!call?.token || !/^[A-Za-z0-9_-]{43}$/.test(call.token)) return null;
+  if (!call || (!call.admitted && (!call.token || !/^[A-Za-z0-9_-]{43}$/.test(call.token)))) return null;
   if (!call.admitted) {
     const proof = mutate<CallProof | null>(pid, row => {
       if (!row || row.ended || row.identity !== identity(pid)) return { row: null, value: null };
@@ -105,6 +106,16 @@ export function nativeTranscriptCallProof(pid: number, transcript: string): stri
   const admitted = call.admitted;
   const sessionId = path.basename(transcript, ".jsonl");
   return admitted.pid === pid && nativeGenerationCurrent(pid, sessionId, transcript, admitted.proof.generation) ? admitted.proof.generation : null;
+}
+
+/** A receiving first-party writer restores only a reference already admitted
+ * by the original RPC. No token is retained or consumed a second time. */
+export function admittedNativeCall(): AdmittedNativeCall | undefined {
+  const admitted = calls.getStore()?.admitted;
+  return admitted ? structuredClone(admitted) : undefined;
+}
+export function runWithAdmittedNativeCall<T>(admitted: AdmittedNativeCall | undefined, operation: () => T): T {
+  return calls.run({ input: admitted?.proof.input ?? "", ...(admitted ? { admitted } : {}) }, operation);
 }
 
 /** A sibling's writable PID record cannot by itself hold another session. */

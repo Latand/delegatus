@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
-import { FENCES_SOURCE, mutateAccountSource, readAccountSource } from "@/lib/accounts/accountsStore";
+import { readAccountSpawnFence, mutateAccountSpawnFence } from "@/lib/accounts/accountsStore";
 import { statePath } from "@/lib/configDir";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { pipelineTaskLinkError } from "@/lib/pipelines/store";
@@ -146,7 +146,7 @@ function normalizeSpawnAdmissionFence(value: unknown, key: string): SpawnAdmissi
    The rows hold what `spawn-admission-fences.json` held, so every refusal
    below is the one it always was. */
 function readSpawnAdmissionFenceFile(requestedClientAttemptId?: string): SpawnAdmissionFenceFile {
-  const read = readAccountSource(FENCES_SOURCE);
+  const read = requestedClientAttemptId ? readAccountSpawnFence(requestedClientAttemptId) : { kind: "legacy" as const };
   if (read.kind === "collection") {
     return read.body === undefined
       ? emptySpawnAdmissionFenceFile()
@@ -191,8 +191,8 @@ function normalizeSpawnAdmissionFenceFile(parsed: unknown, requestedClientAttemp
     } catch (error) {
       /* A damaged entry must still make recovery of that exact key unknown.
          An unrelated damaged key has no bearing on this lookup and must not
-         turn every new reservation into a 500. A later atomic write drops the
-         unusable entry from the normalized file. */
+         turn every new reservation into a 500. Keyed writes preserve other
+         rows, including evidence this reader cannot normalize. */
       if (key === requestedClientAttemptId) throw error;
     }
   }
@@ -215,13 +215,14 @@ export function recordSpawnAdmissionRejection(input: {
   status: number;
   error: string;
   rejectedAt?: string;
-}, currentReceipt: () => SpawnReceipt | null): SpawnAdmissionFenceResult {
+}, currentReceipt: () => SpawnReceipt | null, assertAuthority?: () => void): SpawnAdmissionFenceResult {
   if (!validClientAttemptId(input.clientAttemptId)) throw new Error("invalid spawn admission fence clientAttemptId");
   if (!/^[0-9a-f]{64}$/i.test(input.requestDigest)) throw new Error("invalid spawn admission fence request digest");
   if (!Number.isInteger(input.status) || input.status < 400 || input.status > 499) throw new Error("invalid spawn admission fence status");
   const error = input.error.trim().slice(0, 500);
   if (!error) throw new Error("spawn admission fence error is required");
   return withAccountMutationLock(() => {
+    assertAuthority?.();
     const existingReceipt = currentReceipt();
     if (existingReceipt) return { kind: "existing-receipt", receipt: existingReceipt };
     const requestDigest = input.requestDigest.toLowerCase();
@@ -230,9 +231,9 @@ export function recordSpawnAdmissionRejection(input: {
        serializes callers, and the collection lease keeps this true for a
        caller that reached here another way: a fence read outside the
        transaction is a fence another writer can erase. */
-    mutateAccountSource(FENCES_SOURCE, (body) => {
-      const file = normalizeSpawnAdmissionFenceFile(body ?? emptySpawnAdmissionFenceFile(), input.clientAttemptId);
-      const existing = file.fences[input.clientAttemptId];
+    mutateAccountSpawnFence(input.clientAttemptId, (value) => {
+      assertAuthority?.();
+      const existing = value === undefined ? null : normalizeSpawnAdmissionFence(value, input.clientAttemptId);
       if (existing) {
         outcome = existing.requestDigest === requestDigest
           ? { kind: "fenced", fence: existing }
@@ -247,11 +248,8 @@ export function recordSpawnAdmissionRejection(input: {
         error,
         rejectedAt: input.rejectedAt ?? new Date().toISOString(),
       };
-      file.fences[input.clientAttemptId] = fence;
       outcome = { kind: "fenced", fence };
-      /* The normalized file drops entries no lookup can use, which is what
-         clears a damaged one; every usable fence is carried through. */
-      return file;
+      return fence;
     });
     return outcome!;
   });

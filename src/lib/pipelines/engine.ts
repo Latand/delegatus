@@ -1,3 +1,4 @@
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
@@ -15347,7 +15348,9 @@ type CreatePipelineOptions = {
   /** Internal controller creates may retain a structured creator without a transcript. */
   creatorLineage?: PipelineCreatorLineage;
   refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
-  creationRequest?: { key: string; digest: string };
+  creationRequest?: Pipeline["creationRequest"];
+  candidateId?: string;
+  assertCaller?: () => void;
   ensureTask?: BoardTask;
   spawnParams?: TaskPipelineSpawnParams;
   allowOperatorDraftWithoutLineage?: boolean;
@@ -15433,6 +15436,7 @@ export async function createPipelineFromRequest(
   // when a writer is busy. Share one admission deadline with the earlier
   // validation/preflight work, leaving time for the acknowledgement to render.
   const admissionDeadline = options.queueWhenBusy ? performance.now() + 500 : undefined;
+  options.assertCaller?.();
   assertWorkspaceExecution();
   if (options.conversationSource !== undefined && !isPipelineConversationSource(options.conversationSource)) {
     return { error: "invalid conversation source", status: 400 };
@@ -15532,8 +15536,10 @@ export async function createPipelineFromRequest(
     ...newLegacyReviewAnswer(normalized.legacyReview),
     ...(finishes.dropped.length ? { finishesTaskDropped: finishes.dropped } : {}),
   };
+  options.assertCaller?.();
   assertWorkspaceExecution();
   const admission = (await ports.preflightRepo(requestedRepoDir));
+  options.assertCaller?.();
   assertWorkspaceExecution();
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
@@ -15578,7 +15584,7 @@ export async function createPipelineFromRequest(
     options = { ...options, creationRequest: { key, digest: crypto.createHash("sha256").update(JSON.stringify({ task, spec, stages: normalized.stages, taskIds })).digest("hex") } };
   }
   const pipeline = buildPipeline({
-    id: inventedTasks.length && options.creationRequest ? crypto.createHash("sha256").update(options.creationRequest.key).digest("hex").slice(0, 16) : crypto.randomUUID().slice(0, 8),
+    id: options.candidateId ?? (inventedTasks.length && options.creationRequest ? crypto.createHash("sha256").update(options.creationRequest.key).digest("hex").slice(0, 16) : crypto.randomUUID().slice(0, 8)),
     task,
     taskIds,
     ...(taskSpawn ? { creationIntent: { kind: "task-spawn" as const, taskId: taskSpawn.task.id, launchId: taskSpawn.params.launchId } } : {}),
@@ -15683,8 +15689,10 @@ export async function createPipelineFromRequest(
   if (taskLinkError) return { error: taskLinkError, status: 400 };
   const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
   if (elsewhere) return elsewhere;
+  const admit = async (): Promise<PipelineMutationResult> => {
+  options.assertCaller?.();
   try {
-    await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
+    await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id, undefined, undefined, options.assertCaller);
   } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
   if (!options.ensureTask) {
     let created: Pipeline;
@@ -15692,6 +15700,7 @@ export async function createPipelineFromRequest(
     try {
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf, admissionDeadline,
         assertAuthority: () => {
+          options.assertCaller?.();
           assertWorkspaceExecution(project);
           if (workspace && !workspacePrincipalAllows(workspace, project)) throw new Error("workspace access denied");
         }, prepare: options.beforeConversationCreate,
@@ -15700,6 +15709,7 @@ export async function createPipelineFromRequest(
     } catch (error) {
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
+      options.assertCaller?.();
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
       return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
     }
@@ -15734,6 +15744,10 @@ export async function createPipelineFromRequest(
     await persist();
     return { pipeline, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   });
+  };
+  return options.creationRequest?.admissionProtocol === 1
+    ? withAccountMutationLockAsync(admit, { caller: "mcp pipeline admission", waitMs: 4000 })
+    : admit();
 }
 
 export async function ensureTaskPipelineForAssignment(

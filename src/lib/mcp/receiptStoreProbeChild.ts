@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import fs from "node:fs";
+import type { SpawnCommandDependencies } from "@/lib/agent/spawnCommand";
 import path from "node:path";
 import { awaitFixtureFile, waitForFixtureFile, waitUntilFixtureTime } from "./fixtureBarrier";
 import { beginCodexFeatureFixture } from "@/lib/agent/codexSpawnPolicyTestFixtures";
@@ -59,6 +60,9 @@ interface HttpHostConfig {
 }
 
 interface HttpHostControl {
+  replaySpawnAfterRelease?: boolean;
+  captureInputMetadata?: boolean;
+  guardedSpawnUnsupported?: boolean;
   /** `respond`: answer normally. `hold`: run the handler, write the accepted
       marker, then wait for the release file before answering. `lose`: run the
       handler, write the accepted marker, never answer. `hold-before`: write the
@@ -195,15 +199,19 @@ async function runHttpHost(configPath: string): Promise<void> {
     defer: (work: () => Promise<void>) => {
       const pending = work();
       pendingSpawnWork.add(pending);
-      void pending.then(() => pendingSpawnWork.delete(pending), () => pendingSpawnWork.delete(pending));
+      void pending.then(() => { pendingSpawnWork.delete(pending); marker("deferred-done"); },
+        () => { pendingSpawnWork.delete(pending); marker("deferred-done"); });
     },
     storeImages: () => [],
-    spawnStructuredConversation: async (input: { receipt: { launchId: string; conversationId: string; clientAttemptId: string | null; cwd: string }; prompt: string }) => {
+    spawnStructuredConversation: async (input: Parameters<SpawnCommandDependencies["spawnStructuredConversation"]>[0]) => {
       /* The launch receipt already exists when the route hands the launch
          here: that is the admission. The writer runs only once execution is
          released. */
       if (control().admission === "hold-effect") await executionBarrier();
       if (control().spawnEffectDelayMs) await Bun.sleep(control().spawnEffectDelayMs!);
+      // The real route supplies its synchronous final authorization callback.
+      // Consume it at the controlled writer's effect, after either held await.
+      if (input.authorize?.() !== undefined) throw new Error("fixture requires synchronous route authorization");
       /* THE writer effect: the controlled writer creates the conversation's
          transcript exactly here, once per launch it is handed. */
       const transcriptPath = path.join(config.transcriptRoot, `${input.receipt.launchId}.jsonl`);
@@ -232,11 +240,19 @@ async function runHttpHost(configPath: string): Promise<void> {
     fetch: async (request) => {
       const url = new URL(request.url);
       if (url.pathname === "/api/mcp") {
+        if (control().captureInputMetadata) {
+          const body = await request.clone().text();
+          effect({ kind: "mcp-input", bytes: Buffer.byteLength(body) });
+        }
         const { handleMcpHttpRequest } = await import("./http");
         return handleMcpHttpRequest(new NextRequest(request));
       }
       const current = control();
-      if (current.mode === "hold-before") {
+      if (current.guardedSpawnUnsupported && url.pathname === "/api/spawn/admission") {
+        marker("guarded-unsupported");
+        return new Response(null, { status: 404 });
+      }
+      if (current.mode === "hold-before" && ["/api/tmux", "/api/spawn", "/api/spawn/admission"].includes(url.pathname)) {
         marker("reached");
         await awaitFile(path.join(config.markerDir, "release"));
       }
@@ -244,7 +260,8 @@ async function runHttpHost(configPath: string): Promise<void> {
       const next = new NextRequest(request.url, { method: request.method, headers: request.headers, body });
       let response: Response;
       if (url.pathname === "/api/tmux") response = await conversationHostPOST(next);
-      else if (url.pathname === "/api/spawn") response = await POST.withDependencies(next, spawnDependencies as never);
+      else if (url.pathname === "/api/spawn/validate") response = await (await import("@/lib/agent/spawnAdmissionValidation")).executeSpawnAdmissionValidation(next, { registry: agentRegistry });
+      else if (["/api/spawn", "/api/spawn/admission"].includes(url.pathname)) response = await POST.withDependencies(next, spawnDependencies as never);
       else return new Response(JSON.stringify({ error: "unrouted" }), { status: 404, headers: { "content-type": "application/json" } });
       // An immediate-effect proxy loses its answer only AFTER actual work.
       // Held-effect cases intentionally return admission before execution.
@@ -267,6 +284,13 @@ async function runHttpHost(configPath: string): Promise<void> {
         marker("accepted");
         if (current.mode === "lose") return new Promise<Response>(() => {});
         await awaitFile(path.join(config.markerDir, "release"));
+        if (current.replaySpawnAfterRelease && url.pathname === "/api/spawn/admission") {
+          const replay = await POST.withDependencies(new NextRequest(request.url, { method: request.method, headers: request.headers, body }), spawnDependencies as never);
+          await Promise.all(pendingSpawnWork);
+          const replayBody = await replay.text();
+          fs.appendFileSync(config.responsesPath, `${JSON.stringify({ pathname: url.pathname, status: replay.status, body: replayBody })}\n`);
+          return new Response(replayBody, { status: replay.status, headers: { "content-type": "application/json" } });
+        }
         if (current.lateUnreadableStatus) return new Response("response lost", { status: current.lateUnreadableStatus });
         if (current.lateVerdict) {
           let admitted: Record<string, unknown> = {};

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -30,8 +32,8 @@ import { NextRequest } from "next/server";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { installSpawnCapabilityResolver } from "@/lib/agent/callerClaims";
 import { runAsMcpHttpCaller } from "./callerContext";
-import { viewerMcpBindings, productionDomainDependencies, productionViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
-import { createMcpToolService, createProductionViewerMcpService, MemoryMcpReceiptStore, type McpToolArgs, type McpToolService } from "./server";
+import { recoveryCaller, viewerMcpBindings, productionDomainDependencies, productionViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
+import { createMcpToolService, createProductionViewerMcpService, createViewerMcpServer, SqliteMcpReceiptStore, MemoryMcpReceiptStore, type McpToolArgs, type McpToolService } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { nativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
@@ -833,4 +835,36 @@ test("parallel request keys cannot expose another workspace's in-flight or saved
       .toMatchObject({ ok: false, code: "invalid_request", status: 409 });
     expect(deliveries).toBe(1); expect(readDeputies()).toHaveLength(1);
   } finally { release.resolve(); recorded.resolve(); await Promise.allSettled([first, collision].filter(Boolean)); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
+});
+
+test("launch claim disclosure rechecks real workspace grants after the SDK service await", async () => {
+  const key = "workspace-claim-disclosure";
+  beginOrchestratorSeatIntent({ project: own, mandate: "Inspect claims", clientRequestId: "workspace-read-seat", mode: "existing", conversationId: "conversation_member", now: AT });
+  completeOrchestratorSeatIntent({ project: own, clientRequestId: "workspace-read-seat", conversationId: "conversation_member", path: "conversation_member.jsonl", now: AT });
+  const receipts = new SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "mcp-receipts.sqlite"));
+  const caller = recoveryCaller(dependencies, true, false);
+  receipts.claim(`spawn_agent:${key}`, "a".repeat(64), "durable", { version: 1, toolName: "spawn_agent", clientRequestId: key,
+    caller, target: { project: own, identity: root }, downstreamKey: "workspace-downstream", owner: { pid: process.pid, startIdentity: null }, claimedAt: AT });
+  const actual = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), receipts), dependencies);
+  let release!: () => void, enter!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { enter = resolve; });
+  let hold = true;
+  const server = createViewerMcpServer({ async callTool(...args) {
+    const result = await actual.callTool(...args);
+    if (hold) { enter(); await held; }
+    return result;
+  } }, ["list_unknown_launch_claims"]);
+  const client = new Client({ name: "workspace-claims", version: "1" });
+  const [transport, peer] = InMemoryTransport.createLinkedPair(); await Promise.all([client.connect(transport), server.connect(peer)]);
+  const read = async () => (await client.callTool({ name: "list_unknown_launch_claims", arguments: {} })).structuredContent;
+  const pending = read();
+  try {
+    await ready; placeProject(store, owner, own, W2); release();
+    const refused = await pending;
+    expect(refused).toMatchObject(REFUSED);
+    expect(JSON.stringify(refused)).not.toContain(key);
+    hold = false; placeProject(store, owner, own, W1);
+    const allowed = await read(); expect(allowed).toMatchObject({ ok: true });
+    expect(JSON.stringify(allowed)).toContain(key);
+  } finally { release(); await pending.catch(() => {}); await client.close(); await server.close(); receipts.close(); }
 });

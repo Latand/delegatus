@@ -15,7 +15,7 @@ import { TASKS_FILE, loadTasksByIds, mutateTasks } from "@/lib/tasks/store";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 import { bindAccountToProject } from "@/lib/accounts/projectBindings";
-import { reserveProactiveLane } from "@/lib/tasks/proactiveLane";
+import { releaseUnusedProactiveLane, reserveProactiveLane } from "@/lib/tasks/proactiveLane";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setCodexCloudEnvironmentId } from "@/lib/projects/settings";
 import { settlePipelineControllerJobs } from "./controllerJobs";
@@ -314,6 +314,24 @@ test("concurrent and replayed lane creation retains one reservation through alia
   const current = f.current();
   expect(() => assertProactivePipelineExecution(current, "prepare")).not.toThrow();
   await expect(reserveProactiveLane({ ...current, id: "another-lane" }, "another-lane")).rejects.toThrow("reserved");
+});
+
+test("a fenced creation releases only its unused proactive reservation with current authority", async () => {
+  const f = await fixture("admission-expiry");
+  const original = f.current(), requestKey = original.creationRequest!.key;
+  const competitor = { ...structuredClone(original), id: "independent-admission" };
+  await releaseUnusedProactiveLane(f.project, original.id, requestKey, () => {});
+  await expect(reserveProactiveLane(competitor, "independent-request")).rejects.toThrow("reserved");
+  savePipelines([]);
+  await releaseUnusedProactiveLane(f.project, original.id, "wrong-request", () => {});
+  await expect(reserveProactiveLane(competitor, "independent-request")).rejects.toThrow("reserved");
+  await expect(releaseUnusedProactiveLane(f.project, original.id, requestKey, () => { throw new Error("fixture authority changed"); })).rejects.toThrow("fixture authority changed");
+  await expect(reserveProactiveLane(competitor, "independent-request")).rejects.toThrow("reserved");
+  await releaseUnusedProactiveLane(f.project, original.id, requestKey, () => {});
+  await releaseUnusedProactiveLane(f.project, original.id, requestKey, () => {});
+  await reserveProactiveLane(competitor, "independent-request");
+  await releaseUnusedProactiveLane(f.project, original.id, requestKey, () => {});
+  await expect(reserveProactiveLane(original, requestKey)).rejects.toThrow("reserved");
 });
 
 test("a fresh process sees the same reservation and cannot admit a competing lane", async () => {

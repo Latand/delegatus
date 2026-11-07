@@ -1,3 +1,11 @@
+import { releaseUnusedProactiveLane } from "@/lib/tasks/proactiveLane";
+import { listUnknownLaunchClaims } from "./unknownLaunchClaims";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { pipelineAdmissionIdentity, readCreationAdmission, recordCreationAdmission } from "@/lib/pipelines/creationAdmission";
+import { exactQueuedCreationStatus } from "@/lib/pipelines/creationQueue";
+import { currentRecoverySeat, prepareOrchestratorRecoveryAuthority, recoverySeatCurrent, seatMayRecoverLaunch } from "@/lib/orchestrator/seats";
+import { admittedNativeCall, runWithAdmittedNativeCall } from "@/lib/attention/nativeCallProof";
+import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
@@ -90,7 +98,7 @@ import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { currentMcpHttpCaller, resolveMcpCallerValue, runAsMcpHttpCaller } from "./callerContext";
 import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
@@ -1841,7 +1849,21 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     }
   }
   const launcher = mcpSpawnLauncher(dependencies);
-  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
+  const frozen = context?.binding?.launchAdmission;
+  const body = frozen ? { ...withoutKeys(args, ["clientRequestId", "recoveryOnly", "launcherConversationId", "crossProjectRequest"]),
+    ...frozen.adaptations, clientAttemptId } : spawnDispatchBody(args, clientAttemptId, launcher);
+  if (frozen && (frozen.roleParameterSources || frozen.roleParameterOmissions)) {
+    const parameters = { ...(objectRecord(args.roleParams) ? args.roleParams : {}) };
+    for (const key of frozen.roleParameterOmissions ?? []) delete parameters[key];
+    for (const [key, source] of Object.entries(frozen.roleParameterSources ?? {})) {
+      const prompt = typeof args.prompt === "string" ? args.prompt : "";
+      parameters[key] = source === "first-line" ? firstPromptLine(prompt)
+        : source === "diff-source" ? diffSourceFromPrompt(prompt) : /\b[0-9a-f]{40}\b/i.exec(prompt)?.[0] ?? null;
+    }
+    if (Object.keys(parameters).length || args.roleParams !== undefined) body.roleParams = parameters;
+  }
+  if (frozen && spawnAdmissionBodyDigest(body) !== frozen.envelopeDigest) throw new McpToolRefusal("launch envelope changed before dispatch", { code: "binding_mismatch" });
+  const result = await dispatchControl(control)(frozen ? "/api/spawn/admission" : "/api/spawn", body, {
     ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
   });
   const terminalFailure = ["failed", "conflict"].includes(result.state as string);
@@ -2566,6 +2588,19 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   refuseCrossProjectFromSeat("create_pipeline", () => (text(args.repoDir) ? projectForCwd(text(args.repoDir)) : null), args, dependencies);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
   if (request.src === undefined && dependencies) request.src = inferredPipelineSource(dependencies);
+  const admission = context?.binding?.launchAdmission;
+  if (admission) Object.assign(request, admission.adaptations);
+  const creationDigest = requestDigest("create_pipeline", request);
+  if (admission && creationDigest !== admission.envelopeDigest) throw new McpToolRefusal("pipeline envelope changed before creation", { code: "binding_mismatch" });
+  const assertAdmission = () => {
+    context?.assertCaller?.();
+    if (!admission || !context?.binding) return;
+    if (!admission.registryIdentity || pipelineAdmissionIdentity() !== admission.registryIdentity) throw new Error("pipeline admission continuity changed");
+    const witness = readCreationAdmission(context.binding.downstreamKey);
+    if (witness?.kind === "fenced" || witness && witness.digest !== creationDigest) throw new Error("pipeline admission was fenced or changed");
+    if (Date.now() >= admission.settleAfter && witness?.kind !== "admitted") throw new Error("pipeline admission deadline elapsed");
+  };
+  assertAdmission();
   context?.assertCaller?.();
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
@@ -2575,7 +2610,9 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
     workspace: dependencies?.workspaceConversation
       ? conversationWorkspacePrincipal(dependencies.workspaceConversation, briefer.conversationId) ?? undefined
       : undefined,
-    creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: requestDigest("create_pipeline", request) },
+    creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: creationDigest,
+      ...(admission ? { admissionProtocol: 1 as const, admissionBinding: context!.binding } : {}) },
+    ...(admission ? { candidateId: admission.candidateId, assertCaller: assertAdmission } : { assertCaller: context?.assertCaller }),
     queueWhenBusy: true,
     briefer,
   });
@@ -4717,9 +4754,10 @@ async function namedLaunchProject(args: McpToolArgs, dependencies: ViewerMcpDoma
 
 /** Original-key lookups authenticate the caller and use the recorded target.
     A later display-name change cannot invalidate an existing launch receipt. */
-function launchRecoveryBinding(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, field: "cwd" | "repoDir"): McpRequestBindingInput {
+async function launchRecoveryBinding(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, field: "cwd" | "repoDir"): Promise<McpRequestBindingInput> {
+  if (!await prepareOrchestratorRecoveryAuthority()) throw new McpToolRefusal("seat recovery authority is not ready", { code: "recovery_authority_unavailable", retryable: true });
   const directory = field === "cwd" ? spawnCwd(args) : path.resolve(required(args, field));
-  const caller = recoveryCaller(dependencies);
+  const caller = recoveryCaller(dependencies, false, false);
   if (field === "cwd" && caller.kind === "unidentified") requireMcpDeployerCaller(args, projectForCwd(directory), dependencies);
   return {
     caller,
@@ -8055,9 +8093,10 @@ export function viewerMcpToolPolicy(
     projection the call already holds — never a separately resolved guess. An
     authority or registry that faults reads as unidentified, which fails both
     a fresh claim and a recovery closed. */
-function recoveryCaller(
-  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority" | "registrySnapshot" | "recoveryPredecessors">>,
+export function recoveryCaller(
+  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority" | "registrySnapshot" | "recoveryPredecessors" | "workspaceConversation">>,
   revalidateNative = false,
+  includePredecessors = true,
 ): McpRequestCaller {
   const unidentified: McpRequestCaller = { kind: "unidentified", conversationId: null, project: null };
   let authority: AttentionCallerAuthority;
@@ -8069,7 +8108,7 @@ function recoveryCaller(
   /* Caller attribution is shared for the whole tool call, while a native
      session proof is a live fence: generation changes must be visible at each
      recovery check even when the original authority is memoized. */
-  if (revalidateNative && authority.kind !== "unidentified" && authority.nativeProof && dependencies.attentionAuthority) {
+  if (revalidateNative && dependencies.attentionAuthority) {
     try {
       authority = dependencies.attentionAuthority();
     } catch {
@@ -8079,14 +8118,29 @@ function recoveryCaller(
   if (authority.kind === "unidentified") return { ...unidentified, ...(authority.admission ? { admission: authority.admission } : {}) };
   if (authority.conversationId === null) return { kind: authority.kind, conversationId: null, project: null };
   let project: string | null;
+  let authorityStamp: string | undefined;
+  let seatEpoch: number | undefined;
   try {
     if (!dependencies.registrySnapshot) return unidentified;
-    project = callerProjectFromSnapshot(dependencies.registrySnapshot(), authority.conversationId);
+    const snapshot = dependencies.registrySnapshot();
+    const recordedProject = callerProjectFromSnapshot(snapshot, authority.conversationId);
+    project = recordedProject ? canonicalProject(recordedProject) : null;
+    const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(authority.conversationId as `conversation_${string}`);
+    const generation = conversation?.generations.at(-1);
+    if (conversation?.supersededBy || generation?.archivedAt) return unidentified;
+    const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? snapshot, authority.conversationId);
+    if (conversation) authorityStamp = crypto.createHash("sha256").update(JSON.stringify([generation?.id, generation?.path,
+      conversation?.projectOwnership, generation?.archivedAt, principal])).digest("hex");
+    const active = project ? currentRecoverySeat(project) : null;
+    if (active?.conversationId === authority.conversationId && project) {
+      if (!recoverySeatCurrent(project, authority.conversationId, active.seatEpoch)) return unidentified;
+      seatEpoch = active.seatEpoch;
+    }
   } catch {
     return unidentified;
   }
   let predecessors: string[] = [];
-  if (project) {
+  if (project && includePredecessors) {
     try {
       predecessors = [...(dependencies.recoveryPredecessors ?? productionRecoveryPredecessors)(project, authority.conversationId)]
         .filter((candidate, index, all) => /^conversation_[A-Za-z0-9_-]{1,128}$/.test(candidate) && all.indexOf(candidate) === index)
@@ -8099,6 +8153,8 @@ function recoveryCaller(
     kind: authority.kind,
     conversationId: authority.conversationId,
     ...(authority.nativeProof ? { nativeProof: authority.nativeProof } : {}),
+    ...(authorityStamp ? { authorityStamp } : {}),
+    ...(seatEpoch ? { seatEpoch } : {}),
     project,
     ...(predecessors.length ? { predecessors } : {}),
   };
@@ -8275,10 +8331,66 @@ function spawnTargetProject(args: McpToolArgs, cwd: string): string | null {
   return canonical;
 }
 
+function canFreezeLaunch(caller: McpRequestCaller): boolean {
+  return !!caller.authorityStamp && (!!callerCapability()
+    || (!!caller.nativeProof && !!currentMcpHttpCaller()?.nativePeer && !!admittedNativeCall()));
+}
+
+function frozenSpawnAdmission(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput["launchAdmission"] {
+  const key = `mcp_spawn_${crypto.createHash("sha256").update(requestId(args)).digest("hex")}`;
+  const body = spawnDispatchBody(args, key, mcpSpawnLauncher(dependencies));
+  const adaptations = Object.fromEntries(Object.entries(body).filter(([field, value]) => field !== "clientAttemptId" && field !== "roleParams"
+    && (field === "launcherConversationId" || JSON.stringify(value) !== JSON.stringify(args[field]))));
+  const raw = objectRecord(args.roleParams) ? args.roleParams : {};
+  const resolved = objectRecord(body.roleParams) ? body.roleParams : {};
+  const roleParameterSources: NonNullable<NonNullable<McpRequestBindingInput["launchAdmission"]>["roleParameterSources"]> = {};
+  for (const [key, value] of Object.entries(resolved)) {
+    if (JSON.stringify(raw[key]) === JSON.stringify(value)) continue;
+    if (key === "claims" || key === "questions") roleParameterSources[key] = "first-line";
+    else if (key === "diffSource") roleParameterSources[key] = "diff-source";
+    else if (key === "sha") roleParameterSources[key] = "sha";
+    else throw new Error("unsupported frozen role adaptation");
+  }
+  const roleParameterOmissions = Object.keys(raw).filter(key => !(key in resolved));
+  const capability = callerCapability();
+  return { version: 1, settleAfter: Date.now() + 120_000, envelopeDigest: spawnAdmissionBodyDigest(body), adaptations,
+    ...(Object.keys(roleParameterSources).length ? { roleParameterSources } : {}),
+    ...(roleParameterOmissions.length ? { roleParameterOmissions } : {}),
+    registryIdentity: agentRegistry().launchAdmissionIdentity(),
+    ...(currentMcpHttpCaller()?.nativePeer ? { nativePeer: currentMcpHttpCaller()!.nativePeer } : {}),
+    ...(admittedNativeCall() ? { nativeCall: admittedNativeCall() } : {}),
+    ...(capability ? { capabilityDigest: crypto.createHash("sha256").update(capability).digest("hex") } : {}),
+  };
+}
+
+/** Fresh checks at the receiving boundary use the original authenticated
+ * generation reference. Neither arguments nor the MCP transport tag names it. */
+export function assertLaunchAdmissionCaller(binding: McpRequestBinding): void {
+  const admission = binding.launchAdmission;
+  const caller = binding.caller;
+  if (!admission || !caller.conversationId || !caller.authorityStamp) throw new Error("launch caller proof unavailable");
+  const registry = agentRegistry();
+  if (admission.capabilityDigest && registry.conversationIdForSpawnCapabilityDigest(admission.capabilityDigest) !== caller.conversationId) throw new Error("launch caller capability changed");
+  if (caller.nativeProof) {
+    const current = runWithAdmittedNativeCall(admission.nativeCall, () => runAsMcpHttpCaller({ nativePeer: admission.nativePeer }, () => recoveryCaller(productionDomainDependencies, true, false)));
+    if (current.conversationId !== caller.conversationId || current.nativeProof !== caller.nativeProof) throw new Error("native launch caller changed");
+  } else if (!admission.capabilityDigest) throw new Error("launch caller authentication unavailable");
+  const current = registry.conversation(caller.conversationId as `conversation_${string}`);
+  const generation = current?.generations.at(-1);
+  const principal = conversationWorkspacePrincipal(id => registry.conversation(id as `conversation_${string}`), caller.conversationId);
+  const stamp = current ? crypto.createHash("sha256").update(JSON.stringify([generation?.id, generation?.path,
+    current.projectOwnership, generation?.archivedAt, principal])).digest("hex") : null;
+  if (current?.supersededBy || generation?.archivedAt || stamp !== caller.authorityStamp) throw new Error("launch caller generation changed");
+  if (caller.seatEpoch !== undefined) {
+    if (!caller.project || !recoverySeatCurrent(caller.project, caller.conversationId, caller.seatEpoch)) throw new Error("launch caller seat changed");
+  }
+  if (principal && !workspacePrincipalAllows(principal, binding.target.project)) throw new Error("workspace access denied");
+}
+
 async function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpRequestBindingInput> {
   args = await namedLaunchProject(args, dependencies, "cwd");
   const cwd = spawnCwd(args);
-  const caller = recoveryCaller(dependencies);
+  const caller = recoveryCaller(dependencies, false, false);
   const project = spawnTargetProject(args, cwd);
   // An unidentified caller cannot own a receipt. Keep the deployer's refusal
   // before lookup; identified owners are checked again only for fresh work.
@@ -8290,6 +8402,7 @@ async function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDepende
     caller,
     target: { project, identity: cwd },
     downstreamKey: `mcp_spawn_${crypto.createHash("sha256").update(requestId(args)).digest("hex")}`,
+    ...(canFreezeLaunch(caller) ? { launchAdmission: frozenSpawnAdmission(args, dependencies) } : {}),
   };
 }
 
@@ -8428,7 +8541,25 @@ async function recoverSpawn(
     return { outcome: "unknown", evidence: "spawn-receipt", reason: `the launch record could not be read: ${error instanceof Error ? error.message : String(error)}`, ids: {} };
   }
   let receipts = registryRowsMatching(snapshot, "receipts", "clientAttemptId", key);
+  if (binding.launchAdmission) {
+    const registry = agentRegistry();
+    const retained = registry.retainedSpawnAdmission(key);
+    if (retained && receipts.some(receipt => receipt.launchId !== retained.launchId)) return unknown("current and retained launch admissions contradict each other");
+    if (retained && receipts.length === 0) receipts = [retained];
+    else if (receipts.length === 0 && Date.now() >= binding.launchAdmission.settleAfter) {
+      const { expireSpawnAdmission } = await import("./launchAdmission");
+      const resolution = await expireSpawnAdmission(binding, () => context?.assertCaller?.(), Math.min(Date.now() + 5000, context?.deadlineAt ?? Infinity));
+      context?.assertCaller?.();
+      if (resolution?.kind === "fenced") return fencedEvidence(resolution.fence);
+      if (resolution?.kind === "existing-receipt") receipts = [resolution.receipt];
+      else return unknown("admission expiry lacks continuous downstream evidence");
+    }
+  }
   if (receipts.length === 0) {
+    if (binding.launchAdmission) {
+      const fence = dependencies.readSpawnAdmissionFence?.(key);
+      return fence && fence.requestDigest === binding.launchAdmission.envelopeDigest ? fencedEvidence(fence) : unknown();
+    }
     if (legacy || !args || typeof args.role !== "string" || !args.role.trim() || !dependencies.validateSpawnAdmission) return unknown();
     let body: Record<string, unknown>;
     try {
@@ -8558,12 +8689,75 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
  * answer an existing claim from durable evidence only. Neither `recover` can
  * reach a mutation binding.
  */
+async function recoverPipelineAdmission(binding: McpRequestBinding, legacy: boolean, assertInvocation: () => void,
+  deadlineAt = Date.now() + 5000): Promise<McpRecoveryEvidence> {
+  const assertCaller = () => { assertInvocation(); if (Date.now() >= deadlineAt) throw new Error("pipeline recovery budget elapsed"); };
+  const unknown = (reason: string): McpRecoveryEvidence => ({ outcome: "unknown", evidence: "pipeline-row", reason, ids: {}, ...(legacy ? { ownership: "unknown" as const } : {}) });
+  if (legacy) return unknown("creation has no caller-bound receipt");
+  const resolve = (): McpRecoveryEvidence => {
+    assertCaller();
+    const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
+    if (pipeline) return { outcome: "settled", evidence: "pipeline-row", reason: null,
+      ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), memoryCaps: pipelineMemoryCaps(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
+    const admission = binding.launchAdmission;
+    if (!admission?.candidateId) return unknown(RECOVERY_ABSENT_REASON);
+    const queued = exactQueuedCreationStatus(admission.candidateId, binding.downstreamKey, admission.envelopeDigest);
+    if (queued) return { outcome: "settled", evidence: "pipeline-creation-queue", reason: queued.state === "queued" ? queued.reason : queued.error,
+      ids: { pipelineId: admission.candidateId }, facts: { state: queued.state, queuedAt: queued.queuedAt } };
+    const witness = readCreationAdmission(binding.downstreamKey);
+    if (witness) {
+      if (witness.digest !== admission.envelopeDigest || witness.candidate_id !== admission.candidateId) return unknown("creation admission identity changed");
+      if (witness.kind === "fenced") return { outcome: "not-executed", evidence: "pipeline-admission-fence", reason: "pipeline admission deadline elapsed before creation", ids: {} };
+      return unknown("the admitted creation witness has no matching pipeline or queue status");
+    }
+    if (Date.now() < admission.settleAfter) return unknown(RECOVERY_ABSENT_REASON);
+    if (!admission.registryIdentity || pipelineAdmissionIdentity() !== admission.registryIdentity) return unknown("creation admission continuity changed");
+    const fenced = recordCreationAdmission({ request_key: binding.downstreamKey, digest: admission.envelopeDigest,
+      candidate_id: admission.candidateId, kind: "fenced" }, () => {
+        assertCaller();
+        if (pipelineAdmissionIdentity() !== admission.registryIdentity) throw new Error("pipeline admission continuity changed");
+      });
+    return fenced.kind === "fenced" ? { outcome: "not-executed", evidence: "pipeline-admission-fence", reason: "pipeline admission deadline elapsed before creation", ids: {} }
+      : unknown("creation admission changed during recovery");
+  };
+  if (!binding.launchAdmission) return resolve();
+  return withAccountMutationLockAsync(async () => {
+    const result = resolve();
+    if (result.outcome === "not-executed" && binding.target.project && binding.launchAdmission?.candidateId) {
+      await releaseUnusedProactiveLane(binding.target.project, binding.launchAdmission.candidateId, binding.downstreamKey, assertCaller, undefined, deadlineAt);
+      assertCaller();
+    }
+    return result;
+  }, { caller: "mcp pipeline recovery", waitMs: Math.max(0, Math.min(4000, deadlineAt - Date.now())) });
+}
+
+async function mayRecoverLaunch(binding: McpRequestBinding, current: McpRequestCaller,
+  dependencies: ViewerMcpDomainDependencies): Promise<boolean> {
+  if (!await prepareOrchestratorRecoveryAuthority()) return false;
+  const fresh = recoveryCaller(dependencies, true, false);
+  if (fresh.kind !== current.kind || fresh.project !== current.project || fresh.conversationId !== current.conversationId
+    || fresh.nativeProof !== current.nativeProof || fresh.authorityStamp !== current.authorityStamp) return false;
+  current = fresh;
+  if (binding.caller.kind === "unidentified" || current.kind === "unidentified"
+    || (binding.caller.project ? canonicalProject(binding.caller.project) : null) !== current.project) return false;
+  if (binding.caller.conversationId === current.conversationId) return binding.caller.kind === current.kind
+    && (binding.caller.seatEpoch === undefined || binding.caller.seatEpoch === current.seatEpoch);
+  if (!current.project || !current.conversationId || current.seatEpoch === undefined || !binding.caller.conversationId) return false;
+  if (!recoverySeatCurrent(current.project, current.conversationId, current.seatEpoch)) return false;
+  return seatMayRecoverLaunch(current.project, current.conversationId, current.seatEpoch, binding.caller.conversationId,
+    binding.claimedAt, binding.caller.seatEpoch);
+}
+
+const mayRecoverLaunchFor = (dependencies: ViewerMcpDomainDependencies) =>
+  (binding: McpRequestBinding, current: McpRequestCaller) => mayRecoverLaunch(binding, current, dependencies);
+
 export function viewerMcpRecoverableTools(
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
-      currentCaller: () => recoveryCaller(domainDependencies, true),
+      canRecoverCaller: mayRecoverLaunchFor(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true, false),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
       bind: async (args) => {
         assertExplicitPipelineSource(args, domainDependencies);
@@ -8571,21 +8765,28 @@ export function viewerMcpRecoverableTools(
         assertExplicitPipelineSource(args, domainDependencies);
         const project = projectForCwd(required(args, "repoDir"));
         refuseCrossProjectFromSeat("create_pipeline", () => project, args, domainDependencies);
-        return { caller: recoveryCaller(domainDependencies),
+        const caller = recoveryCaller(domainDependencies, false, false);
+        const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
+        if (request.src === undefined) request.src = inferredPipelineSource(domainDependencies);
+        const capability = callerCapability();
+        return { caller,
           target: { project, identity: path.resolve(required(args, "repoDir")) },
-          downstreamKey: `create_pipeline:${requestId(args)}` };
+          downstreamKey: `create_pipeline:${requestId(args)}`,
+          ...(canFreezeLaunch(caller) ? { launchAdmission: { version: 1 as const, settleAfter: Date.now() + 120_000,
+            envelopeDigest: requestDigest("create_pipeline", request),
+            adaptations: { ...(args.project ? { project: args.project } : {}), ...(args.src === undefined ? { src: request.src } : {}) },
+            registryIdentity: pipelineAdmissionIdentity(), candidateId: crypto.randomUUID().slice(0, 8),
+            ...(currentMcpHttpCaller()?.nativePeer ? { nativePeer: currentMcpHttpCaller()!.nativePeer } : {}),
+            ...(admittedNativeCall() ? { nativeCall: admittedNativeCall() } : {}),
+            ...(capability ? { capabilityDigest: crypto.createHash("sha256").update(capability).digest("hex") } : {}),
+          } } : {}) };
       },
-      recover: async (binding, options): Promise<McpRecoveryEvidence> => {
-        if (options.legacy) return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "creation has no caller-bound receipt", ids: {}, ownership: "unknown" };
-        const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
-        if (!pipeline) return { outcome: "unknown", evidence: "pipeline-row", reason: RECOVERY_ABSENT_REASON, ids: {} };
-        return { outcome: "settled", evidence: "pipeline-row", reason: null,
-          ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), memoryCaps: pipelineMemoryCaps(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
-      },
+      recover: (binding, options) => recoverPipelineAdmission(binding, options.legacy, () => options.context?.assertCaller?.(), Math.min(Date.now() + 5000, options.context?.deadlineAt ?? Infinity)),
     },
     spawn_agent: {
+      canRecoverCaller: mayRecoverLaunchFor(domainDependencies),
       bind: (args) => bindSpawn(args, domainDependencies),
-      currentCaller: () => recoveryCaller(domainDependencies, true),
+      currentCaller: () => recoveryCaller(domainDependencies, true, false),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "cwd"),
       authorizeClaim: (args, binding) => {
         requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
@@ -8780,6 +8981,15 @@ export function viewerMcpBindings(
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),
     get_flow: (args) => Promise.resolve(getFlow(args, domainDependencies)),
     flow_action: (args) => flowAction(args, domainDependencies),
+    list_unknown_launch_claims: Object.assign(async (args: McpToolArgs) => listUnknownLaunchClaims(args, domainDependencies), {
+      readAuthority: async () => {
+        if (!await prepareOrchestratorRecoveryAuthority()) throw new McpToolRefusal("seat recovery authority is not ready", { code: "recovery_authority_unavailable", retryable: true });
+        const caller = JSON.stringify(recoveryCaller(domainDependencies, true, false));
+        return () => {
+          if (JSON.stringify(recoveryCaller(domainDependencies, true, false)) !== caller) throw new McpToolRefusal("launch claim caller changed", { code: "caller_unidentified" });
+        };
+      },
+    }),
     list_pipelines: reads.list_pipelines,
     list_tasks: reads.list_tasks,
     get_task: reads.get_task,
