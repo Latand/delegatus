@@ -253,6 +253,8 @@ export interface EngineHost {
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
   health(): Promise<HostState>;
+  /** Current owner memory, synchronously read under its fence at automatic wake dispatch. */
+  readViewerMcpObservation?(): ViewerMcpObservation | undefined;
   release(): Promise<void>;
   /** Engine-backed persistence evidence for a fresh session's first message.
       A logical session may exist before its canonical transcript does. */

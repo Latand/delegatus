@@ -688,7 +688,28 @@ export class SupersedenceConflictError extends Error {
   }
 }
 
-export type SeatTickConversation = Pick<RegistryConversation, "id" | "turn"> & { viewerMcp?: ViewerMcpObservation };
+export type SeatTickConversation = Pick<RegistryConversation, "id" | "turn"> & {
+  viewerMcp?: ViewerMcpObservation;
+  /** Undefined for other engines; null means this Codex generation has no proven owner. */
+  viewerMcpOwner?: { key: string; identity: string } | null;
+};
+
+/** Fixed-size ownership fields only; never copy the observation into its fence. */
+export function viewerMcpOwnerForEntry(entry: AgentRegistryEntry | undefined): SeatTickConversation["viewerMcpOwner"] {
+  const host = entry?.structuredHost;
+  if (!entry || entry.key.engine !== "codex" || entry.host || !entry.claimOwner
+    || host?.kind !== "codex-app-server" || entry.claimEpoch !== host.writerClaimEpoch) return null;
+  return { key: sessionKeyId(entry.key), identity: JSON.stringify([
+    entry.artifactPath, entry.claimOwner, entry.claimEpoch, host.endpoint, host.process,
+  ]) };
+}
+
+export function seatViewerMcpOwner(conversation: RegistryConversation, entry: AgentRegistryEntry | undefined): SeatTickConversation["viewerMcpOwner"] {
+  if (conversation.engine !== "codex" || entry?.host) return undefined;
+  const generation = conversation.generations.at(-1);
+  if (!generation || entry?.key.sessionId !== generation.id || entry.artifactPath !== generation.path) return null;
+  return viewerMcpOwnerForEntry(entry);
+}
 
 /** The named current native and its writer claim are the authority for this
  * projection. A mismatched observation stays unavailable until re-established. */
@@ -6154,7 +6175,7 @@ export class AgentRegistry {
       const generation = conversation.generations.at(-1);
       const entry = generation ? file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] : undefined;
       const viewerMcp = seatViewerMcpObservation(conversation, entry);
-      return { id: conversation.id, turn: conversation.turn, ...(viewerMcp ? { viewerMcp } : {}) };
+      return { id: conversation.id, turn: conversation.turn, viewerMcpOwner: seatViewerMcpOwner(conversation, entry), ...(viewerMcp ? { viewerMcp } : {}) };
     });
   }
 

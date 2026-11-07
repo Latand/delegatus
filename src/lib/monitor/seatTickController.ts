@@ -1,3 +1,4 @@
+import { structuredDeliveryMcpObservation } from "@/lib/runtime/structuredDeliveryController";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bindResumedSeatTick } from "./resumedSeatTick";
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm } from "./seatTickWatchdog";
@@ -1750,7 +1751,7 @@ async function check(
       const health = dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
         ?? seatMcpHealth(receipt, seat.designatedAt ?? null,
           path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio",
-          sources.registry().seatTickConversation(seat.conversationId)?.viewerMcp);
+          structuredDeliveryMcpObservation(seat.conversationId, sources.registry()));
       return { ...health, ...(receipt?.viewerMcpTransport ? { transport: receipt.viewerMcpTransport } : {}) };
     } catch { return { status: "dead", detail: "MCP liveness could not be read" }; }
   };

@@ -1,4 +1,4 @@
-import { seatViewerMcpObservation, type SeatTickConversation } from "./registry";
+import { seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -4126,7 +4126,7 @@ export class SqliteAgentRegistryStore {
           const entry = key && rawEntry !== undefined ? this.normalizePartial({ version: 2, entries: { [key]: rawEntry }, receipts: {} }).entries[key] : undefined;
           const viewerMcp = conversation ? seatViewerMcpObservation(conversation, entry) : undefined;
           if (ownsTransaction) this.db.exec("COMMIT");
-          return conversation ? { id: conversation.id, turn: conversation.turn, ...(viewerMcp ? { viewerMcp } : {}) } : null;
+          return conversation ? { id: conversation.id, turn: conversation.turn, viewerMcpOwner: seatViewerMcpOwner(conversation, entry), ...(viewerMcp ? { viewerMcp } : {}) } : null;
         }
         if (typeof alias !== "string" || !alias.startsWith("conversation_")) throw new Error("invalid seat alias");
         current = alias;

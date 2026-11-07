@@ -112,3 +112,14 @@ original operation before any resend. This detector never retries an action,
 changes engine approval policy, or grants tool access. Installed read-only tool
 availability requires a separately authorized observation under the intended
 identity.
+
+
+The seat monitor reads the current adapter through its owning delivery controller,
+using the native generation and writer fence from the keyed registry projection.
+This read sees pending engine evidence even when a checkpoint cannot be written.
+A missing or replaced owner, failed read or stale restored observation leaves
+management health unverified and withholds automatic wakes. The existing queue
+rechecks that observation in its synchronous authorization callback immediately
+before sending or injecting a seat tick, including after asynchronous preparation.
+The original key and receipt remain owed; the guard creates no replacement send.
+Operator controls continue through their existing permission checks.

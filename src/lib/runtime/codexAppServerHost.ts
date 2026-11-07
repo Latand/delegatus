@@ -3436,6 +3436,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!this.ledgerFailed && receipt) this.callbackReceipts.set(id, receipt);
   }
 
+  readViewerMcpObservation(): ViewerMcpObservation | undefined {
+    if (this.dead || this.releasing || this.released || this.ledgerFailed || !this.writerFenceAllowsActuation()) {
+      return normalizeViewerMcpObservation(null);
+    }
+    return normalizeViewerMcpObservation(this.viewerMcp);
+  }
+
   async health(): Promise<HostState> {
     if (this.pendingSteers.size && !this.writerFenceAllowsActuation()) this.settleUnverifiedSteers();
     return this.currentState();

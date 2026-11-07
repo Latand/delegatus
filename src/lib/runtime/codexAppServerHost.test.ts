@@ -37,7 +37,7 @@ import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
-import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { structuredDeliveryMcpObservation, bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
 import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
@@ -7916,7 +7916,7 @@ test.each([false, true])("Codex child environments preserve the production evide
 
 test.each(["off", "sqlite"] as const)("Viewer MCP denial reaches claimed persistence, keyed health and tick (%s)", async sqliteMode => {
   const { seatMcpHealth } = await import("../monitor/seatMcpHealth");
-  const { harness, PROJECT, CONVERSATION, NOW, OPEN_LANE, runSeatTickCheck } = mcpTickFixture;
+  const { harness, PROJECT, NOW, OPEN_LANE, runSeatTickCheck } = mcpTickFixture;
   const { flushStructuredHostPersistence } = await import("./registry");
   const threadId = ["00000000", "0000", "4000", "8000", "000000000031"].join("-");
   const server = new FakeAppServer(threadId);
@@ -7934,7 +7934,16 @@ test.each(["off", "sqlite"] as const)("Viewer MCP denial reaches claimed persist
   const filename = path.join(metadataState, "mcp-runtime", "sessions", `${receipt.spawnCapabilityDigest}.json`);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   fs.writeFileSync(filename, JSON.stringify({ checkedAt: new Date(NOW).toISOString(), ready: true, failedCalls: 0 }));
-  const observe = () => registry.seatTickConversation(conversation.id)?.viewerMcp;
+  const journal = new RuntimeJournal(path.join(metadataState, "mcp-journal.sqlite"), { structuredHosts: true });
+  const client = {
+    append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+    producerCursor: async () => 0,
+    snapshot: async () => journal.snapshot(),
+    effectBatch: async () => [],
+  } as unknown as RuntimeHostClient;
+  await bindStructuredDeliveryQueue([{ key, host }], { registry, client,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const observe = () => structuredDeliveryMcpObservation(conversation.id, registry);
   const call = (phase: "started" | "completed", id: string, tool: string, fields: Record<string, unknown> = {}, incomingThread = threadId) => {
     server.notify(`item/${phase}`, { threadId: incomingThread, turnId: "mcp-turn", item: { type: "mcpToolCall", id, server: "viewer", tool, ...fields } });
   };
@@ -7948,15 +7957,11 @@ test.each(["off", "sqlite"] as const)("Viewer MCP denial reaches claimed persist
     expect((await host.health()).status).toBe("idle");
     for (const transport of ["stdio", "http"] as const) {
       expect(seatMcpHealth(receipt, null, metadataState, NOW, transport, observe()).status).toBe("dead");
-      const rig = harness({ pipelines: OPEN_LANE });
-      const prior = rig.deps.sources!.registry;
-      rig.deps.sources!.registry = () => new Proxy(prior(), { get(target, property, receiver) {
-        if (property === "seatTickConversation") return ((id: string) => id === CONVERSATION
-          ? { ...registry.seatTickConversation(conversation.id)!, id: CONVERSATION } : null) satisfies AgentRegistry["seatTickConversation"];
-        if (property === "seatMcpReceipt") return (() => ({ ...receipt, viewerMcpTransport: transport })) satisfies AgentRegistry["seatMcpReceipt"];
-        return Reflect.get(target, property, receiver);
-      } });
+      const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: conversation.id, seatEpoch: 1, path: artifactPath } });
+      const receiptRead = spyOn(registry, "seatMcpReceipt").mockReturnValue({ ...receipt, viewerMcpTransport: transport });
+      rig.deps.sources!.registry = () => registry;
       const result = await runSeatTickCheck(PROJECT, rig.deps);
+      receiptRead.mockRestore();
       expect(result?.delivery?.outcome).toBe("seat-mcp-unavailable");
       expect(rig.sent).toHaveLength(0);
       expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open" && card.detail.includes("engine approval denied: get_task"))).toBe(true);
@@ -7978,9 +7983,29 @@ test.each(["off", "sqlite"] as const)("Viewer MCP denial reaches claimed persist
     await flush(); expect(observe()?.denied).toEqual([]);
     expect(seatMcpHealth(receipt, null, metadataState, NOW, "stdio", observe()).status).toBe("healthy");
     expect(JSON.stringify(observe())).not.toContain("synthetic-private-sentinel");
+    const failedWrite = spyOn(registry, "setStructuredHostClaimed").mockImplementation(() => { throw new Error("synthetic checkpoint unavailable"); });
+    try {
+      deny("failed-checkpoint", "get_task");
+      await expect(flush()).rejects.toThrow("synthetic checkpoint unavailable");
+      expect(registry.seatTickConversation(conversation.id)?.viewerMcp?.denied).toEqual([]);
+      for (const transport of ["stdio", "http"] as const) {
+        expect(seatMcpHealth(receipt, null, metadataState, NOW, transport, observe()).status).toBe("dead");
+        const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: conversation.id, seatEpoch: 1, path: artifactPath } });
+        const receiptRead = spyOn(registry, "seatMcpReceipt").mockReturnValue({ ...receipt, viewerMcpTransport: transport });
+        rig.deps.sources!.registry = () => registry;
+        try {
+          await runSeatTickCheck(PROJECT, rig.deps);
+          expect(rig.sent).toHaveLength(0);
+          expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open"
+            && card.detail.includes("engine approval denied: get_task"))).toBe(true);
+        } finally { receiptRead.mockRestore(); }
+      }
+      call("started", "post-fault-recovery", "get_task"); success("post-fault-recovery", "get_task");
+      expect(observe()?.denied).toEqual([]);
+    } finally { failedWrite.mockRestore(); await flush(); }
     call("completed", "foreign", "get_task", { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } }, "other-thread");
     await flush(); expect(observe()?.denied).toEqual([]);
-  } finally { await stop(); await host.release(); }
+  } finally { await bindStructuredDeliveryQueue([], { client: null }); await stop(); await host.release(); journal.close(); registry.close(); }
 });
 
 test("Viewer MCP denial restoration retains bounds and requires a fresh recovery start", async () => {
@@ -8013,3 +8038,99 @@ test("Viewer MCP denial restoration retains bounds and requires a fresh recovery
     expect((await host.health()).viewerMcp?.unverified).toBe(true);
   } finally { await host.release(); }
 });
+
+test("MCP service controls preserve denial layers and same-key effects", async () => {
+  const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("../mcp/server");
+  let effects = 0, allowed = false;
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as import("../mcp/server").McpToolBindings;
+  bindings.update_task = async () => { effects++; return { updated: true }; };
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore(), {
+    permit: () => allowed ? { allowed: true } : { allowed: false, code: "forbidden", error: "Synthetic project fence" },
+  });
+  const args = { clientRequestId: "same-key-control", taskId: "synthetic-task", text: "Synthetic update" };
+  const denied = await service.callTool("update_task", args);
+  expect(denied).toMatchObject({ ok: false, code: "forbidden", retryable: false });
+  expect(effects).toBe(0);
+  allowed = true;
+  const success = await service.callTool("update_task", args);
+  const replay = await service.callTool("update_task", args);
+  expect(success.ok).toBe(true); expect(replay.replayed).toBe(true); expect(effects).toBe(1);
+  const threadId = "service-control", server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const send = (phase: string, id: string, fields: Record<string, unknown>) => server.notify(`item/${phase}`, {
+    threadId, turnId: "control-turn", item: { type: "mcpToolCall", server: "viewer", tool: "update_task", id, ...fields },
+  });
+  try {
+    send("completed", "engine-denied", { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+    for (const [i, result] of [denied, success, replay].entries()) {
+      send("started", `control-${i}`, {});
+      send("completed", `control-${i}`, { status: "completed", result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } });
+      expect((await host.health()).viewerMcp?.denied.length).toBe(i === 0 ? 1 : 0);
+    }
+    expect(effects).toBe(1);
+  } finally { await host.release(); }
+});
+
+
+test("a fresh process retains MCP denial and rejects the predecessor recovery start", async () => {
+  const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
+  const directory = path.join(metadataState, "mcp-process-events");
+  const first = spawn(process.execPath, [fixture, "mcp-produce", directory, path.join(metadataState, "unused.jsonl")],
+    { cwd: process.cwd(), env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  let firstOutput = "", firstErrors = "";
+  first.stderr!.on("data", data => { firstErrors += String(data); });
+  const closed = new Promise<void>(resolve => first.once("close", () => resolve()));
+  try {
+    const ready = await new Promise<{ observation: unknown }>((resolve, reject) => {
+      first.once("error", reject);
+      first.once("close", () => reject(new Error(firstErrors || "MCP producer exited before readiness")));
+      first.stdout!.on("data", data => {
+        firstOutput += String(data);
+        if (firstOutput.includes("\n")) resolve(JSON.parse(firstOutput.split("\n")[0]!));
+      });
+    });
+    expect(ready.observation).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: false });
+    first.kill("SIGKILL");
+    await closed;
+    const resumed = Bun.spawn([process.execPath, fixture, "mcp-resume", directory, path.join(metadataState, "unused.jsonl")],
+      { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [output, errors, exit] = await Promise.all([new Response(resumed.stdout).text(), new Response(resumed.stderr).text(), resumed.exited]);
+    expect({ exit, errors }).toMatchObject({ exit: 0 });
+    expect(JSON.parse(output).observation).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: false });
+  } finally {
+    if (first.exitCode === null && first.signalCode === null) first.kill("SIGKILL");
+    await closed;
+  }
+}, 30_000);
+
+
+for (const scenario of ["tool-128", "tool-129", "denials-33", "starts-33", "large-result"] as const)
+  test(`Viewer MCP observation stays bounded for ${scenario}`, async () => {
+    const threadId = "mcp-bounds", server = new FakeAppServer(threadId);
+    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    const notify = (phase: string, id: string, tool: string, fields: Record<string, unknown>) => server.notify(`item/${phase}`, {
+      threadId, turnId: "bounds-turn", item: { type: "mcpToolCall", server: "viewer", id, tool, ...fields },
+    });
+    const denied = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+    try {
+      if (scenario.startsWith("tool-")) notify("completed", "denied", "x".repeat(scenario === "tool-128" ? 128 : 129), denied);
+      else {
+        notify("completed", "denied", "get_task", denied);
+        if (scenario === "denials-33") for (let index = 1; index <= 32; index++) notify("completed", `denied-${index}`, `tool_${index}`, denied);
+        if (scenario === "starts-33") for (let index = 0; index < 33; index++) notify("started", `start-${index}`, "get_task", {});
+        if (scenario === "large-result") {
+          notify("started", "large", "get_pipeline", {});
+          notify("completed", "large", "get_pipeline", { status: "completed", result: {
+            structuredContent: { ok: true }, content: [{ type: "text", text: "界".repeat(100_000) }],
+          } });
+        }
+      }
+      const observation = host.readViewerMcpObservation()!;
+      expect(observation.unverified).toBe(["tool-129", "denials-33", "starts-33"].includes(scenario));
+      expect(observation.denied.length).toBeLessThanOrEqual(32);
+      expect(JSON.stringify(observation).length).toBeLessThan(6000);
+      expect(JSON.stringify(observation)).not.toContain("界");
+      observation.denied.length = 0;
+      if (scenario !== "tool-129") expect(host.readViewerMcpObservation()!.denied.length).toBeGreaterThan(0);
+    } finally { await host.release(); }
+  });

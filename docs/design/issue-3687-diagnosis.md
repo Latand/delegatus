@@ -8,7 +8,7 @@ Originating public requirement: [issue #3687](https://github.com/Latand/delegatu
 
 The current source has a reproduced detection gap. A recorded engine approval refusal reaches the real Codex adapter and its event store, while the seat health reader still reports a fresh stdio launcher as healthy. The real tick consumer then resolves its MCP incident and admits a wake. HTTP seats have no equivalent launcher observation. This justifies carrying a small, generation-bound engine observation into the existing health decision.
 
-The cause of the engine requiring approval is **unresolved**. The evidence does not justify changing approval policy, sandbox access, credentials, capabilities, automatic recovery policy, or tool permissions. This is a diagnosis and implementation brief, with an intentionally failing requirement probe. No product repair, installation acceptance, deployment, or task completion is claimed.
+The cause of the engine requiring approval is **unresolved**. The evidence does not justify changing approval policy, sandbox access, credentials, capabilities, automatic recovery policy, or tool permissions. The initial diagnosis and baseline probes below establish the implementation boundary. The authorized source continuation is documented at the end; independent review, installation acceptance and task completion remain outstanding.
 
 ## Primary records and source
 
@@ -131,12 +131,12 @@ The historical engine configuration cause and installed behavior remain separate
 
 Approval-policy changes, automatic seat rotation, forced release/restart, credential or capability changes, speculative fixes for deployment rollback, broader Claude recovery, a transcript-scanning monitor, new telemetry infrastructure, full registry scans, arbitrary server-refusal escalation, additional retry clocks, original-operation replay and production acceptance are deferred. The missing historical configuration and heartbeat evidence remain explicit. An ADR is unnecessary for this additive observation in the existing checkpoint path.
 
-## Final verification
+## Diagnostic-stage verification (historical)
 
 At 21:07 UTC on 6 November, main remained `423bf964`; a later issue/main recheck confirmed the same revision, issue timestamp and zero comments. The assigned worktree had no changes before this document was written. Three isolated observation/control probes exited 0; the requirement probe deliberately exited 1 with `healthy` versus expected `dead`. No product-source check is represented as a fixed-head pass. The first document scan lacked the required fingerprint configuration and exited 1 with `configuration_error`; supplying the repository's committed fingerprint catalog produced PASS, exit 0. The final scan is repeated after this edit, with its log and actual exit retained in stage evidence. No bypass was used.
 
 
-## Builder follow-up: checkpoint failure remains an acceptance blocker
+## Builder checkpoint: reproduced write-failure gap (historical)
 
 The scoped implementation now carries a bounded engine observation through
 Codex host state, claimed checkpoints, the keyed JSON/SQLite seat projection and
@@ -168,3 +168,82 @@ consumer surface extends beyond this document's checkpoint-only file fence.
 Keep this implementation as an unpublished draft until that boundary is settled
 and the fault probe passes. No source completion or installed acceptance is
 claimed. The three review rounds and original uncertain operations remain due.
+
+
+## Authorized continuation: live owner read and final wake admission
+
+The continuation authorizes the minimum owner read and delivery guard needed
+for the reproduced checkpoint failure. The process inventory establishes that
+`bindStructuredDeliveryQueue` in the Viewer holds the actual Codex adapter.
+The separate runtime-host `session-read` method serves a journal projection.
+A synchronous keyed read from the existing delivery controller therefore reaches
+the live producer without adding a socket request, runtime-host handler or journal
+copy. Permission and approval configuration remain unchanged.
+
+| Boundary | Producer, copy and consumer |
+| --- | --- |
+| `engineHost.ts`, `codexAppServerHost.ts` | Optional synchronous adapter observation reads bounded owner memory; retired, unreadable or fenced adapters return unverified evidence. Other engines retain their existing behavior. |
+| `agent/registry.ts`, `agent/sqliteRegistryStore.ts` | The existing keyed seat projection supplies the current native key and a fence over artifact, writer, epoch, endpoint and process identity. JSON and SQLite use the same builder. A live legacy pane retains transport-only behavior. No new schema is introduced. |
+| `structuredDeliveryController.ts` | Registration captures the owner fence and carries it through controller succession. A read checks the named registration, current registry and generation before and after accessing adapter memory. Missing ownership, a read error or evidence older than a retained checkpoint is unverified. No checkpoint failure can authorize fallback to an old healthy row. |
+| `structuredDeliveryQueue.ts` | The existing synchronous authorization callback receives durable message origin for individual sends, coalesced inbox members and context injection. Only automatic `seat-tick` messages acquire the additional health guard. A refusal retains the original operation in the existing queue. Operator controls retain their existing authorization path. |
+| `monitor/seatTickController.ts` | The existing incident and wake guard read the owner observation. Host reachability and ordinary dead-host recovery remain separate. |
+| Existing tests, `fixtures/codexCallbackProcess.ts` and the board browser driver | Adapter tests inject the real checkpoint failure for JSON and SQLite; controller tests exercise ownership, succession and final-write refusal; the board driver renders the persisted incident in both locales and themes. |
+
+The fresh primary issue still has zero comments and its requirement timestamp is
+5 November 2026 at 12:33:18 UTC. Current main was reread as `9e445fa305` before
+editing; its changes do not overlap this continuation's product hunks. Adjacent
+nested-read work at `24eea15541` changes `SqliteAgentRegistryStore.read()`, while
+this lane retains transaction ownership in `seatTickConversation()`. The native
+queue work changes event-proof restoration and settlement, and the retained
+sender-notice work changes delivery progress. Their actual hunks were read;
+this continuation leaves those mechanisms intact. No branches were merged,
+rewritten or pushed.
+
+The baseline checkpoint probe still returns `healthy` instead of `dead` for both
+storage backends. The continuation's actual adapter/owner/tick path detects that
+same pending denial while the persisted row remains healthy. Controller tests
+also replace the owner, epoch, endpoint and artifact, carry a registration through
+succession, refuse unreadable state, and inject denial after a send enters its
+host callback. The operation keeps its key, then delivers once after an eligible
+same-tool recovery. An ordinary operator control remains permitted.
+
+All checks use isolated exports and one explicit test file per owned wrapper
+command, with separate logs and actual exits. Evidence is retained under
+`$LLV_EVIDENCE_DIR/continuation/`. The existing three independent review rounds
+remain required. Historical configuration cause, original unknown operations
+and installed acceptance remain open; source verification does not finish the
+task or authorize a live canary.
+
+
+### Source verification and review handoff
+
+The final adapter file passes 318 tests, including the real service refusal and
+same-key control, an owned process restart, the JSON/SQLite checkpoint fault and
+independent 32/33-entry and 128/129-character bounds. Persistence passes 92 tests,
+registry 147, SQLite 69, health 6, delivery controller 16, send queue 178,
+context queue 25 and injection queue 15. Approval rotation and lineage pass all
+10 selected cases. Each file has its own wrapper run and
+actual exit. No standalone typecheck, full repository suite or production build
+was run by this stage.
+
+The complete delivery file has 64 passes and one failure; the complete policy
+file has 87 passes and five failures; rotation authority has 17 passes and two
+failures. All eight failures reproduce in fresh complete-file baseline runs.
+The policy and rotation failures have the same diagnostics; the delivery failure
+has the same diagnostic after replacing its generated fixture operation ID.
+These inherited failures remain visible. The baseline checkpoint fault has two
+expected failures (`healthy` instead of `dead`). Disabling the final synchronous
+health guard in a separate scratch export causes both wake regressions to fail
+with one write where zero is required; the unchanged candidate passes both.
+
+Rendered coverage uses the existing kanban driver at 1280 × 700 and 390 × 844,
+English and Ukrainian interfaces, both themes, and actual touch input on the
+phone. The persisted incident uses the existing English diagnostic body in both
+interface languages. The board preview retains its existing truncation; opening
+the description exposes the full denial and recovery guidance. This is fixture
+rendering evidence, with no installed or live-seat acceptance claim.
+
+The source candidate is ready for the lane's three independent review rounds.
+Publication hooks and installation verification remain subsequent boundaries;
+no push, live message, provider request, seat rotation or original-operation replay
+was performed. No performance improvement is claimed.
