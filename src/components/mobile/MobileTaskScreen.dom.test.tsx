@@ -726,7 +726,7 @@ test("an accepted creation joins its task without replacing the existing lanes o
   const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
   const { buildPipeline } = await import("@/lib/pipelines/store");
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json({ error: "temporarily unavailable" }, { status: 503 })) as typeof fetch;
+  globalThis.fetch = Object.assign(async () => Response.json({ error: "temporarily unavailable" }, { status: 503 }), { preconnect: () => {} });
   setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
     approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
   } });

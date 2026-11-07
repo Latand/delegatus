@@ -77,8 +77,9 @@ async function workspaceGET(
       const read = await readPipelineCreationReceipt(id);
       pipeline = getPipeline(id);
       if (!pipeline) {
-        if (read.kind === "unavailable") return NextResponse.json({ error: "creation status unavailable" }, { status: 503 });
-        if (read.kind === "missing") return NextResponse.json({ error: "pipeline not found" }, { status: 404 });
+        if (read.kind !== "found") return read.kind === "unavailable"
+          ? NextResponse.json({ error: "creation status unavailable" }, { status: 503 })
+          : NextResponse.json({ error: "pipeline not found" }, { status: 404 });
         assertWorkspaceReadProject(req, read.receipt.project);
         return NextResponse.json({ error: read.receipt.state === "queued" ? "creation queued" : "creation refused",
           code: read.receipt.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused",

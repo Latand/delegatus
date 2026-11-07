@@ -524,7 +524,7 @@ test("a fork whose remote is a bare URL names the fork once, and a named remote 
 
 
 test.each(["accepted", "revoked"] as const)("a %s result never opens an editable builder", async state => {
-  globalThis.fetch = (async () => Response.json({ ok: true, repoDir: "/canonical/repo" })) as typeof fetch;
+  globalThis.fetch = Object.assign(async () => Response.json({ ok: true, repoDir: "/canonical/repo" }), { preconnect: () => {} });
   let opened = 0, closed = 0;
   const host = mount(<PipelineTemplatePicker repoDir="/fixture/repo"
     onCreate={async () => ({ pipeline, accepted: true, current: () => state !== "revoked" })}

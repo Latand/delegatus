@@ -217,7 +217,6 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
   const { POST } = await import("@/app/api/pipelines/route");
   const { GET } = await import("@/app/api/pipelines/[id]/route");
   const { GET: taskListGET } = await import("@/app/api/tasks/route");
-  const { GET: taskGET } = await import("@/app/api/tasks/[id]/route");
   const { withPipelineMutation, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
   const { saveTasks } = await import("@/lib/tasks/store");
   const { admitQueuedPipelineCreations, pipelineCreationQueueDir } = await import("@/lib/pipelines/creationQueue");
@@ -281,7 +280,6 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
     const responses: Record<string, unknown> = {
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
       "/api/tasks": (request: Request) => taskListGET(new NextRequest(request)),
-      "/api/tasks/accepted-control-task": (request: Request) => taskGET(new NextRequest(request), { params: Promise.resolve({ id: controlTask.id }) }),
       "/fixture/config": () => Response.json({ task: creationTitle, repoDir: repo, src: source, autoStart: false,
         ...(retainLink ? { savedLink: { attachLink: "sample/project#7", kind: "issue" } } : {}),
         ...(phone && !retainLink ? { taskIds: [controlTask.id] } : {}),

@@ -203,7 +203,10 @@ export function memoryFilesSnapshotStore(initial: FilesSnapshotRecord | null = n
   let record = initial;
   return {
     current: () => record,
-    read: async () => (usableSnapshot(record, Date.now()) || usableCreationLocators(record?.creations) ? record : null),
+    read: async () => {
+      const creations = record?.creations;
+      return usableSnapshot(record, Date.now()) || usableCreationLocators(creations) ? record : null;
+    },
     write: async (next, current = () => true) => {
       if (!current()) throw new Error("snapshot owner changed");
       if (next.text.length > FILES_SNAPSHOT_MAX_BYTES) throw new Error("snapshot is too large");

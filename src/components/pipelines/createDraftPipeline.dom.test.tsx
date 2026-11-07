@@ -170,7 +170,7 @@ test.each([false, true])("dispatch rechecks the completed reservation (revoked=%
     return reservation;
   });
   let posts = 0;
-  globalThis.fetch = (async () => { posts++; return Response.json({ pipeline: { id: "fresh-create" } }, { status: 201 }); }) as typeof fetch;
+  globalThis.fetch = Object.assign(async () => { posts++; return Response.json({ pipeline: { id: "fresh-create" } }, { status: 201 }); }, { preconnect: () => {} });
   try {
     const result = await createDraftPipeline("demo", "/repo");
     expect(posts).toBe(revoked ? 0 : 1);
@@ -183,7 +183,7 @@ test("eight concurrent intents reserve capacity before POST and the ninth never 
   let posts = 0;
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  globalThis.fetch = (async () => { posts++; await held; return Response.json({ error: "refused" }, { status: 400 }); }) as typeof fetch;
+  globalThis.fetch = Object.assign(async () => { posts++; await held; return Response.json({ error: "refused" }, { status: 400 }); }, { preconnect: () => {} });
   const pending = Array.from({ length: 9 }, () => createDraftPipeline("demo", "/repo"));
   await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
   expect(posts).toBe(8);
