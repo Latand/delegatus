@@ -5,6 +5,7 @@ import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { yieldToRuntime } from "@/lib/cooperative";
 
 import { accountManager } from "@/lib/accounts/manager";
 import { successorRefusal } from "@/lib/links/adoptionGuard";
@@ -36,7 +37,7 @@ import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySource
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
 import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
-import { forkClaudeHistoryAsync, hashValidatedHistoryAsync, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistoryAsync, validateHistorySource } from "./safeHistoryCopy";
+import { forkClaudeHistoryAsync, hashValidatedHistoryAsync, HistorySecurityError, MissingSourceAncestorError, MigrationTargetUnavailableError, safeCopyHistoryAsync, validateHistorySource } from "./safeHistoryCopy";
 import { validateMigrationTargetRoot } from "./targetRoot";
 
 interface StructuredHostPublicationInput {
@@ -45,13 +46,14 @@ interface StructuredHostPublicationInput {
   profile: LaunchProfile;
   registry: AgentRegistry;
   ownsOperation?: () => Promise<boolean>;
+  assertCurrent?: () => void;
   /** The migrated conversation, whose capability the successor is launched with. */
   conversationId?: string;
 }
 
 export interface ProviderDependencies {
   accounts: Pick<AccountManager, "resolveSpawn" | "resolveTranscriptOwner">;
-  startCodex(home: string): Promise<CodexAppServerClient>;
+  startCodex(home: string, assertCurrent?: () => void): Promise<CodexAppServerClient>;
   claudeStatus(home: string): Promise<{ loggedIn: boolean; indeterminate?: boolean }>;
   /** Liveness and cancellation of a legacy tmux-launched successor. A receipt
       persisted before viewer-written forks still names such a pane. */
@@ -78,6 +80,13 @@ export class SuccessorPendingError extends Error {
   }
 }
 
+export class SourceOwnershipChangedError extends Error {
+  constructor() {
+    super("source generation or operation ownership changed");
+    this.name = "SourceOwnershipChangedError";
+  }
+}
+
 export class CodexForkOutcomeUnknownError extends Error {
   constructor(message = "Codex provider fork outcome is unknown") {
     super(message);
@@ -87,7 +96,7 @@ export class CodexForkOutcomeUnknownError extends Error {
 
 const defaultDependencies: ProviderDependencies = {
   accounts: accountManager,
-  startCodex: (home) => CodexAppServerClient.start({ home, protocolProfile: "thread-control" }),
+  startCodex: (home, assertCurrent) => CodexAppServerClient.start({ home, protocolProfile: "thread-control", assertCurrent }),
   claudeStatus: (home) => realClaudeLoginPorts.status(home),
   verifyClaudeHost: (host) => verifyTmuxHostEvidence(host),
   cancelClaude: (host) => cleanupTmuxHostIfMatches(host),
@@ -142,21 +151,90 @@ function findCodexRollout(root: string, nativeId: string): string {
 }
 
 async function findCodexLineageRollout(root: string, nativeId: string): Promise<string> {
+  let canonicalRoot: string;
+  try { canonicalRoot = fs.realpathSync(root); }
+  catch { throw new HistorySecurityError("unsafe-source"); }
   const pending = [{ dir: root, depth: 0 }];
   let visited = 0;
+  let incomplete = false;
   while (pending.length) {
     const current = pending.pop()!;
-    if (current.depth > 6) continue;
-    const directory = await fs.promises.opendir(current.dir);
-    for await (const entry of directory) {
-      if (++visited > CODEX_FORK_SCAN_LIMIT) throw new HistorySecurityError("history-too-large");
-      const candidate = path.join(current.dir, entry.name);
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) pending.push({ dir: candidate, depth: current.depth + 1 });
-      else if (entry.isFile() && entry.name.endsWith(`${nativeId}.jsonl`)) return candidate;
+    if (current.depth > 6) { incomplete = true; continue; }
+    let directory: fs.Dir;
+    try {
+      if (fs.realpathSync(current.dir) !== path.join(canonicalRoot, path.relative(root, current.dir))) throw new HistorySecurityError("unsafe-source");
+      directory = await fs.promises.opendir(current.dir);
+    }
+    catch { throw new HistorySecurityError("unsafe-source"); }
+    try {
+      for await (const entry of directory) {
+        if (++visited > CODEX_FORK_SCAN_LIMIT) throw new HistorySecurityError("history-too-large");
+        const candidate = path.join(current.dir, entry.name);
+        if (entry.isSymbolicLink()) { incomplete = true; continue; }
+        if (entry.isDirectory()) pending.push({ dir: candidate, depth: current.depth + 1 });
+        else if (entry.isFile() && entry.name.endsWith(`${nativeId}.jsonl`)) return candidate;
+      }
+    } catch (error) {
+      if (error instanceof HistorySecurityError) throw error;
+      throw new HistorySecurityError("unsafe-source");
     }
   }
-  throw new HistorySecurityError("unsafe-source");
+  if (incomplete) throw new HistorySecurityError("unsafe-source");
+  throw new MissingSourceAncestorError(nativeId);
+}
+
+/** Read-only admission. Copying still validates the bytes it actually stages. */
+export async function preflightCodexSource(
+  source: Pick<import("./contracts").NativeGeneration, "id" | "path" | "accountId">,
+  accounts: Pick<AccountManager, "resolveTranscriptOwner"> = accountManager,
+  assertCurrent: () => void = () => {},
+): Promise<void> {
+  const owner = accounts.resolveTranscriptOwner("codex", source.path);
+  if (!owner || owner.engine !== "codex" || owner.accountId !== source.accountId) throw new HistorySecurityError("unsafe-source");
+  const assertOwner = () => {
+    assertCurrent();
+    const current = accounts.resolveTranscriptOwner("codex", source.path);
+    if (!current || current.engine !== owner.engine || current.accountId !== owner.accountId
+      || current.home !== owner.home || current.transcriptRoot !== owner.transcriptRoot) throw new HistorySecurityError("unsafe-source");
+  };
+  const visited = new Set<string>();
+  let ancestor: { id: string; path: string } | null = source;
+  try {
+    while (ancestor) {
+      assertOwner();
+      if (visited.has(ancestor.id) || visited.size >= 128) throw new HistorySecurityError("unsafe-source");
+      visited.add(ancestor.id);
+      validateHistorySource(ancestor.path, owner.transcriptRoot);
+      const metadata = readCodexSessionMeta(ancestor.path);
+      if (metadata?.id !== ancestor.id) throw new HistorySecurityError("unsafe-source");
+      await yieldToRuntime();
+      assertOwner();
+      if (!metadata.forkedFromId) return;
+      const pathname = await findCodexLineageRollout(owner.transcriptRoot, metadata.forkedFromId);
+      assertOwner();
+      ancestor = { id: metadata.forkedFromId, path: pathname };
+    }
+  } finally { assertOwner(); }
+}
+
+/** Pin only the source generation and host custody; progress counters may move. */
+export function captureCodexSourceAuthority(
+  registry: AgentRegistry,
+  conversationId: ViewerConversationId,
+  source: Pick<import("./contracts").NativeGeneration, "id" | "path" | "accountId">,
+): () => void {
+  const read = () => {
+    const snapshot = registry.conversationDeliverySnapshot({ conversationId });
+    const current = snapshot.conversations[conversationId]?.generations.at(-1);
+    const entry = snapshot.entries[sessionKeyId({ engine: "codex", sessionId: source.id })];
+    if (!current || current.id !== source.id || current.path !== source.path || current.accountId !== source.accountId) return null;
+    return JSON.stringify([entry?.artifactPath, entry?.accountId, entry?.claimOwner, entry?.claimEpoch,
+      entry?.host, entry?.structuredHost?.writerClaimEpoch, entry?.structuredHost?.endpoint, entry?.structuredHost?.process]);
+  };
+  const captured = read();
+  return () => {
+    if (captured === null || read() !== captured) throw new SourceOwnershipChangedError();
+  };
 }
 
 interface CodexSessionMeta {
@@ -287,6 +365,7 @@ function assertProviderLockOwned(filename: string, token: string): void {
 export async function successorCapability(input: StructuredHostPublicationInput, engine: "claude" | "codex"): Promise<{ capability: string | null; restore: () => Promise<void> }> {
   const minted = input.conversationId
     ? await input.registry.deliveryWriteOrBusy({ label: "registry.successor-capability", operationId: input.receipt.operationId }, () => {
+      input.assertCurrent?.();
       const refused = successorRefusal(input, engine, input.registry.readOnlySnapshot());
       if (refused) throw new Error(refused.error);
       return input.registry.stageSpawnCapabilityForConversation(input.conversationId!, input.receipt.operationId);
@@ -325,6 +404,7 @@ function successorTelegramGrantCheck(input: StructuredHostPublicationInput): (()
 
 async function publishCodexSuccessorHost(input: StructuredHostPublicationInput): Promise<() => Promise<void>> {
   if (input.ownsOperation && !await input.ownsOperation()) return async () => {};
+  input.assertCurrent?.();
   if (!structuredHostsEnabled()) return async () => {};
   const key = sessionKey("codex", input.receipt.nativeId);
   if (!key) throw new Error("successor Codex thread identity is invalid");
@@ -339,6 +419,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
      work that cannot be contained is refused here, before anything starts. */
   const memoryCell = structuredHostCell(input.registry, "codex", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
   const entry = await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, () => {
+    input.assertCurrent?.();
     const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
     if (refused) throw new Error(refused.error);
     const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
@@ -361,6 +442,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   });
   if (!entry.structuredHost) {
     await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, () => {
+      input.assertCurrent?.();
       const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
       if (refused) throw new Error(refused.error);
       if (!input.registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost) {
@@ -380,6 +462,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   }
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
   const claimed = await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, () => {
+    input.assertCurrent?.();
     const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
     if (refused) throw new Error(refused.error);
     return input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
@@ -417,6 +500,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, nativeMemoryEnabled });
     if (input.ownsOperation && !await input.ownsOperation()
       || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
+    input.assertCurrent?.();
     host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       codexHome: input.target.home,
@@ -434,6 +518,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       env: access.env,
       ...(memoryCell ? { memoryCell } : {}),
     });
+    input.assertCurrent?.();
     stopPersistence = await bindCodexHostPersistence(
       input.registry,
       key,
@@ -441,6 +526,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       claimed.claimOwner,
       claimed.claimEpoch,
     );
+    input.assertCurrent?.();
     unregister = await publishStructuredDeliveryHost({ key, host }, input.ownsOperation);
   } catch (error) {
     if (!host && error instanceof StructuredHostAdoptionCleanupError
@@ -733,6 +819,8 @@ function readCodexSessionMeta(pathname: string): CodexSessionMeta | null {
         if (record.type !== "session_meta" || !record.payload || typeof record.payload !== "object" || Array.isArray(record.payload)) continue;
         const payload = record.payload as { id?: unknown; forked_from_id?: unknown };
         if (typeof payload.id !== "string" || !payload.id) return null;
+        if (payload.forked_from_id !== undefined && payload.forked_from_id !== null
+          && (typeof payload.forked_from_id !== "string" || !payload.forked_from_id)) return null;
         return {
           id: payload.id,
           forkedFromId: typeof payload.forked_from_id === "string" && payload.forked_from_id ? payload.forked_from_id : null,
@@ -1484,15 +1572,32 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
   async create(input: Parameters<SuccessorProviderPort["create"]>[0]): Promise<ProviderReceipt> {
     const target = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
     const source = assertRegisteredRoots(this.dependencies.accounts.resolveTranscriptOwner(input.engine, input.source.path), target, input.source.path);
+    const assertCurrent = () => {
+      input.assertCurrent?.();
+      const currentSource = this.dependencies.accounts.resolveTranscriptOwner(input.engine, input.source.path);
+      const currentTarget = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
+      if (!currentSource || currentSource.accountId !== source.accountId || currentSource.home !== source.home
+        || currentSource.transcriptRoot !== source.transcriptRoot || currentTarget.accountId !== target.accountId
+        || currentTarget.home !== target.home || currentTarget.transcriptRoot !== target.transcriptRoot) {
+        throw new HistorySecurityError("unsafe-source");
+      }
+    };
+    if (input.engine === "codex") {
+      await preflightCodexSource(input.source, this.dependencies.accounts, assertCurrent);
+      assertCurrent();
+    }
     await validateMigrationTargetRoot(target, true);
+    if (input.engine === "codex") assertCurrent();
     return input.engine === "codex"
-      ? this.createCodex(input.operationId, input.conversationId, input.source.id, input.source.path, input.source.launchProfile, source, target, input.recordContinuityPath)
+      ? this.createCodex(input.operationId, input.conversationId, input.source.id, input.source.path, input.source.launchProfile, source, target, input.recordContinuityPath, assertCurrent)
       : this.createClaude(input.operationId, input.conversationId, input.source.path, input.source.launchProfile, source, target, input.recordContinuityPath);
   }
 
-  async verify(receipt: ProviderReceipt, input: { engine: "claude" | "codex"; targetAccountId: string; launchProfile: LaunchProfile }): Promise<void> {
+  async verify(receipt: ProviderReceipt, input: Parameters<SuccessorProviderPort["verify"]>[1]): Promise<void> {
+    input.assertCurrent?.();
     const target = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
     await validateMigrationTargetRoot(target, true);
+    input.assertCurrent?.();
     if (input.engine === "claude") {
       const status = await this.dependencies.claudeStatus(target.home);
       if (status.indeterminate) throw new SuccessorPendingError("target account authentication check is still pending");
@@ -1510,13 +1615,16 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       }
       return;
     }
-    const client = await this.dependencies.startCodex(target.home);
+    const client = await this.dependencies.startCodex(target.home, input.assertCurrent);
     try {
+      input.assertCurrent?.();
       const account = await client.readAccount();
+      input.assertCurrent?.();
       // Authenticated ChatGPT responses carry requiresOpenaiAuth=true because
       // the field describes the active provider's credential requirement.
       if (!account.account) throw new MigrationTargetUnavailableError("not-authenticated", "target Codex account is not authenticated");
       const thread = await client.readThread(receipt.nativeId);
+      input.assertCurrent?.();
       if (thread.id !== receipt.nativeId) throw new Error("target Codex thread identity does not match");
     } finally { client.close(); }
   }
@@ -1526,6 +1634,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     input: Parameters<NonNullable<SuccessorProviderPort["publishHost"]>>[1],
   ): Promise<void> {
     if (input.ownsOperation && !await input.ownsOperation()) return;
+    input.assertCurrent?.();
     const injectedPublisher = input.engine === "codex"
       ? this.dependencies.publishCodexHost
       : this.dependencies.publishClaudeHost;
@@ -1573,6 +1682,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         profile,
         registry,
         ownsOperation: input.ownsOperation,
+        assertCurrent: input.assertCurrent,
         conversationId: input.conversationId,
       };
       let cleanup: () => Promise<void>;
@@ -1590,6 +1700,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         await cleanup();
         return;
       }
+      input.assertCurrent?.();
       this.publishedHosts.set(receipt.operationId, {
         nativeId: receipt.nativeId,
         path: receipt.path,
@@ -1710,6 +1821,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     source: AccountContext,
     target: AccountContext,
     recordContinuityPath: (pathname: string) => void | Promise<void>,
+    assertCurrent: () => void,
   ): Promise<ProviderReceipt> {
     const journalRoot = this.dependencies.journalRoot ?? statePath("migration-provider-operations");
     return withCodexOperationLease(journalRoot, `move:${sourceNativeId}`, (assertLeaseOwned) => this.createCodexLocked(
@@ -1722,7 +1834,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       target,
       recordContinuityPath,
       journalRoot,
-      assertLeaseOwned,
+      () => { assertCurrent(); assertLeaseOwned(); },
     ));
   }
 
@@ -1738,6 +1850,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     journalRoot: string,
     assertLeaseOwned: () => void,
   ): Promise<ProviderReceipt> {
+    assertLeaseOwned();
     const prepared = prepareCodexOperationJournal(
       journalRoot,
       operationId,
@@ -1798,10 +1911,13 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     }
     if (!fork && !refork && !prepared.fresh && journal.forkRequestedAtMs !== null) throw new CodexForkOutcomeUnknownError();
     if (!fork) {
-      const sourceClient = await this.dependencies.startCodex(source.home);
+      assertLeaseOwned();
+      const sourceClient = await this.dependencies.startCodex(source.home, assertLeaseOwned);
       let created: Awaited<ReturnType<CodexAppServerClient["forkThread"]>>;
       try {
+        assertLeaseOwned();
         const account = await sourceClient.readAccount();
+        assertLeaseOwned();
         if (!account.account) throw new Error("source Codex account is not authenticated");
         journal.forkRequestedAtMs = Date.now();
         journal.forkRecoveryFloorMs ??= journal.forkRequestedAtMs;
@@ -1842,8 +1958,13 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         catch { return []; }
       });
     const sourceFork = adopted.path;
+    assertLeaseOwned();
     await recordContinuityPath(sourceFork);
-    for (const superseded of supersededForks) await recordContinuityPath(superseded.path);
+    assertLeaseOwned();
+    for (const superseded of supersededForks) {
+      await recordContinuityPath(superseded.path);
+      assertLeaseOwned();
+    }
     /* Every paginated ancestor must exist in the target account. A second
        account migration has a parent that is itself a fork; copying only
        that parent leaves its earlier turns unreadable. Read each next link
@@ -1862,11 +1983,14 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         destinationRelative: path.relative(source.transcriptRoot, ancestor.path),
         operationId: codexLineageCopyOperationId(journal.sourceRoot, journal.targetRoot, ancestor.id),
         replaceOwnedDestination: true,
+        assertCurrent: assertLeaseOwned,
       });
       const metadata = readCodexSessionMeta(staged.path);
+      assertLeaseOwned();
       if (metadata?.id !== ancestor.id) throw new HistorySecurityError("unsafe-source");
       stagedLineage.push(staged.path);
       await recordContinuityPath(staged.path);
+      assertLeaseOwned();
       ancestor = metadata.forkedFromId ? {
         id: metadata.forkedFromId,
         path: await findCodexLineageRollout(source.transcriptRoot, metadata.forkedFromId),
@@ -1882,10 +2006,14 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       operationId,
       priorOperationIds,
       afterDestinationPublished: this.dependencies.afterCodexCopyPublished,
+      assertCurrent: assertLeaseOwned,
     });
+    assertLeaseOwned();
     await recordContinuityPath(copied.path);
-    const targetClient = await this.dependencies.startCodex(target.home);
+    assertLeaseOwned();
+    const targetClient = await this.dependencies.startCodex(target.home, assertLeaseOwned);
     try {
+      assertLeaseOwned();
       const account = await targetClient.readAccount();
       if (!account.account) throw new MigrationTargetUnavailableError("not-authenticated", "target Codex account is not authenticated");
       assertLeaseOwned();
@@ -1901,11 +2029,16 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         ...(profile.serviceTier ? { serviceTier: profile.serviceTier } : {}),
         approvalPolicy,
         sandbox: launchProfileCodexSandbox(profile),
+        assertCurrent: assertLeaseOwned,
       });
+      assertLeaseOwned();
       if (resumed.id !== fork.id) throw new Error("target Codex resume returned another thread");
       if (profile.title) await targetClient.setThreadName(fork.id, profile.title);
+      assertLeaseOwned();
       if (profile.goal?.objective) await targetClient.setThreadGoal(fork.id, profile.goal.objective, profile.goal.status);
+      assertLeaseOwned();
       const verified = await targetClient.readThread(fork.id);
+      assertLeaseOwned();
       if (verified.id !== fork.id) throw new Error("target Codex history verification failed");
     } finally { targetClient.close(); }
     return {

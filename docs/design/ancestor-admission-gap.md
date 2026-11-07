@@ -114,3 +114,32 @@ No component or layout change is planned. If diagnostic presentation requires a 
 Final document checks: the project privacy-publication gate with required known-value fingerprints passed (exit 0); whitespace check emitted no diagnostics. Final issue/comment and main reads remained unchanged. Worktree status contains only this declared document. No source, index, branch, commit, forge, board or production mutation was performed.
 
 The requirement is served by early, attributable refusal plus preservation of the verified successful path. This stage changes only this design document; source implementation and its acceptance remain owed.
+
+
+## Implementation verification
+
+The source repair now runs the same bounded, read-only Codex preflight at effective account selection, queued execution, and provider creation. A confirmed absent ancestor returns `source-ancestor-missing` and the full SHA-256 reference of its native ID. Incomplete scans, unsafe metadata and ownership changes retain safety refusals. Initial refusal precedes runtime command submission, attribution, provider startup and copying. Same-account withdrawal remains available.
+
+The original staging traversal, continuity receipts, permissions and successful successor-before-stop ordering remain in place. The reproduced cancellation race required a narrow optional synchronous assertion on the existing provider contract: source generation, claim owner/epoch, writer epoch, operation/revision and pipeline authorization are rechecked at provider, copy, publication, registry commit and predecessor-release boundaries. The real client carries the assertion locally across launch preparation and resume fallback; it never sends that callback to the provider. Existing late-artifact receipt reconciliation remains intact.
+
+`src/lib/accounts/migration/ancestorAdmission.test.ts` drives selection through the real journal, queue, reconfigure executor, coordinator and provider, with the real Codex JSON-RPC client over a local transport. Its 37 passing cases include hostile missing identifiers on admission, execution and direct-provider paths; carried picks and withdrawal; source/target authentication and resume waits; goal and verification waits; replacement of owner, generation, claim/writer epochs and operation revision; pipeline refusal; and publication, commit and release races. Host publication and termination remain instrumented test boundaries. Installed acceptance is still UNKNOWN.
+
+Each command used `bun run test` with one explicit file, the supplied gate wrapper, a fresh isolated HOME/config/state/temp root and an actual exit record. Final results:
+
+| Test file | Pass / fail | Assertions | Exit |
+| --- | --- | --- | --- |
+| `src/lib/accounts/migration/ancestorAdmission.test.ts` | 37 / 0 | 394 | 0 |
+| `src/lib/runtime/structuredControls.test.ts` | 77 / 0 | 262 | 0 |
+| `src/lib/runtime/structuredReconfigure.test.ts` | 41 / 0 | 210 | 0 |
+| `src/lib/accounts/codexAppServer.test.ts` | 45 / 0 | 221 | 0 |
+| `src/lib/accounts/migration/safeHistoryCopy.test.ts` | 24 / 0 | 109 | 0 |
+| `src/lib/accounts/migration/provider.test.ts` | 63 / 2 | 274 | 1 |
+| `src/lib/accounts/migration/coordinator.test.ts` | 122 / 2 | 661 | 1 |
+
+The four failures also occur on unchanged main `8d0239d6` under the same isolation. Provider baseline: 50 pass, 2 fail, 252 assertions, exit 1; both failures expect rejection of an owned writable transcript root inside a private home, once per engine. Coordinator baseline: 122 pass, 2 fail, 661 assertions, exit 1; both failures concern legacy held-delivery dispatch timing, including the inventory-sidecar case. They are outside this repair. No new failing assertion remains.
+
+Nine disposable mutation controls each exit 1 with the expected regression: removing admission preflight (7 failures); admission authority (5); execution authority (5); provider authority (11); post-authorization publication authority (1); final registry commit authority (1); final copy publication authority (1); client launch/resume authority (3); predecessor release authority (1). The seven production-chain controls used the 34-case corpus before the three additional goal/verification cases. The restored final corpus passes all 37. Each mutation has its exact substitution, hashes and separate log retained in private evidence; no mutant enters the commit.
+
+The final source export matches all 13 changed source/test files byte for byte. Changed-file lint passes with one existing unused-variable warning in structured controls; whitespace passes. Whole-file publication privacy and normal commit hooks are required before handoff. The remote pull request title/body are separately updated and read back for the implementation.
+
+Final overlap review inspected all 29 open pull requests and found no changed-source file overlap. Main remains `8d0239d6`; the named adjacent diffs and source-lineage ownership remain outside these changes. This bounded search does not establish absence in hidden archives. Historical incident cause remains UNKNOWN. There were no live host/provider effects, deployment, manual push/merge, account or policy changes. Three independent runtime-risk review rounds and pipeline publication remain outstanding.

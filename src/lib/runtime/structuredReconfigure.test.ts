@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,8 +16,16 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { copilotLaunchArgs } from "./copilotAcpHost";
 import { copilotHostOptions } from "./structuredSpawn";
 
+import { accountManager } from "@/lib/accounts/manager";
+import type { AccountContext } from "@/lib/accounts/contracts";
+
+const sourceAccounts = new Map<string, AccountContext>();
+const sourceOwner = spyOn(accountManager, "resolveTranscriptOwner").mockImplementation((_engine, pathname) => sourceAccounts.get(pathname) ?? null);
+
 const roots: string[] = [];
+afterAll(() => sourceOwner.mockRestore());
 afterEach(() => {
+  sourceAccounts.clear();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -33,7 +41,9 @@ function fixture(
     storage ? { sqliteMode: "sqlite", sqliteFilename, ...storage } : { sqliteMode: "off" });
   const sessionId = crypto.randomUUID();
   const transcript = path.join(root, `rollout-${sessionId}.jsonl`);
-  fs.writeFileSync(transcript, "{}\n");
+  fs.writeFileSync(transcript, engine === "codex"
+    ? JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n" : "{}\n", { mode: 0o600 });
+  if (engine === "codex") sourceAccounts.set(transcript, { engine, accountId: "source", kind: "managed", home: root, transcriptRoot: root, env: {} });
   const begun = beginLegacySpawnFixture(registry, {
     engine,
     cwd: root,
