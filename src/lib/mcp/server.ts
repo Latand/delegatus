@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
@@ -309,7 +310,25 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
+/** Call-local checks survive awaited service/SDK wrappers, never a wire frame. */
+export interface McpResponseAuthority { checks: Array<() => void> }
+
+function responseAuthorityResult(tool: string, args: McpToolArgs, authority: McpResponseAuthority | undefined, result: McpToolResult): McpToolResult {
+  try { for (const check of authority?.checks ?? []) check(); return result; }
+  catch (error) {
+    const code = error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "caller_unidentified";
+    return failure(tool, clientRequestId(args), code, code === "workspace_forbidden" ? "workspace access denied" : "caller authority changed before response", false, false, { code });
+  }
+}
+
+function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
+  if (!context.responseAuthority) return;
+  const runInCallerContext = AsyncLocalStorage.snapshot();
+  context.responseAuthority.checks.push(() => runInCallerContext(check));
+}
+
 export interface McpToolCallContext {
+  responseAuthority?: McpResponseAuthority;
   /** Trusted read projection; never accepted from serialized tool arguments. */
   redactText?: (text: string) => string;
   signal?: AbortSignal;
@@ -406,8 +425,10 @@ export interface McpDispatchTracker {
   attempted: boolean;
 }
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
-  /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
-  authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+  /** Caller-dependent checks before receipt reads, claims or in-process joins.
+      An optional returned assertion is retained through the final response.
+      Neither check may mutate state. */
+  authorizeReceipt?: (args: McpToolArgs, context?: McpToolCallContext) => void | (() => void) | Promise<void | (() => void)>;
   /** Fresh admission checks, after authority and existing-receipt lookup,
       before any claim. Mutable names must not conceal a recorded result. */
   prepareAdmission?: (args: McpToolArgs) => void | Promise<void>;
@@ -2910,7 +2931,14 @@ export function createMcpToolService(
       }
       try {
         const authorize = bindings[typedTool].authorizeReceipt;
-        if (authorize) await authorize(effectiveArgs);
+        if (authorize) {
+          const assertReceipt = await authorize(effectiveArgs, context);
+          if (assertReceipt) {
+            retainResponseAuthority(context, assertReceipt);
+            assertReceipt();
+            context = { ...context, assertCaller: assertReceipt };
+          }
+        }
       } catch (error) {
         return finish(failure(typedTool, requestId,
           error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
@@ -3755,12 +3783,17 @@ export function createMcpToolService(
       }
     },
   };
-  return withMcpPageCursors({ callTool: async (tool, args, context) => {
+  const paged = withMcpPageCursors({ callTool: async (tool, args, context) => {
     const finish = (MCP_TOOL_NAMES as readonly string[]).includes(tool)
       ? trackMcpClaim(`${tool}:${clientRequestId(args) ?? "unkeyed"}`) : () => {};
     try { return await runWithMcpCallerResolution(() => service.callTool(tool, args, context)); }
     finally { finish(); }
   } });
+  return { async callTool(tool, args, context = {}) {
+    const authority = context.responseAuthority ?? (tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+    const result = await paged.callTool(tool, args, { ...context, responseAuthority: authority });
+    return responseAuthorityResult(tool, args, authority, result);
+  } };
 }
 
 /**
@@ -4378,6 +4411,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     publication: z.enum(["internal", "remote-branch"]).optional().describe("Omitted: publish when the owner delivery target has a remote, local-only when it has none. internal: never push while the lane runs. remote-branch: requires a remote, pushes every accepted revision and fences reviews on the delivery branch. Without baseRef, the controller fetches origin/<baseBranch> time-bounded, or resolves local <baseBranch> when origin is absent."),
   }).passthrough(),
   pipeline_action: z.object({
+    src: z.string().optional().describe("set-src: creator transcript path; required for this action."),
+    overwrite: z.boolean().optional().describe("set-src: true authorizes replacing existing creator lineage; defaults to false."),
     resumeCondition: pipelineResumeConditionSchema.optional().describe("pause: remind when this date arrives or fresh cached usage for the named account/window falls below belowPercent. Omit for a reminder after 24 hours. Reminders never resume a lane automatically."),
     remote: z.string().optional().describe("set-delivery-remote: configured Git remote name (default origin). Fills an empty delivery target after a remote is added; never redirects an existing target."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
@@ -5192,7 +5227,9 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
+        const authority: McpResponseAuthority | undefined = toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
+          responseAuthority: authority,
           signal: deadline.signal,
           deadlineAt: Date.now() + timeoutMs,
           /* #1629: the SDK hands the request's own `_meta` through on `extra`,
@@ -5204,7 +5241,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
         const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
-        return response(result);
+        return response(responseAuthorityResult(toolName, args as McpToolArgs, authority, result));
       } finally {
         finishClaim();
         deadline.release();

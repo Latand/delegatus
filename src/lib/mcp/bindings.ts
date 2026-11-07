@@ -90,7 +90,7 @@ import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { currentMcpHttpCaller, resolveMcpCallerValue, runWithMcpCallerResolution } from "./callerContext";
 import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
@@ -2655,7 +2655,48 @@ function closeReportCounts(report: PipelineCloseReport) {
   };
 }
 
-async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+/** The public spelling is deliberately confined to this action's MCP boundary. */
+function pipelineSourceRequest(args: McpToolArgs): PatchPipelineRequest & McpToolArgs {
+  const allowed = new Set(["pipelineId", "action", "clientRequestId", "src", "overwrite", "full", "compact", "includeHints"]);
+  for (const key of Object.keys(args)) if (!allowed.has(key)) {
+    throw new McpToolRefusal(key === "srcPath" ? "set-src requires src; srcPath is not an MCP field" : `unsupported set-src field: ${key}`,
+      { code: "invalid_arguments", retryable: false });
+  }
+  const src = required(args, "src");
+  if (args.overwrite !== undefined && typeof args.overwrite !== "boolean") {
+    throw new McpToolRefusal("overwrite must be a boolean", { code: "invalid_arguments", retryable: false });
+  }
+  return { action: "set-src", srcPath: src, ...(args.overwrite !== undefined ? { overwrite: args.overwrite } : {}) };
+}
+
+/** Pin the caller before dispatch; read fresh authority again inside the writer. */
+function pipelineSourceAuthority(dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): () => void {
+  const snapshot = () => runWithMcpCallerResolution(() => {
+    const authority = dependencies.attentionAuthority();
+    const refuse = (): never => { throw new McpToolRefusal("set-src requires a current identified caller", { code: "caller_changed", retryable: false }); };
+    if (authority.kind === "unidentified" || !authority.conversationId) return refuse();
+    const registry = dependencies.registrySnapshot();
+    const conversation = readOnlyConversationLookupFromSnapshot(registry).conversation(authority.conversationId as `conversation_${string}`);
+    const generation = conversation?.generations.at(-1);
+    if (!conversation || conversation.supersededBy || !generation || generation.archivedAt) return refuse();
+    const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry, authority.conversationId);
+    const caller = attributionOf(dependencies);
+    for (const id of new Set([authority.conversationId, caller.conversationId])) {
+      const revoked = revokedSeatPipelineRefusal(id,
+        value => readOnlyConversationLookupFromSnapshot(registry).canonicalConversationId(value as `conversation_${string}`) ?? value);
+      if (revoked) throw new McpToolRefusal(revoked, { code: "orchestrator_seat_revoked", status: 403 });
+    }
+    return JSON.stringify([authority, caller, generation.id, generation.path, conversation.projectOwnership, principal]);
+  });
+  const pinned = snapshot();
+  return () => {
+    context?.assertCaller?.();
+    assertWorkspaceMcpCall();
+    if (snapshot() !== pinned) throw new McpToolRefusal("set-src caller identity changed", { code: "caller_changed", retryable: false });
+  };
+}
+
+async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
@@ -2665,7 +2706,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
      (docs/design/needs-attention.md §5): the same gate and the same attributed
      record `dismiss_attention` writes. */
   if (action === "dismiss" || action === "undismiss") return pipelineDismissal(pipelineId, action, args, dependencies);
-  const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact", "includeHints"]);
+  const assertSource = action === "set-src" ? pipelineSourceAuthority(dependencies, context) : assertWorkspaceMcpCall;
+  const request = action === "set-src" ? pipelineSourceRequest(args) : withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact", "includeHints"]);
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
@@ -2674,7 +2716,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
   const result = action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies), assertWorkspaceMcpCall)
-    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertWorkspaceMcpCall);
+    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertSource);
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
     if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
@@ -8676,7 +8718,7 @@ export function viewerMcpBindings(
       { prepareAdmission: (args: McpToolArgs) => assertExplicitPipelineSource(args, domainDependencies) },
     ),
     pipeline_action: Object.assign(
-      (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
+      (args: McpToolArgs, context?: McpToolCallContext) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies, context)),
       { canonicalizeReceiptArgs: (args: McpToolArgs) => {
         if (args.action !== "resolve-decision" || typeof args.expectedRevision !== "string") return args;
         const id = required(args, "pipelineId");
@@ -8688,7 +8730,13 @@ export function viewerMcpBindings(
         const retained = accepted?.expectedRevision ?? pipelineRevision(pipeline);
         if (!/^[a-f0-9]{7,64}$/i.test(args.expectedRevision) || !retained.toLowerCase().startsWith(args.expectedRevision.toLowerCase())) return args;
         return { ...args, expectedRevision: retained };
-      }, authorizeReceipt: (args: McpToolArgs) => {
+      }, authorizeReceipt: (args: McpToolArgs, context?: McpToolCallContext) => {
+        if (args.action === "set-src") {
+          pipelineSourceRequest(args);
+          const assertSource = pipelineSourceAuthority(domainDependencies, context);
+          assertSource();
+          return assertSource;
+        }
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
         const pipeline = domainDependencies.readPipelineRecord
