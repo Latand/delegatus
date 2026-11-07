@@ -174,11 +174,11 @@ test.each([["headers", 201], ["body", 201], ["headers", 202], ["body", 202]] as 
   let entered!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   const started = new Promise<void>(resolve => { entered = resolve; });
-  let signal: AbortSignal | null | undefined;
+  const signals: AbortSignal[] = [];
   let posts = 0;
   globalThis.fetch = Object.assign(async (_url: string | URL | Request, init?: RequestInit) => {
     if (++posts > 1) return Response.json({ pipeline: { id: "independent" } }, { status: 201 });
-    signal = init?.signal;
+    if (init?.signal) signals.push(init.signal);
     if (seam === "headers") { entered(); await held; }
     const response = Response.json({ pipeline: { id: "late", project: "demo", task: "Late work", taskIds: [] },
       queued: { queuedAt: "2030-01-01T00:00:00Z", reason: "store_unavailable" } }, { status });
@@ -195,7 +195,8 @@ test.each([["headers", 201], ["body", 201], ["headers", 202], ["body", 202]] as 
     await started;
     expire();
     expect(await first).toEqual({ error: "Creation status unavailable" });
-    expect(signal?.aborted).toBe(true);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
     expect((await createDraftPipeline("demo", "/repo")).pipeline?.id).toBe("independent");
     release();
     // Let the released transport and body finish their promise continuations.
