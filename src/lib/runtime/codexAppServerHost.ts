@@ -3471,7 +3471,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private viewerMcp: ViewerMcpObservation | undefined;
   private readonly viewerMcpTerminals = new Set<string>();
   private viewerMcpHistoryLost = false;
-  private readonly viewerMcpStarts = new Map<string, { tool: string; seq: number }>();
+  private readonly viewerMcpStarts = new Map<string, { tool: string; seq: number | null }>();
+
+  private rememberViewerMcpStart(key: string | null, tool: string | null, seq: number | null): void {
+    if (key && this.viewerMcpStarts.get(key)?.tool === tool) return;
+    if (!key || !tool || this.viewerMcpStarts.has(key) || this.viewerMcpStarts.size >= 32) {
+      this.viewerMcpHistoryLost = true;
+      return;
+    }
+    this.viewerMcpStarts.set(key, { tool, seq });
+  }
 
   private rememberViewerMcpTerminal(key: string | null): void {
     if (!key) { this.viewerMcpHistoryLost = true; return; }
@@ -3494,11 +3503,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     // completions even while healthy, before any recovery is needed.
     if (key && this.viewerMcpTerminals.has(key)) return;
     if (event.phase === "started") {
-      if (!observation || (!observation.denied.length && !observation.unverified)) return;
-      if (key && this.viewerMcpStarts.get(key)?.tool === tool) return;
-      if (this.viewerMcpHistoryLost || !tool || !key || this.viewerMcpStarts.has(key) || this.viewerMcpStarts.size >= 32) {
+      // Keep the first start even while healthy. A replay must retain its
+      // original ordering relative to a denial that arrives later.
+      this.rememberViewerMcpStart(key, tool, event.seq);
+      if (observation && this.viewerMcpHistoryLost) {
         this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
-      } else this.viewerMcpStarts.set(key, { tool, seq: event.seq });
+      }
     } else {
       const start = key ? this.viewerMcpStarts.get(key) : undefined;
       if (key) this.viewerMcpStarts.delete(key);
@@ -3514,7 +3524,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           next.denied.push({ tool, seq: event.seq });
         }
         this.viewerMcp = next;
-      } else if (observation && tool && start?.tool === tool && item.status === "completed" && item.error == null) {
+      } else if (observation && tool && start?.tool === tool && start.seq !== null && item.status === "completed" && item.error == null) {
         const result = record(item.result);
         // Structured server refusals are successful transports, with no proof
         // that the denied management capability is now permitted.
@@ -3959,9 +3969,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (event.codexItemIdentity?.threadId === this.identity.threadId && item?.type === "mcpToolCall" && item.server === "viewer") {
           const key = typeof item.id === "string" && item.id.length > 0 && item.id.length <= 256
             && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, item.id]) : null;
-          // Predecessor starts cannot become fresh recovery either. Only new
-          // ingress can establish an in-flight call in this host generation.
-          this.rememberViewerMcpTerminal(key);
+          if (event.phase === "completed") {
+            if (key) this.viewerMcpStarts.delete(key);
+            this.rememberViewerMcpTerminal(key);
+          } else if (!key || !this.viewerMcpTerminals.has(key)) {
+            const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+            // A predecessor start cannot prove recovery in this generation,
+            // but its first completion can still establish a new denial.
+            this.rememberViewerMcpStart(key, tool, null);
+          }
         }
       }
       if (event.kind === "turn-started") {

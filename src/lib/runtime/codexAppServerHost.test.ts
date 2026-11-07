@@ -8104,10 +8104,10 @@ test("MCP service controls preserve denial layers and same-key effects", async (
 });
 
 
-test.each([1, 33])("a fresh process retains MCP denial and rejects predecessor recovery replay (%s terminals)", async terminalCount => {
+test.each([1, 33, "pending-denial", "starts-32", "starts-33"] as const)("a fresh process retains MCP correlation (%s)", async scenario => {
   const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
   const directory = path.join(metadataState, "mcp-process-events");
-  const first = spawn(process.execPath, [fixture, "mcp-produce", directory, path.join(metadataState, "unused.jsonl"), String(terminalCount)],
+  const first = spawn(process.execPath, [fixture, "mcp-produce", directory, path.join(metadataState, "unused.jsonl"), String(scenario)],
     { cwd: process.cwd(), env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
   let firstOutput = "", firstErrors = "";
   first.stderr!.on("data", data => { firstErrors += String(data); });
@@ -8121,14 +8121,18 @@ test.each([1, 33])("a fresh process retains MCP denial and rejects predecessor r
         if (firstOutput.includes("\n")) resolve(JSON.parse(firstOutput.split("\n")[0]!));
       });
     });
-    expect(ready.observation).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: terminalCount > 32 });
+    if (typeof scenario === "number") expect(ready.observation).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: scenario > 32 });
+    else expect(ready.observation).toBeUndefined();
     first.kill("SIGKILL");
     await closed;
-    const resumed = Bun.spawn([process.execPath, fixture, "mcp-resume", directory, path.join(metadataState, "unused.jsonl"), String(terminalCount)],
+    const resumed = Bun.spawn([process.execPath, fixture, "mcp-resume", directory, path.join(metadataState, "unused.jsonl"), String(scenario)],
       { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
     const [output, errors, exit] = await Promise.all([new Response(resumed.stdout).text(), new Response(resumed.stderr).text(), resumed.exited]);
     expect({ exit, errors }).toMatchObject({ exit: 0 });
-    expect(JSON.parse(output).observation).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: terminalCount > 32 });
+    expect(JSON.parse(output).observation).toMatchObject({
+      denied: scenario === "starts-32" ? [] : [{ tool: "get_task", seq: expect.any(Number) }],
+      unverified: scenario === "starts-33" || scenario === 33,
+    });
   } finally {
     if (first.exitCode === null && first.signalCode === null) first.kill("SIGKILL");
     await closed;
@@ -8217,3 +8221,80 @@ test("Viewer MCP recovery stays unverified when restoration has lost event histo
     expect(host.readViewerMcpObservation()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: true });
   } finally { await host.release(); }
 });
+
+
+for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-start"] as const)
+  test.each(["off", "sqlite"] as const)(`Viewer MCP first-start correlation survives ${scenario} (%s)`, async sqliteMode => {
+    const { seatMcpHealth } = await import("../monitor/seatMcpHealth");
+    const { harness, PROJECT, NOW, OPEN_LANE, runSeatTickCheck } = mcpTickFixture;
+    const { flushStructuredHostPersistence } = await import("./registry");
+    const threadId = ["00000000", "0000", "4000", "8000", "000000000071"].join("-");
+    const store = new MemoryEventStore();
+    let server = new FakeAppServer(threadId);
+    let host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+    const registryFile = path.join(metadataState, "first-start-registry.json");
+    const registry = new AgentRegistry(registryFile, () => true, undefined, { sqliteMode });
+    const artifactPath = `/sessions/${threadId}.jsonl`;
+    const conversation = registry.ensureConversation("codex", artifactPath, null);
+    const key = { engine: "codex" as const, sessionId: threadId };
+    registry.upsert({ key, artifactPath, cwd: metadataState, accountId: null, status: "idle", host: null,
+      claimEpoch: 7, claimOwner: "fixture-writer", pendingAction: null, structuredHost: codexHostColumns(await host.health(), 7) });
+    let stop = await bindCodexHostPersistence(registry, key, host, "fixture-writer", 7);
+    const journal = new RuntimeJournal(path.join(metadataState, "first-start-journal.sqlite"), { structuredHosts: true });
+    const client = {
+      append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+      producerCursor: async () => 0, snapshot: async () => journal.snapshot(), effectBatch: async () => [],
+    } as unknown as RuntimeHostClient;
+    const bind = () => bindStructuredDeliveryQueue([{ key, host }], { registry, client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    const notify = (phase: "started" | "completed", id: string, fields: Record<string, unknown> = {}, tool = "get_task") =>
+      server.notify(`item/${phase}`, { threadId, turnId: "first-start-turn", item: { id, type: "mcpToolCall", server: "viewer", tool, ...fields } });
+    const denial = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+    const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
+    const observe = () => structuredDeliveryMcpObservation(conversation.id, registry);
+    const assertWake = async (recovered: boolean) => {
+      const receipt = { spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW - 1800000).toISOString(), viewerMcpTransport: "http" as const };
+      expect(seatMcpHealth(receipt, null, metadataState, NOW, "http", observe()).status).toBe(recovered ? "untracked" : "dead");
+      const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: conversation.id, seatEpoch: 1, path: artifactPath } });
+      const receiptRead = spyOn(registry, "seatMcpReceipt").mockReturnValue(receipt);
+      rig.deps.sources!.registry = () => registry;
+      try {
+        const result = await runSeatTickCheck(PROJECT, rig.deps);
+        expect(rig.sent).toHaveLength(recovered ? 1 : 0);
+        expect(result?.delivery?.outcome).toBe(recovered ? "delivered" : "seat-mcp-unavailable");
+      } finally { receiptRead.mockRestore(); }
+    };
+    try {
+      await bind();
+      notify("started", "pending");
+      if (scenario !== "pending-denial") notify("completed", "later-denial", denial);
+      await flushStructuredHostPersistence(host);
+      if (scenario !== "replayed-start") {
+        await bindStructuredDeliveryQueue([], { client: null });
+        await stop(); await host.release();
+        server = new FakeAppServer(threadId);
+        host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+        registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${threadId}`]!, claimOwner: "fixture-successor", claimEpoch: 8,
+          structuredHost: codexHostColumns(await host.health(), 8) });
+        stop = await bindCodexHostPersistence(registry, key, host, "fixture-successor", 8);
+        await bind();
+      }
+      if (scenario === "pending-denial") notify("completed", "pending", denial);
+      else { notify("started", "pending"); notify("completed", "pending", success); }
+      await flushStructuredHostPersistence(host);
+      expect(observe()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: false });
+      const reopened = new AgentRegistry(registryFile, () => true, undefined, { sqliteMode });
+      try { expect(reopened.seatTickConversation(conversation.id)?.viewerMcp).toEqual(observe()); }
+      finally { reopened.close(); }
+      await assertWake(false);
+      notify("completed", "other-denial", denial, "get_pipeline");
+      notify("started", "fresh"); notify("completed", "fresh", success);
+      await flushStructuredHostPersistence(host);
+      expect(observe()?.denied.map(entry => entry.tool)).toEqual(["get_pipeline"]);
+      await assertWake(false);
+      notify("started", "fresh-other", {}, "get_pipeline"); notify("completed", "fresh-other", success, "get_pipeline");
+      await flushStructuredHostPersistence(host);
+      expect(observe()).toMatchObject({ denied: [], unverified: false });
+      await assertWake(true);
+    } finally { await bindStructuredDeliveryQueue([], { client: null }); await stop(); await host.release(); journal.close(); registry.close(); }
+  });

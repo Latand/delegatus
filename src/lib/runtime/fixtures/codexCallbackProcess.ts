@@ -115,7 +115,22 @@ if (mode === "engine-socket") {
             const item = (phase: string, fields: Record<string, unknown>) => send({ method: `item/${phase}`,
               params: { threadId: thread, turnId: "mcp-turn", item: { type: "mcpToolCall", server: "viewer", tool: "get_task", ...fields } } });
             const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
-            if (message.method === "thread/start") {
+            const denial = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+            if (descriptor === "pending-denial" || descriptor?.startsWith("starts-")) {
+              if (message.method === "thread/start") {
+                const count = descriptor === "pending-denial" ? 1 : Number(descriptor.slice(7));
+                for (let index = 1; index < count; index++) item("started", { id: `pending-${index}` });
+                item("started", { id: "before-restart" });
+              } else if (descriptor === "pending-denial") {
+                item("completed", { id: "before-restart", ...denial });
+              } else {
+                item("completed", { id: "later-denial", ...denial });
+                item("started", { id: "before-restart" });
+                item("completed", { id: "before-restart", ...success });
+                item("started", { id: "fresh-recovery" });
+                item("completed", { id: "fresh-recovery", ...success });
+              }
+            } else if (message.method === "thread/start") {
               item("completed", { id: "initial-denial", status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
               const count = Number(descriptor ?? 1);
               for (let index = 0; index < count; index++) {
@@ -178,8 +193,9 @@ if (mode === "engine-socket") {
   }
   if (mode.startsWith("mcp-")) {
     const events = host.attach(0);
+    const lastItem = mode === "mcp-resume" && descriptor?.startsWith("starts-") ? "fresh-recovery" : "before-restart";
     for await (const event of events) {
-      if (event.kind !== "item" || (event.item as { id?: string })?.id !== "before-restart"
+      if (event.kind !== "item" || (event.item as { id?: string })?.id !== lastItem
         || event.phase !== (mode === "mcp-produce" ? "started" : "completed")) continue;
       process.stdout.write(`${JSON.stringify({ observation: host.readViewerMcpObservation(), enginePid: (await host.health()).pid })}\n`);
       break;

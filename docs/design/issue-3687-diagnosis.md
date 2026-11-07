@@ -307,3 +307,27 @@ positive wake control. Process fixtures also exercise retained terminal identity
 and overflow after killing and replacing the fixture process. The existing
 32/33 denial/start and tool-length controls remain in place. Publication and
 installation acceptance remain separate, and no performance gain is claimed.
+
+### Review repair: pending-call correlation
+
+Two further sequences exposed gaps in the terminal-call fence. A call started
+before adapter restoration lost its first denial because restoration treated
+its start as a completion. A call started while healthy could acquire a later
+start sequence through replay and clear a newer same-tool denial.
+
+The adapter now remembers each first start while healthy, with the existing
+32-entry bound. Repeated starts retain their original ordering. Restored pending
+starts carry no recovery sequence; their first completion can record a denial,
+and their success cannot prove recovery. Only completed identities enter the
+terminal fence. Missing or conflicting identities and overflow retain the
+existing conservative recovery behavior. The event journal and observation
+schema are unchanged.
+
+The regression cases traverse the actual adapter, claimed JSON/SQLite
+checkpoint, reopened registry reader, live owner and tick. Both defect cases
+fail on the previous source. New distinct calls clear only their own tool, and
+the tick resumes after all denials clear. Separate process fixtures kill and
+replace the adapter process with a pending call and with 32/33 pending starts.
+The complete adapter file passes 339 tests, including the existing completed
+replay, history-gap, permission, checkpoint-failure and same-key controls.
+Historical cause, prior UNKNOWN operations and installed acceptance remain open.
