@@ -8730,11 +8730,12 @@ export function viewerMcpBindings(
         const retained = accepted?.expectedRevision ?? pipelineRevision(pipeline);
         if (!/^[a-f0-9]{7,64}$/i.test(args.expectedRevision) || !retained.toLowerCase().startsWith(args.expectedRevision.toLowerCase())) return args;
         return { ...args, expectedRevision: retained };
-      }, authorizeReceipt: (args: McpToolArgs) => {
+      }, authorizeReceipt: (args: McpToolArgs, context?: McpToolCallContext) => {
         if (args.action === "set-src") {
           pipelineSourceRequest(args);
-          pipelineSourceAuthority(domainDependencies)();
-          return;
+          const assertSource = pipelineSourceAuthority(domainDependencies, context);
+          assertSource();
+          return assertSource;
         }
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");

@@ -21,7 +21,7 @@ const { setMcpHttpDependenciesForTests } = await import("./http");
 const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { spawnCapabilityDigest } = await import("@/lib/agent/callerClaims");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
-const { createMcpToolService, SqliteMcpReceiptStore } = await import("./server");
+const { createMcpToolService, SqliteMcpReceiptStore, requestDigest } = await import("./server");
 const { viewerMcpBindings, viewerMcpToolPolicy, productionDomainDependencies } = await import("./bindings");
 const { withWorkspaceMcpFence } = await import("./workspaceFence");
 const { runAsMcpHttpCaller } = await import("./callerContext");
@@ -90,7 +90,12 @@ async function fixture(engine: "codex" | "claude" = "codex", closed = false, wor
   const dependencies = { ...productionDomainDependencies, ...domain };
   const makeService = () => withWorkspaceMcpFence(createMcpToolService(bindings, receipts!, viewerMcpToolPolicy(dependencies)), dependencies);
   let service = makeService();
-  setMcpHttpDependenciesForTests({ service: async () => service,
+  let afterResponse: (() => void) | undefined;
+  setMcpHttpDependenciesForTests({ service: async () => ({ async callTool(...args: Parameters<typeof service.callTool>) {
+    const answer = await service.callTool(...args);
+    afterResponse?.();
+    return answer;
+  } }),
     conversationForCapability: value => registry.conversationIdForSpawnCapabilityDigest(spawnCapabilityDigest(value)) });
   const listener = resources.listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => new URL(request.url).pathname === "/api/mcp"
     ? POST(new NextRequest(request)) : PATCH(new NextRequest(request), { params: Promise.resolve({ id: pipeline.id }) }) });
@@ -102,6 +107,7 @@ async function fixture(engine: "codex" | "claude" = "codex", closed = false, wor
   return { client, caller, source, other, pipeline, registry, bindings, listener,
     args, call: async (key: string, fields: Record<string, unknown> = {}) => CallToolResultSchema.parse(await client.callTool({ name: "pipeline_action", arguments: args(key, fields) })),
     row: () => getPipeline(pipeline.id)!, count: () => dispatches,
+    receipts: () => receipts!, afterResponse: (value: () => void) => { afterResponse = value; },
     ports: (value: Partial<Ports>) => { ports = value; }, before: (value: () => void) => { beforeDispatch = value; },
     reopen: () => { receipts!.close(); receipts = new SqliteMcpReceiptStore(path.join(root, `receipts-${n}.sqlite`)); service = makeService(); },
   };
@@ -392,4 +398,88 @@ test("a deputy loses its seat authority during source resolution", async () => {
   } });
   expect((await f.call("deputy-lost-seat")).structuredContent).toMatchObject({ ok: false });
   expect(lookups).toBe(2); expect(f.row()).toEqual(before);
+});
+
+
+for (const change of ["superseded", "seat"] as const) {
+  for (const boundary of ["receipt", "SDK response"] as const) test(`${change} during ${boundary} refuses source replay without changing its receipt`, async () => {
+    const f = await fixture();
+    if (change === "seat") designate(f.pipeline.project, f.caller.id, f.caller.src, "replay-current-seat");
+    expect((await f.call("adopt")).structuredContent).toMatchObject({ ok: true });
+    const before = f.row(), key = `pipeline_action:${f.args("adopt").clientRequestId}`;
+    const receipt = f.receipts().lookup(key);
+    const revoke = () => {
+      if (change === "seat") designate(f.pipeline.project, f.other.id, f.other.src, "replay-successor-seat");
+      else f.registry.recordSupersedence(f.caller.id, f.other.id);
+    };
+    if (boundary === "receipt") {
+      const claim = f.receipts().claim.bind(f.receipts());
+      f.receipts().claim = (...args: Parameters<typeof claim>) => {
+        const result = claim(...args);
+        queueMicrotask(revoke);
+        return result;
+      };
+    } else f.afterResponse(revoke);
+    const answer = await f.call("adopt");
+    if (change === "seat") expect(orchestratorSeatFor(f.pipeline.project).active?.conversationId).toBe(f.other.id);
+    else expect(productionDomainDependencies.registrySnapshot().conversations[f.caller.id]?.supersededBy?.conversationId).toBe(f.other.id);
+    expect(answer.structuredContent).toMatchObject({ ok: false, code: change === "seat" ? "orchestrator_seat_revoked" : "caller_changed" });
+    expect(f.count()).toBe(1); expect(f.row()).toEqual(before);
+    expect(f.receipts().lookup(key)).toEqual(receipt);
+    f.reopen();
+    expect(f.receipts().lookup(key)).toEqual(receipt);
+  });
+}
+
+for (const change of ["none", "superseded", "seat"] as const) test(`${change} while a duplicate awaits source settlement preserves one dispatch`, async () => {
+  const f = await fixture();
+  if (change === "seat") designate(f.pipeline.project, f.caller.id, f.caller.src, "duplicate-current-seat");
+  let completed!: () => void, release!: () => void;
+  const stored = new Promise<void>(resolve => { completed = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const receipts = f.receipts(), complete = receipts.complete.bind(receipts), claim = receipts.claim.bind(receipts);
+  let claims = 0;
+  receipts.claim = (...args: Parameters<typeof claim>) => { claims++; return claim(...args); };
+  receipts.complete = async (...args: Parameters<typeof complete>) => {
+    complete(...args); completed(); await held;
+  };
+  const first = f.call("duplicate");
+  try {
+    await stored;
+    const before = f.row(), key = `pipeline_action:${f.args("duplicate").clientRequestId}`;
+    const receipt = receipts.lookup(key);
+    f.bindings.pipeline_action.canonicalizeReceiptArgs = args => {
+      queueMicrotask(() => {
+        if (change === "superseded") f.registry.recordSupersedence(f.caller.id, f.other.id);
+        if (change === "seat") designate(f.pipeline.project, f.other.id, f.other.src, "duplicate-successor-seat");
+        release();
+      });
+      return args;
+    };
+    const duplicate = await f.call("duplicate"), original = await first;
+    if (change === "none") {
+      expect(original.structuredContent).toMatchObject({ ok: true, replayed: false });
+      expect(duplicate.structuredContent).toMatchObject({ ok: true, replayed: true });
+    } else {
+      const refusal = { ok: false, code: change === "seat" ? "orchestrator_seat_revoked" : "caller_changed" };
+      expect(original.structuredContent).toMatchObject(refusal);
+      expect(duplicate.structuredContent).toMatchObject(refusal);
+    }
+    expect(claims).toBe(1); expect(f.count()).toBe(1); expect(f.row()).toEqual(before);
+    expect(receipts.lookup(key)).toEqual(receipt);
+    expect(receipt?.result).toMatchObject({ ok: true });
+    f.reopen();
+    expect(f.receipts().lookup(key)).toEqual(receipt);
+  } finally { release(); await first; }
+});
+
+test("unsettled source receipt remains UNKNOWN after reopen without dispatch", async () => {
+  const f = await fixture(), before = f.row(), args = f.args("uncertain");
+  const key = `pipeline_action:${args.clientRequestId}`;
+  expect(f.receipts().claim(key, requestDigest("pipeline_action", args), "durable").kind).toBe("fresh");
+  const receipt = f.receipts().lookup(key);
+  f.reopen();
+  expect((await f.call("uncertain")).structuredContent).toMatchObject({ ok: false, code: "outcome_unknown", details: { outcome: "unknown" } });
+  expect(f.count()).toBe(0); expect(f.row()).toEqual(before);
+  expect(f.receipts().lookup(key)).toEqual(receipt);
 });
