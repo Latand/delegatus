@@ -43721,3 +43721,60 @@ describe("a task card without inline conversations", () => {
     expect(failures).toEqual([]);
   }, 1_500_000);
 });
+
+
+describe("MCP engine refusal card", () => {
+  browserTest("the persisted refusal and recovery reason remain readable in both locales and themes", async () => {
+    const { ensureSeatTickCard } = await import("@/lib/monitor/seatTickController");
+    const { seatMcpHealth } = await import("@/lib/monitor/seatMcpHealth");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { statePath } = await import("@/lib/configDir");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR!, "mcp-health-card");
+    fs.mkdirSync(out, { recursive: true });
+    const health = seatMcpHealth(null, null, "unused", Date.parse("2026-11-06T00:00:00Z"), "http", {
+      seq: 1, observedAt: "2026-11-06T00:00:00Z", denied: [{ tool: "get_task", seq: 1 }], unverified: false,
+    });
+    ensureSeatTickCard("atlas", { kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "1",
+      detail: `${health.detail}; check the seat conversation and rotate the seat if recovery remains unavailable` }, "2026-11-06T00:00:00Z");
+    const notice = loadTasks(statePath("tasks.json")).find(task => task.project === "atlas"
+      && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"))!.text;
+    const server = await serveEvidenceFixture(out);
+    // A short alias to this test's owned temp directory keeps Chromium sockets
+    // within the platform limit without allocating outside the stage sandbox.
+    const tempFd = process.platform === "linux" ? fs.openSync(process.env.TMPDIR!, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) {
+        const texts = { notice, failed: "Maintenance finished", live: "Maintenance running" };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(Buffer.from(JSON.stringify(texts)).toString("base64"))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390, 1, new Date("2026-11-06T00:00:00Z"));
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').tap();
+          let node = page.locator(width === 390 ? '[data-phone-card="task:t-tick-notice"]' : card("t-tick-notice"));
+          await node.waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-card.png`) });
+          if (width === 390) {
+            expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+            await node.tap();
+            await page.locator('[data-phone-task-description]').tap();
+            node = page.locator('[data-phone-task-editor="description"] textarea');
+          } else {
+            await node.locator("[data-describe]").click();
+            node = node.locator("textarea");
+          }
+          await node.waitFor();
+          expect(await node.inputValue()).toBe(notice.split("\n").slice(2).join("\n"));
+          expect(notice).toContain("engine approval denied: get_task");
+          expect(notice).toContain("Wakes to a live host with broken MCP remain withheld");
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-reason.png`) });
+          readings.push({ lang, theme, width, text: await node.inputValue(), errors: pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 180_000);
+});

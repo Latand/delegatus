@@ -1,3 +1,4 @@
+import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
@@ -3435,6 +3436,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!this.ledgerFailed && receipt) this.callbackReceipts.set(id, receipt);
   }
 
+  readViewerMcpObservation(): ViewerMcpObservation | undefined {
+    if (this.dead || this.releasing || this.released || this.ledgerFailed || !this.writerFenceAllowsActuation()) {
+      return normalizeViewerMcpObservation(null);
+    }
+    return normalizeViewerMcpObservation(this.viewerMcp);
+  }
+
   async health(): Promise<HostState> {
     if (this.pendingSteers.size && !this.writerFenceAllowsActuation()) this.settleUnverifiedSteers();
     return this.currentState();
@@ -3460,6 +3468,81 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     catch { return false; }
   }
 
+  private viewerMcp: ViewerMcpObservation | undefined;
+  private readonly viewerMcpTerminals = new Set<string>();
+  private viewerMcpHistoryLost = false;
+  private readonly viewerMcpStarts = new Map<string, { tool: string; seq: number | null }>();
+
+  private rememberViewerMcpStart(key: string | null, tool: string | null, seq: number | null): void {
+    if (key && this.viewerMcpStarts.get(key)?.tool === tool) return;
+    if (!key || !tool || this.viewerMcpStarts.has(key) || this.viewerMcpStarts.size >= 32) {
+      this.viewerMcpHistoryLost = true;
+      return;
+    }
+    this.viewerMcpStarts.set(key, { tool, seq });
+  }
+
+  private rememberViewerMcpTerminal(key: string | null): void {
+    if (!key) { this.viewerMcpHistoryLost = true; return; }
+    this.viewerMcpTerminals.add(key);
+    if (this.viewerMcpTerminals.size > 32) {
+      this.viewerMcpTerminals.delete(this.viewerMcpTerminals.values().next().value!);
+      this.viewerMcpHistoryLost = true;
+    }
+  }
+
+  private observeViewerMcp(event: Extract<RuntimeEvent, { kind: "item" }>): void {
+    if (event.codexItemIdentity?.threadId !== this.identity.threadId || !this.writerFenceAllowsActuation()) return;
+    const item = record(event.item);
+    if (item?.type !== "mcpToolCall" || item.server !== "viewer") return;
+    const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+    const id = typeof item.id === "string" && item.id.length <= 256 ? item.id : null;
+    const key = id && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, id]) : null;
+    const observation = this.viewerMcp;
+    // A newly sequenced replay is still the same terminal call. Remember
+    // completions even while healthy, before any recovery is needed.
+    if (key && this.viewerMcpTerminals.has(key)) return;
+    if (event.phase === "started") {
+      // Keep the first start even while healthy. A replay must retain its
+      // original ordering relative to a denial that arrives later.
+      this.rememberViewerMcpStart(key, tool, event.seq);
+      if (observation?.denied.length && this.viewerMcpHistoryLost) {
+        this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
+      }
+    } else {
+      const start = key ? this.viewerMcpStarts.get(key) : undefined;
+      if (key) this.viewerMcpStarts.delete(key);
+      this.rememberViewerMcpTerminal(key);
+      const denial = item.status === "failed" && record(item.error)?.message === "MCP tool call requires approval, but approval policy is never";
+      if (denial) {
+        const next: ViewerMcpObservation = observation ? structuredClone(observation) : { seq: event.seq, observedAt: new Date().toISOString(), denied: [], unverified: false };
+        next.seq = event.seq;
+        next.observedAt = new Date().toISOString();
+        if (!tool || (!next.denied.some(entry => entry.tool === tool) && next.denied.length >= 32)) next.unverified = true;
+        else {
+          next.denied = next.denied.filter(entry => entry.tool !== tool);
+          next.denied.push({ tool, seq: event.seq });
+        }
+        this.viewerMcp = next;
+      } else if (observation && tool && start?.tool === tool && start.seq !== null && item.status === "completed" && item.error == null) {
+        const result = record(item.result);
+        // Structured server refusals are successful transports, with no proof
+        // that the denied management capability is now permitted.
+        const structured = record(result?.structuredContent);
+        if (result && result.isError !== true && structured?.ok === true && observation.denied.length && this.viewerMcpHistoryLost) {
+          // Eviction loses proof for clearing an outstanding denial. Preserve
+          // confirmed healthy state while retaining the fence for later recovery.
+          this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
+        } else if (result && result.isError !== true && structured?.ok === true) {
+          const startSeq = start.seq;
+          this.viewerMcp = { ...observation, seq: event.seq, observedAt: new Date().toISOString(),
+            denied: observation.denied.filter(entry => entry.tool !== tool || startSeq <= entry.seq) };
+        }
+      }
+    }
+    if (this.viewerMcp) event.viewerMcp = structuredClone(this.viewerMcp);
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
@@ -3472,6 +3555,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       : this.engineStatus;
     return {
       status,
+      ...(this.viewerMcp ? { viewerMcp: structuredClone(this.viewerMcp) } : {}),
       sessionKey: this.identity.threadId,
       endpoint: pid ? this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` : "stdio:released",
       pid,
@@ -3812,6 +3896,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
+    if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
       this.eventStore.append(this.identity.threadId, sequenced);
     } catch (error) {
@@ -3871,7 +3956,31 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.cursor,
       this.onEventCursorRecovery,
     );
+    this.viewerMcp = undefined;
+    this.viewerMcpStarts.clear();
+    this.viewerMcpTerminals.clear();
+    this.viewerMcpHistoryLost = false;
+    let previousMcpHistorySeq = 0;
     for (const event of stored) {
+      if (event.seq !== previousMcpHistorySeq + 1) this.viewerMcpHistoryLost = true;
+      previousMcpHistorySeq = event.seq;
+      if (event.kind === "item") {
+        if (event.viewerMcp !== undefined) this.viewerMcp = normalizeViewerMcpObservation(event.viewerMcp);
+        const item = record(event.item);
+        if (event.codexItemIdentity?.threadId === this.identity.threadId && item?.type === "mcpToolCall" && item.server === "viewer") {
+          const key = typeof item.id === "string" && item.id.length > 0 && item.id.length <= 256
+            && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, item.id]) : null;
+          if (event.phase === "completed") {
+            if (key) this.viewerMcpStarts.delete(key);
+            this.rememberViewerMcpTerminal(key);
+          } else if (!key || !this.viewerMcpTerminals.has(key)) {
+            const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+            // A predecessor start cannot prove recovery in this generation,
+            // but its first completion can still establish a new denial.
+            this.rememberViewerMcpStart(key, tool, null);
+          }
+        }
+      }
       if (event.kind === "turn-started") {
         this.cancelledVoiceTurns.delete(event.turnId);
         this.activeTurnId = event.turnId;
@@ -4811,7 +4920,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
-        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+        ...((user?.type === "userMessage" || (user?.type === "mcpToolCall" && user.server === "viewer")) && turnId && stringField(params, "threadId") === this.identity.threadId
           ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt, attachedAt: new Date().toISOString() } } : {}),
