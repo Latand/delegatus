@@ -146,16 +146,16 @@ function prepareLaunch(capabilityEnv: NodeJS.ProcessEnv, env: NodeJS.ProcessEnv,
 }
 
 function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return { ...env, LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) };
+  return { ...env, LLV_SIGNAL_EXEC_ACK: undefined, LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) };
 }
 
 /** `handle` is the process the caller started: the monitor itself, or the
  * launcher that waits outside the transient scope the monitor runs in. */
-type SignalReceipt = { domain: AgentSignalDomain; handle: number } | { off: string };
+type SignalReceipt = { domain: AgentSignalDomain; handle: number } | { off: string; execAck: boolean };
 function readReceipt(file: string): SignalReceipt {
   const value = JSON.parse(fs.readFileSync(file, "utf8"));
   if (value?.policyVersion === 1 && value.boundary === "off") {
-    return { off: typeof value.reason === "string" && value.reason ? value.reason : "the launcher could not establish the boundary" };
+    return { off: typeof value.reason === "string" && value.reason ? value.reason : "the launcher could not establish the boundary", execAck: value.execAck === true };
   }
   const domain = normalizeAgentSignalDomain(value)!;
   const launcher = value.launcher as ProcessIdentity | undefined;
@@ -417,6 +417,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   const receipt = path.join(directory, "ready.json");
   const diagnosticFile = options.env?.LLV_SIGNAL_IGNORE_NATIVE_STDIO === "1" ? `${directory}.stderr` : undefined;
   const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
+    LLV_SIGNAL_EXEC_ACK: assertCurrent ? "1" : undefined,
     ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
@@ -439,9 +440,16 @@ export async function spawnSignalSandbox(command: string, args: string[], option
       if (fs.existsSync(receipt)) {
         const parsed = readReceipt(receipt);
         if ("off" in parsed) {
-          // The launcher has executed the engine in its own place.
           recordSignalBoundaryOff(child, parsed.off, "managed");
-          fs.rmSync(directory, { recursive: true, force: true });
+          if (assertCurrent) {
+            if (!parsed.execAck) throw new Error("agent signal sandbox unavailable: fallback exec acknowledgement is unavailable");
+            assertCurrent();
+            fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
+            // The launcher removes its scratch after consuming the approval.
+          } else {
+            // Unguarded launchers have already executed the engine.
+            fs.rmSync(directory, { recursive: true, force: true });
+          }
           return child;
         }
         const domain = parsed.domain;
