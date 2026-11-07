@@ -381,7 +381,7 @@ export interface RuntimeInjectOutcome {
 
 /** A host whose engine exposes client-originated history injection (#1560). */
 export interface InjectCapableHost extends EngineHost {
-  inject(request: RuntimeInjectRequest): Promise<RuntimeInjectOutcome>;
+  inject(request: RuntimeInjectRequest, authorizeDispatch?: () => void): Promise<RuntimeInjectOutcome>;
 }
 
 export function hostSupportsInject(host: EngineHost): host is InjectCapableHost {

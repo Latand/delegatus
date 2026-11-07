@@ -24,7 +24,7 @@ import { recoverDeadStructuredConversation, structuredHostProcessAlive } from ".
 
 export type StructuredControlResult =
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "delivered" } }
-  | { status: 200; body: { ok: true; structured: true; target: string; outcome: "resumed"; spawned: boolean } }
+  | { status: 200; body: { ok: true; structured: true; target: string; outcome: "resumed" | "held"; spawned: boolean } }
   /** Picking the account the conversation runs on while another pick waits (#1846): the waiting pick is
       withdrawn, nothing was ever moved, and no new operation was needed. */
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "withdrawn"; withdrawn: string | null } }
@@ -267,6 +267,7 @@ export async function dispatchStructuredControl(
     attributeAccountChoice?: typeof attributeNamedAccountChoice;
     recover?: typeof recoverDeadStructuredConversation;
     republish?: typeof republishStructuredDeliveryHost;
+    onResumed?: (conversationId: string) => void | Promise<void>;
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
   } = {},
 ): Promise<StructuredControlResult | null> {
@@ -318,6 +319,13 @@ export async function dispatchStructuredControl(
   if (!STRUCTURED_CONTROL_ACTIONS.has(request.action)) {
     if (request.action === "resume") {
       if (entry.status === "dead" || entry.status === "unhosted") return null;
+      const resumed = (spawned: boolean, held = false): StructuredControlResult => {
+        if (!held) void Promise.resolve().then(async () => {
+          const notify = dependencies.onResumed ?? (await import("@/lib/monitor/resumedSeatTick")).requestResumedSeatTick;
+          await notify(conversation.id);
+        }).catch(error => console.warn("[structured resume] seat recheck deferred", error instanceof Error ? error.message : String(error)));
+        return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: held ? "held" : "resumed", spawned } };
+      };
       try {
         if ((dependencies.hostProcessAlive ?? structuredHostProcessAlive)(entry.structuredHost?.process ?? null)) {
           const republished = await (dependencies.republish ?? republishStructuredDeliveryHost)({
@@ -325,18 +333,21 @@ export async function dispatchStructuredControl(
             sessionId: generation.id,
           });
           if (!republished) {
-            return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
+            // A native Codex process can survive its Viewer connection. Reclaim
+            // that verified socket before reporting the conversation resumed.
+            const recovered = conversation.engine === "codex"
+              ? await (dependencies.recover ?? recoverDeadStructuredConversation)({
+                path: request.path || generation.path,
+                conversationId: conversation.id,
+                reconnectLiveHost: true,
+              }, { registry })
+              : null;
+            if (!recovered || recovered.conversationId !== conversation.id || recovered.reconnected !== true) {
+              return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
+            }
+            return resumed(recovered.spawned, Boolean(recovered.hold));
           }
-          return {
-            status: 200,
-            body: {
-              ok: true,
-              structured: true,
-              target: conversation.id,
-              outcome: "resumed",
-              spawned: false,
-            },
-          };
+          return resumed(false);
         }
         const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
           path: request.path || generation.path,
@@ -345,16 +356,7 @@ export async function dispatchStructuredControl(
         if (!recovered) {
           return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
         }
-        return {
-          status: 200,
-          body: {
-            ok: true,
-            structured: true,
-            target: conversation.id,
-            outcome: "resumed",
-            spawned: recovered.spawned,
-          },
-        };
+        return resumed(recovered.spawned, Boolean(recovered.hold));
       } catch (error) {
         return { status: 503, body: { error: error instanceof Error ? error.message : String(error) } };
       }

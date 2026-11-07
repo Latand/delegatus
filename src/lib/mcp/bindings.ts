@@ -1,3 +1,4 @@
+import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { assertWorkspaceMcpCall, workspaceGuardedBindings } from "./workspaceFence";
@@ -7,7 +8,7 @@ import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { curationAnswer } from "@/lib/memory/curation/answer";
+import { curationAnswerCooperatively } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
 import { resolveIssueReportDigest } from "@/lib/issueReports/store";
 import { shortId, shortenHashesInText } from "@/lib/shortIds";
@@ -90,6 +91,7 @@ import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/a
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -181,7 +183,7 @@ import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
-import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, forgetSeatDeploymentRequest, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
@@ -377,6 +379,7 @@ const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
 // operation the MCP call's remaining budget, including the settlement reserve.
 const PROTOTYPE_CONTROL_BUDGET_MS = 30_000;
 const CONTROL_DEADLINE_RESERVE_MS = 250;
+const DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS = 1_500;
 const CONTROL_RETRY_BASE_MS = 100;
 const CONTROL_RETRY_MAX_MS = 1_000;
 const TRANSIENT_CONTROL_STATUSES = new Set([502, 504]);
@@ -464,6 +467,7 @@ async function requestViewerControl(
     });
     try {
       const headers = controlRequestHeaders(init.headers, token);
+      if (pathname === "/api/attention/needs-you") headers.set("x-llv-read-deadline", String(Math.min(expiresAt - 300, now + 3500)));
       if (init.method === "POST") {
         headers.set("origin", baseUrl);
         headers.set("sec-fetch-site", "same-origin");
@@ -577,6 +581,10 @@ async function postViewerControl(
   /* Every control mutation carries its endpoint's idempotency identity
      (clientAttemptId, clientMessageId or clientRequestId). Repeating the same
      request after a lost transport answer therefore asks for its receipt. */
+  const deployment = pathname === "/api/runtime/deployments" || pathname === "/api/runtime/deployments/reconcile";
+  if (deployment && body.reconcileOnly === true) {
+    context = { ...context, deadlineAt: Math.min(context.deadlineAt ?? Infinity, Date.now() + 5000) };
+  }
   let answer: Awaited<ReturnType<typeof requestViewerControl>>;
   try {
     answer = await requestViewerControl(pathname, {
@@ -610,7 +618,12 @@ async function postViewerControl(
     // so the tool caller can read its revision and choose a new request.
     return { conflict: true, binding: result.binding };
   }
-  if (pathname === "/api/runtime/deployments" && uncertainPriorPost && !response.ok) {
+  if (deployment && result.code === "deploy_not_admitted" && response.status === 409) {
+    throw new McpToolRefusal("Deployment was not admitted; this request key is permanently closed.", {
+      code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false,
+    });
+  }
+  if (deployment && uncertainPriorPost && !response.ok) {
     throw new McpDeploymentPendingError(`${controlFailureMessage(response.status, result.error)} after an earlier deploy request may have reached admission`);
   }
   if (pathname === "/api/prototype-reviews" && response.ok
@@ -1892,7 +1905,7 @@ async function sendMessage(
   const message = requiredMessageText(args);
   let outcome: Record<string, unknown>;
   try {
-    outcome = await dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", {
+    const body = {
       pid: null,
       path: transcriptPath,
       ...(conversationId ? { conversationId } : {}),
@@ -1904,7 +1917,10 @@ async function sendMessage(
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
       ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
-    }, callerCapabilityHeaders());
+    };
+    outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
+      headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", body,
+        { ...callerCapabilityHeaders(), ...headers }));
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
        anything. Nothing exists under the downstream key, so the send settles
@@ -1950,6 +1966,8 @@ async function sendMessage(
        reading the send-time guess as the end of the story — `message_receipt`
        over the operation id is where the end of the story lives. */
     settled: settledOutcome === "delivered",
+    deliveryConfirmed: settledOutcome === "delivered",
+    ...(settledOutcome !== "delivered" ? { notice: "Accepted for delivery; arrival is unconfirmed." } : {}),
   };
 }
 
@@ -3867,24 +3885,45 @@ async function deployExactSha(
     throw error;
   }
   assertSeat();
-  if (callContext.priorAttemptUncertain) {
-    try {
-      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-        dependencies.recordSeatDeployment);
-      const recovered = seatDeploymentForRequestKey(idempotencyKey);
-      if (recovered) {
-        if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
-          || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
-          throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
-            code: "deploy_request_key_conflict", retryable: false,
-          });
+  let recoveredReceipt: Record<string, unknown> | null = null;
+  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)
+    && dependencies.findDeploymentByIdempotencyKey) {
+    const remainingMs = callContext.deadlineAt === undefined
+      ? DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS
+      : Math.min(DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS, callContext.deadlineAt - Date.now() - CONTROL_DEADLINE_RESERVE_MS);
+    if (remainingMs > 0) {
+      const lookupDeadlineAt = Date.now() + remainingMs;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const timeout = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), remainingMs); });
+        const lookup = Promise.resolve().then(() => dependencies.findDeploymentByIdempotencyKey!(idempotencyKey));
+        const found = await Promise.race([lookup, timeout]);
+        if (Date.now() < lookupDeadlineAt && found && found.idempotencyKey === idempotencyKey
+          && typeof found.deploymentId === "string" && found.deploymentId
+          && typeof found.revision === "string" && found.revision.toLowerCase().startsWith(revision.toLowerCase())
+          && typeof found.requestedRevision === "string" && found.requestedRevision.toLowerCase() === revision.toLowerCase()) {
+          recoveredReceipt = { state: "accepted", deploymentId: found.deploymentId,
+            revision: found.revision, replayed: true };
         }
-      } else {
-        throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
+      } catch {
+        // The read-only receipt source can be unavailable; reconciliation below
+        // remains the durable admission fence for a receiver that supports it.
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
+    }
+  }
+  let reconciledReceipt: Record<string, unknown> | null = null;
+  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey) && !recoveredReceipt) {
+    try {
+      // The backend settles under its admission lock, bypassing target resolution.
+      // No read of an eventually visible ledger can prove non-admission.
+      assertSeat();
+      reconciledReceipt = await control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true });
+      assertSeat();
     } catch (error) {
-      if (error instanceof McpToolRefusal || error instanceof McpDeploymentPendingError) throw error;
-      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because its receipt store is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof McpToolRefusal) throw error;
+      throw new McpDeploymentPendingError(`deployment reconciliation is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const admittedReceipt = (): Record<string, unknown> | null => {
@@ -3900,20 +3939,36 @@ async function deployExactSha(
     return { state: "accepted", deploymentId: priorAdmission.deploymentId,
       revision: priorAdmission.revision, replayed: true };
   };
-  let receipt = admittedReceipt();
+  let receipt = admittedReceipt() ?? recoveredReceipt ?? reconciledReceipt;
   if (!receipt) try {
+    const refuseUnfencedAdmission = async (message: string, code: string): Promise<never> => {
+      let cleanupFailure = "";
+      try { await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId); }
+      catch (error) { cleanupFailure = `; pending attribution cleanup failed: ${error instanceof Error ? error.message : String(error)}`; }
+      throw new McpToolRefusal(`${message}${cleanupFailure}`, {
+        code, outcome: "not-executed", evidence: "not-admitted", retryable: false,
+      });
+    };
+    if (control.get) {
+      let capabilities: Record<string, unknown>;
+      try {
+        capabilities = await control.get("/api/runtime/deployments/capabilities/v1", callContext);
+      } catch (error) {
+        return await refuseUnfencedAdmission(`durable deployment admission fencing could not be verified; no deployment request was sent (${error instanceof Error ? error.message : String(error)})`,
+          "deploy_admission_fence_unavailable");
+      }
+      if (capabilities.capability !== "viewer-deployments" || capabilities.version !== 1
+        || capabilities.admissionFence !== true) {
+        await refuseUnfencedAdmission("the Viewer does not advertise durable deployment admission fencing; no deployment request was sent",
+          "deploy_admission_fence_unsupported");
+      }
+    }
     assertSeat();
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
     if (error instanceof McpToolRefusal) {
       await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       throw error;
-    }
-    try {
-      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-        dependencies.recordSeatDeployment);
-    } catch (recoveryError) {
-      throw new McpDeploymentPendingError(`deployment admission may have completed, and its receipt could not be reconciled: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`);
     }
     receipt = admittedReceipt();
     if (!receipt) throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
@@ -4928,7 +4983,7 @@ async function projectRuntimeTarget(args: McpToolArgs, dependencies: ViewerMcpDo
 }
 
 function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): McpToolBinding {
-  const tick = orchestratorProjectBinding(dependencies, args => seatTickSettingsTool(args, dependencies), true);
+  const tick = orchestratorProjectBinding(dependencies, (args, context) => seatTickSettingsTool(args, dependencies, context), true);
   const targets = new WeakMap<McpToolArgs, string>();
   const runtime = async (args: McpToolArgs) => {
     let project = targets.get(args);
@@ -4942,7 +4997,7 @@ function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): Mcp
   return Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
     if (args.pipelineStageRuntime === undefined) return tick(args, context);
     const { project } = await runtime(args);
-    return seatTickSettingsTool({ ...args, project }, dependencies);
+    return seatTickSettingsTool({ ...args, project }, dependencies, context);
   }, {
     prepareAdmission: async (args: McpToolArgs) => { if (args.pipelineStageRuntime === undefined) await tick.prepareAdmission?.(args); },
     authorizeReceipt: async (args: McpToolArgs) => { if (args.pipelineStageRuntime !== undefined) await runtime(args); },
@@ -4989,7 +5044,8 @@ function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): Mcp
  * acknowledged with `{changed, revision, changedFields, monitorPromptLength}`
  * and nothing else. A verbose read carries the note once.
  */
-async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
+  throwIfCallEnded(context);
   const attribution = attributionOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const callerSeat = attribution.conversationId
@@ -5134,6 +5190,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const reportAsk = quieted && bridgeReportsEnabled(project) ? seatTickReportAsk(project, dependencies) : {};
 
   const verbose = args.verbose === true || args.full === true;
+  const curationRead = changed && !verbose ? null : await readSeatCuration(project, settings, readSettings, context);
+  if (curationRead) settings = curationRead.settings;
   const { monitorPrompt: storedPrompt, reason: storedReason, instructionLines: storedInstructions, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.curation;
@@ -5158,8 +5216,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     });
   }
 
-  const now = Date.now();
-  const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+  const { now, effective, curation } = curationRead!;
   /* #1845: the note is the one large field here, and a seat changing its
      cadence was reading its own note back three times on every call. It is
      carried only on an explicit full/verbose read, and there once, as
@@ -5172,7 +5229,6 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const compactSettings = storedReason === effective.reason ? settingsWithoutPrompt : { ...settingsWithoutPrompt, reason: storedReason };
   const fenceAnswer = seatTickFenceAnswer(project, effective.wakeIntervalMs, now);
   if (!verbose && fenceAnswer.fence) delete fenceAnswer.fenceDetail;
-  const curation = curationAnswer(project, effective, now);
   return redactPayload({
     project,
     changed,
@@ -5212,7 +5268,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
-    ...(verbose || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
+    ...("status" in curation ? { partial: true, omissions: ["curation"] } : {}),
+    ...(verbose || "status" in curation || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
@@ -5224,6 +5281,45 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...fenceAnswer,
     ...reportAsk,
   });
+}
+
+/** Keep one deadline across retries and refresh controls edited while history
+ * yields. A compact write acknowledgement never enters this read path. */
+async function readSeatCuration(project: string, initial: SeatTickSettings,
+  readSettings: (project: string) => SeatTickSettings, context: McpToolCallContext) {
+  throwIfCallEnded(context);
+  const timeout = new AbortController();
+  const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now() - 500));
+  const panelDeadlineAt = Date.now() + budget;
+  const timer = setTimeout(() => timeout.abort(budget < 5000
+    ? new DeadlineExceededError("MCP tool deadline exceeded", 0) : Error("curation panel read timed out")), budget);
+  const signal = context.signal ? AbortSignal.any([context.signal, timeout.signal]) : timeout.signal;
+  let settings = initial;
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      throwIfCallEnded(context);
+      signal.throwIfAborted();
+      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
+      const now = Date.now(), revision = recordRevision(settings);
+      const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+      const curation = await curationAnswerCooperatively(project, effective, now, signal);
+      throwIfCallEnded(context);
+      signal.throwIfAborted();
+      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
+      const fresh = readSettings(project);
+      if (recordRevision(fresh) === revision) return { settings, now, effective, curation };
+      settings = fresh;
+    }
+    throw Error("seat tick settings changed while being read");
+  } catch (error) {
+    throwIfCallEnded(context);
+    const now = Date.now();
+    const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+    return { settings, now, effective, curation: {
+      status: "unavailable" as const, lastRun: null, live: null,
+      runsError: redactMonitorText(error instanceof Error ? error.message : "curation panel unavailable").slice(0, 300),
+    } };
+  } finally { clearTimeout(timer); }
 }
 
 /** Turbo for the seat: whether it is on, the credit approval and the switch progress. */
@@ -7252,6 +7348,8 @@ async function agentActivity(
       ? { [snapshot.selection.scope === "targeted" ? "undescribedTargetCount" : "undescribedHostCount"]: snapshot.selection.recoveryPending }
       : {};
     return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(projectReadText(filtered, context))), journaled: journal.appended,
+      deliveryEvidence: "not_checked",
+      deliveryNote: "Lifecycle and verified describe host and turn observations. A waiting conversation can still fail delivery or recovery; read message_receipt for the send outcome.",
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
       /* Every projection says what it could not confirm. `pending`: no
@@ -8089,6 +8187,7 @@ function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
 /** Seats, the gateway and live owner relay agents can message a seat.
     Auto-creation still goes through the unchanged operator-only seat route. */
 function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
+  nativeOrchestratorRelayCaller()?.();
   const caller = attributionOf(dependencies);
   if (caller.kind === "gateway" || ownerRelayCaller(dependencies)) return;
   if (caller.conversationId && !caller.via) {
@@ -8097,6 +8196,41 @@ function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencie
   }
   throw new McpToolRefusal("only a designated orchestrator seat, the voice gateway or a verified owner relay may relay to an orchestrator; continue the requested work with your tools, or explain the failure and the owner's next action", {
     code: "orchestrator_relay_refused", retryable: false,
+  });
+}
+
+/** Pin the real peer's identity before the first project-resolution await.
+ * Never derive this handoff from tool arguments or injected attribution. Each
+ * use resolves authority afresh, outside the tool's memoized attribution. */
+function nativeOrchestratorRelayCaller(): (() => string) | null {
+  if (!currentMcpHttpCaller()?.nativePeer || callerCapability() !== undefined) return null;
+  return resolveMcpCallerValue(productionDomainDependencies, "native-orchestrator-relay", () => {
+    const authority = () => attentionCallerAuthority(attentionCallerSources());
+    const original = authority();
+    const refused = () => { throw new McpDispatchNotExecutedError("the native relay caller changed or could not be verified", { code: "orchestrator_relay_refused" }); };
+    if (original.kind === "unidentified" || !original.conversationId) return refused();
+    const id = original.conversationId;
+    const generation = () => {
+      const conversation = agentRegistry().conversation(id as `conversation_${string}`);
+      const current = conversation?.generations.at(-1);
+      return conversation && !conversation.supersededBy && current && current.archivedAt == null
+        ? JSON.stringify([current.id, current.path, conversation.projectOwnership]) : null;
+    };
+    const pinned = generation();
+    const seat = authorizedManagerSeats(productionManagerAuthoritySources()).find(candidate => candidate.conversationId === id);
+    // This handoff repairs designated-seat relays only. Other relay producers
+    // retain their existing authenticated capability and operator paths.
+    if (!pinned || !seat?.project) return refused();
+    const project = seat.project;
+    const epoch = orchestratorSeatFor(project).active?.seatEpoch;
+    return () => {
+      const current = authority();
+      if (current.kind === "unidentified" || current.conversationId !== id
+        || current.nativeProof !== original.nativeProof || generation() !== pinned
+        || orchestratorSeatFor(project).active?.seatEpoch !== epoch
+        || !authorizedManagerSeats(productionManagerAuthoritySources()).some(candidate => candidate.conversationId === id && candidate.project === project)) return refused();
+      return id;
+    };
   });
 }
 

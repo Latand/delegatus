@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { translate } from "@/lib/i18n";
+import { keyEntries } from "@/lib/keys/store";
 import type { FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -75,6 +76,7 @@ const OVERRIDES: Record<string, unknown> = {
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
+    if (url === "/api/keys") return jsonResponse({ keys: keyEntries(false), staging: false, owner: false });
     if (url.startsWith("/api/board")) {
       if (init?.method === "PATCH") {
         const body = JSON.parse(String(init.body)) as {
@@ -93,7 +95,9 @@ const OVERRIDES: Record<string, unknown> = {
     /* The accounts screen's limits blocks read this; an unavailable answer
        leaves them in their loading state, which is all this file needs. */
     if (url.startsWith("/api/limits")) return { ok: false, status: 503, json: async () => ({}), text: async () => "" };
-    return jsonResponse({});
+    // An unimplemented fixture route is unavailable, with no fabricated
+    // successful body for the Settings readers to interpret.
+    return Response.json({ error: "fixture route unavailable" }, { status: 503 });
   }) as unknown as typeof fetch,
 };
 
@@ -311,7 +315,7 @@ test("⋯ opens the board menu over the board: create cells, the places as rows,
      (#2098). The header's entries follow docs/design/header-menu.md:
      Activity, Team and Update as cells, then Settings and Help and learning;
      the project's switches and Archive are a page behind «Project rules». */
-  expect(rows()).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "team", "self-update", "settings", "help", "rules"]);
+  expect(rows()).toEqual(["new-agent", "new-task", "new-pipeline", "review-history", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "team", "self-update", "settings", "help", "rules"]);
   expect(q(root, '[data-mobile2-menu-row="pipelines"]')!.getAttribute("data-mobile2-go")).toBe("pipelines");
   /* Every target is at least 44 px: a row by its own height, a cell by its 60. */
   for (const row of root.querySelectorAll("[data-mobile2-menu-row]")) expect((row as unknown as HTMLElement).className).toMatch(/min-h-11|min-h-\[60px\]/);

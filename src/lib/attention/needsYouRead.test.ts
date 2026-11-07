@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test, setSystemTime } from "bun:test";
 import { buildNeedsYouQueue } from "@/components/attention/attentionQueue";
 import { needsYouSections } from "@/components/attention/needsYouPanel";
 import { conversationNeed, SYSTEM_CLEAR_CARD_SECONDS } from "@/components/attention/needReason";
@@ -6,7 +6,7 @@ import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { translate } from "@/lib/i18n/core";
-import { needsYouEntries, needsYouAnswer, needsYouEvidence, type NeedsYouEvidencePorts } from "./needsYouRead";
+import { needsYouEntries, needsYouAnswer, needsYouEvidence, readNeedsYou, type NeedsYouReadSources, type NeedsYouEvidencePorts } from "./needsYouRead";
 
 const now = Date.parse("2026-10-09T00:00:00Z") / 1000;
 const at = new Date((now - 100) * 1000).toISOString();
@@ -29,6 +29,105 @@ export const fixture = () => ({ files: [
 ] });
 const decision = { id: "update-a", project: "project-a", at, blockers: null };
 const ports = (body = fixture()): NeedsYouEvidencePorts => ({ tasks: body.tasks, pipelines: body.pipelines, dismissals: [], reports: null, admissions: [], unavailable: [] });
+
+function sources(overrides: Partial<NeedsYouReadSources> = {}) {
+  const calls: string[] = [];
+  const readers: NeedsYouReadSources = {
+    board: async () => { calls.push("board"); return fixture(); },
+    tasks: async () => { calls.push("tasks"); return fixture().tasks; },
+    pipelines: async () => { calls.push("pipelines"); return fixture().pipelines; },
+    dismissals: async () => { calls.push("dismissals"); return []; },
+    reports: async () => { calls.push("bridge"); return null; },
+    admissions: async () => { calls.push("admissions"); return []; },
+    identity: async () => { calls.push("identity"); return id => id; },
+    ended: async () => { calls.push("liveness"); return { ids: new Set(), complete: true }; },
+    decision: async () => { calls.push("update"); return null; },
+    locale: async () => "en",
+    ...overrides,
+  };
+  return { readers, calls };
+}
+
+test("read selects update sources before board preparation and memory omits update reads", async () => {
+  setSystemTime(new Date(now * 1000));
+  try {
+    const update = sources();
+    expect((await readNeedsYou("project-a", { kinds: ["update"] }, "panel", update.readers)).partial).toBeUndefined();
+    expect(update.calls).toEqual(["update"]);
+    const memory = sources();
+    const result = await readNeedsYou("project-a", { kinds: ["memory"] }, "panel", memory.readers);
+    expect(result.rows.map(row => row.kind)).toEqual(["memory"]);
+    expect(memory.calls).toEqual(["board", "tasks", "pipelines", "dismissals", "admissions", "identity", "liveness"]);
+  } finally { setSystemTime(); }
+});
+
+test("expiry during a native read stops later sources without waiting for a timer", async () => {
+  setSystemTime(new Date(now * 1000));
+  const input = sources({ board: async () => { setSystemTime(new Date(now * 1000 + 3500)); return fixture(); } });
+  try {
+    const answer = await readNeedsYou("project-a", { cursor: "missing-cursor" }, "panel", input.readers);
+    expect(answer).toMatchObject({ partial: true, countIsLowerBound: true, count: 0, rows: [] });
+    expect(answer.omissions).toEqual(expect.arrayContaining(["board", "dismissals", "bridge", "self-update"]));
+    expect(input.calls).toEqual([]);
+  } finally { setSystemTime(); }
+});
+
+test("a read at the audited population returns explicit partial evidence at its cutoff", async () => {
+  setSystemTime(new Date(now * 1000));
+  const body = {
+    files: Array.from({ length: 17_087 }, (_, i) => file(`retained-${i}`, i === 0 ? { memoryKill: { at } } : {})),
+    tasks: Array.from({ length: 3886 }, (_, i) => ({ id: `retained-task-${i}`, project: "project-a", status: "done", assignments: [] }) as unknown as BoardTask),
+    pipelines: Array.from({ length: 2795 }, (_, i) => lane(`retained-lane-${i}`, "completed")),
+  };
+  const input = sources({ board: async () => body, tasks: async () => { setSystemTime(new Date(now * 1000 + 3500)); return body.tasks; } });
+  try {
+    const answer = await readNeedsYou("project-a", { kinds: ["memory"] }, "panel", input.readers);
+    expect(answer).toMatchObject({ partial: true, countIsLowerBound: true, rows: [], omissions: expect.arrayContaining(["tasks", "liveness", "row-evidence"]) });
+    expect(answer.count).toBe(1);
+    expect(answer).not.toHaveProperty("nextCursor");
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(24_000);
+    expect(input.calls).toEqual([]);
+  } finally { setSystemTime(); }
+});
+
+test("row evidence stops at the pinned cutoff even when timers have not run", () => {
+  setSystemTime(new Date(now * 1000));
+  const body = fixture();
+  try {
+    const answer = needsYouAnswer(body, null, now, "project-a", { ...ports(body),
+      admissions: [{ conversationId: "conversation_seat", at }],
+      canonicalConversationId: id => { setSystemTime(new Date(now * 1000 + 3500)); return id; },
+    }, { deadlineAt: now * 1000 + 3500 });
+    expect(answer).toMatchObject({ partial: true, countIsLowerBound: true, omissions: expect.arrayContaining(["row-evidence", "cleared"]) });
+    expect(answer.rows.length).toBeLessThan(answer.count);
+    expect(answer).not.toHaveProperty("nextCursor");
+  } finally { setSystemTime(); }
+});
+
+test("cancellation releases a held board read and never starts another source", async () => {
+  const started = Promise.withResolvers<AbortSignal>(), held = Promise.withResolvers<ReturnType<typeof fixture>>();
+  const controller = new AbortController();
+  const input = sources({ board: async signal => { started.resolve(signal); return held.promise; } });
+  const reading = readNeedsYou("project-a", { signal: controller.signal }, "panel", input.readers);
+  const signal = await started.promise;
+  controller.abort(Error("caller left"));
+  try {
+    expect(await reading).toMatchObject({ partial: true, omissions: expect.arrayContaining(["board"]), rows: [] });
+    expect(signal.aborted).toBe(true);
+    expect(signal.reason).toBe(controller.signal.reason);
+    expect(input.calls).toEqual([]);
+  } finally { held.resolve(fixture()); }
+});
+
+test("a failed source returns named partial evidence beside retained rows", async () => {
+  setSystemTime(new Date(now * 1000));
+  try {
+    const input = sources({ reports: async () => { throw Error("store unavailable"); } });
+    const answer = await readNeedsYou("project-a", { kinds: ["decision"] }, "panel", input.readers);
+    expect(answer).toMatchObject({ partial: true, omissions: ["bridge"], unavailable: expect.arrayContaining(["bridge"]) });
+    expect(answer.rows.map(row => row.kind)).toEqual(["decision", "decision"]);
+  } finally { setSystemTime(); }
+});
 
 test("the project read equals the panel projection in order, covering every row kind", () => {
   const body = fixture();

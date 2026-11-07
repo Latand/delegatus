@@ -42,8 +42,19 @@ zero hook timeouts and the same 131,163 assertions. Cleanup took
 Each run used an explicit test path through the gate slot and a fresh isolated
 home, configuration, state and temporary directory.
 
-The scan covers committed, staged, unstaged, and untracked changes
-relative to the exact base SHA.
+The hosted scan reads whole changed files relative to the exact base SHA.
+Local pre-push inspection and `privacy:check` use `--added-lines`: each commit
+in the publication range contributes its added lines with three context lines,
+and each new binary blob contributes its complete bytes. Content removed by a
+later commit remains covered. Commit messages, identities, the fingerprint
+catalog and supplied learned-rule texts remain covered. Local privacy ignores
+working-tree, index and untracked changes; commit the intended changes before
+running `privacy:check`. Pre-commit runs whitespace and lint checks.
+
+The hook can defer unavailable media OCR to the required hosted check. Metadata
+and provenance findings still refuse the push. Direct `privacy:check` keeps
+missing-tool failures decisive. See [commit selection](design/privacy-commit-selection.md)
+for the input boundaries, measurements and rollout.
 Diagnostics expose finding classes and counts. Matched values, OCR text,
 metadata values, and file paths remain suppressed.
 

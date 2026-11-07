@@ -261,7 +261,7 @@ async function removeOpenAiKey(host: HTMLElement) {
   await settle();
 }
 
-for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] as const) test(`${lang} ${size}: the six features list under the OpenAI row and name what serves each now; unsaved Rules follows the key`, async () => {
+for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] as const) test(`${lang} ${size}: the six features list under the OpenAI row and name what serves each now; unsaved Rules follows the key and the other choices stay`, async () => {
   setLocale(lang);
   serve();
   const opened: string[] = [];
@@ -603,7 +603,7 @@ test("on every feature page a held choice can be let go: the provider serving it
     expect(radio(page, feature === "rules" ? "openai" : previous).checked).toBe(true);
     expect(page.querySelector("[data-openai-option-reason='held']")).not.toBeNull();
     const puts = calls.filter((call) => call.method === "PUT").length;
-    /* The provider already serving it is the one pressed: that is the decision to stay, so it goes to the server. */
+    /* Keep the fallback explicitly; Rules changes away from its held OpenAI choice. */
     await click(radio(page, previous));
     expect(calls.filter((call) => call.method === "PUT").slice(puts).map((call) => call.body)).toEqual([{ feature, provider: previous }]);
     expect(resolveService(feature)).toMatchObject({ requested: previous, effective: previous, held: false });

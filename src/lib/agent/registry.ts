@@ -1,5 +1,6 @@
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
+import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
 import { hostExitWriterPending, readHostExit, reclaimHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
@@ -2602,7 +2603,7 @@ function canonicalHeldDeliveryCommand(
   const command: HeldDeliveryCommand = {
     operationId: value?.operationId || deliveryId,
     kind: value?.kind === "steer" ? "steer" : value?.kind === "inject" ? "inject" : "send",
-    policy: value?.policy === "queue" || value?.policy === "steer-if-active" || value?.policy === "steer-or-queue"
+    policy: value?.policy === "queue" || value?.policy === "context-or-queue" || value?.policy === "steer-if-active" || value?.policy === "steer-or-queue"
       ? value.policy
       : "interrupt-active",
   };
@@ -5863,6 +5864,11 @@ export class AgentRegistry {
     return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
   }
 
+  worktreeProtectionSnapshot(): WorktreeProtection {
+    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.worktreeProtectionSnapshot() : worktreeProtection(this.readOnlySnapshot());
+  }
+
   /** Prepare the recovery lookups through asynchronous writer admission. */
   async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
     await this.sqliteStore?.prepareRecoveryIndexes(signal);
@@ -6056,6 +6062,32 @@ export class AgentRegistry {
             result.entries[sessionKeyId(entry.key)] = clone(entry);
           }
         }
+      }
+      return result;
+    });
+  }
+
+  /** One original message key, including its retained owner and aliases.
+      A notice poll must not hydrate its recipient's complete delivery history.
+      SQLite callers prepareRecoveryIndexes before this synchronous read. */
+  deliverySnapshotForMessageKey(conversationId: string, clientMessageId: string): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const canonical = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      const conversation = file.conversations[canonical];
+      if (conversation) result.conversations[canonical] = clone(conversation);
+      for (const identity of conversationIdentities(file, canonical)) {
+        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+      }
+      for (const [id, delivery] of deliveryRegistryEntriesForKey(file, "heldDeliveries", clientMessageId, [canonical])) {
+        result.heldDeliveries[id] = clone(delivery);
+        const owner = file.deliveryOperationOwners[delivery.command.operationId];
+        if (owner) result.deliveryOperationOwners[delivery.command.operationId] = clone(owner);
+      }
+      for (const [operationId, owner] of deliveryRegistryEntriesForKey(file, "deliveryOperationOwners", clientMessageId, [canonical])) {
+        result.deliveryOperationOwners[operationId] = clone(owner);
+        const delivery = file.heldDeliveries[owner.deliveryId];
+        if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
       }
       return result;
     });

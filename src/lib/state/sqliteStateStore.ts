@@ -158,6 +158,8 @@ type Database = BunDatabase;
 export interface StateCollectionSeed<T> {
   collection: string;
   schemaVersion: number;
+  /** Explicit compatible formats; accepting one never relabels existing data. */
+  compatibleSchemaVersions?: readonly number[];
   migrationId: string;
   loadRecords(): readonly T[];
   recordJson?(records: readonly T[], index: number): string | undefined;
@@ -168,6 +170,8 @@ export interface StateCollectionSeed<T> {
 export interface SqliteStateCollectionOptions<T> {
   collection: string;
   schemaVersion: number;
+  /** Explicit compatible formats; accepting one never relabels existing data. */
+  compatibleSchemaVersions?: readonly number[];
   busyMessage: string;
   /** Open an existing compatible collection without schema upgrades. Writes
       still require release authority and the activated schema. */
@@ -289,13 +293,19 @@ export function markStateSqliteCutoverReady(filename: string): void {
   cutoverReadyDatabases.add(path.resolve(filename));
 }
 
+function acceptsCollectionSchema(schemaVersion: number, declaration: {
+  schemaVersion: number; compatibleSchemaVersions?: readonly number[];
+}): boolean {
+  return schemaVersion === declaration.schemaVersion || declaration.compatibleSchemaVersions?.includes(schemaVersion) === true;
+}
+
 function collectionMarkersMatch(db: Database, seeds: readonly StateCollectionSeed<unknown>[]): boolean {
   const marker = db.query<{ schema_version: number; migration_id: string }, [string]>(
     "SELECT schema_version, migration_id FROM state_collections WHERE collection = ?",
   );
   return seeds.every((seed) => {
     const current = marker.get(seed.collection);
-    return current?.schema_version === seed.schemaVersion && current.migration_id === seed.migrationId;
+    return current !== null && current !== undefined && acceptsCollectionSchema(current.schema_version, seed) && current.migration_id === seed.migrationId;
   });
 }
 
@@ -385,6 +395,13 @@ function openDatabase(filename: string): Database {
 }
 
 /** Schema creation and the read-only readiness probe share one inventory. */
+const PIPELINE_INTEGRATION_FORMAT = `collection IN ('pipelines','pipelines_archive')
+  AND CASE WHEN json_valid(value_json) THEN
+    json_type(value_json, '$.merge.integration') IS NOT NULL
+    OR json_type(value_json, '$.adoptedCreationRequest') IS NOT NULL
+    OR json_type(value_json, '$.adoptedCreationRequests') IS NOT NULL
+  ELSE 0 END`;
+
 const stateSchema = [
   `CREATE TABLE IF NOT EXISTS state_collections (
     collection TEXT PRIMARY KEY,
@@ -404,6 +421,85 @@ const stateSchema = [
     PRIMARY KEY(collection, row_key),
     FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
   )`,
+  // Keep the privacy clock outside the pruned change journal and surviving
+  // rows. All writers, including imports and physical deletes, advance it in
+  // their own transaction; request and scope bookkeeping leave it untouched.
+  `CREATE TABLE IF NOT EXISTS role_memory_privacy_revision (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0)
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_insert AFTER INSERT ON state_rows
+    WHEN NEW.collection='role_memory' AND NEW.row_key >= 'r:' AND NEW.row_key < 'r;'
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_update AFTER UPDATE ON state_rows
+    WHEN (OLD.collection='role_memory' AND OLD.row_key >= 'r:' AND OLD.row_key < 'r;')
+      OR (NEW.collection='role_memory' AND NEW.row_key >= 'r:' AND NEW.row_key < 'r;')
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_delete AFTER DELETE ON state_rows
+    WHEN OLD.collection='role_memory' AND OLD.row_key >= 'r:' AND OLD.row_key < 'r;'
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
+  `CREATE INDEX IF NOT EXISTS pipeline_integration_format
+    ON state_rows(collection,row_key) WHERE ${PIPELINE_INTEGRATION_FORMAT}`,
+  `CREATE TABLE IF NOT EXISTS pipeline_request_receipts (
+    collection TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    request_key TEXT NOT NULL,
+    PRIMARY KEY(collection, row_key, request_key),
+    FOREIGN KEY(collection, row_key) REFERENCES state_rows(collection, row_key) ON DELETE CASCADE
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_request_receipt_key
+    ON pipeline_request_receipts(collection, request_key, row_key)`,
+  `CREATE INDEX IF NOT EXISTS pipeline_adopted_creation_request
+    ON state_rows(collection, json_extract(value_json, '$.adoptedCreationRequest.key'))
+    WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
+      AND json_extract(value_json, '$.adoptedCreationRequest.key') IS NOT NULL`,
+  `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_insert AFTER INSERT ON state_rows
+    WHEN NEW.collection IN ('pipelines', 'pipelines_archive') AND json_valid(NEW.value_json)
+    BEGIN
+      INSERT INTO pipeline_request_receipts(collection, row_key, request_key)
+        SELECT NEW.collection, NEW.row_key, request_key FROM (
+          SELECT json_extract(NEW.value_json, '$.creationRequest.key') AS request_key
+          WHERE json_type(NEW.value_json, '$.creationRequest.key') = 'text'
+          UNION ALL
+          SELECT json_extract(NEW.value_json, '$.adoptedCreationRequest.key')
+          WHERE json_type(NEW.value_json, '$.adoptedCreationRequest.key') = 'text'
+          UNION ALL
+          SELECT CASE item.type WHEN 'object' THEN json_extract(item.value, '$.key') END
+          FROM json_each(CASE WHEN json_type(NEW.value_json, '$.adoptedCreationRequests') = 'array'
+            THEN json_extract(NEW.value_json, '$.adoptedCreationRequests') ELSE '[]' END) AS item
+          WHERE CASE item.type WHEN 'object' THEN json_type(item.value, '$.key') END = 'text'
+        ) GROUP BY request_key;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_update AFTER UPDATE OF value_json ON state_rows
+    WHEN NEW.collection IN ('pipelines', 'pipelines_archive') AND json_valid(NEW.value_json)
+    BEGIN
+      DELETE FROM pipeline_request_receipts WHERE collection = OLD.collection AND row_key = OLD.row_key;
+      INSERT INTO pipeline_request_receipts(collection, row_key, request_key)
+        SELECT NEW.collection, NEW.row_key, request_key FROM (
+          SELECT json_extract(NEW.value_json, '$.creationRequest.key') AS request_key
+          WHERE json_type(NEW.value_json, '$.creationRequest.key') = 'text'
+          UNION ALL
+          SELECT json_extract(NEW.value_json, '$.adoptedCreationRequest.key')
+          WHERE json_type(NEW.value_json, '$.adoptedCreationRequest.key') = 'text'
+          UNION ALL
+          SELECT CASE item.type WHEN 'object' THEN json_extract(item.value, '$.key') END
+          FROM json_each(CASE WHEN json_type(NEW.value_json, '$.adoptedCreationRequests') = 'array'
+            THEN json_extract(NEW.value_json, '$.adoptedCreationRequests') ELSE '[]' END) AS item
+          WHERE CASE item.type WHEN 'object' THEN json_type(item.value, '$.key') END = 'text'
+        ) GROUP BY request_key;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_delete AFTER DELETE ON state_rows
+    WHEN OLD.collection IN ('pipelines', 'pipelines_archive')
+    BEGIN DELETE FROM pipeline_request_receipts WHERE collection = OLD.collection AND row_key = OLD.row_key; END`,
   `CREATE INDEX IF NOT EXISTS state_rows_collection_order
     ON state_rows(collection, row_order)`,
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
@@ -435,6 +531,12 @@ const stateSchema = [
         OR json_type(value_json,'$.sync.s.handover') IS NULL)`,
   `CREATE INDEX IF NOT EXISTS state_rows_controller_active
     ON state_rows(collection, controller_active, row_order)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_controller_active_key
+    ON state_rows(collection, controller_active, row_key)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_send_failure_sender_v3
+    ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.senderConversationId') END, controller_active, row_key)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_send_failure_fallback_v3
+    ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.fallbackConversationId') END, controller_active, row_key)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
     ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
     WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
@@ -491,6 +593,75 @@ function taskDueIndexCurrent(db: Database): boolean {
   return sql !== undefined && normalize(sql) === normalize(expected);
 }
 
+/** Rebuild a newly installed replay projection from authoritative rows only.
+ * The caller holds the startup writer transaction; a refusal rolls it back. */
+function backfillPipelineRequestReceipts(db: Database): void {
+  const deadline = performance.now() + 30_000;
+  const checkBudget = () => {
+    if (performance.now() >= deadline) throw new Error("pipeline receipt backfill exceeded its startup budget");
+  };
+  // Bun 1.3.3 closes only cached query statements. Keep these startup-only
+  // statements out of that bounded cache and finalize them on every exit.
+  const statements: Array<{ finalize(): void }> = [];
+  const prepare = <Row = unknown, Bindings extends SQLQueryBindings[] = SQLQueryBindings[]>(sql: string) => {
+    const statement = db.prepare<Row, Bindings>(sql);
+    statements.push(statement);
+    return statement;
+  };
+  try {
+    const insert = prepare("INSERT OR IGNORE INTO pipeline_request_receipts(collection,row_key,request_key) VALUES (?,?,?)");
+    const existing = prepare<{ request_key: string }, [string, string]>(
+      "SELECT request_key FROM pipeline_request_receipts WHERE collection=? AND row_key=?");
+    const conflicts = prepare("SELECT 1 FROM pipeline_request_receipts INDEXED BY pipeline_request_receipt_key WHERE collection=? AND request_key=? AND row_key<>? LIMIT 1");
+    const read = prepare<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+    const page = prepare<{ row_key: string }, [string, string]>(
+      "SELECT row_key FROM state_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT 16");
+    for (const collection of ["pipelines", "pipelines_archive"]) {
+      let after = "";
+      for (;;) {
+        checkBudget();
+        const rows = page.all(collection, after);
+        for (const { row_key: key } of rows) {
+          checkBudget();
+          const value = parseSqliteJson(read.get(collection, key)!.value_json, db) as Record<string, unknown> | null;
+          checkBudget();
+          const keys = new Set<string>();
+          const add = (receipt: unknown) => {
+            checkBudget();
+            if (receipt && typeof receipt === "object" && typeof (receipt as { key?: unknown }).key === "string") {
+              keys.add((receipt as { key: string }).key);
+            }
+            checkBudget();
+          };
+          if (value && typeof value === "object") {
+            add(value.creationRequest); add(value.adoptedCreationRequest);
+            if (Array.isArray(value.adoptedCreationRequests)) value.adoptedCreationRequests.forEach(add);
+          }
+          if (existing.all(collection, key).some(row => { checkBudget(); return !keys.has(row.request_key); })) {
+            throw new Error("pipeline receipt projection contradicts its retained row");
+          }
+          for (const requestKey of keys) {
+            checkBudget();
+            if (["pipelines", "pipelines_archive"].some(other => { checkBudget(); return conflicts.get(other, requestKey, key); })) {
+              throw new Error("pipeline receipt key has conflicting retained owners");
+            }
+            checkBudget();
+            insert.run(collection, key, requestKey);
+            checkBudget();
+          }
+          after = key;
+        }
+        if (rows.length < 16) break;
+      }
+    }
+    checkBudget();
+  } finally {
+    for (const statement of statements) statement.finalize();
+  }
+  checkBudget();
+}
+
 function openRawDatabase(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
@@ -500,6 +671,10 @@ function openRawDatabase(filename: string): Database {
         // Missing schema still follows the fenced initialization path below.
         const objects = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type IN ('table','index','trigger')").all();
         const names = new Set(objects.map(row => row.name));
+        if (names.has("state_collections") && !names.has("pipeline_request_receipts")
+          && db.query("SELECT 1 FROM state_collections WHERE collection IN ('pipelines','pipelines_archive') AND schema_version = 6 LIMIT 1").get()) {
+          throw new Error("pipeline format six receipt index is missing; repair required");
+        }
         if ([...stateSchemaNames,
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
@@ -521,6 +696,7 @@ function openRawDatabase(filename: string): Database {
         db.exec("BEGIN IMMEDIATE");
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         for (const sql of stateSchema) db.exec(sql);
+        if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
@@ -535,6 +711,8 @@ function openRawDatabase(filename: string): Database {
         installPipelineControllerSchedule(db, path.dirname(filename), !pipelineControllerReferencesCurrent(db));
         installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
+        assertSqliteInitializationAuthority(filename);
+        assertStateStartupMutation(path.dirname(filename), "state database schema publication");
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
         return db;
@@ -685,7 +863,7 @@ export function initializeStateCollections(
           "SELECT schema_version, migration_id FROM state_collections WHERE collection = ?",
         ).get(seed.collection);
         if (current) {
-          if (current.schema_version !== seed.schemaVersion) {
+          if (!acceptsCollectionSchema(current.schema_version, seed)) {
             throw new Error(`unsupported ${seed.collection} SQLite schema: ${current.schema_version}`);
           }
           if (current.migration_id !== seed.migrationId) {
@@ -1118,6 +1296,13 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
   } finally { rollbackQuietly(db); db.close(); }
 }
 
+/** The partial index answers format authority without decoding the stored lane. */
+export function pipelineHasIntegrationMetadata(filename: string, key: string): boolean {
+  if (!fs.existsSync(filename)) return false;
+  return sharedStateReadonlyDatabase(filename).query(`SELECT 1 FROM state_rows INDEXED BY pipeline_integration_format
+    WHERE ${PIPELINE_INTEGRATION_FORMAT} AND row_key = ? LIMIT 1`).get(key) !== null;
+}
+
 /** Read raw authoritative rows for compatibility projections, with JSON fallback before migration. */
 export function readStateCollectionRows(filename: string, collection: string): unknown[] | null {
   return readStateCollectionsRows(filename, [collection]).get(collection) ?? null;
@@ -1414,7 +1599,7 @@ export class SqliteStateCollection<T> {
       this.cacheAuthority = authority;
     }
     const key = this.options.readCacheKey ? JSON.stringify([path.resolve(this.filename), identity,
-      this.options.collection, this.options.schemaVersion, this.options.readCacheKey, authority]) : undefined;
+      this.options.collection, this.options.schemaVersion, this.options.compatibleSchemaVersions ?? [], this.options.readCacheKey, authority]) : undefined;
     if (key) this.cacheSlot = collectionReadCache(key, this.options.collection === "pipelines_archive");
     return { identity, authority, key };
   }
@@ -1452,7 +1637,7 @@ export class SqliteStateCollection<T> {
     try {
       const meta = this.collectionMeta();
       if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);
-      if (meta.schema_version !== options.schemaVersion) {
+      if (!acceptsCollectionSchema(meta.schema_version, options)) {
         throw new Error(`unsupported ${options.collection} SQLite schema: ${meta.schema_version}`);
       }
     } catch (error) {
@@ -1817,6 +2002,19 @@ export class SqliteStateCollection<T> {
     });
   }
 
+  /** Indexed keyset page over rows retained by the controller. */
+  keyRangeForController(after: string, through: string, limit: number): T[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
+    return this.readDb.query<Pick<CollectionRow, "row_key" | "value_json">, [string, string, string, number]>(`
+      SELECT row_key, value_json FROM state_rows INDEXED BY state_rows_controller_active_key
+      WHERE collection = ? AND controller_active = 1 AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
+    `).all(this.options.collection, after, through, limit).flatMap((row) => {
+      const decoded = this.decodeRow(row.value_json);
+      if (decoded === null && !this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
+      return decoded === null ? [] : [this.options.clone(decoded)];
+    });
+  }
+
   /** Indexed raw-key page for collections whose read contract skips rejected
       rows. The cursor advances over every key, while decoding stays bounded. */
   keyRangeEntries(after: string, through: string, limit: number): Array<{ key: string; value: T | null }> {
@@ -1828,6 +2026,22 @@ export class SqliteStateCollection<T> {
       const decoded = this.decodeRow(row.value_json);
       return { key: row.row_key, value: decoded === null ? null : this.options.clone(decoded) };
     });
+  }
+
+  /** Indexed recipient lookup for the bounded send-failure alarm reader. */
+  jsonTextKeysByRecipient(field: "senderConversationId" | "fallbackConversationId", recipient: string, after: string, limit: number): string[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error("invalid recipient page limit");
+    if (field !== "senderConversationId" && field !== "fallbackConversationId") throw new Error("unsupported recipient field");
+    if (field === "fallbackConversationId") return this.readDb.query<{ row_key: string }, [string, string, number]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_send_failure_fallback_v3
+      WHERE collection='send_failure_notices' AND CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.fallbackConversationId') END=? AND row_key>? AND controller_active=1
+      ORDER BY row_key LIMIT ?
+    `).all(recipient, after, limit).map(row => row.row_key);
+    return this.readDb.query<{ row_key: string }, [string, string, number]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_send_failure_sender_v3
+      WHERE collection='send_failure_notices' AND CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.senderConversationId') END=? AND row_key>? AND controller_active=1
+      ORDER BY row_key LIMIT ?
+    `).all(recipient, after, limit).map(row => row.row_key);
   }
 
   /** Project-scoped replica watermark from indexed group maxima, without
@@ -2049,9 +2263,15 @@ export class SqliteStateCollection<T> {
     const rows = ["pipelines", "pipelines_archive"].flatMap((collection) => {
       if (!("requestKey" in query) && query.active && collection !== "pipelines") return [];
       const row = "requestKey" in query
-        ? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows
-            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL
-            AND json_extract(value_json, '$.creationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
+        ? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_creation_request
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
+              AND json_extract(value_json, '$.creationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
+          ?? db.query<{ value_json: string }, [string, string]>(`SELECT row.value_json FROM pipeline_request_receipts AS receipt INDEXED BY pipeline_request_receipt_key
+            JOIN state_rows AS row ON row.collection = receipt.collection AND row.row_key = receipt.row_key
+            WHERE receipt.collection = ? AND receipt.request_key = ? LIMIT 1`).get(collection, query.requestKey)
+          ?? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_adopted_creation_request
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)
+              AND json_extract(value_json, '$.adoptedCreationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
         : db.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows
             WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.delivery.target.repository') = ?
             AND json_extract(value_json, '$.delivery.target.branch') = ?
@@ -2534,40 +2754,41 @@ export class SqliteStateCollection<T> {
     }, assertCurrent);
   }
 
-  checkpointMirror(write: (records: readonly T[], revision: number) => void): void {
+  checkpointMirror(write: (records: readonly T[], revision: number, schemaVersion: number) => void): void {
     const lease = this.acquireLeaseSync();
     try {
       const records = this.mirrorSnapshot();
-      write(records, this.revision());
+      write(records, this.revision(), this.collectionMeta()!.schema_version);
     } finally {
       this.releaseLeaseSync(lease);
     }
   }
 
-  checkpointMirrorForDemotion(write: (records: readonly T[], revision: number) => void, maxAttempts = 2): number {
+  checkpointMirrorForDemotion(write: (records: readonly T[], revision: number, schemaVersion: number) => void, maxAttempts = 2): number {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       let checkpointRevision = -1;
-      this.checkpointMirror((records, revision) => {
-        checkpointRevision = revision;
-        write(records, revision);
+      let checkpointSchema = -1;
+      this.checkpointMirror((records, revision, schemaVersion) => {
+        checkpointRevision = revision; checkpointSchema = schemaVersion;
+        write(records, revision, schemaVersion);
       });
-      if (this.revision() === checkpointRevision) return checkpointRevision;
+      if (this.revision() === checkpointRevision && this.collectionMeta()!.schema_version === checkpointSchema) return checkpointRevision;
     }
     throw new Error(`${this.options.collection} rollback checkpoint did not converge`);
   }
 
-  async checkpointMirrorForDemotionAsync(write: (records: readonly T[], revision: number) => void, maxAttempts = 2): Promise<number> {
+  async checkpointMirrorForDemotionAsync(write: (records: readonly T[], revision: number, schemaVersion: number) => void, maxAttempts = 2): Promise<number> {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const lease = await this.acquireLease();
-      let revision: number;
+      let revision: number, schemaVersion: number;
       try {
         const records = this.mirrorSnapshot();
-        revision = this.revision();
-        write(records, revision);
+        revision = this.revision(); schemaVersion = this.collectionMeta()!.schema_version;
+        write(records, revision, schemaVersion);
       } finally {
         await this.releaseLease(lease);
       }
-      if (this.revision() === revision) return revision;
+      if (this.revision() === revision && this.collectionMeta()!.schema_version === schemaVersion) return revision;
     }
     throw new Error(`${this.options.collection} rollback checkpoint did not converge`);
   }

@@ -224,6 +224,36 @@ test("completed redispositions after Undo cannot starve the next pending batch",
   expect(selectImportBatch(IMPORT_PROJECT)?.candidates).toEqual([rows[80].id]);
 });
 
+test("import selection looks up each disposition's pass by its complete key", async () => {
+  const { selectImportBatch } = await import("../importCuration");
+  const first = importCandidate(1), next = importCandidate(2);
+  await seedImport([first, next]);
+  const p = pass();
+  patchPass(p.id, { state: "succeeded", endedAt: IMPORT_AT });
+  importCollection()!.boundedPatch(2, tx => tx.put({ ...candidateById(IMPORT_ID, first.id)!, dispositions: [
+    { at: IMPORT_AT, pass: p.id, kind: "drop", ruleIds: [], occurrences: ids(first), reason: "stale", note: "Already accounted for." },
+  ] }));
+  const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const prototype = sqlite.Database.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "query")!;
+  let selection: string | undefined;
+  Object.defineProperty(prototype, "query", { ...descriptor, value: function (this: unknown, sql: string) {
+    if (sql.includes("$.dispositions") && sql.includes("$.loadedAtStart")) selection = sql;
+    return Reflect.apply(descriptor.value, this, [sql]);
+  } });
+  try { expect(selectImportBatch(IMPORT_PROJECT)?.candidates).toEqual([next.id]); }
+  finally { Object.defineProperty(prototype, "query", descriptor); }
+  expect(selection).toBeDefined();
+  const db = new sqlite.Database(path.join(root, "state.sqlite"), { readonly: true });
+  try {
+    const plan = db.query<{ detail: string }, [string, string, string, string]>(`EXPLAIN QUERY PLAN ${selection!}`)
+      .all(`c:${IMPORT_ID}:`, `c:${IMPORT_ID}:\uffff`, IMPORT_PROJECT, JSON.stringify([IMPORT_PROJECT]));
+    // This is an execution-plan bound: visiting every pass before iterating
+    // candidate dispositions made a cold rules read stall for seconds.
+    expect(plan.some(row => /SEARCH p\b.*collection=\? AND row_key=\?/.test(row.detail))).toBe(true);
+  } finally { db.close(); }
+});
+
 test.each(["rewrite", "ranking", "merge", "split", "none"] as const)("pass undo derives candidate state after later %s and prevents duplicate adoption", async later => {
   const candidate = importCandidate(1); await seedImport([candidate]); const p = pass(); const id = await adoptOne(candidate, p);
   patchPass(p.id, { state: "succeeded", endedAt: new Date(NOW + 1).toISOString() });

@@ -15,14 +15,61 @@ import "./envAlias.mjs";
 import { releaseLauncherCredentials, restoreLauncherCredentials } from "./launcher-credentials.mjs";
 import { lockLauncherStartup } from "./launcher-lock.mjs";
 import { SERVICE_UNIT, unitRunsLauncher } from "./launcher-service-proof.mjs";
+import { boundedWait, switchDeadline, SWITCH_TIMEOUT_MS, ROLLBACK_TIMEOUT_MS, STOP_TIMEOUT_MS, SWITCH_OVERRUN, writeLauncherRefusal } from "./launcher-deadline.mjs";
+import { stopRecorded } from "./launcher-adoption.mjs";
 
 export const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
+
+function stopStartedLauncher(child, identity) {
+  if (!child.pid || child.exitCode != null || child.signalCode != null) return false;
+  if (!identity || readStartIdentity(child.pid) !== identity) {
+    child.kill("SIGKILL");
+    return true;
+  }
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${child.pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (Number(fields[2]) === child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      }
+    } catch (error) { if (error.code !== "ESRCH") throw error; return false; }
+  }
+  try { process.kill(child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+  return true;
+}
 
 function atomic(file, value) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
   writeFileSync(temporary, value, { mode: 0o600 });
   renameSync(temporary, file);
+}
+
+async function guardLauncherTransition(paths, trial, installRoot, owner = { pid: process.pid, identity: readStartIdentity(process.pid) }, recordOwner = undefined, handoff = undefined) {
+  if (recordOwner === undefined) {
+    try { recordOwner = JSON.parse(readFileSync(paths.record, "utf8")).launcher; } catch { /* startup may have no record yet */ }
+  }
+  const plan = { paths, requestId: trial.requestId, target: trial.target, installRoot,
+    pid: owner.pid, identity: owner.identity, recordOwner, handoff, state: trial.state,
+    deadline: trial.state === "rolled-back" ? trial.rollbackDeadlineAt : trial.switchDeadlineAt };
+  const child = spawn(process.execPath, [...process.execArgv, join(dirname(fileURLToPath(import.meta.url)), "launcher-rollback-guard.mjs"),
+    Buffer.from(JSON.stringify(plan)).toString("base64")], { detached: true, stdio: ["ignore", "pipe", "inherit"] });
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      child.off("error", failed); child.off("exit", exited); child.stdout?.destroy();
+      if (error) { child.kill("SIGKILL"); reject(error); } else { child.unref(); resolve(); }
+    };
+    const failed = () => finish(new Error("The launcher deadline guard could not start"));
+    const exited = () => finish(new Error("The launcher deadline guard exited before readiness"));
+    const timer = setTimeout(() => finish(new Error("The launcher deadline guard did not become ready")), 2000);
+    child.once("error", failed); child.once("exit", exited);
+    child.stdout?.once("data", data => String(data).trim() === "ready" ? finish() : failed());
+  });
+  return child;
 }
 
 /* delegatus-terminal-bootstrap-v1: the shown command runs outside either
@@ -37,6 +84,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   const trialFile = join(directory, name.replace(/^request/, "trial"));
   const recordFile = join(directory, name.replace(/^request/, "launcher"));
   const applyFile = join(directory, "apply.json");
+  const terminalPaths = { record: recordFile, trial: trialFile, request: plan.requestFile, releasePointer: plan.releasePointer };
   const startupLock = lockLauncherStartup(recordFile);
   assertLauncherAvailable({ record: recordFile });
   const read = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
@@ -47,7 +95,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   }
   const priorEntry = join(prior, "bin", "cli.mjs");
   if (plan.checkout) {
-    const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: prior, encoding: "utf8", timeout: 2000 });
+    const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: prior, encoding: "utf8", timeout: 2000, killSignal: "SIGKILL" });
     if (head.status !== 0 || head.stdout.trim().slice(0, 7) !== plan.priorRevision) throw new Error("The prior release identity changed; no launcher was started.");
   } else if (read(join(prior, "package.json"))?.version !== plan.priorVersion) throw new Error("The prior package identity changed; no launcher was started.");
   let apply = read(applyFile);
@@ -62,7 +110,8 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   // when one exists. Persist custody before a candidate may start.
   atomic(trialFile, JSON.stringify(intent) + "\n");
   if (owned) {
-    apply = { ...apply, state: "switching", externalRestart: true, switchedAt: new Date().toISOString() };
+    apply = { ...apply, state: "switching", externalRestart: true, switchedAt: apply.switchedAt ?? new Date().toISOString() };
+    apply.switchDeadlineAt = switchDeadline(apply);
     atomic(applyFile, JSON.stringify(apply) + "\n");
     atomic(join(directory, "auto-drain.json"), JSON.stringify({ id: intent.requestId, target: intent.target, since: intent.at, until: Date.now() + 600000, persistent: true }) + "\n");
   }
@@ -73,12 +122,14 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   const scratch = mkdtempSync(join(tmpdir(), "delegatus-terminal-preflight-"));
   let loads;
   try {
-    loads = spawnSync(process.execPath, [...process.execArgv, nextEntry, "--version"], { cwd: dirname(dirname(nextEntry)), timeout: 30000, stdio: "ignore",
+    loads = spawnSync(process.execPath, [...process.execArgv, nextEntry, "--version"], { cwd: dirname(dirname(nextEntry)), timeout: 30000, killSignal: "SIGKILL", stdio: "ignore",
       env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"), XDG_CACHE_HOME: join(scratch, "cache"), LLV_STATE_DIR: scratch, LLV_LAUNCHER_CREDENTIAL_HANDOFF: "0",
         LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: plan.root, LLV_LAUNCHER_CHECKOUT: plan.root } }).status === 0;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
   const rollback = detail => {
-    restore(); atomic(trialFile, JSON.stringify({ ...intent, state: "rolled-back", detail }) + "\n");
+    const currentTrial = read(trialFile) ?? intent;
+    restore(); atomic(trialFile, JSON.stringify({ ...currentTrial, state: "rolled-back", detail,
+      rollbackDeadlineAt: Date.now() + ROLLBACK_TIMEOUT_MS }) + "\n");
   };
   if (!loads) rollback("The replacement launcher failed its load check.");
   startupLock.release();
@@ -88,13 +139,50 @@ async function terminalBootstrap(encoded, nextEntry, args) {
         LLV_LAUNCHER_CHECKOUT: plan.root, LLV_LAUNCHER_TRIAL: intent.requestId } });
     child.on("error", () => {}); child.unref(); return child;
   };
+  const refuseLauncher = async (detail, launcherChild, identity, trial) => {
+    const refused = writeLauncherRefusal(terminalPaths, trial, detail);
+    const currentRecord = read(recordFile);
+    const ownsRecord = currentRecord?.launcher?.pid === launcherChild.pid
+      && currentRecord.launcher.startIdentity === identity;
+    let closed;
+    if (launcherChild.pid && launcherChild.exitCode == null && launcherChild.signalCode == null) {
+      closed = new Promise(resolve => launcherChild.once("close", resolve));
+    }
+    const signalled = stopStartedLauncher(launcherChild, identity);
+    const cleanup = [
+      ...(closed && signalled ? [boundedWait(closed, STOP_TIMEOUT_MS, "The refused launcher did not exit after SIGKILL")] : []),
+    ];
+    if (ownsRecord) cleanup.push(
+      stopRecorded(currentRecord.web, currentRecord.socket, currentRecord.port, plan.root, plan.releasePointer),
+      stopRecorded(currentRecord.runtimeHost, currentRecord.socket),
+    );
+    await Promise.all(cleanup);
+    throw new Error(refused.detail);
+  };
+  const supervisePrior = async priorChild => {
+    priorIdentity = readStartIdentity(priorChild.pid);
+    const trial = read(trialFile);
+    const previousOwner = read(recordFile)?.launcher;
+    try {
+      await guardLauncherTransition(terminalPaths, trial, plan.root,
+        { pid: priorChild.pid, identity: priorIdentity }, previousOwner);
+    } catch (error) {
+      await refuseLauncher(`The prior launcher rollback guard could not start: ${error.message}`,
+        priorChild, priorIdentity, trial);
+    }
+  };
   let child = start(loads ? nextEntry : priorEntry);
   let failed = !loads;
   let startedPrior = !loads;
+  let priorIdentity = startedPrior ? readStartIdentity(child.pid) : null;
+  if (startedPrior) await supervisePrior(child);
   const key = viewerBootGateKey(process.env);
   const headers = probeHeadersFrom(dirname(directory));
   if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
-  const deadline = performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS;
+  const rollbackExpiry = failed ? read(trialFile)?.rollbackDeadlineAt : null;
+  const deadline = Math.min(performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+    rollbackExpiry ? performance.now() + Math.max(0, rollbackExpiry - Date.now())
+      : owned ? performance.now() + Math.max(0, switchDeadline(apply) - Date.now()) : Infinity);
   while (performance.now() < deadline) {
     const trial = read(trialFile); const record = read(recordFile);
     if (trial?.requestId === intent.requestId && trial.state === "rolled-back") failed = true;
@@ -115,12 +203,28 @@ async function terminalBootstrap(encoded, nextEntry, args) {
       }
     }
     if (child.exitCode !== null || child.signalCode !== null) {
-      if (startedPrior) throw new Error("The prior release could not start; update custody is retained.");
+      if (startedPrior) {
+        const latest = read(trialFile);
+        await refuseLauncher(latest?.refused ? latest.detail : "The prior release exited before readiness.", child, priorIdentity, latest ?? read(trialFile));
+      }
       failed = true; startedPrior = true; rollback("The replacement launcher failed before readiness."); child = start(priorEntry);
+      await supervisePrior(child);
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error("Launcher health could not be verified; update custody is retained.");
+  const trial = read(trialFile);
+  const detail = trial?.rollbackDeadlineAt && Date.now() >= trial.rollbackDeadlineAt
+    ? "The launcher rollback exceeded its 10 minute deadline"
+    : owned && Date.now() >= switchDeadline(apply)
+      ? trial?.switchOverrun ?? SWITCH_OVERRUN
+      : "Terminal launcher bootstrap exceeded its deadline";
+  if (owned && Date.now() >= switchDeadline(apply) && trial) {
+    trial.switchOverrun = trial.switchOverrun ?? SWITCH_OVERRUN;
+    atomic(trialFile, JSON.stringify(trial) + "\n");
+  }
+  if (!startedPrior) rollback(detail);
+  await refuseLauncher(detail, child, startedPrior ? priorIdentity : readStartIdentity(child.pid), read(trialFile) ?? trial);
+  throw new Error("Launcher health could not be verified; update custody was retained.");
 }
 function readPointer(raw) { try { return JSON.parse(raw); } catch { return null; } }
 
@@ -236,12 +340,93 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
   let trial = null;
   let stopping = false;
   let preflightChild = null;
+  let watchdog = null;
+  let failing = null;
+  let expired = false;
+  let completedRequestId = null;
+  const applyFile = join(dirname(paths.request), "apply.json");
+  const rememberOverrun = detail => {
+    if (!trial) return;
+    trial = { ...trial, switchOverrun: trial.switchOverrun ?? detail };
+    atomic(trialFile, `${JSON.stringify(trial)}\n`);
+    let apply;
+    try { apply = JSON.parse(readFileSync(applyFile, "utf8")); } catch { return; }
+    if (apply?.requestId === trial.requestId && apply.target === trial.target && apply.state === "switching") {
+      atomic(applyFile, `${JSON.stringify({ ...apply, switchDeadlineAt: trial.switchDeadlineAt,
+        switchOverrun: trial.switchOverrun, detail: trial.switchOverrun })}\n`);
+    }
+  };
+  const refuse = detail => {
+    if (!trial && completedRequestId) {
+      let accepted;
+      try { accepted = JSON.parse(readFileSync(applyFile, "utf8")); } catch { /* retain an unreadable owner */ }
+      if (accepted?.requestId === completedRequestId && accepted.target === release.sha && accepted.state === "switching") {
+        trial = { requestId: accepted.requestId, target: accepted.target, rollbackPointer: accepted.rollbackPointer,
+          previousEntry: entry, state: "starting", switchDeadlineAt: accepted.switchDeadlineAt };
+      }
+    }
+    if (trial) { trial = writeLauncherRefusal(paths, trial, detail); detail = trial.detail; }
+    console.error(`[self-update] launcher startup refused: ${detail}`);
+    process.exit(75);
+  };
+  const stopAndRefuse = async detail => {
+    try { await boundedWait(stop(), 2 * STOP_TIMEOUT_MS, "Launcher child shutdown timed out"); }
+    catch (error) { detail = `${detail}: ${error.message}`; }
+    refuse(detail);
+  };
+  const arm = () => {
+    clearTimeout(watchdog);
+    expired = false;
+    const deadline = trial?.state === "rolled-back" ? trial.rollbackDeadlineAt
+      : trial ? trial.switchDeadlineAt : Date.now() + SWITCH_TIMEOUT_MS;
+    watchdog = setTimeout(() => {
+      expired = true;
+      const detail = trial?.state === "rolled-back" ? "The launcher rollback exceeded its 10 minute deadline"
+        : trial ? SWITCH_OVERRUN : "The launcher startup exceeded its 10 minute deadline";
+      if (trial?.state === "rolled-back") { rememberOverrun(detail); void stopAndRefuse(detail); }
+      else {
+        rememberOverrun(detail);
+        console.error(`[self-update] ${detail}; ${trial ? "attempting rollback" : "stopping owned children"}`);
+        void controller.failed(detail).then(async recovered => {
+          if (!recovered) await stopAndRefuse(detail);
+        }).catch(error => refuse(`${detail}: ${error.message}`));
+      }
+    }, Math.max(1, deadline - Date.now()));
+    watchdog.unref();
+  };
   try {
     const value = JSON.parse(readFileSync(trialFile, "utf8"));
     if (typeof value.requestId === "string" && typeof value.previousEntry === "string"
       && typeof value.target === "string" && /^[0-9a-f]{40}$/.test(value.target)
       && (value.rollbackPointer === null || typeof value.rollbackPointer === "string")) trial = value;
   } catch { /* No trial on an ordinary start. */ }
+  // A receipt may precede the Viewer's settlement, then a cold start may be
+  // hours later. That completed switch keeps its original outcome; this boot
+  // gets the ordinary startup budget and never replays an expired switch.
+  {
+    const read = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
+    const accepted = read(applyFile), receipt = read(`${paths.request}.result.json`), owner = read(paths.record)?.launcher;
+    const completedAt = Date.parse(accepted?.switchCompletedAt ?? receipt?.completedAt ?? "");
+    const receiptOwner = receipt?.requestId === accepted?.requestId && receipt?.target === accepted?.target && receipt?.revision === accepted?.target
+      && receipt?.state === "done" && receipt?.issuerPid === accepted?.launcherPid && receipt?.issuerIdentity === accepted?.launcherIdentity
+      && receipt?.launcherPid === owner?.pid && receipt?.launcherIdentity === owner?.startIdentity;
+    const completedTimely = accepted && ["switching", "done"].includes(accepted.state)
+      && accepted.releasePointer === paths.releasePointer && release.sha === accepted.target
+      && (accepted.switchCompletedAt || receiptOwner)
+      && Number.isFinite(completedAt) && completedAt < switchDeadline(accepted)
+      && !accepted.switchOverrun && !receipt?.switchOverrun && !trial?.switchOverrun
+      && (!trial || trial.requestId === accepted.requestId && trial.target === accepted.target);
+    if (completedTimely) {
+      if (!accepted.switchCompletedAt) atomic(applyFile, `${JSON.stringify({ ...accepted, switchCompletedAt: receipt.completedAt })}\n`);
+      if (trial) rmSync(trialFile, { force: true });
+      trial = null;
+      completedRequestId = accepted.requestId;
+    }
+  }
+  if (trial?.refused) {
+    console.error(`[self-update] previous launcher startup refused: ${trial.detail}`);
+    rmSync(trialFile, { force: true }); trial = null;
+  }
   // A refused dispatch stopped nothing and owns no transition. Its preflight
   // trial can survive a crash between the refusal receipt and its removal.
   if (trial?.state === "preflight") {
@@ -255,25 +440,41 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     if (pointer === null) rmSync(paths.releasePointer, { force: true });
     else atomic(paths.releasePointer, pointer);
   };
-  const exec = (nextEntry, requestId) => {
+  const exec = async (nextEntry, requestId) => {
     if (stopping) return;
-    const safeArgs = args.filter(arg => arg !== "--new-token" && arg !== "--new-operator-token");
-    if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
-    process.chdir(dirname(dirname(nextEntry)));
-    // The next image inherits this launcher's settings. A handoff requirement
-    // was addressed to the terminal command that started this process and
-    // ends with it.
-    const inherited = { ...process.env };
-    delete inherited.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
-    process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
-      ...inherited, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
-      LLV_LAUNCHER_TRIAL: requestId,
-    });
-    throw new Error("launcher exec returned without replacing the process");
+    const transition = trial;
+    const handoff = randomUUID();
+    const guard = await guardLauncherTransition(paths, transition, installRoot, undefined, undefined, handoff);
+    try {
+      // Guard readiness yielded. A signal, expiry or recovery may have replaced
+      // this transition while the independent deadline handler was loading.
+      if (stopping || trial !== transition) return;
+      const safeArgs = args.filter(arg => arg !== "--new-token" && arg !== "--new-operator-token");
+      if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
+      process.chdir(dirname(dirname(nextEntry)));
+      // The next image inherits this launcher's settings. A handoff requirement
+      // was addressed to the terminal command that started this process and
+      // ends with it.
+      const inherited = { ...process.env };
+      delete inherited.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
+      process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
+        ...inherited, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
+        LLV_LAUNCHER_TRIAL: requestId, LLV_LAUNCHER_DEADLINE_HANDOFF: handoff,
+      });
+      throw new Error("launcher exec returned without replacing the process");
+    } finally {
+      // Successful exec replaces this stack. A cancelled, failed or returned
+      // exec still owns its guard and must reap it before returning custody.
+      if (guard.exitCode === null && guard.signalCode === null) {
+        const closed = new Promise(resolve => guard.once("close", resolve));
+        guard.kill("SIGKILL");
+        await boundedWait(closed, STOP_TIMEOUT_MS, "The launcher deadline guard did not exit after exec failed");
+      }
+    }
   };
   let pendingRecovery = trial?.state === "preflight" || trial?.state === "starting" && trial.stopped === true;
   if (pendingRecovery) directTrial = true;
-  if (!trial) {
+  if (!trial && !completedRequestId) {
     const read = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
     const applyFile = join(dirname(paths.request), "apply.json");
     const apply = read(applyFile);
@@ -363,7 +564,9 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       if (drain && drain.target !== apply.target) throw new Error("Another admission hold owns this installation.");
       if (!drain) atomic(drainFile, JSON.stringify({ id: apply.requestId, target: apply.target,
         since: apply.startedAt, until: Date.now() + 600000, persistent: true }) + "\n");
-      atomic(applyFile, JSON.stringify({ ...apply, state: "switching", switchedAt: apply.switchedAt ?? new Date().toISOString() }) + "\n");
+      const switching = { ...apply, state: "switching", switchedAt: apply.switchedAt ?? new Date().toISOString() };
+      switching.switchDeadlineAt = switchDeadline(switching);
+      atomic(applyFile, JSON.stringify(switching) + "\n");
       if (request) rmSync(paths.request, { force: true });
       const completed = receipt?.requestId === apply.requestId && receipt.target === apply.target && receipt.state === "done"
         && receiptOwner && receipt.revision === apply.target && release.sha === apply.target;
@@ -373,10 +576,19 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       directTrial = true; pendingRecovery = !completed && !externalReady && !rolledBack && !refused;
     }
   }
-  return {
+  if (trial) {
+    let apply;
+    try { apply = JSON.parse(readFileSync(applyFile, "utf8")); } catch { /* legacy trial */ }
+    trial = { ...trial, switchDeadlineAt: Number.isFinite(trial.switchDeadlineAt) ? trial.switchDeadlineAt
+      : switchDeadline(apply?.requestId === trial.requestId && apply.switchedAt ? apply : trial),
+      ...(trial.state === "rolled-back" ? { rollbackDeadlineAt: trial.rollbackDeadlineAt ?? Date.now() + ROLLBACK_TIMEOUT_MS } : {}) };
+    atomic(trialFile, `${JSON.stringify(trial)}\n`);
+  }
+  const controller = {
     canExec,
     requestStop() {
       stopping = true;
+      clearTimeout(watchdog);
       if (trial && trial.state !== "rolled-back") {
         trial = { ...trial, stopped: true };
         try { atomic(trialFile, `${JSON.stringify(trial)}\n`); }
@@ -384,11 +596,24 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       }
       preflightChild?.kill("SIGKILL");
     },
-    isStopping: () => stopping,
+    isStopping: () => stopping || failing !== null,
+    assertStarting() {
+      if (stopping || failing || expired) throw new Error("Launcher startup was cancelled");
+      if (trial && Date.now() >= (trial.state === "rolled-back" ? trial.rollbackDeadlineAt : trial.switchDeadlineAt)) {
+        throw new Error(trial.state === "rolled-back" ? "The launcher rollback exceeded its 10 minute deadline" : SWITCH_OVERRUN);
+      }
+    },
     retainsCustody: () => trial !== null || existsSync(paths.request),
     hasTrial: () => trial !== null && trial.state !== "rolled-back",
     isReplacementStart: () => trial !== null,
     async recoverPending() {
+      if (trial?.state === "rolled-back" && Date.now() >= trial.rollbackDeadlineAt) {
+        return stopAndRefuse("The launcher rollback exceeded its 10 minute deadline");
+      }
+      if (trial && trial.state !== "rolled-back" && Date.now() >= trial.switchDeadlineAt) {
+        rememberOverrun(SWITCH_OVERRUN);
+        return this.failed(SWITCH_OVERRUN);
+      }
       if (pendingRecovery) await this.failed("The launcher stopped before taking the durable update request.");
     },
     /* `readmit` asks the Viewer to admit an automatic request once more. A
@@ -419,10 +644,13 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
             || acceptedApply.launcherPid !== process.pid || acceptedApply.launcherIdentity !== owner.startIdentity)
         || !dispatchFence()) return false;
       const ownerBinding = JSON.stringify(owner);
-      let intent = { requestId: request.requestId, target: next.sha, rollbackPointer, previousEntry: entry, state: "preflight", at: new Date().toISOString() };
+      let intent = { requestId: request.requestId, target: next.sha, rollbackPointer, previousEntry: entry, state: "preflight", at: new Date().toISOString(),
+        previousDeadlineCapable: 1,
+        switchDeadlineAt: switchDeadline(acceptedApply?.requestId === request.requestId && acceptedApply.target === request.target ? acceptedApply : {}) };
       try { atomic(trialFile, `${JSON.stringify(intent)}\n`); }
       catch (error) { restore(rollbackPointer); throw error; }
       trial = intent;
+      arm();
       directTrial = true;
       // The durable trial takes ownership before the request disappears,
       // including while the load check is running in a separate process.
@@ -432,7 +660,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       const scratch = mkdtempSync(join(tmpdir(), "delegatus-launcher-preflight-"));
       let preflight;
       try {
-        preflight = await new Promise(resolve => {
+        preflight = await boundedWait(new Promise(resolve => {
           const child = spawn(process.execPath, [...process.execArgv, nextEntry, "--version"], {
             cwd: next.dir, stdio: "ignore",
             env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"),
@@ -443,16 +671,17 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
           const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
           child.once("error", () => { clearTimeout(timeout); resolve(false); });
           child.once("exit", code => { clearTimeout(timeout); resolve(code === 0); });
-        });
+        }), 35_000, "The launcher load check did not exit after SIGKILL");
       } finally { preflightChild = null; rmSync(scratch, { recursive: true, force: true }); }
       // Signal handling shares this fence with every image transition. The
       // durable preflight trial remains authoritative for a cold recovery.
-      if (stopping) return;
+      if (stopping || failing || trial?.state !== "preflight") return;
       if (!preflight) {
         restore(rollbackPointer);
         record.set("launcher", { state: "healthy", requestId: request.requestId,
           error: { kind: "fell-back", revision: next.sha.slice(0, 7), detail: "The replacement launcher failed its load check." } });
         rmSync(trialFile, { force: true }); trial = null;
+        clearTimeout(watchdog);
         return;
       }
       // The load check can run for half a minute, and work admitted meanwhile
@@ -463,7 +692,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       // the operator's own decision and is not asked about again.
       let readmitted = request.autoGateId === undefined;
       if (!readmitted) try { readmitted = await readmit() === true; } catch { /* refused below */ }
-      if (stopping) return;
+      if (stopping || failing || trial?.state !== "preflight") return;
       let currentGate;
       try { currentGate = JSON.parse(read(gateFile)); } catch { /* refused below */ }
       const pending = read(paths.request);
@@ -483,6 +712,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         // failure may roll this trial back. The receipt precedes its removal.
         if (read(trialFile) === `${JSON.stringify(intent)}\n`) rmSync(trialFile, { force: true });
         trial = null;
+        clearTimeout(watchdog);
         return false;
       }
       intent = { ...intent, state: "starting" };
@@ -492,18 +722,25 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       record.set("web", { state: "stopping" });
       record.set("runtimeHost", { state: "stopping" });
       record.set("launcher", { state: "relaunching", requestId: request.requestId });
-      await stop();
+      await boundedWait(stop(), 2 * STOP_TIMEOUT_MS, "Launcher child shutdown timed out");
       // The PID and its start identity survive exec. Retain that custody
       // record while children are down so another startup cannot take it.
-      if (stopping) return;
-      exec(nextEntry, trial.requestId);
+      if (stopping || failing) return;
+      await exec(nextEntry, trial.requestId);
     },
-    succeeded() {
+    async succeeded() {
       if (stopping) return;
+      if (expired && !trial) return stopAndRefuse("The launcher startup exceeded its 10 minute deadline");
+      if (trial?.state !== "rolled-back" && trial && Date.now() >= trial.switchDeadlineAt) {
+        rememberOverrun(SWITCH_OVERRUN);
+        return this.failed(SWITCH_OVERRUN);
+      }
+      if (trial?.state === "rolled-back" && Date.now() >= trial.rollbackDeadlineAt) return stopAndRefuse("The launcher rollback exceeded its 10 minute deadline");
+      clearTimeout(watchdog);
       const error = trial?.state === "rolled-back"
         ? { kind: "fell-back", revision: trial.target.slice(0, 7), detail: trial.detail }
         : null;
-      record.set("launcher", { state: "healthy", requestId: trial?.requestId ?? null, error });
+      record.set("launcher", { state: "healthy", requestId: trial?.requestId ?? completedRequestId, error });
       if (trial) {
         let accepted;
         try { accepted = JSON.parse(readFileSync(join(dirname(paths.request), "apply.json"), "utf8")); } catch { /* legacy trial */ }
@@ -511,7 +748,8 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: trial.requestId,
           target: trial.target, previousEntry: trial.previousEntry, launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), revision: release.sha,
           ...(owned ? { issuerPid: accepted.launcherPid, issuerIdentity: accepted.launcherIdentity } : {}),
-          state: error ? "rolled-back" : "done", detail: trial.detail }) + "\n");
+          state: error ? "rolled-back" : "done", detail: trial.detail, completedAt: new Date().toISOString(),
+          switchDeadlineAt: trial.switchDeadlineAt, switchOverrun: trial.switchOverrun }) + "\n");
       }
       if (trial) rmSync(trialFile, { force: true });
       trial = null;
@@ -520,26 +758,51 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     async failed(detail) {
       if (stopping) return false;
       if (!trial || trial.state === "rolled-back") return false;
+      if (failing) return failing;
       // Only a starting intent admitted child shutdown. A load check that
       // failed in this process leaves the serving children and the pointer to
       // the Viewer's settlement; a cold preflight trial still rolls back.
       if (trial.state === "preflight" && !pendingRecovery) {
+        const expired = !!trial.switchOverrun;
+        if (expired) {
+          preflightChild?.kill("SIGKILL");
+          record.set("launcher", { state: "healthy", requestId: trial.requestId,
+            error: { kind: "message", text: trial.switchOverrun } });
+        }
         rmSync(trialFile, { force: true }); trial = null;
-        return false;
+        clearTimeout(watchdog);
+        return expired;
       }
-      await stop();
-      if (stopping) return false;
-      restore(trial.rollbackPointer);
-      trial = { ...trial, state: "rolled-back", detail };
-      atomic(trialFile, `${JSON.stringify(trial)}\n`);
-      if ((directTrial || process.env.LLV_LAUNCHER_TRIAL === trial.requestId) && canExec) {
-        try { exec(trial.previousEntry, trial.requestId); }
-        catch { /* The manager/bootstrap must restart after a failed exec. */ }
-      }
-      // A service-manager restart was requested outside this unit. Its next
-      // start follows the restored pointer, keeping rollback outside Viewer.
-      record.remove();
-      process.exit(75);
+      clearTimeout(watchdog);
+      failing = (async () => {
+        try { await boundedWait(stop(), 2 * STOP_TIMEOUT_MS, "Launcher child shutdown timed out"); }
+        catch (error) { refuse(`${detail}: ${error.message}`); }
+        if (stopping) return false;
+        restore(trial.rollbackPointer);
+        trial = { ...trial, state: "rolled-back", detail: trial.switchOverrun ?? detail,
+          rollbackDeadlineAt: trial.rollbackDeadlineAt ?? Date.now() + ROLLBACK_TIMEOUT_MS };
+        atomic(trialFile, `${JSON.stringify(trial)}\n`);
+        arm();
+        if ((directTrial || process.env.LLV_LAUNCHER_TRIAL === trial.requestId) && canExec) {
+          try { await exec(trial.previousEntry, trial.requestId); }
+          catch (error) { refuse(`${detail}: ${error.message}`); }
+        }
+        // A service-manager restart was requested outside this unit. Its next
+        // start follows the restored pointer, keeping rollback outside Viewer.
+        record.remove();
+        process.exit(75);
+      })();
+      return failing;
     },
   };
+  arm();
+  // This acknowledgement follows timer installation. The preceding image's
+  // guard remains responsible for every import and preparation before here.
+  const handoff = process.env.LLV_LAUNCHER_DEADLINE_HANDOFF;
+  delete process.env.LLV_LAUNCHER_DEADLINE_HANDOFF;
+  if (trial && handoff) {
+    trial = { ...trial, deadlineHandler: { id: handoff, at: Date.now() } };
+    atomic(trialFile, `${JSON.stringify(trial)}\n`);
+  }
+  return controller;
 }

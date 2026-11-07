@@ -32,7 +32,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskFilesFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -2588,6 +2588,101 @@ function richMemory(): RoleMemoryProjectView {
 }
 
 describe("memory profile window: opening under slow data", () => {
+  browserTest("a cached profile is readable while the first full rules response is still held", async () => {
+    const out = path.resolve(".artifacts/memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let releaseRules!: () => void;
+    let gate = Promise.resolve();
+    let rulesAnswered = 0, profileReads = 0, posts = 0;
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => { await gate; rulesAnswered++; return Response.json(rules); },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        profileReads++;
+        const lang = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        const view = service.read("garden", lang);
+        view.overall = { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "haiku", promptVersion: 1, stale: false,
+          answer: { headline: lang === "uk" ? "Збережений профіль проєкту" : "Saved project overview", text: lang === "uk" ? "Готовий опис доступний, поки завантажуються правила." : "The saved overview is available while the rules load.",
+            topics: [{ title: "Saved rule topic", text: "A known rule.", ruleIds: [rules.scopes.flatMap(scope => scope.active)[0]!.id] }] } };
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        rulesAnswered = profileReads = posts = 0; gate = new Promise<void>(resolve => { releaseRules = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-profile-ready]").waitFor({ timeout: 5000 });
+          expect(rulesAnswered).toBe(0); expect(profileReads).toBe(1);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+          const topic = page.getByRole("button", { name: /Saved rule topic/ });
+          expect(await topic.isDisabled()).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-before-rules.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-window-loading]").waitFor();
+          releaseRules();
+          await page.locator("[data-rules-section]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-all-rules.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.profile"), exact: true }).click();
+          await page.locator("[data-profile-ready]").waitFor();
+          expect(await topic.isDisabled()).toBe(false);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(1);
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+        } finally { releaseRules(); await context.close(); }
+      }
+    } finally { releaseRules?.(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
+  browserTest("the first slow rules answer opens both tabs after a poll tick", async () => {
+    const out = path.resolve(".artifacts/memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let answeredFirst!: () => void;
+    let began!: () => void;
+    let started = Promise.resolve();
+    let reads = 0, posts = 0;
+    const pending: Array<() => void> = [];
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => {
+        reads++;
+        const wait = new Promise<void>(resolve => { pending.push(resolve); if (reads === 1) answeredFirst = resolve; });
+        began(); await wait; return Response.json(rules);
+      },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        return Response.json(service.read("garden", new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en"));
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        reads = 0; posts = 0; started = new Promise<void>(resolve => { began = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.clock.install({ time: new Date("2026-01-02T12:00:00.000Z") });
+          await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
+          await started;
+          await page.locator("[data-rules-window-loading]").waitFor();
+          await page.clock.fastForward(16_000);
+          answeredFirst();
+          await page.locator("[data-memory-profile]").waitFor({ timeout: 5000 });
+          await page.locator('[data-memory-profile][aria-busy="false"]').waitFor({ timeout: 5000 });
+          expect(reads).toBe(1);
+          expect(await page.locator("[data-rules-window-loading]").count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-section]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-rules.png`) });
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } finally { for (const release of pending.splice(0)) release(); await context.close(); }
+      }
+    } finally { for (const release of pending.splice(0)) release(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
   browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
     const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
@@ -17780,7 +17875,7 @@ describe("a task's album: every picture its agents made, one click from the card
                 /* The foot keeps one line: every visible child shares the album button's line. */
                 footLines: new Set([...foot.children].filter((child) => child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map((child) => { const rect = child.getBoundingClientRect(); return Math.round((rect.top + rect.bottom) / 2); })).size,
                 exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
-                buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
+                buttonsOnBoard: [...document.querySelectorAll("[data-album-button]")].filter((button) => /\d/.test(button.textContent ?? "")).length,
               };
             });
             readings[`${label}-card`] = cardReading;
@@ -17789,7 +17884,7 @@ describe("a task's album: every picture its agents made, one click from the card
             if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
             if (cardReading.footLines !== 1) failures.push(`${label}: the card foot wraps onto ${cardReading.footLines} lines`);
             if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
-            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
+            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons with a picture count on the board, expected the two tasks with pictures`);
 
             await button.click();
             await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
@@ -17899,6 +17994,24 @@ describe("a task's album: every picture its agents made, one click from the card
     fs.writeFileSync("evidence/task-album/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
+
+  /* docs/design/task-file-preview.md §11.5: the Files view and the preview it opens, over a real
+     repository the driver builds, at 1440 and 820 here and at 390 below, in both languages and themes.
+     Frames go to TASK_FILES_PNG_DIR (default `.artifacts/task-files/`). */
+  for (const phone of [false, true]) {
+    browserTest(`the task's Files view and the preview it opens, on ${phone ? "the phone" : "the desktop"}, in both languages and themes`, async () => {
+      const out = path.resolve(process.env.TASK_FILES_PNG_DIR ?? ".artifacts/task-files", phone ? "phone" : "desktop");
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.mkdirSync(out, { recursive: true });
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try {
+        const result = await captureTaskFilesFrames(browser, out, phone);
+        expect(result.failures).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    }, 1_800_000);
+  }
 });
 
 describe("optimistic UI fix line: refusals and older pages say so in place", () => {
@@ -26963,6 +27076,35 @@ describe("floating voice companion", () => {
     probe.running = false;
     return probe as unknown as { frames: number; entries: number; entriesAwayFromCharacter: number; entryAwayMaxPx: number; towardCharacterFrames: number; towardCharacterMaxPx: number; awayMaxStepPx: number; rises: number; riseMaxFrameShare: number; riseMaxFrameShareStepPx: number; riseMaxFrameSharePathPx: number; riseLongestPathPx: number; risesCutByLeaving: number; lateFramesInRises: number; overlapFrames: number; overlapMaxPx: number; overlapWorstPair: string; bubblesRead: number; orphanLastLines: string[]; carriedFrames: number; carriedMaxPx: number; relocations: number };
   });
+
+  browserTest("review confirmation transitions preserve outward motion", async () => {
+    fs.mkdirSync(HANDOFF, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const rows: Array<{ script: string; width: number; lang: string; scheme: string; motion: Awaited<ReturnType<typeof stopMotionProbe>> }> = [];
+    try {
+      for (const script of ["withdraw", "voiceConfirm"] as const) for (const [width, lang, scheme] of [[1440, "en", "light"], [1220, "uk", "dark"]] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=${script}`, { viewport: { width, height: 800 }, lang, scheme, motion: "no-preference", video: path.join(HANDOFF, "videos") });
+        try {
+          await startMotionProbe(page);
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForSelector("[data-companion-send]", { timeout: 30_000 });
+          const asking = await readCompanion(page);
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
+          await page.waitForTimeout(700);
+          const motion = await stopMotionProbe(page);
+          const final = await readCompanion(page);
+          await page.screenshot({ path: path.join(HANDOFF, `motion-${script}-${width}-${lang}-${scheme}.png`) });
+          rows.push({ script, width, lang, scheme, motion });
+          expect(pageErrors, `${script} ${width} ${lang} ${scheme}`).toEqual([]);
+          expect(asking.floaters, `${script} ${width}: confirmation is shown`).toBeGreaterThan(0);
+          expect(final.floaters, `${script} ${width}: result remains visible`).toBeGreaterThan(0);
+        } finally { await context.close(); }
+      }
+    } finally { await close(); server.stop(); }
+    fs.writeFileSync(path.join(HANDOFF, "motion.json"), JSON.stringify(rows, null, 2) + "\n");
+    expect(rows.map(row => ({ script: row.script, width: row.width, toward: row.motion.towardCharacterFrames, px: row.motion.towardCharacterMaxPx }))).toEqual(rows.map(row => ({ script: row.script, width: row.width, toward: 0, px: 0 })));
+  }, 600_000);
 
   browserTest("by default the character and its lane cover no control and no page text, in one place on three loads and the same at 1.4 s and 6 s: open and collapsed, with the conversation as it starts, with the delegated row and its answer, and filled to its whole height, 1440 and 1000, en and uk, both themes", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });

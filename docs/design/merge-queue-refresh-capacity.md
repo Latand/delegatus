@@ -332,11 +332,14 @@ record's latest update has `base` equal to the current base tip. While one
 exists, a `BEHIND` read waits in `checking` with the reason «waiting for the
 update of PR #N (pipeline <id>)» and `nextReadAt` one poll ahead. A second
 update for the same base would be stale as soon as the owner merges. The owner
-stops owning when it merges (main moves), when it blocks, or when main moves
-under it. The sweep reads at most `refreshLimit` candidates per repository
-per sweep (`autoMerge.ts:1357-1360`), in queue order or, while a refresh is
-outstanding, by oldest read; the first `BEHIND` PR read while no owner exists
-becomes the owner.
+stops owning when it merges (main moves), when it blocks, when main moves
+under it, or when its settled UNKNOWN head reaches the three-minute readiness
+bound. A dispatched merge retains its reservation until reconciled. The sweep
+reads at most `refreshLimit` candidates per repository per sweep, in queue
+order or by oldest read while refreshes, base updates, failed reads or aged
+checking heads need rotation. An observed merge clears followers' obsolete
+update reasons in the same sweep. See [UNKNOWN mergeability in the merge
+queue](merge-queue-unknown.md) for the ancestry check and incident evidence.
 
 ### 5.4 State and records
 

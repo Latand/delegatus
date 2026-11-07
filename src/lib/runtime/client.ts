@@ -326,7 +326,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   acknowledgeTerminalProjection(operationIds: readonly string[]): Promise<number> {
     return this.call("operation-projection-ack", { operationIds: [...operationIds] }) as Promise<number>;
   }
-  requestViewerDeployment(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs, undefined, false, authorize) as Promise<ViewerDeploymentReceipt>; }
+  requestViewerDeployment(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt> { return this.call(request.reconcileOnly ? "viewer-deployment-reconcile" : "viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs, undefined, false, authorize) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   findViewerDeploymentByIdempotencyKey(idempotencyKey: string): Promise<ViewerDeploymentStatus | null> {

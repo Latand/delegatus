@@ -1,3 +1,4 @@
+import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { withHostStopOrigin } from "./hostExit";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { composeBatch, type InboxMember } from "./inboxBatch";
@@ -17,6 +18,7 @@ import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjection
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
+import { NATIVE_INJECT_CAPABILITY } from "./codexCapabilityFlags";
 import { hostSupportsCompact, hostSupportsInject, StructuredDispatchDeferredError, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
   parseStructuredImageRefs,
@@ -282,7 +284,7 @@ interface SendEffect {
   roleMemoryRevision?: string;
   turnId?: string | null;
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
-  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  policy?: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   kind: "send" | "steer";
   runtime?: RuntimeSendSettings;
   /** #844: the selected-card reference the operator submitted with. Replayed
@@ -465,6 +467,7 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
     ? effect.payload.turnId
     : undefined;
   const policy = effect.payload.policy === "queue"
+    || effect.payload.policy === "context-or-queue"
     || effect.payload.policy === "steer-if-active"
     || effect.payload.policy === "steer-or-queue"
     || effect.payload.policy === "interrupt-active"
@@ -777,7 +780,7 @@ function deliveringOwnership(reason: string | null | undefined): DeliveringOwner
   const hostClaim = recorded.slice(separator + 1);
   if (!hostClaim) return null;
   return {
-    executorId: recorded.slice(0, separator),
+    executorId: recorded.slice(0, separator).replace(/^context:/, ""),
     hostClaim: hostClaim === UNKNOWN_HOST_CLAIM ? null : hostClaim,
   };
 }
@@ -1383,7 +1386,7 @@ export class StructuredDeliveryQueue {
       this.unlistedChecks.set(record.operationId, now);
       void this.readStatus(record.operationId).then((durable) => {
         if (!durable.readable || !durable.value || !TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) return;
-        progress.settle(record.operationId, progressTerminalState(durable.value.status), durable.value.reason ?? null);
+        this.settleProgress(record.operationId, durable.value.status, durable.value.reason);
       });
     }
   }
@@ -1401,6 +1404,9 @@ export class StructuredDeliveryQueue {
         || this.activeSteers.has(effect.operationId) || this.activeInjections.has(effect.operationId)) continue;
       const record = progress.get(effect.operationId);
       const due = record?.nextWakeAt ? Date.parse(record.nextWakeAt) : null;
+      // An event wait has no promised timer to lose. The safety pass still
+      // checks it, and the host's next state change wakes it independently.
+      if (record?.waitReason === "awaiting-turn") continue;
       if (record && (due === null || due + WAKE_GRACE_MS > now)) continue;
       this.noteWait(effect, "wake-lost", { wake: "retry", detail: record ? `due ${Math.round((now - due!) / 1000)}s earlier` : "admitted without a wake" });
     }
@@ -2145,7 +2151,7 @@ export class StructuredDeliveryQueue {
          delivering could be delivered a SECOND time by whichever pass caught
          the journal at a bad moment. */
       let durable = durableStatuses.get(effect.operationId) ?? null;
-      if (effect.kind === "inject" && this.activeInjections.has(effect.operationId)) continue;
+      if (this.activeInjections.has(effect.operationId)) continue;
       if (this.activeSteers.has(effect.operationId)) continue;
       if (durable?.status === "delivering") {
         /* A detached steer observer may have settled this operation while this
@@ -2276,6 +2282,36 @@ export class StructuredDeliveryQueue {
         if (!await this.executeInjection(effect, host, health, lane)) return true;
         continue;
       }
+      if (effect.kind === "send" && effect.policy === "context-or-queue" && heldForUpdate()) {
+        updateHeld = true;
+        this.noteWait(effect, "update-drain");
+        continue;
+      }
+      if (effect.kind === "send" && effect.policy === "context-or-queue"
+        && effect.turnId === undefined && !effect.content.images.length && !effect.runtime
+        && health.status === "active" && health.activeTurnRef && health.activeFlags.includes(NATIVE_INJECT_CAPABILITY)
+        && hostSupportsInject(host)) {
+        const binding = await this.checking(lane, effect, "reading context injection ownership",
+          () => readEvidence(() => this.port.injectionBinding?.(effect.conversationId) ?? null));
+        if (!binding.readable || !binding.value) {
+          this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "context injection ownership is unavailable" });
+          return this.fenceUnavailable();
+        }
+        if (!await this.executeInjection({ kind: "inject", operationId: effect.operationId,
+          conversationId: effect.conversationId, text: effect.content.text, contentDigest: effect.contentDigest,
+          binding: binding.value, turnId: health.activeTurnRef, eventSeq: effect.eventSeq,
+          selectedContext: effect.selectedContext, origin: effect.origin }, host, health, lane, true, () => {
+          if (heldForUpdate() || this.port.handoffHeld?.()) throw new StructuredDispatchDeferredError("automatic-update-handoff");
+          if (effect.roleMemoryRevision && roleMemoryRevisionToken() !== effect.roleMemoryRevision)
+            throw new StructuredSendRefusedError(ROLE_MEMORY_CHANGED_MESSAGE);
+          let current: RuntimeInjectionBinding | null | undefined;
+          try { current = this.port.injectionBinding?.(effect.conversationId); }
+          catch { throw new StructuredDispatchDeferredError("context injection ownership is unavailable"); }
+          if (!current || current.threadId !== binding.value!.threadId || current.accountId !== binding.value!.accountId
+            || current.writerClaim !== binding.value!.writerClaim) throw new StructuredDispatchDeferredError("context injection ownership changed");
+        })) return true;
+        continue;
+      }
       const steerOrQueue = effect.policy === "steer-or-queue";
       const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active"
         // An explicit next-turn fence queues until idle, including after recovery.
@@ -2344,6 +2380,8 @@ export class StructuredDeliveryQueue {
         continue;
       }
       if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt && !queuesDuringTurn) {
+        if (health.activeTurnRef) this.port.progress?.deadline(effect.operationId,
+          new Date(this.timing.now() + SEND_SETTLEMENT_WINDOW_MS).toISOString(), "turn-boundary");
         const interrupted = replacementIsActive && this.interruptAcknowledged.has(effect.operationId);
         const reconciled = interrupted ? await this.reconcileStalledInterrupt(effect) : "wait";
         if (reconciled === "delivered") continue;
@@ -2657,6 +2695,21 @@ export class StructuredDeliveryQueue {
       if (error instanceof StructuredDispatchDeferredError) {
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
         this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: reason });
+        this.retrySoon();
+        return "stop";
+      }
+      if (effect.kind === "send" && effect.policy === "context-or-queue"
+        && error instanceof StructuredSendRefusedError && reason === "stale-turn") {
+        // A turn can start during native metadata publication. Nothing was
+        // written by this attempt; reconsider context versus wake under its key.
+        const current = await this.readStatus(effect.operationId);
+        if (!current.readable || !current.value) { this.retrySoon(); return "stop"; }
+        if (context.priorDeliveryUnverified || current.value.deliveryUnverified === true) {
+          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+          return "next";
+        }
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+        this.noteWait(effect, "awaiting-turn", { wake: "retry", detail: "the turn changed before the hand-over" });
         this.retrySoon();
         return "stop";
       }
@@ -3095,7 +3148,7 @@ export class StructuredDeliveryQueue {
    *   this operation's dedup marker before writing, and `uncertain` is a
    *   terminal the journal refuses to transition out of.
    */
-  private async executeInjection(effect: InjectEffect, host: EngineHost, health: HostState, lane?: DeliveryLane): Promise<boolean> {
+  private async executeInjection(effect: InjectEffect, host: EngineHost, health: HostState, lane?: DeliveryLane, wakeIfIdle = false, beforeWrite?: () => void): Promise<boolean> {
     /* Its acknowledgement already came back and its evidence is still being
        read. Re-issuing here would be a second insertion, which the engine does
        not deduplicate. */
@@ -3109,7 +3162,8 @@ export class StructuredDeliveryQueue {
     if (!binding || !current.value || binding.threadId !== health.sessionKey
       || binding.threadId !== current.value.threadId || binding.accountId !== current.value.accountId
       || binding.writerClaim !== current.value.writerClaim) {
-      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-generation" });
+      await this.transitionUnlessSettled(effect.operationId, wakeIfIdle ? "queued" : "failed", { reason: "stale-generation" });
+      if (wakeIfIdle) this.retrySoon();
       return true;
     }
     if (!hostSupportsInject(host)) {
@@ -3129,7 +3183,7 @@ export class StructuredDeliveryQueue {
     if (lane?.released || this.retirementExecutor.retired) return false;
     if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
       turnId: health.activeTurnRef,
-      reason: deliveringOwnershipReason(this.executorId, { readable: true, value: binding.writerClaim }),
+      reason: deliveringOwnershipReason(wakeIfIdle ? `context:${this.executorId}` : this.executorId, { readable: true, value: binding.writerClaim }),
     },
     /* Only from a state nobody is delivering it in, as for a send: the journal
        answers a second `delivering` write as a replay, and the engine does not
@@ -3146,19 +3200,18 @@ export class StructuredDeliveryQueue {
       return false;
     }
     this.noteWait(effect, "dispatching", { lane, attempted: true, wake: "event" });
+    const authorize = () => {
+      const seat = this.port.seatRecipient?.(effect.conversationId);
+      if (seat?.kind === "unknown") throw new StructuredDispatchDeferredError(seat.reason);
+      if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
+      const retired = this.port.conversationRetired?.(effect.conversationId);
+      if (retired) throw new StructuredSendRefusedError(retired);
+      this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
+      beforeWrite?.();
+    };
     let outcome;
     try {
-      const seat = this.port.seatRecipient?.(effect.conversationId);
-      if (seat?.kind === "unknown") {
-        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: seat.reason });
-        this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: seat.reason });
-        this.retrySoon();
-        return true;
-      }
-      if (seat?.kind === "revoked") {
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: seat.reason });
-        return true;
-      }
+      authorize();
       outcome = await host.inject({
         operationId: effect.operationId,
         threadId: binding.threadId,
@@ -3167,13 +3220,27 @@ export class StructuredDeliveryQueue {
         ...(effect.turnId !== undefined ? { expectedTurnId: effect.turnId } : {}),
         ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
         ...(effect.origin ? { origin: effect.origin } : {}),
-      });
+      }, authorize);
     } catch (error) {
       const reason = failureReason(error);
       /* A REFUSED injection wrote nothing and can say so plainly. Anything else
          may have written, and saying `failed` there would tell a caller the
          context is absent when it may be sitting in the thread. */
+      if (error instanceof StructuredDispatchDeferredError) {
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+        this.retrySoon();
+        return true;
+      }
+      if (error instanceof StructuredSendRefusedError) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        return true;
+      }
       if (error instanceof StructuredInjectError && error.phase === "refused") {
+        if (wakeIfIdle) {
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+          this.retrySoon();
+          return true;
+        }
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
         return true;
       }
@@ -3193,7 +3260,7 @@ export class StructuredDeliveryQueue {
        already been written. Ordering on the thread was fixed when the request
        returned, so a send admitted a moment later neither overtakes the
        injection nor needs to wait for its evidence. */
-    const settle = this.settleObservedInjection(effect, outcome).finally(() => {
+    const settle = this.settleObservedInjection(effect, outcome, wakeIfIdle).finally(() => {
       this.activeInjections.delete(effect.operationId);
       this.retrySoon();
     });
@@ -3208,7 +3275,7 @@ export class StructuredDeliveryQueue {
    * injection (#1560). Runs detached from the delivery pass; see the note at
    * its call site for why that is required rather than merely tidy.
    */
-  private async settleObservedInjection(effect: InjectEffect, outcome: RuntimeInjectOutcome): Promise<void> {
+  private async settleObservedInjection(effect: InjectEffect, outcome: RuntimeInjectOutcome, wakeIfIdle = false): Promise<void> {
     let observed: boolean;
     try {
       observed = await outcome.observe();
@@ -3230,7 +3297,7 @@ export class StructuredDeliveryQueue {
       reason: outcome.placement === "pending-input"
         ? INJECTION_INTO_RUNNING_TURN
         : INJECTION_INTO_HISTORY,
-    });
+    }, wakeIfIdle ? { confirmedDelivery: true } : undefined);
   }
 
   /**

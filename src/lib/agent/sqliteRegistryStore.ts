@@ -25,6 +25,7 @@ import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, Seat
 import { sessionKeyId } from "./sessionKey";
 import { drainRegistryEndingChanges, endingInstant, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+import { protectionConversation, protectionDelivery, protectionEntry, type WorktreeProtection } from "./worktreeProtection";
 
 /** Startup owns these transactions. Explicit statements also pass through the
  * writer observer; Bun's transaction callback API bypasses Database.exec. */
@@ -1690,6 +1691,53 @@ export class SqliteAgentRegistryStore {
   readOnlySnapshot(): SqliteRegistrySnapshot {
     if (this.preparedReader && !this.writerHeld) return this.preparedReader.readOnlySnapshot();
     return withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured()));
+  }
+
+  /** Filesystem retention needs current owner evidence, never historical
+   * delivery bodies or the complete immutable registry graph. Normalize one
+   * stored row at a time and keep only the fields its existing guard reads. */
+  worktreeProtectionSnapshot(): WorktreeProtection {
+    const admitted = this.writerHeld;
+    if (!admitted) this.db.exec("BEGIN");
+    try {
+      const result: WorktreeProtection = { entries: {}, conversations: {}, heldDeliveries: {} };
+      for (const collection of ["entries", "conversations", "heldDeliveries"] as const) {
+        // Each state gets its own index seek. Null is the legacy default
+        // "held"; the normalizer still rejects corrupt idle/image commands.
+        const sql = collection === "heldDeliveries"
+          ? ["held", "assigned", "delivery-uncertain", null].map(() =>
+            `SELECT row_key,value_json,row_order FROM ${this.recordsSource}
+              WHERE collection='heldDeliveries' AND json_extract(value_json,'$.state') IS ?`).join(" UNION ALL ") + " ORDER BY row_order"
+          : `SELECT row_key,value_json FROM ${this.recordsSource} WHERE collection=? ORDER BY row_order`;
+        // This read owns its statement. An interrupted iterator must not leave
+        // a cached Bun statement unusable after the peer repairs the row.
+        const statement = this.db.prepare<{ row_key: string; value_json: string }, (string | null)[]>(sql);
+        this.onRowPayloadRead?.(collection, 0);
+        try {
+          const cursor = statement.iterate(...(collection === "heldDeliveries" ? ["held", "assigned", "delivery-uncertain", null] : [collection]));
+          for (;;) {
+            const next = cursor.next();
+            if (next.done) break;
+            const row = next.value;
+            this.onRowPayloadRead?.(collection, 1);
+            this.onRowPayloadParse?.(collection, 1);
+            const value = parseSqliteJson(row.value_json, this.db);
+            const normalized = this.normalizePartial({ version: 2, entries: {}, receipts: {}, [collection]: { [row.row_key]: value } });
+            if (collection === "entries") result.entries[row.row_key] = protectionEntry(normalized.entries[row.row_key]!);
+            else if (collection === "conversations") result.conversations[row.row_key] = protectionConversation(normalized.conversations[row.row_key]!);
+            else {
+              const delivery = protectionDelivery(normalized.heldDeliveries[row.row_key]!);
+              if (delivery) result.heldDeliveries[row.row_key] = delivery;
+            }
+          }
+        } finally { statement.finalize(); }
+      }
+      if (!admitted) this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { if (!admitted) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
   }
 
   /** Prepare an immutable view without holding the writer connection across

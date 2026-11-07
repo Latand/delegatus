@@ -9,7 +9,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, expect, spyOn, test } from "bun:test";
 
-import type { RegistryFile } from "@/lib/agent/registry";
+import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests, type RegistryFile } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
@@ -289,13 +289,13 @@ test("a settled, quiet, unclaimed host is retired and the audit says why", async
 test("unknown process liveness refuses and cannot reconcile a gone row", async () => {
   let reconciled = false;
   const probe = await sweep({ pidAlive: () => undetermined("kernel unavailable"),
-    reconcileGone: async () => { reconciled = true; return true; } });
+    reconcileGone: async () => { reconciled = true; return { status: "gone" }; } });
   expect(probe.terminated).toEqual([]);
   expect(reconciled).toBe(false);
   expect(probe.report.refused).toMatchObject([{ clause: "process-identity", undetermined: true, reason: "kernel unavailable" }]);
 });
 
-test.each(["process", "exitProcess"] as const)("a gone scoped root retained in %s reaches termination rather than gone reconciliation", async field => {
+test.each(["process", "exitProcess"] as const)("a gone scoped root retained in %s reconciles without entering termination", async field => {
   const file = snapshot();
   const host = file.entries[`claude:${SESSION}`]!.structuredHost!;
   host.scope = { unit: "delegatus-agent-retirement.scope", bootEpoch: BOOT_EPOCH };
@@ -305,13 +305,13 @@ test.each(["process", "exitProcess"] as const)("a gone scoped root retained in %
   let reconciled = false;
   const probe = await sweep({ snapshot: () => file, pidAlive: () => determined(false),
     processIdentity: () => undetermined("root exited"),
-    reconcileGone: async () => { reconciled = true; return true; } });
+    reconcileGone: async () => { reconciled = true; return { status: "gone" }; } });
   expect(probe.report.failed).toEqual([]);
   expect(probe.report.refused).toEqual([]);
-  expect(probe.report.gone).toEqual([]);
-  expect(reconciled).toBe(false);
-  expect(probe.terminated).toMatchObject([{ pid: identity.pid, startIdentity: identity.startIdentity }]);
-  expect(probe.report.retired).toHaveLength(1);
+  expect(probe.report.gone).toHaveLength(1);
+  expect(reconciled).toBe(true);
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
 });
 
 test.each(["process", "exitProcess"] as const)("a retained %s identity and scope are rechecked after asynchronous measurement", async field => {
@@ -324,8 +324,8 @@ test.each(["process", "exitProcess"] as const)("a retained %s identity and scope
     host.process = field === "process" ? identity : null;
     host.exitProcess = field === "exitProcess" ? identity : undefined;
     let current = file;
-    const probe = await sweep({ snapshot: () => current, pidAlive: () => determined(false),
-      processIdentity: () => undetermined("root exited"), treePss: async () => {
+    const probe = await sweep({ snapshot: () => current, pidAlive: () => determined(true),
+      processIdentity: () => determined(identity.startIdentity), treePss: async () => {
         await Promise.resolve();
         const changed = { ...host,
           [field]: change === "missing" ? null : { ...identity,
@@ -365,7 +365,7 @@ for (const alive of [true, false]) test(`a cursor write failure alarms before ${
   let acted = false;
   await expect(sweep({ writeCursor: () => { throw new Error("cursor disk unavailable"); },
     pidAlive: () => determined(alive),
-    reconcileGone: async () => { acted = true; return true; },
+    reconcileGone: async () => { acted = true; return { status: "gone" }; },
     terminate: async () => { acted = true; throw new Error("unreachable"); } })).rejects.toThrow("cursor disk unavailable");
   expect(acted).toBe(false);
 });
@@ -871,8 +871,11 @@ test("a host whose record stored no kernel identity blocks retirement", async ()
   }, "undetermined");
 });
 
-test("a pid that no longer carries the recorded identity blocks retirement", async () => {
-  await refusedBy("process-identity", { processIdentity: () => determined(`${HOST_PID}:999999`) });
+test("a pid that no longer carries the recorded identity reconciles without termination", async () => {
+  const probe = await sweep({ processIdentity: () => determined(`${HOST_PID}:999999`), reconcileGone: async () => ({ status: "gone" }) });
+  expect(probe.report.gone).toHaveLength(1);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.terminated).toEqual([]);
 });
 
 test("a sweep defers past its batch bound rather than overrunning the next tick", async () => {
@@ -1026,6 +1029,7 @@ test("a replacement host on the same session key is never reached", async () => 
       },
     }),
     processIdentity: observedIdentity,
+    reconcileGone: async () => ({ status: "gone" }),
     processMemory: (pids) => procBackend.processMemory(pids),
     ppidMap: () => procBackend.ppidMap(),
     owned: () => false,
@@ -1037,12 +1041,12 @@ test("a replacement host on the same session key is never reached", async () => 
     }),
   });
 
-  /* The predicate itself refuses, so the termination is never even reached. */
+  /* Only the predecessor custody is gone; the replacement tree is untouched. */
   expect(probe.report.retired).toEqual([]);
   expect(probe.report.failed).toEqual([]);
   expect(probe.terminated).toEqual([]);
-  expect(probe.report.refused).toHaveLength(1);
-  expect(probe.report.refused[0]!.clause).toBe("process-identity");
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.gone).toHaveLength(1);
   expect(cleared).toEqual([]);
   for (const pid of tree.tree) expect(procBackend.pidAlive(pid)).toBe(true);
 });
@@ -1424,7 +1428,7 @@ class ResumedEngineChild extends EventEmitter {
   }
 }
 
-test("a retired conversation still opens and resumes from its transcript", async () => {
+test.each(["retired", "gone"] as const)("a %s conversation still opens and resumes from its transcript with events intact", async mode => {
   /* #747 asks for this as an assertion rather than an assumption: retire a
      host for real, then OPEN the conversation's transcript and RESUME the
      session from it, through the same adoption path production uses. */
@@ -1449,32 +1453,50 @@ test("a retired conversation still opens and resumes from its transcript", async
   fs.utimesSync(transcript, quiet, quiet);
   const before = fs.readFileSync(transcript);
 
-  const tree = await spawnFixtureHostTree();
-  const retired = await sweep({
-    snapshot: () => snapshot({
-      entries: {
-        [`claude:${SESSION}`]: entry({
-          artifactPath: transcript,
-          cwd,
+  const eventStore = new FileRuntimeEventStore(path.join(home, "events"));
+  const event = { kind: "delta" as const, turnId: "retained-turn", text: "retained output", seq: 1 };
+  eventStore.append(SESSION, event);
+  const eventsBefore = eventStore.load(SESSION);
+  if (mode === "gone") {
+    const file = normalizeRegistry({ ...snapshot({ entries: {
+      [`claude:${SESSION}`]: entry({ artifactPath: transcript, cwd,
+        structuredHost: { ...(entry().structuredHost as object),
+          process: { pid: 2_147_483_647, startIdentity: "exited-host", bootEpoch: BOOT_EPOCH },
+          scope: { unit: "delegatus-agent-resume.scope", bootEpoch: BOOT_EPOCH },
+          eventCursor: 0, activeTurnRef: "unsettled-turn" },
+      }),
+    } }), version: 2 });
+    const filename = path.join(home, "registry.json");
+    fs.writeFileSync(filename, JSON.stringify(file));
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", now: () => NOW });
+    setAgentRegistryForTests(registry);
+    try {
+      const reconciled = await sweep({ snapshot: () => registry.readOnlySnapshot(), pidAlive: () => determined(false),
+        processIdentity: () => undetermined("process absent"), durableEventTail: () => determined(1),
+        scopeLoadState: async () => "not-found" });
+      expect(reconciled.report.gone).toHaveLength(1);
+      expect(reconciled.terminated).toEqual([]);
+      expect(registry.readOnlySnapshot().entries[`claude:${SESSION}`]!.artifactPath).toBe(transcript);
+      expect(registry.readOnlySnapshot().conversations).toEqual(file.conversations);
+    } finally { setAgentRegistryForTests(null); registry.close(); }
+  } else {
+    const tree = await spawnFixtureHostTree();
+    const retired = await sweep({
+      snapshot: () => snapshot({ entries: {
+        [`claude:${SESSION}`]: entry({ artifactPath: transcript, cwd,
           structuredHost: { ...(entry().structuredHost as object), process: { pid: tree.pid, startIdentity: tree.startIdentity, bootEpoch: BOOT_EPOCH } },
         }),
-      },
-    }),
-    /* The real stat, so the transcript this resume reads is the file on disk. */
-    transcriptStat: undefined,
-    processIdentity: observedIdentity,
-    processMemory: (pids) => procBackend.processMemory(pids),
-    ppidMap: () => procBackend.ppidMap(),
-    owned: () => false,
-    terminate: (ref) => terminateStructuredHostTree(ref, {
-      terminateOwnedHost: async () => false,
-      retireRegistryEntry: () => {},
-      graceMs: 200,
-      deadlineMs: 5_000,
-    }),
-  });
-  expect(retired.report.retired).toHaveLength(1);
-  for (const pid of tree.tree) expect(procBackend.pidAlive(pid)).toBe(false);
+      } }),
+      transcriptStat: undefined, processIdentity: observedIdentity,
+      processMemory: (pids) => procBackend.processMemory(pids), ppidMap: () => procBackend.ppidMap(), owned: () => false,
+      terminate: (ref) => terminateStructuredHostTree(ref, {
+        terminateOwnedHost: async () => false, retireRegistryEntry: () => {}, graceMs: 200, deadlineMs: 5_000,
+      }),
+    });
+    expect(retired.report.retired).toHaveLength(1);
+    for (const pid of tree.tree) expect(procBackend.pidAlive(pid)).toBe(false);
+  }
+  expect(eventStore.load(SESSION)).toEqual(eventsBefore);
 
   /* Opened: the transcript is byte-identical and still parses into the
      conversation the retired host was serving. */
@@ -1503,7 +1525,7 @@ test("a retired conversation still opens and resumes from its transcript", async
   const resumed = await ClaudeStreamBrokerHost.adopt(SESSION, {
     cwd,
     claudeProjectsDir: projects,
-    eventStore: new FileRuntimeEventStore(path.join(home, "events")),
+    eventStore,
     deliveryLedger: ledger,
     shutdownGraceMs: 50,
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
@@ -1525,6 +1547,7 @@ test("a retired conversation still opens and resumes from its transcript", async
     expect(argv).not.toContain("--session-id");
     expect(confirmed).toEqual([{ entryId: "delivery-1", engineMessageId: messageId }]);
     expect((await resumed.health()).status).toBe("idle");
+    expect(eventStore.load(SESSION).slice(0, eventsBefore.length)).toEqual(eventsBefore);
   } finally {
     await resumed.release();
   }
