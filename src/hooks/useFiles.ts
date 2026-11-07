@@ -1902,6 +1902,18 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       }
       void load();
     };
+    // Confirmation can discard the catalog already in flight; replacement or
+    // rescoping also clears certified rows. Each mounted scope owes a fresh
+    // read, even when the runtime is live and emits no new files revision.
+    let authoritySignature = browserCreationAuthority()?.signature;
+    const onAuthorityChanged = () => {
+      const next = browserCreationAuthority()?.signature;
+      if (next === authoritySignature) return;
+      authoritySignature = next;
+      if (next) onChanged();
+    };
+    const unsubscribeTeamAuthority = subscribeTeamAuthority(onAuthorityChanged);
+    const unsubscribeWorkspaces = subscribeConfirmedWorkspaces(onAuthorityChanged);
     window.addEventListener(FLOWS_CHANGED_EVENT, onChanged);
     window.addEventListener(PIPELINES_CHANGED_EVENT, onChanged);
     window.addEventListener(WORKFLOWS_CHANGED_EVENT, onChanged);
@@ -1998,6 +2010,8 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       if (initialRetryTimer) clearTimeout(initialRetryTimer);
       if (revisionTimer) clearTimeout(revisionTimer);
       unsubscribeCache();
+      unsubscribeTeamAuthority();
+      unsubscribeWorkspaces();
       unsubBus();
       unsubFiles();
       window.removeEventListener(FLOWS_CHANGED_EVENT, onChanged);
