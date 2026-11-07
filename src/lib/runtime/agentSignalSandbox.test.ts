@@ -23,8 +23,8 @@ test.each(["injected", "managed", "sandbox"] as const)("a revoked launch never s
   const start = () => { spawns++; throw new Error("unexpected native spawn"); };
   const assertCurrent = () => { throw new Error("launch custody revoked"); };
   const opening = mode === "sandbox"
-    ? spawnSignalSandbox("fixture", [], {}, start as typeof spawn, undefined, {}, assertCurrent)
-    : spawnManagedEngine("fixture", [], {}, null, mode === "injected" ? start : undefined, {}, start, assertCurrent);
+    ? spawnSignalSandbox("fixture", [], {}, start as typeof spawn, undefined, { NODE_ENV: "test" }, assertCurrent)
+    : spawnManagedEngine("fixture", [], {}, null, mode === "injected" ? start : undefined, { NODE_ENV: "test" }, start, assertCurrent);
   await expect(opening).rejects.toThrow("launch custody revoked");
   expect(spawns).toBe(0);
 });

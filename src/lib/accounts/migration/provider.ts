@@ -468,10 +468,11 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     return input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
   });
   if (!claimed?.claimOwner) throw new Error("successor Codex structured host claim is unavailable");
+  const claimOwner = claimed.claimOwner;
 
   const assertAdoptionCurrent = () => {
     input.assertCurrent?.();
-    if (!input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) {
+    if (!input.registry.ownsStructuredHostClaim(key, claimOwner, claimed.claimEpoch)) {
       throw new Error("successor host claim changed during adoption");
     }
   };
