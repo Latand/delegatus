@@ -3534,8 +3534,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           // and persist the uncertainty through the existing observation.
           this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
         } else if (result && result.isError !== true && structured?.ok === true) {
+          const startSeq = start.seq;
           this.viewerMcp = { ...observation, seq: event.seq, observedAt: new Date().toISOString(),
-            denied: observation.denied.filter(entry => entry.tool !== tool || start.seq <= entry.seq) };
+            denied: observation.denied.filter(entry => entry.tool !== tool || startSeq <= entry.seq) };
         }
       }
     }
