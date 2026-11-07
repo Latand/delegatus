@@ -199,7 +199,7 @@ test("production reader accepts every worker reply family and retains curation r
   const filter = { self: { id: "fixture", prefix: "fixture" }, projects: new Set<string>(), skipPrefix: null, now: 1_700_000_000_000 };
   await real.build({ kind: "scan", after: "" }, filter);
   expect(rows().at(-1)).toMatchObject({ phase: "settled", executeMs: expect.any(Number) });
-  await real.build({ kind: "log", after: [] }, filter);
+  await real.build({ kind: "log", after: [0] }, filter);
   expect(rows().at(-1)).toMatchObject({ phase: "settled", executeMs: expect.any(Number) });
 });
 
