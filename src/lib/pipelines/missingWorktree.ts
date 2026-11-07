@@ -3,8 +3,8 @@ import path from "node:path";
 import type { ExecPort } from "@/lib/workflows/provision";
 import type { Pipeline } from "./types";
 
-/** Recover only an absent checkout from its local branch, preserving the tip
- * instead of resolving the lane's provisioning base again. */
+/** Verify a returned checkout or explain what must be restored, preserving
+ * the local branch tip and every other checkout's data. */
 export async function restoreMissingLaneWorktree(
   lane: Pick<Pipeline, "repoDir" | "worktreeDir" | "branch">,
   exec: ExecPort,
@@ -41,8 +41,6 @@ export async function restoreMissingLaneWorktree(
   };
   const git = async (args: string[]) => {
     assertCurrent();
-    if (args[0] === "worktree" && args[1] === "add" && !missing())
-      throw new Error(`${prefix}; a directory appeared during recovery; inspect it and retry the stage`);
     const remaining = deadline - performance.now();
     if (signal.aborted || remaining <= 0) throw new Error(`${prefix}; checkout recovery was interrupted; retry the stage`);
     const result = await exec("git", args, lane.repoDir, undefined, { signal, timeoutMs: Math.ceil(remaining) });
@@ -94,8 +92,7 @@ export async function restoreMissingLaneWorktree(
   }
   if (current.code !== 0 || current.stdout.trim() !== head)
     throw new Error(`${prefix}; local branch ${lane.branch} changed during recovery; check the branch and retry the stage`);
-  // Read registration ownership after every ref read. No asynchronous work
-  // may reuse this permission before add; a changed or unknown owner refuses.
+  // Refresh ownership after every ref read, including for a returned checkout.
   const listing = await git(["worktree", "list", "--porcelain", "-z"]);
   if (listing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
   const registration = inspectRegistrations(listing.stdout);
@@ -103,20 +100,11 @@ export async function restoreMissingLaneWorktree(
     if (await verifyAppeared(head, ref, repositoryCommonDir)) return;
     throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
   }
-  // One --force replaces only this missing path's stale registration. Git
-  // retains other worktrees' indexes and refuses a lock (which needs two).
-  // A directory appearing after our lstat is left to Git's nonempty-path guard.
-  const added = await git(["worktree", "add", ...(registration ? ["--force"] : []), "--", lane.worktreeDir, lane.branch]);
-  // --force also bypasses Git's branch-in-use check. Recheck collisions that
-  // arose during add before accepting the checkout or dispatching the stage.
-  const restoredListing = await git(["worktree", "list", "--porcelain", "-z"]);
-  if (restoredListing.code !== 0) throw new Error(`${prefix}; registered worktrees cannot be read; restore repository access, then retry the stage`);
-  inspectRegistrations(restoredListing.stdout);
-  if (added.code !== 0 && !missing()) {
-    if (await verifyAppeared(head, ref, repositoryCommonDir)) return;
-    throw new Error(`${prefix}; a checkout appeared during recovery and could not be verified on ${lane.branch}; inspect it and retry the stage`);
-  }
-  if (added.code !== 0) throw new Error(`${prefix}; checkout could not be restored; check directory permissions and release any conflicting branch registration, then retry the stage`);
-  if (!await verifyAppeared(head, ref, repositoryCommonDir))
-    throw new Error(`${prefix}; restored checkout could not be verified on branch ${lane.branch} in its repository; inspect the directory and retry the stage`);
+  // Even ordinary native add can truncate a peer's .git and reset its working
+  // files if the peer takes this path inside Git's execution. There is no
+  // exclusive destination primitive in worktree add. Refuse reconstruction
+  // before any write; another preflight read cannot close that native window.
+  throw new Error(registration
+    ? `${prefix}; its worktree registration is still present; restore the registered checkout or correct the lane directory, then retry the stage`
+    : `${prefix}; local branch ${lane.branch} is available; automatic reconstruction cannot safely reserve this path; restore the checkout from that branch, then retry the stage`);
 }
