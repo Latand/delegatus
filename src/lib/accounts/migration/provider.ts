@@ -469,6 +469,13 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   });
   if (!claimed?.claimOwner) throw new Error("successor Codex structured host claim is unavailable");
 
+  const assertAdoptionCurrent = () => {
+    input.assertCurrent?.();
+    if (!input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) {
+      throw new Error("successor host claim changed during adoption");
+    }
+  };
+
   const approvalPolicy = input.profile.permissionMode
     && ["never", "on-request", "untrusted"].includes(input.profile.permissionMode)
     ? input.profile.permissionMode
@@ -480,11 +487,15 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   let access: ReturnType<typeof materializeStructuredHostAccess>;
   try {
     identity = await successorCapability(input, "codex");
+    assertAdoptionCurrent();
     access = await materializeOwnedStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
       { ...input.target.env, ...await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd) },
       identity.capability,
-      () => tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId),
+      () => {
+        assertAdoptionCurrent();
+        return tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId);
+      },
     );
   } catch (error) {
     /* Nothing was started: release the claim and discard the pending identity,
@@ -496,12 +507,14 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   try {
     // A migration successor never widens native delegation, regardless of the
     // source profile, so its memories feature follows that denied policy.
+    assertAdoptionCurrent();
     const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.target.home, false, input.profile.cleanMemory === true);
     const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, nativeMemoryEnabled });
     if (input.ownsOperation && !await input.ownsOperation()
       || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
-    input.assertCurrent?.();
+    assertAdoptionCurrent();
     host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
+      assertCurrent: assertAdoptionCurrent,
       cwd: input.profile.cwd,
       codexHome: input.target.home,
       cleanMemory: input.profile.cleanMemory === true,
@@ -518,7 +531,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       env: access.env,
       ...(memoryCell ? { memoryCell } : {}),
     });
-    input.assertCurrent?.();
+    assertAdoptionCurrent();
     stopPersistence = await bindCodexHostPersistence(
       input.registry,
       key,
@@ -526,8 +539,9 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       claimed.claimOwner,
       claimed.claimEpoch,
     );
-    input.assertCurrent?.();
+    assertAdoptionCurrent();
     unregister = await publishStructuredDeliveryHost({ key, host }, input.ownsOperation);
+    assertAdoptionCurrent();
   } catch (error) {
     if (!host && error instanceof StructuredHostAdoptionCleanupError
       && error.host instanceof CodexAppServerHost) {
@@ -1561,6 +1575,7 @@ function ownsCompletedClaudeBrokerTransition(
 
 export class RegisteredSuccessorProvider implements SuccessorProviderPort {
   private readonly publishedHosts = new Map<string, {
+    admitted: boolean;
     nativeId: string;
     path: string;
     cleanup: () => Promise<void>;
@@ -1639,20 +1654,22 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       ? this.dependencies.publishCodexHost
       : this.dependencies.publishClaudeHost;
     if (!injectedPublisher && !structuredHostsEnabled()) return;
+    const pending = this.publishingHosts.get(receipt.operationId);
+    if (pending) {
+      await pending;
+      input.assertCurrent?.();
+      const published = this.publishedHosts.get(receipt.operationId);
+      if (!published?.admitted || published.nativeId !== receipt.nativeId || published.path !== receipt.path) {
+        throw new Error("successor host publication conflicts");
+      }
+      return;
+    }
     const existing = this.publishedHosts.get(receipt.operationId);
     if (existing) {
       if (existing.nativeId !== receipt.nativeId || existing.path !== receipt.path) {
         throw new Error("successor host publication conflicts");
       }
-      return;
-    }
-    const pending = this.publishingHosts.get(receipt.operationId);
-    if (pending) {
-      await pending;
-      const published = this.publishedHosts.get(receipt.operationId);
-      if (!published || published.nativeId !== receipt.nativeId || published.path !== receipt.path) {
-        throw new Error("successor host publication conflicts");
-      }
+      if (!existing.admitted) throw new Error("successor host publication cleanup is pending");
       return;
     }
     const publication = (async () => {
@@ -1696,20 +1713,33 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
           cancelClaude: this.dependencies.cancelClaude ?? defaultDependencies.cancelClaude!,
         });
       }
-      if (input.ownsOperation && !await input.ownsOperation()) {
-        await cleanup();
-        return;
-      }
-      input.assertCurrent?.();
-      this.publishedHosts.set(receipt.operationId, {
+      // Retain the exact attempt's resource before yielding. A refused check or
+      // failed cleanup must leave this handle available to coordinator cleanup.
+      const acquired = {
+        admitted: false,
         nativeId: receipt.nativeId,
         path: receipt.path,
         cleanup,
-      });
+      };
+      this.publishedHosts.set(receipt.operationId, acquired);
+      let owned: boolean;
+      try {
+        owned = !input.ownsOperation || await input.ownsOperation();
+        input.assertCurrent?.();
+      } catch (error) {
+        try { await this.cleanup(receipt); }
+        catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], "successor publication refused and cleanup failed", { cause: error });
+        }
+        throw error;
+      }
+      if (!owned) { await this.cleanup(receipt); return; }
+      acquired.admitted = true;
     })();
     this.publishingHosts.set(receipt.operationId, publication);
     try {
       await publication;
+      input.assertCurrent?.();
     } finally {
       if (this.publishingHosts.get(receipt.operationId) === publication) {
         this.publishingHosts.delete(receipt.operationId);

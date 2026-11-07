@@ -52,7 +52,8 @@ export function headlessFixtureTransport(): typeof spawn | null { return fixture
 type EngineSpawn = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 export async function spawnManagedEngine(command: string, args: string[], options: SpawnOptionsWithoutStdio,
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
-  transportSpawn?: EngineSpawn): Promise<ChildProcessWithoutNullStreams> {
+  transportSpawn?: EngineSpawn, assertCurrent?: () => void): Promise<ChildProcessWithoutNullStreams> {
+  assertCurrent?.();
   if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
   options = { ...options, env: { ...(options.env ?? process.env), LLV_HOST_EXIT_RECEIPTS: "1" } };
   const waiters: Array<ReturnType<typeof spawnNativeWaitOwner>> = [];
@@ -65,7 +66,7 @@ export async function spawnManagedEngine(command: string, args: string[], option
   const scope = memory && (memory.plan.mechanism === "scope" || memory.plan.cpu) ? memory.plan.unit : null;
   const capabilityEnv = sourceEnv.LLV_GATE_SLOT_LEASE ? { ...(options.env ?? process.env), LLV_GATE_SLOT_LEASE: sourceEnv.LLV_GATE_SLOT_LEASE } : undefined;
   try {
-    const child = await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv) as ChildProcessWithoutNullStreams;
+    const child = await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv, assertCurrent) as ChildProcessWithoutNullStreams;
     for (const waiter of waiters) waiter.retainExit(!signalDomain(child));
     return child;
   } catch (error) {
@@ -401,7 +402,8 @@ function cacheHostTooling(launcher: string, scripts: string): { launcher: string
 /** The resource wrapper remains outside the namespace. An injected spawn is
  * the host tests' protocol seam; production callers always use this adapter. */
 export async function spawnSignalSandbox(command: string, args: string[], options: SpawnOptions,
-  start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env): Promise<ChildProcess> {
+  start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env, assertCurrent?: () => void): Promise<ChildProcess> {
+  assertCurrent?.();
   const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
   const prepared = prepareLaunch(capabilityEnv, options.env ?? process.env, bridged);
   if ("off" in prepared) {
@@ -446,6 +448,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
         if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
         if (env.LLV_HOST_EXIT_RECEIPTS === "1") bindHostExitWriter(directory, domain.native, domain.monitor);
+        assertCurrent?.();
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
         return child;
       }

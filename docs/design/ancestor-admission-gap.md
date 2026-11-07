@@ -143,3 +143,37 @@ Nine disposable mutation controls each exit 1 with the expected regression: remo
 The final source export matches all 13 changed source/test files byte for byte. Changed-file lint passes with one existing unused-variable warning in structured controls; whitespace passes. Whole-file publication privacy and normal commit hooks are required before handoff. The remote pull request title/body are separately updated and read back for the implementation.
 
 Final overlap review inspected all 29 open pull requests and found no changed-source file overlap. Main remains `8d0239d6`; the named adjacent diffs and source-lineage ownership remain outside these changes. This bounded search does not establish absence in hidden archives. Historical incident cause remains UNKNOWN. There were no live host/provider effects, deployment, manual push/merge, account or policy changes. Three independent runtime-risk review rounds and pipeline publication remain outstanding.
+
+
+## First review repair
+
+The first independent review identified two remaining source defects: the migration authority assertion stopped outside runtime adoption, and a refusal after publication could lose the acquired cleanup callback. The follow-up carries source/operation/policy authority and the successor's claim owner, claim epoch and writer epoch into `CodexAppServerHost.adopt`. The optional assertion follows protocol and environment preparation, the socket drain wait, managed spawn and the sandbox exec handoff. Startup RPCs, notifications and hydrated-resume fallback also check it; successful adoption releases this temporary assertion and ordinary host writer authority continues to govern the host.
+
+Publication now records the exact cleanup callback before awaiting ownership. Failed assertions and thrown ownership checks clean that resource. A cleanup failure retains the callback for another cleanup attempt, preserves both errors and the original cause, and cannot be mistaken for an admitted publication. Concurrent callers still await the existing publication and recheck their own assertion before returning.
+
+The new regressions use the real default publisher and runtime adoption, forwarding all production options. The production-chain controls independently replace source and successor claims, epochs, writer epochs, operation revision and pipeline authorization during protocol preparation. Separate host controls revoke authority at publication-environment and Telegram preparation, initial RPC replies, resume fallback and the actual socket drain wait. The unchanged controls reach the same spawn boundary or finish adoption. Native-spawn probes record and refuse before starting a vendor process. Cleanup controls cover success, late revocation, a thrown ownership check and failed cleanup followed by retry.
+
+Shared-contract inventory: the migration provider is the new producer of the optional adoption assertion; startup, structured spawn and structured recovery retain their existing optional-host-options contract. The host forwards it into both direct managed spawn and the socket launch callback. Claude and Copilot managed-spawn callers, the socket fixture and direct sandbox callers omit the new trailing argument and retain their behavior. No serialized command, receipt, traversal, schema, retry budget or controller policy changes.
+
+The final overlap check read the current issue and empty comments, native residual ownership, and actual diffs of #3710, #3728, #3734, #3663 and #3668. Captured main was `c35246e3`. Its MCP host observation hunks are separate from adoption. The older #2926 signal-sandbox PR also touches the host and sandbox files; this repair preserves its launcher, cleanup, signal and budget behavior and adds only the optional assertion. A scratch composition with main retains both sets of tests; the sole textual conflict combines independent test imports. No branch integration or publication was performed here. Hidden archive ownership, historical incident causality and installed acceptance retain their previous UNKNOWN status. The existing three-round review budget and source owner are unchanged.
+
+
+Final repair checks run one explicit file per isolated gate invocation:
+
+| File | Pass / fail | Assertions | Exit |
+| --- | --- | --- | --- |
+| `src/lib/accounts/migration/ancestorAdmission.test.ts` | 47 / 0 | 524 | 0 |
+| `src/lib/runtime/codexAppServerHost.test.ts` | 324 / 0 | 1738 | 0 |
+| `src/lib/accounts/migration/provider.test.ts` | 67 / 2 | 293 | 1 |
+| `src/lib/runtime/agentSignalSandbox.test.ts` | 53 / 1 | 402 | 1 |
+| `src/lib/accounts/migration/coordinator.test.ts` | 122 / 2 | 661 | 1 |
+
+The two provider assertions also fail on captured main (50 / 2, 252 assertions). The sandbox assertion also fails there (50 / 1, 396 assertions), with the same fixture Git-identity read refusal. All new regressions pass. A separate scratch composition with main passes the complete host file, including that revision's MCP regressions: 367 / 0, 2176 assertions, exit 0.
+
+Four disposable mutations return the expected failures: omitting the provider's adoption assertion fails nine production-chain controls; removing the managed-spawn assertion fails the real socket-drain race; removing the startup RPC assertion fails the hydrated-resume retry control; retaining cleanup only after final approval fails all three new refusal controls and three existing cleanup controls. The RPC mutation initially exposed a test defect: repeated revocation reset the observation count. The corrected regression fixes the count at the first revocation, then detects the extra request. No mutant is committed. Earlier exploratory harness failures remain in private evidence; final exported source/test bytes match the working tree.
+
+The coordinator's two legacy held-delivery timing assertions reproduce on captured main with identical counts (122 / 2, 661 assertions, exit 1). Across the five repair files, 613 tests pass and five existing assertions fail on both sides. The reviewer's identical cleanup invariant probe passes on both base and repaired source (2 / 0, four assertions each): late revocation now retains one publication and exactly one owned cleanup, while returning the refusal on repaired source.
+
+No full typecheck or build was run in this repair stage; the ordinary pipeline publication owns those checks. The check logs, exact mutation patches, composition evidence and source hashes are retained in the stage evidence directory. Historical incident causality and installed acceptance remain open.
+
+Before commit, main advanced to `5995ba0b5a` through #3743. Its three changed files concern pipeline publication receipts and have no source/test hunk overlap with this repair; the compared migration, host and sandbox files remain byte-identical to the captured base. Whole-file publication privacy passed for all repair files.

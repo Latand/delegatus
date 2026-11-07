@@ -7,6 +7,8 @@ import { RegisteredSuccessorProvider, preflightCodexSource } from "./provider";
 import { MissingSourceAncestorError } from "./safeHistoryCopy";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeOperationCommand } from "@/lib/runtime/contracts";
+import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
+import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { CodexAppServerClient } from "@/lib/accounts/codexAppServer";
 import { emptyLaunchProfile } from "./contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -34,7 +36,7 @@ function codexSessionMeta(id: string, forkedFromId?: string): string {
         payload: { id, ...(forkedFromId ? { forked_from_id: forkedFromId } : {}) },
     }) + "\n";
 }
-test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", "provider-missing", "provider-hostile", "withdraw-missing", "carried-missing", "source-start", "source-auth", "fork-return", "target-start", "target-auth", "config-read", "resume-return", "name-return", "goal-return", "read-return", "verify-start", "verify-auth", "verify-read", "publish-return", "publication-authorization", "journal-ack", "release-owner", "admission-owner", "admission-epoch", "admission-writer", "admission-generation", "operation-revision", "pipeline-policy", "execution-owner", "authentication", "reseat-write", "continuity-write", "commit-write"] as const)("ancestor admission through selection, journal and queue: %s", async (mode) => {
+test.each(["native-host-control", "native-host-preparation", "native-host-owner", "native-host-epoch", "native-host-writer", "native-host-policy", "native-host-operation", "native-host-successor-owner", "native-host-successor-epoch", "native-host-successor-writer", "missing", "missing-hostile", "valid", "removed", "removed-hostile", "provider-missing", "provider-hostile", "withdraw-missing", "carried-missing", "source-start", "source-auth", "fork-return", "target-start", "target-auth", "config-read", "resume-return", "name-return", "goal-return", "read-return", "verify-start", "verify-auth", "verify-read", "publish-return", "publication-authorization", "journal-ack", "release-owner", "admission-owner", "admission-epoch", "admission-writer", "admission-generation", "operation-revision", "pipeline-policy", "execution-owner", "authentication", "reseat-write", "continuity-write", "commit-write"] as const)("ancestor admission through selection, journal and queue: %s", async (mode) => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "ancestor-admission-"));
     const source = accountRoot("codex", base, "source"), target = accountRoot("codex", base, "target");
     const fixtureId = (part: string) => [part.repeat(8), part.repeat(4), "4" + part.repeat(3), "8" + part.repeat(3), part.repeat(12)].join("-");
@@ -64,8 +66,18 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
         if (mode !== at || displaced)
             return;
         displaced = true;
-        if (at === "pipeline-policy") { pipelineAllowed = false; return; }
-        if (at === "operation-revision") {
+        if (at.startsWith("native-host-successor")) {
+            const key = { engine: "codex" as const, sessionId: forkId };
+            const entry = registry.readOnlySnapshot().entries[`codex:${forkId}`]!;
+            registry.upsert({ ...entry, key,
+                claimOwner: at.endsWith("owner") ? "structured-host:replacement" : entry.claimOwner,
+                claimEpoch: entry.claimEpoch + (at.endsWith("epoch") ? 1 : 0),
+                structuredHost: { ...entry.structuredHost!, writerClaimEpoch: entry.claimEpoch + (at.endsWith("writer") ? 1 : 0) },
+            });
+            return;
+        }
+        if (at === "pipeline-policy" || at === "native-host-policy") { pipelineAllowed = false; return; }
+        if (at === "operation-revision" || at === "native-host-operation") {
             registry.claimConversationReconfigure(begun.receipt.conversationId, { operationId: "replacement-switch", revision: 100, profile: { model: profile.model, effort: profile.effort, fast: profile.fast }, accountId: "target" });
             return;
         }
@@ -79,13 +91,13 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
             registry.commitSuccessor(id, { id: replacement.nativeId, path: replacement.path, accountId: "replacement", launchProfile: profile, historyHash: replacement.historyHash, host: replacement.host }, migration.revision, migration.operationId, replacement);
             return;
         }
-        if (at.startsWith("admission") || at === "execution-owner" || at === "authentication" || at === "reseat-write" || at === "commit-write" || at === "publication-authorization" || at === "journal-ack" || at === "release-owner") {
+        if (["native-host-owner", "native-host-epoch", "native-host-writer"].includes(at) || at.startsWith("admission") || at === "execution-owner" || at === "authentication" || at === "reseat-write" || at === "commit-write" || at === "publication-authorization" || at === "journal-ack" || at === "release-owner") {
             const key = { engine: "codex" as const, sessionId: sourceId };
             const entry = registry.readOnlySnapshot().entries[`codex:${sourceId}`]!;
             registry.upsert({ ...entry, key,
-                claimOwner: at === "admission-epoch" || at === "admission-writer" ? entry.claimOwner : "structured-host:replacement",
-                claimEpoch: at === "admission-epoch" ? entry.claimEpoch + 1 : entry.claimEpoch,
-                structuredHost: { ...entry.structuredHost!, writerClaimEpoch: at === "admission-writer" ? entry.claimEpoch + 1 : entry.structuredHost!.writerClaimEpoch },
+                claimOwner: (at === "admission-epoch" || at === "native-host-epoch") || (at === "admission-writer" || at === "native-host-writer") ? entry.claimOwner : "structured-host:replacement",
+                claimEpoch: (at === "admission-epoch" || at === "native-host-epoch") ? entry.claimEpoch + 1 : entry.claimEpoch,
+                structuredHost: { ...entry.structuredHost!, writerClaimEpoch: (at === "admission-writer" || at === "native-host-writer") ? entry.claimEpoch + 1 : entry.structuredHost!.writerClaimEpoch },
             });
         }
         else {
@@ -173,13 +185,26 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
             }, end: () => { this.emit("close", 0, null); } };
         kill() { this.emit("close", 0, null); return true; }
     }
+    if (mode.startsWith("native-host")) {
+        const flags = { LLV_STRUCTURED_HOSTS: process.env.LLV_STRUCTURED_HOSTS, LLV_AGENT_CPU: process.env.LLV_AGENT_CPU, LLV_AGENT_MEMORY: process.env.LLV_AGENT_MEMORY };
+        Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "off", LLV_AGENT_MEMORY: "off" });
+        restorations.push(() => { for (const [key,value] of Object.entries(flags)) { if(value === undefined) delete process.env[key]; else process.env[key] = value; } });
+        restorations.push(setCodexFeatureReaderForTest(() => []));
+        const realAdopt = CodexAppServerHost.adopt.bind(CodexAppServerHost);
+        const adoptSpy = spyOn(CodexAppServerHost, "adopt").mockImplementation((threadId, options) => realAdopt(threadId, { ...options,
+            binary: "/fixture/codex", launchBinary: "/fixture/codex", memoryCell: null,
+            readProtocolVersion: () => { events.push("host-protocol-preparation"); for (const at of ["native-host-preparation", "native-host-owner", "native-host-epoch", "native-host-writer", "native-host-policy", "native-host-operation", "native-host-successor-owner", "native-host-successor-epoch", "native-host-successor-writer"]) boundary(at); return "0.162.1"; },
+            spawnProcess: () => { events.push("native-spawn"); throw new Error("fixture stops at native spawn boundary"); },
+        }));
+        restorations.push(() => adoptSpy.mockRestore());
+    }
     const provider = new RegisteredSuccessorProvider({ accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source }, registry,
         startCodex: async (home, assertCurrent) => {
             events.push(home === source.home ? "source-start" : "target-start");
             boundary(clientStarts === 2 ? "verify-start" : home === source.home ? "source-start" : "target-start");
             return CodexAppServerClient.start({ home, assertCurrent, launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", protocolProfile: "thread-control", spawn: () => new Transport(++clientStarts) as never, signalProcess: () => { throw Error("unexpected process signal"); } });
         },
-        publishCodexHost: async () => { events.push("publish-successor"); boundary("publish-return"); return async () => { }; }, claudeStatus: async () => ({ loggedIn: false }), journalRoot: path.join(base, "journal"), now: () => "2026-11-07T10:00:00.000Z" });
+        ...(mode.startsWith("native-host") ? {} : { publishCodexHost: async () => { events.push("publish-successor"); boundary("publish-return"); return async () => { }; } }), claudeStatus: async () => ({ loggedIn: false }), journalRoot: path.join(base, "journal"), now: () => "2026-11-07T10:00:00.000Z" });
     const publish = provider.publishHost.bind(provider);
     provider.publishHost = (receipt, input) => publish(receipt, { ...input, ownsOperation: async () => {
         const owned = await input.ownsOperation!();
@@ -248,7 +273,7 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
                     if(registry.conversation(begun.receipt.conversationId)?.migration?.phase === "committed") boundary("release-owner");
                     return owned;
                 }, ...(ownership.carriedSends ? { carriedSends: ownership.carriedSends } : {}),
-                pipelineSwitch: () => mode === "pipeline-policy" ? { authorize() { if (!pipelineAllowed) throw new Error("target account is no longer allowed"); } } : null,
+                pipelineSwitch: () => mode === "pipeline-policy" || mode === "native-host-policy" ? { authorize() { if (!pipelineAllowed) throw new Error("target account is no longer allowed"); } } : null,
                 preflightSource: async (generation, _accounts, assertCurrent) => {
                     await preflightCodexSource(generation, { resolveTranscriptOwner: () => source }, assertCurrent);
                     boundary("execution-owner");
@@ -266,6 +291,14 @@ test.each(["missing", "missing-hostile", "valid", "removed", "removed-hostile", 
         }
     });
     await queue.drain();
+    if (mode.startsWith("native-host")) {
+        expect(events).toContain("host-protocol-preparation");
+        expect(events.includes("native-spawn")).toBe(mode === "native-host-control");
+        expect(displaced).toBe(mode !== "native-host-control");
+        expect(terminate).not.toHaveBeenCalled();
+        expect(registry.conversation(begun.receipt.conversationId)?.generations).toHaveLength(1);
+        return;
+    }
     const row = registry.conversation(begun.receipt.conversationId)!;
     if (mode !== "valid") {
         expect(events).not.toContain("incumbent-release");

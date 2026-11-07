@@ -213,6 +213,50 @@ test("provider receipt identity ignores timestamp and object key order", () => {
   expect(sameProviderReceiptOutcome(left, right)).toBeTrue();
 });
 
+test.each(["allowed", "revoked", "ownership-error", "cleanup-error"] as const)("publication retains exact cleanup across final authority: %s", async mode => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "publication-custody-"));
+  const target = accountRoot("codex", base, "target");
+  const registry = new AgentRegistry(path.join(base, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  let owned = true, checks = 0, publications = 0, cleanups = 0;
+  const refusal = new Error("source custody revoked"), cleanupFailure = new Error("owned cleanup refused");
+  const provider = new RegisteredSuccessorProvider({ registry,
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target },
+    startCodex: async () => { throw new Error("unexpected client"); }, claudeStatus: async () => ({ loggedIn: false }),
+    publishCodexHost: async () => { publications++; return async () => {
+      cleanups++;
+      if (mode === "cleanup-error" && cleanups === 1) throw cleanupFailure;
+    }; }, now: () => "2026-11-07T10:00:00.000Z",
+  });
+  const receipt: ProviderReceipt = { operationId: "publication-custody", nativeId: "successor", path: path.join(target.transcriptRoot, "successor.jsonl"),
+    continuityPaths: [], historyHash: "fixture", host: { kind: "codex-app-server", identity: "successor", epoch: 1, verifiedAt: "2026-11-07T10:00:00.000Z" } };
+  const input = { engine: "codex" as const, conversationId: "conversation_publication" as const, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base }),
+    ownsOperation: async () => {
+      const answer = owned;
+      if (++checks === 2 && mode !== "allowed") {
+        owned = false;
+        if (mode === "ownership-error") throw refusal;
+      }
+      return answer;
+    }, assertCurrent: () => { if (!owned) throw refusal; },
+  };
+  try {
+    let error: unknown;
+    try { await provider.publishHost(receipt, input); } catch (caught) { error = caught; }
+    expect(publications).toBe(1);
+    if (mode === "allowed") expect(error).toBeUndefined();
+    else if (mode === "cleanup-error") {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([refusal, cleanupFailure]);
+      expect((error as Error).cause).toBe(refusal);
+      owned = true;
+      await expect(provider.publishHost(receipt, input)).rejects.toThrow("cleanup is pending");
+    } else expect(error).toBe(refusal);
+    await provider.cleanup(receipt);
+    expect(cleanups).toBe(mode === "cleanup-error" ? 2 : 1);
+    expect(publications).toBe(1);
+  } finally { registry.close(); fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 test("Codex successor host publication is single-owner and cleanup releases that owner", async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-published-host-"));
   roots.push(base);

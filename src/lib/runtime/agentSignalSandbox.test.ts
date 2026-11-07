@@ -18,6 +18,17 @@ import { AgentMemoryCell, GIB, planAgentMemory, setAgentMemoryPortsForTests, wra
 import { headlessRuns, launchDetached } from "@/lib/agent/headless";
 import { readHostExit } from "./hostExit";
 
+test.each(["injected", "managed", "sandbox"] as const)("a revoked launch never starts its %s process", async mode => {
+  let spawns = 0;
+  const start = () => { spawns++; throw new Error("unexpected native spawn"); };
+  const assertCurrent = () => { throw new Error("launch custody revoked"); };
+  const opening = mode === "sandbox"
+    ? spawnSignalSandbox("fixture", [], {}, start as typeof spawn, undefined, {}, assertCurrent)
+    : spawnManagedEngine("fixture", [], {}, null, mode === "injected" ? start : undefined, {}, start, assertCurrent);
+  await expect(opening).rejects.toThrow("launch custody revoked");
+  expect(spawns).toBe(0);
+});
+
 test.skipIf(process.platform !== "linux")("a missing namespace marker never proves an unseen namespace's queue owner dead", () => {
   const current = captureProcessIdentity(process.pid);
   const foreign = { ...current, pid: 99999999, bootEpoch: current.bootEpoch!.replace(/pid:\[\d+\]$/, "pid:[99999999]") };
