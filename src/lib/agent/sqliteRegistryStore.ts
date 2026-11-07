@@ -3732,16 +3732,18 @@ export class SqliteAgentRegistryStore {
   }
 
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
-    const admitted = this.writerHeld;
-    if (!admitted) this.db.exec("BEGIN");
+    // A mutation consumes writer admission before calling its guard. Nested
+    // readers borrow the open transaction; only its owner may end it.
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) this.db.exec("BEGIN");
     try {
       const skipColdKeyInitialization = options.skipColdKeyInitialization === true;
       if (this.changesReady && !skipColdKeyInitialization) this.refreshColdKeys();
       const result = reader(this.loadLazyInTransaction(true, !skipColdKeyInitialization, true, skipColdKeyInitialization).file);
-      if (!admitted) this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { if (!admitted) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
