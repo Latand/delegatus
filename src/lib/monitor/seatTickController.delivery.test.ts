@@ -1931,8 +1931,8 @@ test("the final wake admission rechecks engine denial after asynchronous prepara
     let denied = false, effects = 0;
     const registry = rig.deps.sources!.registry;
     rig.deps.sources!.registry = () => new Proxy(registry(), { get(target, property, receiver) {
-      if (property === "seatTickConversation") return (() => ({ id: CONVERSATION,
-        turn: { state: "idle" as const, source: "empty" as const, terminalAt: null },
+      if (property === "seatTickConversation") return (() => ({ id: CONVERSATION as `conversation_${string}`,
+        turn: { state: "idle" as const, source: "empty" as const, terminalAt: null, observedAt: null },
         ...(denied ? { viewerMcp: { seq: 1, observedAt: new Date(NOW).toISOString(), denied: [{ tool: "get_task", seq: 1 }], unverified: false } } : {}) })) satisfies ReturnType<typeof registry>["seatTickConversation"];
       if (property === "seatMcpReceipt") return (() => ({ spawnCapabilityDigest: "a".repeat(64), createdAt: new Date(NOW).toISOString(), viewerMcpTransport: "http" as const })) satisfies ReturnType<typeof registry>["seatMcpReceipt"];
       return Reflect.get(target, property, receiver);

@@ -8042,14 +8042,14 @@ test("Viewer MCP denial restoration retains bounds and requires a fresh recovery
 test("MCP service controls preserve denial layers and same-key effects", async () => {
   const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("../mcp/server");
   let effects = 0, allowed = false;
-  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as import("../mcp/server").McpToolBindings;
+  const bindings = Object.fromEntries<import("../mcp/server").McpToolBinding>(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as import("../mcp/server").McpToolBindings;
   bindings.update_task = async () => { effects++; return { updated: true }; };
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore(), {
-    permit: () => allowed ? { allowed: true } : { allowed: false, code: "forbidden", error: "Synthetic project fence" },
+    permit: () => allowed ? { allowed: true } : { allowed: false, code: "tool_not_permitted", error: "Synthetic project fence" },
   });
   const args = { clientRequestId: "same-key-control", taskId: "synthetic-task", text: "Synthetic update" };
   const denied = await service.callTool("update_task", args);
-  expect(denied).toMatchObject({ ok: false, code: "forbidden", retryable: false });
+  expect(denied).toMatchObject({ ok: false, code: "tool_not_permitted", retryable: false });
   expect(effects).toBe(0);
   allowed = true;
   const success = await service.callTool("update_task", args);

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { DeliveryReceipt, EngineHost, HostState, QueueEntry, RuntimeEvent, RuntimeInjectOutcome, RuntimeInjectRequest } from "./engineHost";
-import { StructuredDispatchDeferredError, StructuredInjectError } from "./engineHost";
+import { hostSupportsInject, StructuredDispatchDeferredError, StructuredInjectError } from "./engineHost";
 import type { StructuredDeliveryEffect, StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
 import {
   INJECTION_ACKNOWLEDGED_BUT_UNOBSERVED,
@@ -345,7 +345,8 @@ test("the admitted binding is also compared with the actual host thread", async 
 
 for (const denied of [false, true]) test(`context injection rechecks the durable wake origin before writing (denied=${denied})`, async () => {
   const probe = probeHost({ activeTurnRef: "turn-live" });
-  const inject = probe.host.inject!.bind(probe.host);
+  if (!hostSupportsInject(probe.host)) throw new Error("injection fixture lacks its declared capability");
+  const inject = probe.host.inject.bind(probe.host);
   let afterWait = false;
   let checks = 0;
   probe.host.inject = async (request, authorize) => {
@@ -354,7 +355,7 @@ for (const denied of [false, true]) test(`context injection rechecks the durable
     authorize?.();
     return inject(request);
   };
-  const origin = { kind: "agent", role: "seat-tick" };
+  const origin = { kind: "agent", role: "seat-tick" } as const;
   const { queue, transitions } = injectQueue(probe, { origin }, (_operation, _conversation, observed) => {
     checks++;
     expect(observed).toEqual(origin);
