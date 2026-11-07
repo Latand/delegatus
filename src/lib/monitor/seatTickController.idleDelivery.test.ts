@@ -61,7 +61,7 @@ async function drainInProcess(directory: string, registryFile: string, operation
   try {
     const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect({ exit, error }).toEqual({ exit: phase === "crash" ? 23 : 0, error: "" });
-    return output ? JSON.parse(output) as { pid: number; status: string; held: { id: string; clientMessageId: string; operationId: string; generationId: string }[] } : null;
+    return output ? JSON.parse(output) as { pid: number; status: string; held: { id: string; clientMessageId: string | null; operationId: string; generationId: string | null }[] } : null;
   } finally { clearTimeout(deadline); }
 }
 
@@ -201,7 +201,7 @@ for (const change of recoveryChanges) {
       const result = await deliverConversationMessage(message, {
         recover: request => recoverDeadStructuredConversation(request, {
           registry: fixture.registry, client, transport: () => "structured", park: () => null,
-          resolveAccount: () => ({ engine: "claude", accountId: null, kind: "legacy",
+          resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy",
             home: fixture.dir, transcriptRoot: fixture.dir, env: { NODE_ENV: "test" } }),
           spawn: async input => {
             spawns++;
@@ -212,13 +212,13 @@ for (const change of recoveryChanges) {
                 setupHost: { kind: "claude-broker", endpoint: "fixture:setup", process: null,
                   eventCursor: 0, protocolVersion: "fixture-v1", writerClaimEpoch: 4,
                   activeTurnRef: null, pendingAttention: [], activeFlags: [] },
-                setupEntry: { artifactPath: fixture.seat.path!, cwd: fixture.cwd, accountId: null, launchProfile: profile },
+                setupEntry: { artifactPath: fixture.seat.path!, cwd: fixture.cwd, accountId: input.account.accountId, launchProfile: profile },
               });
             });
             if (!claim?.claimOwner || !claim.structuredHost) throw new Error("fixture claim missing");
             input.resumeAdmission!.claimed(claim);
             expect(fixture.registry.stageStructuredSpawn(input.receipt.launchId, {
-              key, artifactPath: fixture.seat.path!, cwd: fixture.cwd, accountId: null, launchProfile: profile,
+              key, artifactPath: fixture.seat.path!, cwd: fixture.cwd, accountId: input.account.accountId, launchProfile: profile,
               status: "idle", host: null, structuredHost: { ...claim.structuredHost,
                 endpoint: "fixture:recovered", process, writerClaimEpoch: claim.claimEpoch },
               claimEpoch: claim.claimEpoch, claimOwner: claim.claimOwner, pendingAction: "spawn",
