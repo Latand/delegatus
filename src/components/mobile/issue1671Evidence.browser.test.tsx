@@ -434,6 +434,7 @@ describe("shared memory settings", () => {
     const memory = await import("@/app/api/memory/settings/route");
     const keysList = await import("@/app/api/keys/route");
     const keyWrite = await import("@/app/api/keys/[id]/route");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
     const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
     const { memoryIndex } = await import("@/lib/memory/service");
     const { writeAsksYouSettings } = await import("@/lib/asks/settings");
@@ -476,18 +477,19 @@ describe("shared memory settings", () => {
         fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
         fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        /* The operator's own browser session, as the Viewer's page navigation sets it. */
+        await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
         try {
           /* Shared memory and «Keys» are pages of the header menu (docs/design/header-menu.md, keys-settings.md):
              the rail's ⋯ on the desktop, the board menu's sheet on the phone, Settings, then the row. */
           const phone = width === 390;
-          const container = phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]";
+          const container = phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]";
           const openPage = async (row: "memory" | "keys") => {
-            if (!(await page.locator(container).count())) await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
-            if (await page.locator(phone ? '[data-mobile2-menu-row="back"]' : "[data-rail-menu-back]").count()) {
-              await page.locator(phone ? '[data-mobile2-menu-row="back"]' : "[data-rail-menu-back]").click();
-            }
-            if (await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").count()) {
+            if (!(await page.locator(container).count())) {
+              await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
               await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+            } else if (phone && await page.locator(`${container} [data-settings-back]`).count()) {
+              await page.locator(`${container} [data-settings-back]`).click();
             }
             await page.locator(phone ? `[data-mobile2-menu-row="${row}"]` : `[data-rail-menu-${row}]`).click();
             await page.locator(row === "memory" ? "[data-memory-page]" : "[data-keys-page] [data-keys-row]").first().waitFor();
@@ -516,10 +518,6 @@ describe("shared memory settings", () => {
             }, !phone);
             expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
             expect(geometry.top).toBeGreaterThanOrEqual(0); expect(geometry.bottom).toBeLessThanOrEqual(900);
-            /* header-menu.md's 360 px; «Keys» is 370 px as approved (six rows, the back row and two transfer rows), and an open field or the staging notice passes it (keys-settings.md §15). */
-            const keysList = state === "key-saved" || state === "environment";
-            const open = ["invalid-key", "write-failed", "staging-env", "staging-file"].includes(state);
-            if (!phone && !open) expect(geometry.height).toBeLessThanOrEqual(keysList ? 380 : 360);
             expect(geometry.overflow).toBeLessThanOrEqual(1);
             expect(geometry.controls.every(control => control.left >= geometry.left && control.right <= geometry.right)).toBe(true);
             expect(geometry.overlaps).toEqual([]);
@@ -12634,6 +12632,7 @@ describe("keys settings", () => {
     const backend = await import("@/app/api/transcribe/backend/route");
     const { setTelegramConnectForTests } = await import("@/lib/keys/store");
     const { KEY_IDS } = await import("@/lib/keys/shared");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
     const { saveBotToken } = await import("@/lib/telegram/bot/transport");
     const { botIdFromToken } = await import("@/lib/telegram/bot/contracts");
     const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
@@ -12743,14 +12742,15 @@ describe("keys settings", () => {
         const base = `${server.base}?scenario=keys&header=1`;
         const { context, page, pageErrors } = await openFixture(browser, base, viewport, theme, lang, "reduce", phone, 2);
         await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: server.base.replace(/\/$/, "") });
-        const surface = phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]";
+        const surface = phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]";
         const row = (id: string) => page.locator(`${surface} [data-keys-row="${id}"]`).first();
         const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
         const tap = async (selector: string) => { const target = page.locator(selector).first(); await target.scrollIntoViewIfNeeded(); await target.click(); };
 
         const openSection = async (state: State) => {
           await context.clearCookies();
-          if (memberCookie) await context.addCookies([{ name: MEMBER_COOKIE, value: memberCookie, url: server.base }]);
+          /* The operator's own browser session, as the Viewer's page navigation sets it, or a team member's. */
+          await context.addCookies([memberCookie ? { name: MEMBER_COOKIE, value: memberCookie, url: server.base } : { name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
           await page.goto(base);
           if (state === "from-dictation") return;
           await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
@@ -13088,7 +13088,9 @@ describe("openai key services", () => {
     type Defining = { selector: string; words: string }[];
     type Seeded = { name: string; scene: Parameters<typeof seed>[0]; page: Feature | null; defining: (lang: "en" | "uk") => Defining; check?: (page: Page) => Promise<string | null> };
     const say = (lang: "en" | "uk", key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params).replace(/\s+/g, " ");
-    const PREVIOUS: Record<Feature, string> = { asks: "OpenRouter", memory: "OpenRouter", rules: "OpenRouter", dictation: "Soniox", read: "ElevenLabs", voice: "Codex V3" };
+    const PREVIOUS: Record<Feature, string> = { asks: "OpenRouter", memory: "OpenRouter", rules: "OpenAI", dictation: "Soniox", read: "ElevenLabs", voice: "Codex V3" };
+    /* The selected choice says what serves a feature: Voice calls its API choice by what it does. */
+    const servedBy = (lang: "en" | "uk", feature: Feature, name: string) => feature === "voice" && name === "OpenAI" ? say(lang, "voiceCompanion.settings.backend.api") : name;
     const nowRow = (feature: Feature, words: string) => ({ selector: `[data-openai-service="${feature}"] [data-openai-service-now]`, words });
     const optionReason = `[data-openai-option-reason]`;
     const SEEDED: Seeded[] = [
@@ -13098,11 +13100,11 @@ describe("openai key services", () => {
       { name: "keys-all", scene: { key: true, chosen: FEATURES }, page: null, defining: () => FEATURES.map((feature) => nowRow(feature, "OpenAI")) },
       ...FEATURES.flatMap((feature): Seeded[] => [
         { name: `${feature}-none`, scene: { key: false }, page: feature, defining: (lang) => [{ selector: `[data-openai-option="${OPENAI_ID(feature)}"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-add-key]`, words: say(lang, "openaiServices.addKey") }] },
-        { name: `${feature}-chosen`, scene: { key: true, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenAI" }) }],
+        { name: `${feature}-chosen`, scene: { key: true, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: servedBy(lang, feature, "OpenAI") }],
           check: async (page) => await page.locator(`[data-openai-option="${OPENAI_ID(feature)}"] input`).first().isChecked() ? null : "OpenAI is not checked" },
-        { name: `${feature}-removed`, scene: { key: false, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: PREVIOUS[feature] }) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-option-reason="held"]`, words: say(lang, "openaiServices.held") }] },
+        { name: `${feature}-removed`, scene: { key: false, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: servedBy(lang, feature, PREVIOUS[feature]) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-option-reason="held"]`, words: say(lang, "openaiServices.held") }] },
       ]),
-      { name: "read-legacy", scene: { key: false, legacyRead: true }, page: "read", defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenAI" }) }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+      { name: "read-legacy", scene: { key: false, legacyRead: true }, page: "read", defining: (lang) => [{ selector: "[data-openai-feature-now]", words: "OpenAI" }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
         check: async (page) => { const radio = page.locator('[data-openai-option="openai"] input').first(); return await radio.isChecked() && await radio.isDisabled() ? null : "legacy OpenAI is not checked and disabled"; } },
       { name: "dictation-locked", scene: { key: true, locked: true }, page: "dictation", defining: (lang) => [{ selector: "[data-openai-feature-locked]", words: say(lang, "onboarding.voice.locked") }],
         check: async (page) => (await page.locator("[data-openai-option] input").evaluateAll((inputs) => inputs.every((input) => (input as HTMLInputElement).disabled))) ? null : "a radio is enabled under the lock" },
@@ -13119,7 +13121,7 @@ describe("openai key services", () => {
         const { context, page, pageErrors } = await openFixture(browser, base, viewport, theme, lang, "reduce", phone, 2);
         /* The operator's own browser session, as the Viewer's page navigation sets it. */
         await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
-        const surface = phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]";
+        const surface = phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]";
         const tap = async (selector: string) => { const target = page.locator(selector).first(); await target.scrollIntoViewIfNeeded(); await target.click(); };
         let last: { key: string; text: string } | null = null;
         const openKeys = async () => {
@@ -13392,11 +13394,11 @@ describe("openai key services", () => {
             await openKeys();
             await openFeature("dictation");
             await tap(`${surface} [data-openai-option="openai"] label`);
-            /* Optimistic: «Now OpenAI» at once, then the policy agrees. */
-            expect((await page.locator(`${surface} [data-openai-feature-now]`).innerText()).replace(/\s+/g, " ")).toBe(say(lang, "openaiServices.now", { name: "OpenAI" }));
+            /* Optimistic: OpenAI is selected at once, then the policy agrees. */
+            expect((await page.locator(`${surface} [data-openai-feature-now]`).innerText()).replace(/\s+/g, " ")).toBe("OpenAI");
             await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
             await until(() => resolveService("dictation").effective, "openai", "the policy after the pick");
-            await tap(phone ? `${surface} [data-mobile2-menu-row="back"]` : `${surface} [data-rail-menu-back]`);
+            await tap(`${surface} [data-settings-back]`);
             await page.locator(`${surface} [data-openai-service="dictation"]`).waitFor();
             await until(async () => (await page.locator(`${surface} [data-openai-service="dictation"] [data-openai-service-now]`).innerText()).trim(), "OpenAI", "the Dictation row after the pick");
             await tap(`${surface} [data-keys-more="openai"]`);
@@ -13415,9 +13417,9 @@ describe("openai key services", () => {
             await page.locator(`${surface} [data-openai-option-reason="held"]`).waitFor({ state: "detached" });
             await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
             await until(() => resolveService("asks").requested, "openrouter", "the policy after letting «Asks you» go");
-            await frame("asks-kept", [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenRouter" }) }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+            await frame("asks-kept", [{ selector: "[data-openai-feature-now]", words: "OpenRouter" }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
               await page.locator(`${surface} [data-openai-option="openrouter"] input`).first().isChecked() ? null : "OpenRouter is not checked");
-            await tap(phone ? `${surface} [data-mobile2-menu-row="back"]` : `${surface} [data-rail-menu-back]`);
+            await tap(`${surface} [data-settings-back]`);
             await page.locator(`${surface} [data-openai-service="asks"]:not([data-held])`).waitFor();
             await tap(`${surface} [data-keys-add="openai"]`);
             await page.locator(`${surface} [data-keys-field="openai"] input`).fill(value.openai);
@@ -13509,7 +13511,8 @@ describe("memory source settings", () => {
               await page.goto(`${server.base}?scenario=keys&header=1`);
               await page.locator('[data-mobile2-open="menu"]').first().click();
               await page.locator('[data-mobile2-menu-row="settings"]').first().click();
-              const row = page.locator("[data-mobile2-sheet='menu'] [data-header-menu-memory-source]");
+              await page.locator("[data-mobile2-sheet='settings'] [data-settings-section-row='memory']").click();
+              const row = page.locator("[data-mobile2-sheet='settings'] [data-header-menu-memory-source]");
               await row.waitFor();
               const first = state === "pressed" ? "unchosen" : state === "refused" ? "active" : MEMORY_SOURCE_FRAME_ROW[state];
               await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, first);
@@ -13525,7 +13528,7 @@ describe("memory source settings", () => {
               await row.scrollIntoViewIfNeeded();
               await page.waitForTimeout(120);
               const geometry = await page.evaluate(() => {
-                const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet='menu']")!;
+                const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet='settings']")!;
                 const host = document.querySelector<HTMLElement>("[data-header-menu-memory-source]")!;
                 const line = host.querySelector<HTMLElement>("[data-memory-source-line]")!;
                 const title = host.querySelector<HTMLElement>("[data-memory-source-title]")!;
@@ -13976,6 +13979,27 @@ browserTest("digest preview boundaries and literal hints stay distinct without a
     }
   } finally { await browser.close(); server.stop(); }
 }, 180_000);
+
+/* The one Settings window at 390 px (docs/design/settings-redo/build-brief.md §7). `LLV_SETTINGS_WINDOW_ONLY=<substring,…>`
+   reruns a subset and `LLV_SETTINGS_WINDOW_OUT` says where its frames go. */
+describe("the Settings window", () => {
+  browserTest("every state renders whole on the phone, with its numbers read", async () => {
+    const { captureSettingsWindowFrames, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_SETTINGS_WINDOW_OUT ?? ".artifacts/settings-window", "phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    const subset = (process.env.LLV_SETTINGS_WINDOW_ONLY ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, true, subset.length ? (frame) => subset.some((part) => frame.includes(part)) : undefined);
+      expect(readings.length).toBeGreaterThan(0);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 3_000_000);
+});
 
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {

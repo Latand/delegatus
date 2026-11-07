@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { Select } from "@/components/ui/Select";
+import { ChoiceRow, SectionHead, useDensity } from "@/components/settings/settingsRows";
 import {
   listVoiceDevices,
   outputChoiceSupported,
@@ -22,7 +22,7 @@ type HintLine = { key: string; text: ReactNode; phoneOnly?: boolean };
 const NO_DEVICES: VoiceDeviceList = { inputs: [], outputs: [], defaultInputName: null, defaultOutputName: null, labelled: false };
 
 /**
- * The microphone and speakers a voice call uses, in the Voice Delegatus dialog
+ * The microphone and speakers a voice call uses, in the Voice section of Settings
  * (docs/design/voice-device-picker.md §2). It reads no server settings: the
  * choice is this browser's alone, and the composer's voice conversation uses it
  * even while the companion is off.
@@ -34,6 +34,7 @@ export function VoiceDevicesSetting() {
   const input = useVoiceDeviceChoice("input");
   const output = useVoiceDeviceChoice("output");
   const active = useActiveVoiceInput();
+  const sheet = useDensity() === "sheet";
   const ids = { microphone: useId(), speakers: useId(), microphoneHint: useId(), speakersHint: useId() };
   const alive = useRef(true);
 
@@ -87,31 +88,32 @@ export function VoiceDevicesSetting() {
       setVoiceDeviceChoice(kind, entry ? { id: entry.id, label: entry.label } : null);
     };
     const lines = hint(kind, resolved.state, resolved.state === "present" ? resolved.label : "", choice?.label ?? "", defaultName);
+    const label = t(kind === "input" ? "voiceCompanion.devices.microphone" : "voiceCompanion.devices.speakers");
+    const hintId = kind === "input" ? ids.microphoneHint : ids.speakersHint;
     return (
-      <div className="min-w-0" data-voice-device={kind} data-device-state={resolved.state}>
-        <label htmlFor={kind === "input" ? ids.microphone : ids.speakers} className="font-semibold text-primary">
-          {t(kind === "input" ? "voiceCompanion.devices.microphone" : "voiceCompanion.devices.speakers")}
-        </label>
-        <Select
-          roomy
-          id={kind === "input" ? ids.microphone : ids.speakers}
-          className="mt-1.5 w-full max-sm:min-h-11"
-          value={value}
-          disabled={disabled}
-          aria-describedby={lines.length > 0 ? (kind === "input" ? ids.microphoneHint : ids.speakersHint) : undefined}
-          onChange={event => onChange(event.target.value)}
-        >
-          <option value="">{t("voiceCompanion.devices.default")}</option>
-          {resolved.state === "missing" ? <option value={choice!.id} disabled>{t("voiceCompanion.devices.missingOption", { name: resolved.label })}</option> : null}
-          {hidden ? null : entries.map(entry => <option key={entry.id} value={entry.id}>{nameOf(entry, entries)}</option>)}
-        </Select>
-        {lines.length > 0 ? <div id={kind === "input" ? ids.microphoneHint : ids.speakersHint} className="mt-1 text-[12px] leading-snug text-muted" data-voice-device-hint={kind}>{lines.map(entry => <p key={entry.key} className={entry.phoneOnly ? "sm:hidden" : undefined}>{entry.text}</p>)}</div> : null}
-      </div>
+      <ChoiceRow
+        label={label}
+        wide
+        attrs={{ "data-voice-device": kind, "data-device-state": resolved.state }}
+        id={kind === "input" ? ids.microphone : ids.speakers}
+        value={value}
+        disabled={disabled}
+        describedBy={lines.length > 0 ? hintId : undefined}
+        onChange={onChange}
+        options={[
+          { value: "", label: t("voiceCompanion.devices.default") },
+          ...(resolved.state === "missing" ? [{ value: choice!.id, label: t("voiceCompanion.devices.missingOption", { name: resolved.label }), disabled: true }] : []),
+          ...(hidden ? [] : entries.map(entry => ({ value: entry.id, label: nameOf(entry, entries) }))),
+        ]}
+      >
+        {/* A landscape phone's wide select shows the chosen name whole too, so its line goes there as well. */}
+        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className={`${sheet ? "px-4" : "px-5"} ${lines.every(entry => entry.phoneOnly) ? "landscape:hidden" : ""} pb-1.5 text-ui leading-snug text-muted`} data-voice-device-hint={kind}>{lines.filter(entry => sheet || !entry.phoneOnly).map(entry => <p key={entry.key} className={entry.phoneOnly ? "landscape:hidden" : undefined}>{entry.text}</p>)}</div> : null}
+      </ChoiceRow>
     );
   };
 
   /* The lines a row carries under its select, each whole at 390 px where a native select cuts a long device name: the
-     device in use (the select shows it too, so the chosen device's line is drawn on the phone only), the marker of a
+     device in use (the window's wide select shows it whole, so the chosen device's line is drawn in the sheet only), the marker of a
      choice that is not connected, and the row's own remark. A row with nothing to say draws none. */
   const hint = (kind: VoiceDeviceKind, state: "default" | "present" | "missing", chosen: string, stored: string, defaultName: string | null): HintLine[] => {
     const inUse = (name: string, phoneOnly: boolean): HintLine => ({ key: "in-use", phoneOnly, text: t("voiceCompanion.devices.inUse", { name }) });
@@ -121,7 +123,7 @@ export function VoiceDevicesSetting() {
       if (!list.labelled) return [{ key: "permission", text: (
         <>
           {t("voiceCompanion.devices.permission")}{" "}
-          <button type="button" data-voice-devices-allow onClick={() => void allow()} className="min-h-9 rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">{t("voiceCompanion.devices.allow")}</button>
+          <button type="button" data-voice-devices-allow onClick={() => void allow()} className="min-h-9 rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 settings-sheet:min-h-11">{t("voiceCompanion.devices.allow")}</button>
         </>
       ) }];
       const using = state === "present" ? chosen : defaultName ?? "";
@@ -137,12 +139,10 @@ export function VoiceDevicesSetting() {
   };
 
   return (
-    <section data-voice-devices className="mt-4 min-w-0 border-t border-border pt-3 text-[13px] [overflow-wrap:anywhere]">
-      <h3 className="min-h-6 font-semibold">{t("voiceCompanion.devices.title")}</h3>
-      <div className="mt-2 flex flex-col gap-3">
-        {row("input")}
-        {row("output")}
-      </div>
-    </section>
+    <div data-voice-devices="">
+      <SectionHead title={t("voiceCompanion.devices.title")} />
+      {row("input")}
+      {row("output")}
+    </div>
   );
 }
