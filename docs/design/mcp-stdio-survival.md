@@ -99,10 +99,9 @@ no error body or call arguments. A successful structured Viewer result clears
 only its own tool, after a matching start observed after the denial. Other tools,
 transport heartbeats, ordinary server refusals and old completions cannot clear
 that denial. Invalid or overflowed evidence leaves recovery unverified. The
-existing checkpoint retry path retains write failures for retry. This draft
-still has an acceptance gap during checkpoint failure: the monitor can retain
-an earlier healthy projection. See `issue-3687-diagnosis.md` for the fault probe;
-this behavior is not ready for promotion.
+existing checkpoint retry path retains write failures for retry. The live owner
+read below keeps pending evidence visible while that checkpoint is unavailable.
+See `issue-3687-diagnosis.md` for the reproduced fault and isolated verification.
 
 The authenticated operator can use the Viewer's existing seat rotation control
 (`POST /api/orchestrator/rotate`) independently of the affected seat's MCP
