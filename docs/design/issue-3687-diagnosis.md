@@ -331,3 +331,20 @@ replace the adapter process with a pending call and with 32/33 pending starts.
 The complete adapter file passes 339 tests, including the existing completed
 replay, history-gap, permission, checkpoint-failure and same-key controls.
 Historical cause, prior UNKNOWN operations and installed acceptance remain open.
+
+
+### Review repair: healthy continuation
+
+After a successful recovery, ordinary sequential calls could exhaust the
+32-entry terminal history and mark the already recovered observation unverified.
+Both the start and success paths now apply that uncertainty transition only
+while a denial remains outstanding. The history-loss fence stays set, so a
+later denial still refuses recovery based on an evicted or unprovable identity.
+
+The existing JSON/SQLite owner and tick fixture checks healthy continuation at
+32, 33 and 34 terminal identities, journal restoration, reopened checkpoints,
+one permitted wake, and a later denial that keeps wakes withheld. Separate
+process fixtures replace the adapter at the 32/33 boundary and continue from
+the persisted journal. First-start, terminal replay and in-flight overflow
+controls remain part of the same adapter suite. Permission policy, storage
+schema, successor authority and installed acceptance are unchanged.

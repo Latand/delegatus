@@ -116,7 +116,20 @@ if (mode === "engine-socket") {
               params: { threadId: thread, turnId: "mcp-turn", item: { type: "mcpToolCall", server: "viewer", tool: "get_task", ...fields } } });
             const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
             const denial = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
-            if (descriptor === "pending-denial" || descriptor?.startsWith("starts-")) {
+            if (descriptor?.startsWith("healthy-")) {
+              if (message.method === "thread/start") {
+                item("completed", { id: "initial-denial", ...denial });
+                for (let index = 1; index < Number(descriptor.slice(8)); index++) {
+                  item("started", { id: `healthy-${index}` });
+                  item("completed", { id: `healthy-${index}`, ...success });
+                }
+                item("started", { id: "before-restart" });
+              } else {
+                item("started", { id: "continuation" });
+                item("completed", { id: "continuation", ...success });
+                item("completed", { id: "before-restart", ...success });
+              }
+            } else if (descriptor === "pending-denial" || descriptor?.startsWith("starts-")) {
               if (message.method === "thread/start") {
                 const count = descriptor === "pending-denial" ? 1 : Number(descriptor.slice(7));
                 for (let index = 1; index < count; index++) item("started", { id: `pending-${index}` });

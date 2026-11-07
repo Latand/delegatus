@@ -8104,7 +8104,7 @@ test("MCP service controls preserve denial layers and same-key effects", async (
 });
 
 
-test.each([1, 33, "pending-denial", "starts-32", "starts-33"] as const)("a fresh process retains MCP correlation (%s)", async scenario => {
+test.each([1, 33, "pending-denial", "starts-32", "starts-33", "healthy-32", "healthy-33"] as const)("a fresh process retains MCP correlation (%s)", async scenario => {
   const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
   const directory = path.join(metadataState, "mcp-process-events");
   const first = spawn(process.execPath, [fixture, "mcp-produce", directory, path.join(metadataState, "unused.jsonl"), String(scenario)],
@@ -8122,6 +8122,7 @@ test.each([1, 33, "pending-denial", "starts-32", "starts-33"] as const)("a fresh
       });
     });
     if (typeof scenario === "number") expect(ready.observation).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: scenario > 32 });
+    else if (scenario.startsWith("healthy-")) expect(ready.observation).toMatchObject({ denied: [], unverified: false });
     else expect(ready.observation).toBeUndefined();
     first.kill("SIGKILL");
     await closed;
@@ -8130,7 +8131,7 @@ test.each([1, 33, "pending-denial", "starts-32", "starts-33"] as const)("a fresh
     const [output, errors, exit] = await Promise.all([new Response(resumed.stdout).text(), new Response(resumed.stderr).text(), resumed.exited]);
     expect({ exit, errors }).toMatchObject({ exit: 0 });
     expect(JSON.parse(output).observation).toMatchObject({
-      denied: scenario === "starts-32" ? [] : [{ tool: "get_task", seq: expect.any(Number) }],
+      denied: scenario === "starts-32" || (typeof scenario === "string" && scenario.startsWith("healthy-")) ? [] : [{ tool: "get_task", seq: expect.any(Number) }],
       unverified: scenario === "starts-33" || scenario === 33,
     });
   } finally {
@@ -8223,7 +8224,8 @@ test("Viewer MCP recovery stays unverified when restoration has lost event histo
 });
 
 
-for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-start"] as const)
+for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-start",
+  "healthy-32", "healthy-33", "healthy-34", "restored-healthy-32", "restored-healthy-33"] as const)
   test.each(["off", "sqlite"] as const)(`Viewer MCP first-start correlation survives ${scenario} (%s)`, async sqliteMode => {
     const { seatMcpHealth } = await import("../monitor/seatMcpHealth");
     const { harness, PROJECT, NOW, OPEN_LANE, runSeatTickCheck } = mcpTickFixture;
@@ -8262,10 +8264,54 @@ for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-s
         const result = await runSeatTickCheck(PROJECT, rig.deps);
         expect(rig.sent).toHaveLength(recovered ? 1 : 0);
         expect(result?.delivery?.outcome).toBe(recovered ? "delivered" : "seat-mcp-unavailable");
+        expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open")).toBe(!recovered);
       } finally { receiptRead.mockRestore(); }
     };
     try {
       await bind();
+      if (scenario.includes("healthy-")) {
+        const terminalCount = Number(scenario.split("-").at(-1));
+        notify("completed", "initial-denial", denial);
+        notify("started", "recovery"); notify("completed", "recovery", success);
+        // The denial and recovery already occupy two terminal identities.
+        for (let index = 2; index < terminalCount; index++) {
+          notify("started", `healthy-${index}`, {}, "get_pipeline");
+          notify("completed", `healthy-${index}`, success, "get_pipeline");
+        }
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [], unverified: false });
+        if (scenario.startsWith("restored-")) {
+          await bindStructuredDeliveryQueue([], { client: null });
+          await stop(); await host.release();
+          server = new FakeAppServer(threadId);
+          host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, eventStore: store, spawnProcess: fakeSpawn(server) });
+          registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${threadId}`]!, claimOwner: "fixture-successor", claimEpoch: 8,
+            structuredHost: codexHostColumns(await host.health(), 8) });
+          stop = await bindCodexHostPersistence(registry, key, host, "fixture-successor", 8);
+          await bind();
+        }
+        // Check both sides of the next completion: the 32-entry case crosses
+        // the terminal bound here, while the others have already crossed it.
+        notify("started", "continuation", {}, "get_pipeline");
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [], unverified: false });
+        notify("completed", "continuation", success, "get_pipeline");
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [], unverified: false });
+        const reopened = new AgentRegistry(registryFile, () => true, undefined, { sqliteMode });
+        try { expect(reopened.seatTickConversation(conversation.id)?.viewerMcp).toEqual(observe()); }
+        finally { reopened.close(); }
+        await assertWake(true);
+        // Healthy continuation must retain the history-loss fence for a later
+        // denial, including a replay of the evicted recovery identity.
+        notify("completed", "new-denial", denial);
+        notify("started", "recovery"); notify("completed", "recovery", success);
+        notify("started", "new-recovery"); notify("completed", "new-recovery", success);
+        await flushStructuredHostPersistence(host);
+        expect(observe()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: true });
+        await assertWake(false);
+        return;
+      }
       notify("started", "pending");
       if (scenario !== "pending-denial") notify("completed", "later-denial", denial);
       await flushStructuredHostPersistence(host);

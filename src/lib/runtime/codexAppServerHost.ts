@@ -3506,7 +3506,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       // Keep the first start even while healthy. A replay must retain its
       // original ordering relative to a denial that arrives later.
       this.rememberViewerMcpStart(key, tool, event.seq);
-      if (observation && this.viewerMcpHistoryLost) {
+      if (observation?.denied.length && this.viewerMcpHistoryLost) {
         this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
       }
     } else {
@@ -3529,9 +3529,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         // Structured server refusals are successful transports, with no proof
         // that the denied management capability is now permitted.
         const structured = record(result?.structuredContent);
-        if (result && result.isError !== true && structured?.ok === true && this.viewerMcpHistoryLost) {
-          // Eviction loses proof that this identity is new. Keep the denial
-          // and persist the uncertainty through the existing observation.
+        if (result && result.isError !== true && structured?.ok === true && observation.denied.length && this.viewerMcpHistoryLost) {
+          // Eviction loses proof for clearing an outstanding denial. Preserve
+          // confirmed healthy state while retaining the fence for later recovery.
           this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
         } else if (result && result.isError !== true && structured?.ok === true) {
           const startSeq = start.seq;
