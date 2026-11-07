@@ -1286,39 +1286,57 @@ export async function preflightPipelineRepository(
 export async function createPipeline(req: CreatePipelineRequest, link?: { attachLink: string; kind: "issue" | "pr" }): Promise<PipelineClientResult> {
   const reservation = await preparePipelineCreation();
   if (!reservation) return { error: translate(getLocale(), "pipelineCreation.capacity") };
-  try {
-    if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
-    const response = await fetch("/api/pipelines", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(req),
-    });
-    if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
-    const json = (await response.json().catch(() => null)) as PipelineClientResult | null;
-    if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
-    if (response.ok && json?.pipeline) {
-      if (response.status === 202) {
-        if (!json.queued || !Number.isFinite(Date.parse(json.queued.queuedAt))) return { error: translate(getLocale(), "pipelineCreation.unavailable") };
-        const recovered = await reservation.accept(json.pipeline, json.queued.queuedAt, link);
-        if (!reservation.current()) return { error: translate(getLocale(), "pipelineCreation.revoked") };
-        return { pipeline: json.pipeline, accepted: true, current: reservation.current,
-          ...(!recovered ? { warning: translate(getLocale(), "pipelineCreation.persistence") } : {}) };
+  const interrupted = (): PipelineClientResult => ({ error: translate(getLocale(),
+    reservation.signal.reason?.name === "TimeoutError" ? "pipelineCreation.unavailable" : "pipelineCreation.revoked") });
+  let onAbort!: () => void;
+  const aborted = new Promise<PipelineClientResult>(resolve => {
+    onAbort = () => resolve(interrupted());
+    reservation.signal.addEventListener("abort", onAbort, { once: true });
+    if (reservation.signal.aborted) onAbort();
+  });
+  // Bound both headers and body decoding, even if a transport ignores abort.
+  // An elapsed response deadline says nothing about the server's outcome.
+  const create = async (): Promise<PipelineClientResult> => {
+    try {
+      if (!reservation.current()) return interrupted();
+      const response = await fetch("/api/pipelines", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(req),
+        signal: reservation.signal,
+      });
+      if (!reservation.current()) return interrupted();
+      const json = (await response.json().catch(() => null)) as PipelineClientResult | null;
+      if (!reservation.current()) return interrupted();
+      if (response.ok && json?.pipeline) {
+        if (response.status === 202) {
+          if (!json.queued || !Number.isFinite(Date.parse(json.queued.queuedAt))) return { error: translate(getLocale(), "pipelineCreation.unavailable") };
+          const recovered = await reservation.accept(json.pipeline, json.queued.queuedAt, link);
+          if (!reservation.current()) return interrupted();
+          return { pipeline: json.pipeline, accepted: true, current: reservation.current,
+            ...(!recovered ? { warning: translate(getLocale(), "pipelineCreation.persistence") } : {}) };
+        }
+        /* The POST echo IS the new record — apply it straight into the client
+           cache so the draft's builder appears immediately (issue #221 §3). An
+           auto-started pipeline also spawns agents, so only that path still pays
+           the full board refetch. */
+        applyPipelineSnapshot(json.pipeline, true);
+        if (req.autoStart !== false) window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
+        return { pipeline: json.pipeline, current: reservation.current };
       }
-      /* The POST echo IS the new record — apply it straight into the client
-         cache so the draft's builder appears immediately (issue #221 §3). An
-         auto-started pipeline also spawns agents, so only that path still pays
-         the full board refetch. */
-      applyPipelineSnapshot(json.pipeline, true);
-      if (req.autoStart !== false) window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
-      return { pipeline: json.pipeline, current: reservation.current };
+      return {
+        error: json?.error ?? translate(getLocale(), "pipelineModel.failed", { status: response.status }),
+        ...(json?.code ? { code: json.code, field: json.field, path: json.path } : {}),
+      };
+    } catch {
+      return { error: translate(getLocale(), "common.serverUnavailable") };
     }
-    return {
-      error: json?.error ?? translate(getLocale(), "pipelineModel.failed", { status: response.status }),
-      ...(json?.code ? { code: json.code, field: json.field, path: json.path } : {}),
-    };
-  } catch {
-    return { error: translate(getLocale(), "common.serverUnavailable") };
-  } finally { reservation.release(); }
+  };
+  try { return await Promise.race([aborted, create()]); }
+  finally {
+    reservation.signal.removeEventListener("abort", onAbort);
+    reservation.release();
+  }
 }
 
 /**

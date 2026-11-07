@@ -37,7 +37,8 @@ export type CreationCard = { id: string; receipt?: PipelineCreationReceipt;
   status: "accepted" | "lagging" | "refused" | "unavailable" | "restoring" | "revoked" | "linkPending";
   recoveryUnavailable?: boolean; link?: CreationLocator["link"] };
 type CreationAuthority = { owner: string; signature: string };
-export type CreationReservation = { current(): boolean; release(): void; accept(pipeline: Pipeline, queuedAt: string, link?: CreationLocator["link"]): Promise<boolean> };
+export const CREATION_REQUEST_TIMEOUT_MS = 30_000;
+export type CreationReservation = { signal: AbortSignal; current(): boolean; release(): void; accept(pipeline: Pipeline, queuedAt: string, link?: CreationLocator["link"]): Promise<boolean> };
 const EMPTY_CREATIONS: readonly CreationCard[] = [];
 const EMPTY_CREATION_IDS: readonly string[] = [];
 
@@ -386,6 +387,7 @@ export function createFilesClientCache(
   let accessNotice = false;
   const creations = new Map<string, { locator: CreationLocator; card: CreationCard; stored?: Pipeline }>();
   const creationControllers = new Set<AbortController>();
+  const reservationControllers = new Set<AbortController>();
   let restoration: CreationLocators | null = null;
   let reconciling: Promise<void> | null = null;
   let creationWrites: Promise<unknown> = Promise.resolve();
@@ -422,6 +424,7 @@ export function createFilesClientCache(
     const old = authority;
     authority = next;
     authorityGeneration++;
+    for (const controller of reservationControllers) controller.abort();
     reserved = 0;
     for (const controller of creationControllers) controller.abort();
     if (old && old.owner !== next?.owner) {
@@ -469,9 +472,26 @@ export function createFilesClientCache(
     const generation = authorityGeneration;
     reserved++;
     let released = false;
-    const current = () => ownsCreation(generation);
-    const release = () => { if (!released && generation === authorityGeneration) reserved--; released = true; };
-    return { current, release, accept: async (pipeline, queuedAt, link) => {
+    const controller = new AbortController();
+    reservationControllers.add(controller);
+    const deadline = performance.now() + CREATION_REQUEST_TIMEOUT_MS;
+    const expire = () => controller.abort(new DOMException("Creation response deadline elapsed", "TimeoutError"));
+    const timer = setTimeout(expire, CREATION_REQUEST_TIMEOUT_MS);
+    const current = () => {
+      // A throttled document must also fence a response before its timer runs.
+      if (!released && performance.now() >= deadline) expire();
+      return !controller.signal.aborted && ownsCreation(generation);
+    };
+    const release = () => {
+      if (released) return;
+      if (generation === authorityGeneration) reserved--;
+      released = true;
+      clearTimeout(timer);
+      reservationControllers.delete(controller);
+      controller.signal.removeEventListener("abort", release);
+    };
+    controller.signal.addEventListener("abort", release, { once: true });
+    return { signal: controller.signal, current, release, accept: async (pipeline, queuedAt, link) => {
       if (released || !current()) return false;
       const locator = { id: pipeline.id, ...(link ? { link } : {}) };
       const receipt: PipelineCreationReceipt = { id: pipeline.id, project: pipeline.project, title: pipeline.task,
@@ -1042,6 +1062,7 @@ export function createFilesClientCache(
        and a restored answer this document never certified leaves the screen. */
     if (response.status === 401 || response.status === 403) {
       authorityGeneration++;
+      for (const controller of reservationControllers) controller.abort();
       reserved = 0;
       creations.clear();
       cards = EMPTY_CREATIONS;
@@ -1408,6 +1429,7 @@ export function createFilesClientCache(
     if (disposed) return;
     disposed = true;
     authorityGeneration++;
+    for (const controller of reservationControllers) controller.abort();
     for (const controller of creationControllers) controller.abort();
     for (const controller of healthControllers) controller.abort();
     for (const requestScope of [...completionRetries.keys()]) cancelCompletionRetry(requestScope);
@@ -1490,9 +1512,16 @@ export const preparePipelineCreation = async () => {
       if (record?.creations) cache.restoreCreations(record.creations);
       const reservation = cache.reserveCreation();
       if (!reservation) { resolve(null); return; }
-      await new Promise<void>(releaseLock => resolve({ ...reservation,
-        release() { reservation.release(); releaseLock(); },
-      }));
+      await new Promise<void>(releaseLock => {
+        const release = () => {
+          reservation.release();
+          reservation.signal.removeEventListener("abort", release);
+          releaseLock();
+        };
+        reservation.signal.addEventListener("abort", release, { once: true });
+        if (!reservation.current()) { release(); resolve(null); return; }
+        resolve({ ...reservation, release });
+      });
     }).catch(() => resolve(null)).finally(() => clearTimeout(timer));
   });
 };
