@@ -138,9 +138,8 @@ other case run today's block unchanged.
 3. **Proven undispatched run attempt:** `stage.kind === "run"`, and the
    attempt holds:
    - no `launchId`, `conversationId`, `sessionId`, `agentPath`, `paneId`,
-     `flowId`, `report`, `verdict`, `activation`, `cloud`, `runtimeSwitch` or
-     `controllerWait`;
-   - no entries in `retiredLaunches`;
+     `flowId`, `report`, `verdict`, `activation`, `cloud` or `controllerWait`;
+   - no entries in `runtimeSwitches` or `retiredLaunches`;
    - `spawnCalls` that is `undefined` or `0`.
 
    In addition, `agentRegistry().pipelineSpawnHistory(clientAttemptId(pipeline,
@@ -223,9 +222,10 @@ On d4096460 this case must fail at step 4 (operation `undefined`,
 `publishedCommit` `null`). The builder records that red run.
 
 Counterexamples (one `test.each`, the same setup up to step 3, then one change
-before the retry). Each asserts that the retry clears as today
-(`delivery.operation` is `undefined` and `publishedCommit` is `null`). Where
-noted, it also asserts that the next pass reserves a new operation:
+before the retry). Settled counterexamples assert today's clearing behavior
+(`delivery.operation` is `undefined` and `publishedCommit` is `null`). Pending
+and running operations remain untouched. A mismatched operation epoch is
+rejected by store validation before retry and leaves the stored record intact.
 
 - `moved-head`: `box.setLocalHead(<other sha>)`.
 - `dirty-worktree`: `box.setDirty(true)`.
@@ -239,9 +239,10 @@ noted, it also asserts that the next pass reserves a new operation:
   operation to the refused result, `remote: "unreachable"` and `state:
   "pending"` respectively, using the #3328 variant edits. Expectations: the
   refused result is cleared and recorded in `publicationRecovery`; the
-  unreachable result is cleared; for the pending receipt the existing
-  behaviour is asserted as observed on the base. Observe these on the base
-  revision first; do not assume them.
+  unreachable result is cleared; the pending receipt stays unchanged. These
+  behaviors were observed on the base through `patchPipeline`, before draining
+  publication. The fixture's convenience wrapper also drains pending
+  publication, so the retry assertions use the exported engine operation.
 
 Proof that the post-await check matters: in the accepted case, wrap the
 harness `exec` so that the `rev-parse HEAD` call made by

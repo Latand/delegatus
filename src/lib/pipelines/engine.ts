@@ -7765,6 +7765,15 @@ function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefine
     && !attempt.completedAt && !attempt.report && !attempt.verdict;
 }
 
+function undispatchedRunAttempt(pipeline: Pipeline, stage: PipelineStage | null, attempt: PipelineStageAttempt | null): boolean {
+  if (stage?.kind !== "run" || !attempt || attempt.launchId || attempt.conversationId || attempt.sessionId
+    || attempt.agentPath || attempt.paneId || attempt.flowId || attempt.report || attempt.verdict || attempt.activation
+    || attempt.cloud || attempt.runtimeSwitches?.length || attempt.controllerWait || attempt.retiredLaunches?.length
+    || attempt.spawnCalls !== undefined && attempt.spawnCalls !== 0) return false;
+  try { return agentRegistry().pipelineSpawnHistory(clientAttemptId(pipeline, stage, attempt)).length === 0; }
+  catch { return false; }
+}
+
 function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts, activationPending = !!attempt.activation): string {
   const publication = ports.structuredDeliveryPublication?.() ?? "ready";
   if (publication !== "ready") return `stage spawn deferred: waiting for the delivery controller (${publication})`;
@@ -17944,9 +17953,17 @@ export async function patchPipeline(
           };
         }
       }
-      /* An internal review retries on the clean local head it holds; only a
-         `remote-branch` pipeline takes a remote repair or republishes. */
-      if (pipeline.delivery?.operation?.state === "settled") {
+      // An undispatched retry can reuse the current owner's successful receipt.
+      // Recheck all evidence synchronously after the worktree read yields.
+      const head = pipeline.lastPassedCommit && settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
+        && pipeline.publishedCommit === pipeline.lastPassedCommit
+        ? await currentPipelineBranchHead(pipeline, ports.exec).catch(() => null) : null;
+      const keepPublication = head?.ok && head.sha === pipeline.lastPassedCommit
+        && settledPublicationForHead(pipeline, head.sha) !== null
+        && pipeline.publishedCommit === head.sha
+        && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }) ?? pipeline) === null
+        && undispatchedRunAttempt(pipeline, stage, attempt);
+      if (pipeline.delivery?.operation?.state === "settled" && !keepPublication) {
         recordSettledPublicationFailure(pipeline, attempt, ports);
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
