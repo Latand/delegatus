@@ -183,7 +183,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
+import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost } from "./hostRetirement";
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
@@ -17955,10 +17955,12 @@ export async function patchPipeline(
       }
       // An undispatched retry can reuse the current owner's successful receipt.
       // Recheck all evidence synchronously after the worktree read yields.
-      const head = pipeline.lastPassedCommit && settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
+      const head = !pipelinePublicationHoldsHost(pipeline)
+        && pipeline.lastPassedCommit && settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
         && pipeline.publishedCommit === pipeline.lastPassedCommit
         ? await currentPipelineBranchHead(pipeline, ports.exec).catch(() => null) : null;
       const keepPublication = head?.ok && head.sha === pipeline.lastPassedCommit
+        && !pipelinePublicationHoldsHost(pipeline)
         && settledPublicationForHead(pipeline, head.sha) !== null
         && pipeline.publishedCommit === head.sha
         && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }) ?? pipeline) === null

@@ -2337,6 +2337,43 @@ test("an undispatched same-head retry keeps its publication receipt without publ
   } finally { f.restore(); }
 });
 
+test.each(["uncertain-success", "executor-unfinished"] as const)(
+  "an undispatched retry replaces unresolved publication evidence before completion: %s", async variant => {
+    const f = await undispatchedRetryFixture();
+    try {
+      const lane = f.read();
+      const operation = lane.delivery!.operation!;
+      expect(operation.result?.ok).toBe(true);
+      if (variant === "uncertain-success" && operation.result?.ok) operation.result.uncertain = true;
+      if (variant === "executor-unfinished") {
+        expect(operation.executor).toBeDefined();
+        operation.executor!.finished = false;
+      }
+      savePipelines([lane]);
+      const { pipelinePublicationHoldsHost } = await import("./hostRetirement");
+      expect(pipelinePublicationHoldsHost(f.read())).toBe(true);
+      const reads = f.box.remoteReadAttempts();
+      expect((await f.retry()).error).toBeUndefined();
+      const retried = f.read();
+
+      await tickPipelines([], f.h.ports);
+      const attempt = f.read().runs.find(run => run.stageId === "review")!.attempts.at(-1)!;
+      expect(attempt.n).toBe(2);
+      await tickPipelines([f.h.finish(attempt.agentPath!, "pass")], f.h.ports);
+      const completed = f.read();
+      expect(completed.state).toBe("completed");
+      expect(completed.delivery!.operation!.id).not.toBe(operation.id);
+      expect(completed.delivery!.operation).toMatchObject({ state: "settled",
+        result: { ok: true, remote: "published", sha: f.box.passedSha } });
+      expect(f.box.remoteReadAttempts()).toBeGreaterThan(reads);
+      expect(pipelinePublicationHoldsHost(completed)).toBe(false);
+      expect(retried.delivery!.operation).toBeUndefined();
+      expect(retried.publishedCommit).toBeNull();
+      expect(retried.stages).toEqual(lane.stages);
+      expect(retried.runs).toEqual(lane.runs);
+    } finally { f.restore(); }
+  });
+
 test.each(["moved-head", "dirty-worktree", "spawn-called", "owner-replaced", "stale-epoch",
   "refused-receipt", "unreachable-receipt", "pending-receipt", "running-receipt", "result-sha", "operation-sha", "published-sha",
   "registry-after-await", "registry-unreadable", "wrong-branch", "head-read-failed", "head-read-threw"] as const)(

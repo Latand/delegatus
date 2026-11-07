@@ -130,8 +130,13 @@ other case run today's block unchanged.
 1. **Matching successful evidence:**
    `settledPublicationForHead(pipeline, pipeline.lastPassedCommit) !== null`
    and `pipeline.publishedCommit === pipeline.lastPassedCommit`. This covers
-   owner, epoch, operation SHA and result SHA. Pending, running, refused,
-   `unreachable`, `unavailable` and uncertain results all fail this test.
+   owner, epoch, operation SHA and result SHA. Also require
+   `pipelinePublicationHoldsHost(pipeline) === false`, the production custody
+   reader's proof that publication has settled. A successful result with
+   `uncertain: true`, or an executor whose `finished` is absent or false, keeps
+   custody and cannot be reused. Pending, running, refused, `unreachable` and
+   `unavailable` results also fail the combined predicate. Both checks run
+   before the HEAD read and again after it yields.
 2. **Current owner:** `deliveryOwnerError(pipeline,
    pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }) ??
    pipeline) === null`, the same expression `queuePipelinePublication` uses.
@@ -243,6 +248,12 @@ rejected by store validation before retry and leaves the stored record intact.
   behaviors were observed on the base through `patchPipeline`, before draining
   publication. The fixture's convenience wrapper also drains pending
   publication, so the retry assertions use the exported engine operation.
+- `uncertain-success`, `executor-unfinished`: persist the existing successful
+  receipt with `result.uncertain = true` or `executor.finished = false`.
+  Confirm the production custody reader holds it. Retry must clear that
+  receipt and `publishedCommit`. Drive the replacement attempt through its
+  pass; completion must use a new publication operation after a new remote
+  observation. Historical attempts and the fixed review budget stay intact.
 
 Proof that the post-await check matters: in the accepted case, wrap the
 harness `exec` so that the `rev-parse HEAD` call made by
