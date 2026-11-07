@@ -11,7 +11,6 @@ import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { cacheSizes } from "@/lib/cacheTelemetry";
 import { registryLockHolder } from "./registryLockHolderFixture";
-import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 
 /* The shared read-only registry view (viewer-hot-path-clones): every reader of
    `readOnlySnapshot` holds the same objects, so none may change them, and every
@@ -142,43 +141,130 @@ test("nested reads preserve mutation-batch savepoints and earlier committed memb
     .toEqual(["first member", "last member"]);
 });
 
-test("nested reservation guards release expired writers and preserve FIFO progress", async () => {
+test("nested reservation guards enforce the total deadline without blocking and preserve FIFO", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nested-reservation-bound-"));
   directories.push(directory);
-  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false, undefined,
-    { sqliteMode: "sqlite", sqliteWriterDeadlineMs: 80 });
+  const filename = path.join(directory, "registry.json");
+  const registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const conversation = registry.ensureConversation("claude", path.join(directory, "session.jsonl"), null);
   const store = (registry as unknown as { sqliteStore: SqliteAgentRegistryStore }).sqliteStore;
   const holder = registryLockHolder(store.filename);
-  let timer: ReturnType<typeof setInterval> | undefined;
-  try {
-    const conversation = registry.ensureConversation("claude", path.join(directory, "session.jsonl"), null);
-    const admitted: string[] = [];
-    const reserve = (key: string) => registry.holdDeliveryOffLoop(conversation.id, "wake", key, "text", [], null, {}, {
+  // The parent owns the real SQLite lock and observes the child's event loop.
+  // Only time and timers are controlled; admission, leases, reads and writes
+  // all run through production. Wall time bounds the harness, never the budget.
+  const script = `
+    const { AgentRegistry } = await import(process.argv[1]);
+    const { runtimeSwitchRetirementReason } = await import(process.argv[2]);
+    const registry = new AgentRegistry(process.argv[3], () => false, undefined,
+      { sqliteMode: "sqlite", sqliteWriterDeadlineMs: 80 });
+    const conversationId = process.argv[4];
+    let clock = 0;
+    const timers = new Map();
+    performance.now = () => clock;
+    Math.random = () => 0.5;
+    globalThis.setTimeout = (callback, delay = 0, ...args) => {
+      const timer = { at: clock + delay, run: () => callback(...args), unref() { return this; } };
+      timers.set(timer, timer);
+      return timer;
+    };
+    globalThis.clearTimeout = timer => timers.delete(timer);
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    const admitted = [];
+    let results = null;
+    let completedAt = null;
+    let pending = 0;
+    const reserve = key => registry.holdDeliveryOffLoop(conversationId, "wake", key, "text", [], null, {}, {
       admissionGuard: () => {
-        expect(runtimeSwitchRetirementReason(conversation.id, registry)).toBeNull();
+        const reason = runtimeSwitchRetirementReason(conversationId, registry);
+        if (reason !== null) throw new Error(reason);
         admitted.push(key);
       },
     });
+    process.on("message", async ({ command, at }) => {
+      try {
+        if (command === "start" || command === "accept") {
+          const keys = command === "start" ? ["expired-one", "expired-two"] : ["first", "second"];
+          pending = keys.length;
+          results = null;
+          void Promise.all(keys.map(key => reserve(key).finally(() => pending--)))
+            .then(value => { results = value.map(item => item?.state ?? null); completedAt = clock; })
+            .catch(error => process.send({ error: String(error) }));
+        }
+        await flush();
+        if (command === "advance") {
+          for (;;) {
+            const next = [...timers.values()].filter(timer => timer.at <= at).sort((a, b) => a.at - b.at)[0];
+            if (!next) break;
+            clock = next.at;
+            timers.delete(next);
+            next.run();
+            await flush();
+          }
+          clock = at;
+        }
+        const state = registry.sqliteStore;
+        process.send({ command, clock, pending, results, completedAt, admitted,
+          reservations: Object.keys(registry.snapshot().heldDeliveries).length,
+          writerHeld: state.writerHeld, inTransaction: state.db.inTransaction });
+      } catch (error) { process.send({ error: String(error) }); }
+    });
+    process.send({ command: "ready" });
+  `;
+  type Observation = {
+    command: string; clock: number; pending: number; results: Array<string | null> | null;
+    completedAt: number | null; admitted: string[]; reservations: number;
+    writerHeld: boolean; inTransaction: boolean; error?: string;
+  };
+  let receive: ((message: Observation) => void) | undefined;
+  const ready = new Promise<Observation>(resolve => { receive = resolve; });
+  const child = Bun.spawn([process.execPath, "-e", script,
+    new URL("./registry.ts", import.meta.url).href,
+    new URL("../pipelines/runtimeSwitchFence.ts", import.meta.url).href, filename, conversation.id], {
+    stdin: "pipe", stdout: "ignore", stderr: "inherit",
+    ipc(message: Observation) { receive?.(message); },
+  });
+  const bounded = async (reply: Promise<Observation>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const message = await Promise.race([reply, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("reservation child did not answer the parent handshake")), 5_000);
+      })]);
+      expect(message.error).toBeUndefined();
+      return message;
+    } finally { clearTimeout(timer); }
+  };
+  const request = async (command: string, at?: number) => {
+    const reply = new Promise<Observation>(resolve => { receive = resolve; });
+    child.send({ command, at });
+    const message = await bounded(reply);
+    expect(message.command).toBe(command);
+    return message;
+  };
+  try {
+    expect((await bounded(ready)).command).toBe("ready");
     await holder.hold();
-    let pulses = 0;
-    timer = setInterval(() => pulses++, 5);
-    const started = performance.now();
-    expect(await Promise.all([reserve("expired-one"), reserve("expired-two")])).toEqual([null, null]);
-    const elapsed = performance.now() - started;
-    expect(elapsed).toBeGreaterThanOrEqual(75);
-    expect(elapsed).toBeLessThan(1000);
-    expect(pulses).toBeGreaterThan(2);
-    expect(admitted).toEqual([]);
+    expect((await request("start")).pending).toBe(2);
+    // This round trip is observed outside the process waiting for SQLite.
+    expect((await request("ping")).pending).toBe(2);
+    const beforeDeadline = await request("advance", 79);
+    expect(beforeDeadline).toMatchObject({ clock: 79, pending: 2, results: null, reservations: 0 });
+    const expired = await request("advance", 80);
+    expect(expired).toMatchObject({
+      clock: 80, pending: 0, results: [null, null], completedAt: 80,
+      admitted: [], reservations: 0, writerHeld: false, inTransaction: false,
+    });
     expect(Object.keys(registry.snapshot().heldDeliveries)).toEqual([]);
     await holder.release();
-    const accepted = await Promise.all([reserve("first"), reserve("second")]);
-    expect(admitted).toEqual(["first", "second"]);
-    expect(accepted.map(item => item?.state)).toEqual(["assigned", "assigned"]);
-    expect(transactionState(store).writerHeld).toBe(false);
-    expect(transactionState(store).db.inTransaction).toBe(false);
-    console.info(JSON.stringify({ case: "nested-reservation-bound", deadlineMs: 80, elapsedMs: elapsed, pulses }));
+    const accepted = await request("accept");
+    expect(accepted).toMatchObject({
+      pending: 0, results: ["assigned", "assigned"], admitted: ["first", "second"],
+      reservations: 2, writerHeld: false, inTransaction: false,
+    });
+    console.info(JSON.stringify({ case: "nested-reservation-bound", beforeDeadline, expired, accepted }));
   } finally {
-    if (timer) clearInterval(timer);
+    // Kill only this recorded child, including a mutant stuck in synchronous SQLite.
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
     await holder.close();
     registry.close();
   }
