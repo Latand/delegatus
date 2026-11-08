@@ -621,3 +621,39 @@ test("SDK canonical project succession preserves the original operation without 
     expect(roleMemoryCollection()!.snapshot()).toEqual(before);
   } finally { resetProjectAliasesForTests(); await f.close(); }
 });
+
+
+test("SDK duplicate during held maintenance reads the commit without joining or redispatching the original", async () => {
+  const f = await committedSdkFixture();
+  const privacy = await import("@/lib/memory/privacy");
+  const original = privacy.refreshCurationKnownValuesAsync;
+  let reached!: () => void, release!: () => void;
+  const maintenanceEntered = new Promise<void>(resolve => { reached = resolve; });
+  const maintenanceRelease = new Promise<void>(resolve => { release = resolve; });
+  const refresh = spyOn(privacy, "refreshCurationKnownValuesAsync").mockImplementation(async () => {
+    reached(); await maintenanceRelease; await original();
+  });
+  let first: Promise<Record<string, unknown>> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    first = f.call(f.args);
+    await maintenanceEntered;
+    const before = roleMemoryCollection()!.snapshot();
+    const duplicate = await Promise.race([f.call(f.args), new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error("the duplicate joined held maintenance")), 2000);
+    })]);
+    expect(duplicate).toMatchObject({ ok: true, replayed: true, disposition: "committed", counts: { calls: 1 }, maintenance: { knownValues: "pending" } });
+    expect(roleMemoryCollection()!.snapshot()).toEqual(before);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    release();
+    const completed = await first;
+    expect(completed).toMatchObject({ ok: true, disposition: "committed", operationId: duplicate.operationId, revisions: duplicate.revisions, counts: duplicate.counts, placeholders: duplicate.placeholders, maintenance: { knownValues: "complete" } });
+    expect(await f.call(f.args)).toEqual({ ...completed, replayed: true });
+    expect(roleMemoryCollection()!.snapshot()).toEqual(before);
+    expect(readPass(f.pass.id)!.counts.calls).toBe(1);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+    release(); await first?.catch(() => {});
+    refresh.mockRestore(); await f.close();
+  }
+});
