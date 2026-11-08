@@ -1041,7 +1041,7 @@ async function spawnPipelineAgent(
       roleMemoryRevision,
       registry,
       client,
-      assertCurrent: assertAdmissionCurrent,
+      ...(input.assertCurrent ? { assertCurrent: assertAdmissionCurrent } : {}),
       authorize: async () => {
         assertAdmissionCurrent();
         // Native admission retries yield too. Recheck the durable activation

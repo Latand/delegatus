@@ -2240,8 +2240,8 @@ export async function defaultStartHost(
   const decisionCurrent = membership?.stageId && membership.round
     ? (await import("@/lib/pipelines/engine")).capturePipelineDecisionLaunch(membership.containerId, membership.stageId, membership.round)
     : undefined;
-  input = { ...input, assertCurrent: () => { invocationCurrent?.(); decisionCurrent?.(); } };
-  const assertCurrent = () => { input.assertCurrent?.(); assertMemoryPreparedStartCurrent(input); };
+  if (invocationCurrent || decisionCurrent) input = { ...input, assertCurrent: () => { invocationCurrent?.(); decisionCurrent?.(); } };
+  const assertCurrent = input.assertCurrent ? () => { input.assertCurrent?.(); assertMemoryPreparedStartCurrent(input); } : undefined;
   const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
   await input.registry.recordSpawnMemoryCapOffLoop(input.receipt.launchId, agentMemoryCapForPlan(memoryCell?.plan ?? null));
   input = admittedStructuredLaunchInput(input);
@@ -2287,7 +2287,7 @@ export async function defaultStartHost(
       initialEventCursor,
       env,
       ...engineProcess.codex,
-      assertCurrent,
+      ...(assertCurrent ? { assertCurrent } : {}),
       ...(memoryCell ? { memoryCell } : {}),
     };
     await input.authorize?.();
@@ -2300,7 +2300,7 @@ export async function defaultStartHost(
   const options = {
     ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
     ...engineProcess.claude,
-    assertCurrent,
+    ...(assertCurrent ? { assertCurrent } : {}),
     ...(memoryCell ? { memoryCell } : {}),
   };
   await input.authorize?.();
