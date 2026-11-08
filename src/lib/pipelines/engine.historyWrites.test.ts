@@ -282,6 +282,9 @@ test.each(["failed", "deferred", "unconfirmed", "unresolved"] as const)("capacit
   const key = yieldedAttempt(f).suspension?.capacityYield?.reservationKey;
   await tickPipelines([], f.h.ports);
   expect(stops).toBe(1);
+  const repeatedPause = await patchPipeline(f.id, { action: "pause", reason: "repeat UNKNOWN pause" }, f.h.ports);
+  expect(repeatedPause.error).toBeUndefined();
+  expect(stops).toBe(1);
   expect(withdrawals).toBe(1);
   expect(yieldedAttempt(f).suspension?.capacityYield?.reservationKey).toBe(key);
   expect(f.lane().stateDetail).toContain("UNKNOWN");
@@ -289,6 +292,37 @@ test.each(["failed", "deferred", "unconfirmed", "unresolved"] as const)("capacit
   for (const state of ["paused", "needs_decision", "closed"] as const) {
     expect(holdsRefreshCapacity({ ...f.lane(), state })).toBe(true);
   }
+});
+
+test("runtime-switch continuation refuses when the refresh budget expires during reconfigure", async () => {
+  const f = await capacityLane();
+  const lane = f.lane();
+  const attempt = lane.runs[0]!.attempts[0]!;
+  Object.assign(attempt, { sessionId: "capacity-session", conversationId: "conversation_capacity",
+    agentPath: path.join(lane.worktreeDir, "transcript.jsonl"), launchId: "capacity-launch", paneId: null,
+    historical: false, state: "running" });
+  lane.state = "running";
+  savePipelines([lane, ...loadPipelines().filter(row => row.id !== lane.id)]);
+  f.h.ports.conversationGeneration = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: null,
+    accountId: "default", sessionId: "capacity-session", agentPath: attempt.agentPath! });
+  let continuations = 0;
+  let reconfigured = false;
+  f.h.ports.runtimeSwitchControl = async (_conversationId, _path, action) => {
+    if (action === "reconfigure") { reconfigured = true; f.advance(60 * 60_000); }
+  };
+  f.h.ports.runtimeSwitchOutcome = async () => ({ state: "applied" });
+  f.h.ports.runtimeSwitchDelivery = () => ({ state: "delivered", at: f.h.ports.now() });
+  f.h.ports.conversationGeneration = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null,
+    accountId: "default", sessionId: "session-new", agentPath: attempt.agentPath! });
+  f.h.ports.resumeSeveredTurn = async () => { continuations++; return true; };
+  const result = await patchPipeline(f.id, { action: "override-stage", stageId: "refresh", model: "gpt-6.1-sol", applyNow: true }, f.h.ports);
+  expect(result.error).toBeUndefined();
+
+  await tickPipelines([], f.h.ports);
+
+  expect(reconfigured).toBe(true);
+  expect(f.h.ports.now()).toBe("2026-11-01T13:00:00.000Z");
+  expect(continuations).toBe(0);
 });
 
 test.each(["background", "unreadable", "tree", "delivery", "withdrawal"] as const)("capacity waits for positive owned-work proof: %s", async kind => {

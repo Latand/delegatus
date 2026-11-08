@@ -1692,7 +1692,7 @@ async function capacityPipeline(current: Lane) {
   return { id: pipeline.id, ports, head, snapshot };
 }
 
-test("an ended materialized host tree resolves through its receipt identity and preserves Git inputs", async () => {
+test("an active materialized host tree stops through its receipt identity and preserves Git inputs", async () => {
   const current = await lane("tree");
   const registry = structuredClone(current.registry.readOnlySnapshot());
   const conversation = registry.conversations[current.conversationId]!;
@@ -1705,8 +1705,8 @@ test("an ended materialized host tree resolves through its receipt identity and 
   const other = bystander();
   const f = await capacityPipeline(current);
   const before = await f.snapshot();
-  await current.hostA.end();
-  await current.descendant!.end();
+  expect(current.hostA.alive()).toBeTrue();
+  expect(current.descendant!.alive()).toBeTrue();
   await tickPipelines([], f.ports);
   const pipeline = pipelineRecord(f.id);
   const attempt = pipeline.runs[0]!.attempts[0]!;

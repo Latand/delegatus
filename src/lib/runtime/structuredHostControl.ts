@@ -168,6 +168,8 @@ export function structuredHostKillRefFromRegistry(
     identityProbe?: ProcessIdentityProbe;
     /** A durable kill's admitted conversation; permits its older generations. */
     conversationId?: ViewerConversationId;
+    /** A launch receipt can bind a reserved session key to the current artifact. */
+    generationReceipt?: { conversationId: ViewerConversationId; artifactPath: string };
   } = {},
 ): StructuredHostRegistryRef {
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
@@ -190,9 +192,20 @@ export function structuredHostKillRefFromRegistry(
     return { ok: false, error: `host boot epoch is unknown (pid ${process.pid} was recorded without one)`, owner };
   }
   const conversation = Object.values(file.conversations)
-    .find((candidate) => candidate.engine === key.engine && (dependencies.conversationId
-      ? candidate.id === dependencies.conversationId && candidate.generations.some(generation => generation.id === key.sessionId)
-      : candidate.generations.at(-1)?.id === key.sessionId)) ?? null;
+    .find((candidate) => {
+      if (candidate.engine !== key.engine || dependencies.conversationId && candidate.id !== dependencies.conversationId) return false;
+      if (dependencies.generationReceipt) {
+        const proof = dependencies.generationReceipt;
+        const generation = candidate.generations.at(-1);
+        const receiptMatches = Object.values(file.receipts).some(receipt => receipt.key?.engine === key.engine
+          && receipt.key.sessionId === key.sessionId && receipt.conversationId === proof.conversationId
+          && receipt.artifactPath === proof.artifactPath);
+        if (candidate.id === proof.conversationId && generation?.path === proof.artifactPath && receiptMatches) return true;
+      }
+      return dependencies.conversationId
+        ? candidate.id === dependencies.conversationId && candidate.generations.some(generation => generation.id === key.sessionId)
+        : candidate.generations.at(-1)?.id === key.sessionId;
+    }) ?? null;
   if (!conversation) {
     return { ok: false, error: "the registry row is not the current generation of any conversation", owner };
   }

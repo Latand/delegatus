@@ -1656,7 +1656,8 @@ async function stopStageHostByRecordedIdentity(
   if (!receipt.conversationId || registry.canonicalConversationId(receipt.conversationId) !== probe.conversationId) {
     return refused(`contradictory ownership: the attempt's launch receipt names ${receipt.conversationId ?? "no conversation"}, not ${probe.conversationId}`);
   }
-  const built = structuredHostKillRefFromRegistry(probe.key);
+  const generationReceipt = { conversationId: probe.conversationId, artifactPath: probe.transcriptPath };
+  const built = structuredHostKillRefFromRegistry(probe.key, { generationReceipt });
   const generation = describeStructuredHostOwnerGeneration(built.owner);
   if (!built.ok) {
     return refused(`${built.error}; ${generation}`);
@@ -1668,7 +1669,7 @@ async function stopStageHostByRecordedIdentity(
   const authorize = (): { status: 403 | 409; error: string } | null => {
     const changed = observationGuard?.();
     if (changed) return changed;
-    const current = structuredHostKillRefFromRegistry(probe.key);
+    const current = structuredHostKillRefFromRegistry(probe.key, { generationReceipt });
     if (!current.ok) return { status: 409, error: `authority lost before signalling: ${current.error}` };
     if (current.ref.pid !== ref.pid
       || current.ref.startIdentity !== ref.startIdentity
@@ -2352,7 +2353,7 @@ export function defaultPipelinePorts(
            a tree capture or spending the startup retry budget. The caller
            bounds this handoff separately. Dead or exited engine identities
            still take the normal recovery path below. */
-        const control = structuredHostKillRefFromRegistry(probe.key);
+        const control = structuredHostKillRefFromRegistry(probe.key, { generationReceipt: { conversationId: probe.conversationId, artifactPath: probe.transcriptPath } });
         if (control.ok && !runtimeHostSocket() && control.owner.status === "alive" && control.owner.identity
           && control.owner.identity.pid !== process.pid && processIdentityMayRun(control.owner.identity)
           && root && terminationIdentityStatus(root) !== "dead") return { outcome: "deferred" };
@@ -9041,7 +9042,16 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         }
         continue;
       }
+      const refreshFence = pipeline.refreshOf && stage.id === "refresh" ? refreshWriterFence(pipeline) : null;
+      const assertRefreshDispatchAllowed = () => {
+        if (refreshFence === null) return;
+        const live = findPipelineRecord(pipeline.id);
+        if (!live || refreshWriterFence(live) !== refreshFence || refreshExecutionRefusal(live, ports)) {
+          throw new RuntimeSwitchSuperseded();
+        }
+      };
       const dispatchCheckpoint = async (account = record.rollback ? record.from : record.to) => {
+        assertRefreshDispatchAllowed();
         assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
         const ignored = record.mode === "handoff" ? [switchOperationKey(record, "stop"), switchOperationKey(record, "stop-launch")] : [];
         for (const conversationId of new Set([record.from.conversationId, attempt.conversationId].filter((id): id is string => !!id))) {
@@ -9050,6 +9060,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             parkRuntimeSwitch(pipeline, attempt, record, record.outcome, ports.now());
             await checkpoint(); throw new RuntimeSwitchSuperseded();
           }
+          assertRefreshDispatchAllowed();
         }
         let pool: string[] | null | undefined;
         try { pool = ports.allowedAccountIds?.(pipeline.project, account.engine); }
@@ -9073,6 +9084,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           await checkpoint(); throw new RuntimeSwitchSuperseded();
         }
         await checkpoint();
+        assertRefreshDispatchAllowed();
         assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
       };
       const outside: PipelinePorts = { ...ports,
@@ -18043,7 +18055,9 @@ export async function patchPipeline(
         catch { /* Unknown liveness still requires confirmed termination. */ }
         if (working || attempt.suspension) {
           attempt.suspension ??= { reason: "pause", detail: "pipeline paused", requestedAt: pipeline.pausedAt ?? ports.now() };
-          await stopSuspendedStage(pipeline, stage, attempt, ports, persist);
+          // A capacity yield owns the original stop receipt. Re-entering the
+          // generic pause path could resend after that receipt became UNKNOWN.
+          if (!attempt.suspension.capacityYield) await stopSuspendedStage(pipeline, stage, attempt, ports, persist);
         }
       }
     } else if (req.action === "resume") {
