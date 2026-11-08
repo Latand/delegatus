@@ -5,11 +5,50 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnSync } from "node:child_process";
-import { CodexSocketTransport } from "./codexSocketTransport";
-import { spawnManagedEngine } from "./agentSignalSandbox";
-import { AgentMemoryCell, tickAgentMemoryWatchdogs, type AgentMemoryPlan } from "./agentMemory";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import type { AgentMemoryPlan } from "./agentMemory";
 
 const [root, mode] = process.argv.slice(2);
+const delayed = mode === "delayedexit" || mode === "delayedcontrol" || mode === "shortlive" || mode === "unlinked";
+const owned: Array<{ identity: ReturnType<typeof captureProcessIdentity>; closed: Promise<void> }> = [];
+let nativeCompleted = false;
+let waiterLive = false;
+let initialSize: number | undefined;
+if (delayed) {
+  const { mock } = await import("bun:test");
+  const childProcess = await import("node:child_process");
+  const spawn = childProcess.spawn;
+  const waitOwner = await import("./nativeWaitOwner");
+  mock.module("./nativeWaitOwner", () => ({ ...waitOwner,
+    nativeWaitOwnerSource: waitOwner.nativeWaitOwnerSource.replace("process.exitCode =", "setTimeout(() => {}, 400); process.exitCode ="),
+  }));
+  mock.module("node:child_process", () => ({ ...childProcess, spawn: (...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args);
+    owned.push({ identity: captureProcessIdentity(child.pid!), closed: new Promise<void>(resolve => child.once("close", () => resolve())) });
+    return child;
+  } }));
+  const bin = path.join(root!, "drain-bin"); fs.mkdirSync(bin, { recursive: true });
+  const dd = Bun.which("dd")!;
+  // The first short FIFO read is visible before the bulk write. Hold only the
+  // next read; both schedules keep the production diagnostic deadlines.
+  fs.writeFileSync(path.join(bin, "dd"), `#!/bin/sh
+if [ ! -e "$DRAIN_ROOT/first" ]; then
+  "${dd}" "$@"
+  touch "$DRAIN_ROOT/first"
+else
+  if [ ! -e "$DRAIN_ROOT/delayed" ]; then
+    touch "$DRAIN_ROOT/delayed"
+    sleep 0.2
+  fi
+  exec "${dd}" "$@"
+fi
+`, { mode: 0o700 });
+  process.env.DRAIN_ROOT = root;
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+}
+const { CodexSocketTransport } = await import("./codexSocketTransport");
+const { spawnManagedEngine } = await import("./agentSignalSandbox");
+const { AgentMemoryCell, tickAgentMemoryWatchdogs } = await import("./agentMemory");
 const launcher = mode?.startsWith("managed") || mode?.startsWith("throw") ? "managed" : mode?.startsWith("shim") ? "shim" : undefined;
 const directory = fs.openSync(root!, "r");
 process.env.HOME = process.env.HOST_EXIT_TEST_HOME ?? `/proc/${process.pid}/fd/${directory}`;
@@ -26,24 +65,34 @@ const marker = path.join(root!, "ready");
 const receipts = statePath("host-exits");
 const beforeReceipts = new Set(fs.existsSync(receipts) ? fs.readdirSync(receipts) : []);
 const clock = Date.now;
-if (mode === "timeout" || mode === "ownership") Date.now = () => clock() + (fs.existsSync(marker) ? 11_000 : 0);
+if (mode === "timeout" || mode === "ownership" || mode === "shortlive") Date.now = () => clock() + (fs.existsSync(marker) ? 11_000 : 0);
 const peer = `
   const fs = require("node:fs");
+  const writes = [];
+  const write = (fd, text) => { const count = fs.writeSync(fd, text); writes.push({ requested: Buffer.byteLength(text), written: count }); return count; };
   const file = process.argv.at(-1).slice("unix://".length);
   const mode = process.env.PEER_MODE.replace(/^(managed|shim)/, "");
-  fs.writeSync(2, "EADDRINUSE: callback bind refused\\n");
-  fs.writeSync(2, "Bearer " + "private".repeat(8) + "\\n");
-  fs.writeSync(2, process.env.HOME + "/private/file\\n");
-  if (mode === "exit" || mode === "large" || mode === "boundary" || mode === "secret") {
-    if (mode === "large") fs.writeSync(2, "x".repeat(20000) + "\\n");
-    if (mode === "boundary") fs.writeSync(2, "Bearer " + "private".repeat(3000));
+  write(2, "EADDRINUSE: callback bind refused\\n");
+  if (["delayedexit", "delayedcontrol", "shortlive", "unlinked"].includes(mode)) {
+    const until = Date.now() + 3000;
+    while (!fs.existsSync(process.env.DRAIN_ROOT + "/first")) {
+      if (Date.now() > until) throw new Error("first drain read did not settle");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  write(2, "Bearer " + "private".repeat(8) + "\\n");
+  write(2, process.env.HOME + "/private/file\\n");
+  if (mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "exit" || mode === "large" || mode === "boundary" || mode === "secret") {
+    if (mode === "large" || mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol") write(2, "x".repeat(20000) + "\\n");
+    if (mode === "boundary") write(2, "Bearer " + "private".repeat(3000));
     if (mode === "secret") {
       // The key header and the first payload lines are visible; the footer is past the retained bytes.
-      for (let line = 0; line < 6; line++) fs.writeSync(2, "x".repeat(100) + "\\n");
-      fs.writeSync(2, "-----BEGIN PRIVATE KEY-----\\n");
-      for (let line = 0; line < 150; line++) fs.writeSync(2, "KEYPAYLOAD" + String(line).padStart(3, "0") + "A".repeat(50) + "\\n");
-      fs.writeSync(2, "-----END PRIVATE KEY-----\\n");
+      for (let line = 0; line < 6; line++) write(2, "x".repeat(100) + "\\n");
+      write(2, "-----BEGIN PRIVATE KEY-----\\n");
+      for (let line = 0; line < 150; line++) write(2, "KEYPAYLOAD" + String(line).padStart(3, "0") + "A".repeat(50) + "\\n");
+      write(2, "-----END PRIVATE KEY-----\\n");
     }
+    if (["delayedexit", "delayedcontrol", "unlinked"].includes(mode)) fs.writeFileSync(process.env.DRAIN_ROOT + "/writes.json", JSON.stringify(writes));
     process.exit(23);
   }
   if (mode === "signal" || mode === "wrappedsignal") process.kill(process.pid, "SIGTERM");
@@ -55,7 +104,7 @@ const peer = `
         if (String(message) === "flood") {
           // A chatty listener: far more than any storage bound.
           const chunk = "f".repeat(65536);
-          for (let written = 0; written < 4 * 1024 * 1024; written += chunk.length) fs.writeSync(2, chunk);
+          for (let written = 0; written < 4 * 1024 * 1024; written += chunk.length) write(2, chunk);
           socket.send("flooded");
         } else socket.send(message);
       } },
@@ -70,7 +119,7 @@ const peer = `
   if (mode === "chatty") setInterval(() => {
     if (!fs.existsSync(process.env.PEER_MARKER + ".flood") || fs.existsSync(process.env.PEER_MARKER + ".flooded")) return;
     const chunk = "g".repeat(65536);
-    for (let written = 0; written < 4 * 1024 * 1024; written += chunk.length) fs.writeSync(2, chunk);
+    for (let written = 0; written < 4 * 1024 * 1024; written += chunk.length) write(2, chunk);
     fs.writeFileSync(process.env.PEER_MARKER + ".flooded", "done");
   }, 10);
   if (mode === "wrapped") setInterval(() => {
@@ -114,11 +163,29 @@ try {
     if (launcher) return spawnManagedEngine(command, args, options, null, undefined, options.env ?? process.env, base);
     const diagnostic = path.join(root!, "wrapper.stderr");
     fs.rmSync(diagnostic, { force: true });
-    peerProcess = (memory?.wrapSpawn(base) ?? base)(command, args, mode === "wrapped" || mode === "chatty"
+    peerProcess = (memory?.wrapSpawn(base) ?? base)(command, args, mode === "wrapped" || mode === "chatty" || delayed
       ? { ...options, env: { ...options.env, NODE_ENV: options.env?.NODE_ENV ?? "test", LLV_SIGNAL_DIAGNOSTIC: diagnostic } } : options);
     peerProcess.once("close", () => { peerClosed = true; });
     // The retained descriptor outlives the diagnostic name the transport unlinks.
-    if (mode === "chatty") sink = fs.openSync(fs.readlinkSync(diagnostic), "r");
+    if (mode === "chatty" || delayed) sink = fs.openSync(fs.readlinkSync(diagnostic), "r");
+    if (delayed) {
+      const startup = path.dirname(args.at(-1)!.slice("unix://".length));
+      const until = performance.now() + 3000;
+      const completion = path.join(startup, "native-exit.json");
+      if (mode === "delayedexit" || mode === "unlinked") {
+        while (!fs.existsSync(completion)) {
+          if (performance.now() > until) throw new Error("native exit did not become durable");
+          await Bun.sleep(5);
+        }
+        initialSize = fs.fstatSync(sink!).size;
+        nativeCompleted = JSON.parse(fs.readFileSync(completion, "utf8")).code === 23;
+        waiterLive = peerProcess.exitCode === null && peerProcess.signalCode === null;
+      }
+      if (mode === "unlinked") {
+        // Exercise successful-startup sink unlink while the collector is held.
+        fs.unlinkSync(fs.readlinkSync(diagnostic));
+      }
+    }
     if (mode === "wrapped") {
       while (!fs.existsSync(marker)) await Bun.sleep(10);
       fs.unlinkSync(diagnostic);
@@ -190,9 +257,27 @@ try {
     }
   }
 } catch (error) {
+  let collection: object | undefined;
+  if (delayed) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.all(owned.map(child => child.closed)), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("owned startup children did not close")), 3000);
+      })]);
+      collection = { nativeCompleted, waiterLive, initialSize, size: fs.fstatSync(sink!).size,
+        writes: mode === "shortlive" ? [] : JSON.parse(fs.readFileSync(path.join(root!, "writes.json"), "utf8")),
+        children: owned.map(child => ({ identity: child.identity, status: processIdentityStatus(child.identity) })),
+        childrenDead: owned.length === 2 && owned.every(child => processIdentityStatus(child.identity) === "dead") };
+      if (process.env.STDERR_TEST_EVIDENCE_DIR) {
+        fs.mkdirSync(process.env.STDERR_TEST_EVIDENCE_DIR, { recursive: true });
+        fs.writeFileSync(path.join(process.env.STDERR_TEST_EVIDENCE_DIR, `${mode}.json`), JSON.stringify(collection));
+      }
+    } finally { clearTimeout(timer); }
+  }
   const orphanReceipts = fs.existsSync(receipts) ? fs.readdirSync(receipts).filter(file => !beforeReceipts.has(file)).length : 0;
-  process.stdout.write(JSON.stringify({ error: (error as Error).message, orphanReceipts }));
+  process.stdout.write(JSON.stringify({ error: (error as Error).message, orphanReceipts, collection }));
 } finally {
+  if (sink !== undefined) fs.closeSync(sink);
   memory?.close();
   Date.now = clock;
   fs.closeSync(directory);

@@ -139,6 +139,54 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
   }, 40_000);
 }
 
+test.skipIf(process.platform !== "linux").each(["delayedexit", "delayedcontrol", "shortlive", "unlinked"])(
+  "startup drain retains its bounded diagnostic across %s", async mode => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-drain-"));
+    try {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
+        env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off" }, stdout: "pipe", stderr: "pipe",
+      });
+      const output = new Response(child.stdout).text();
+      const errors = new Response(child.stderr).text();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([child.exited, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("owned drain fixture exceeded its parent deadline")), 15_000);
+        })]);
+        expect(child.exitCode, await errors).toBe(0);
+        const result = JSON.parse(await output);
+        expect(result.orphanReceipts).toBe(0);
+        expect(result.collection.children).toHaveLength(2);
+        expect(result.collection.childrenDead).toBeTrue();
+        if (mode === "delayedexit" || mode === "unlinked") {
+          expect(result.collection.nativeCompleted).toBeTrue();
+          expect(result.collection.waiterLive).toBeTrue();
+          expect(result.collection.initialSize).toBe(34);
+        }
+        expect(result.error).toContain("EADDRINUSE: callback bind refused");
+        expect(result.error).not.toContain("private".repeat(8));
+        expect(result.error).not.toContain(root);
+        expect(result.error.length).toBeLessThanOrEqual(2400);
+        if (mode === "shortlive") {
+          expect(result.error).toContain("timed out after 10000ms");
+          expect(result.error).not.toContain("[stderr clipped]");
+        } else {
+          expect(result.error).toContain("exited with code 23");
+          expect(result.error).toContain("[stderr clipped]");
+          expect(result.collection.size).toBe(16 * 1024);
+          expect(result.collection.writes).toHaveLength(4);
+          for (const write of result.collection.writes) expect(write.written).toBe(write.requested);
+          expect(result.collection.writes.at(-1).written).toBe(20001);
+        }
+      } finally {
+        clearTimeout(timer);
+        if (child.exitCode === null) child.kill("SIGKILL");
+        await child.exited;
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }, 40_000,
+);
+
 // Every reviewed pin exposes the native private socket transport.
 test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.164.0", "codex-cli 0.165.0", "codex-cli 0.166.0", "codex-cli 0.167.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cb-native-"));
