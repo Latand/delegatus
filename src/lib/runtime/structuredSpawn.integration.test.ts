@@ -8032,7 +8032,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const launchProfile = emptyLaunchProfile({ cwd, cleanMemory: true, allowSubagents: true, mcpServers: [] });
     const prior = loadPipelines();
-    const role = { roleId: "builder", engine, model: null, effort: null, access: "read-write" as const, promptScaffold: "Build the requested output." };
+    const role: import("@/lib/pipelines/types").EffectivePipelineRole = { roleId: "builder", engine, model: null, effort: null, access: "read-write", promptScaffold: "Build the requested output." };
     const at = "2026-11-03T10:00:00.000Z", id = `native-decision-${engine}-${boundary}`;
     const pipeline = buildPipeline({ id, project: "native-decision", task: "Continue the settled decision", repoDir: cwd,
       publication: "internal", srcPath: null, srcConversationId: null, now: at,
