@@ -4743,6 +4743,7 @@ test("resolve-decision forwards its receipt key and server actor and wakes the c
   });
   savePipelines([pipeline]);
   const revision = pipelineDecisionRevision(findPipelineRecord(pipeline.id)!);
+  if (revision === null) throw new Error("settled decision revision is required");
   expect(revision).toMatch(/^[a-f0-9]{64}$/);
   const request = { clientRequestId: "decision-answer", pipelineId: pipeline.id, action: "resolve-decision", answer: "Use Markdown.", expectedStageId: "build", expectedAttempt: 1, expectedRevision: revision! };
   const calls: unknown[] = [];
