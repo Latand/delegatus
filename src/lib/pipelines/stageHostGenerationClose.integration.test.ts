@@ -1688,7 +1688,7 @@ async function capacityPipeline(current: Lane) {
   const ports = defaultPipelinePorts();
   ports.now = () => "2026-11-01T13:00:00.000Z";
   const { invalidateProviderContinuation } = await import("./engine");
-  ports.invalidateProviderContinuation = (id, eligible) => invalidateProviderContinuation(id, runtimeHostClient(generationEnvironment)!, eligible);
+  ports.invalidateProviderContinuation = (id, eligible) => invalidateProviderContinuation(id, runtimeHostClient({ ...generationEnvironment, NODE_ENV: "test" })!, eligible);
   return { id: pipeline.id, ports, head, snapshot };
 }
 

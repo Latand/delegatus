@@ -2294,7 +2294,7 @@ export function defaultPipelinePorts(
       return !probe?.resident() ? { outcome: "stopped" } : null;
     },
     stopStageAgent: async (target, options) => options?.capacityYield
-      ? withViewerOperation("pipelines.capacity-stop", async () => {
+      ? withViewerOperation("pipelines.prior-writer-stop", async () => {
         const probe = await stageHostProbe(target);
         const launch = target.launchId ? registry.spawnReceipt(target.launchId) : null;
         const guard = () => {
