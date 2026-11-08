@@ -16550,11 +16550,16 @@ function decisionLaunchFence(p: Pipeline): string {
 export function capturePipelineDecisionLaunch(pipelineId: string, stageId: string, attemptNumber: number): (() => void) | undefined {
   const original = findPipelineRecord(pipelineId);
   const attempt = original && currentAttempt(original, stageId);
+  if (!original) return;
   // A native receipt that still belongs to a pipeline stage can outlive the
-  // answer link it was created from. Detect that broken custody from the
-  // durable answer's successor target and refuse closed instead of treating
-  // it as an ordinary launch.
-  if (!original || !attempt) throw new ActivationSuperseded();
+  // answer link or successor attempt it was created from. Refuse only when a
+  // durable answer proves that this target belongs to a decision continuation;
+  // ordinary cloud and non-decision stages have no such evidence.
+  if (!attempt) {
+    if (original.decisionAnswers?.some(answer => answer.stageId === stageId && answer.nextAttempt === attemptNumber))
+      throw new ActivationSuperseded();
+    return;
+  }
   if (!attempt.decisionAnswerId) {
     if (original.decisionAnswers?.some(answer => answer.stageId === stageId && answer.nextAttempt === attemptNumber))
       throw new ActivationSuperseded();
