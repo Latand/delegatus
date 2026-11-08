@@ -4722,25 +4722,61 @@ test("continue-review from a conversation that did not create the pipeline is re
 });
 
 test("resolve-decision forwards its receipt key and server actor and wakes the controller", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-decision-binding-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const { buildPipeline, savePipelines, findPipelineRecord, pipelineDecisionRevision } = await import("@/lib/pipelines/store");
+  const now = "2026-09-20T00:00:00.000Z";
+  const pipeline = buildPipeline({
+    id: "pipeline_1", task: "Choose output format", project: "proj-a", repoDir: "/repo",
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: "conversation_creator", now,
+  });
+  pipeline.state = "needs_decision";
+  pipeline.cursor!.state = "running";
+  pipeline.runs[0]!.attempts.push({
+    n: 1, state: "needs_decision", effectiveRole: pipeline.stages[0]!.effectiveRole,
+    input: null, activatedBy: null, output: "Which output format?", verdict: { status: "needs_decision" },
+    error: null, startedAt: now, completedAt: now, launchId: null, conversationId: null,
+    sessionId: null, agentPath: null, paneId: null, flowId: null,
+  });
+  savePipelines([pipeline]);
+  const revision = pipelineDecisionRevision(findPipelineRecord(pipeline.id)!);
+  expect(revision).toMatch(/^[a-f0-9]{64}$/);
+  const request = { clientRequestId: "decision-answer", pipelineId: pipeline.id, action: "resolve-decision", answer: "Use Markdown.", expectedStageId: "build", expectedAttempt: 1, expectedRevision: revision! };
   const calls: unknown[] = [];
-  const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
+  const decisionAnswer = { clientRequestId: request.clientRequestId, stageId: "build", attempt: 1, nextAttempt: 2, at: now };
+  const patch: typeof import("@/lib/pipelines/engine").patchPipeline = async (id, body, _ports, actor, assertAuthority) => {
+    expect(typeof assertAuthority).toBe("function");
+    assertAuthority?.();
+    calls.push({ request: body, actor });
+    if (!actor) throw new Error("decision actor is required");
+    const current = findPipelineRecord(id)!;
+    current.decisionAnswers = [{ ...decisionAnswer, expectedRevision: body.expectedRevision!,
+      question: current.runs[0]!.attempts[0]!.output!, answer: body.answer!, actor }];
+    current.state = "running";
+    savePipelines([current]);
+    return { pipeline: current, decisionAnswer: current.decisionAnswers[0], replayed: false };
+  };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", project: "proj-a", srcConversationId: "conversation_creator" }),
-    patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
-      calls.push({ request, actor });
-      return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };
-    },
+    readPipelineRecord: findPipelineRecord,
+    patchPipeline: patch,
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_creator", role: "orchestrator" }),
   } as never);
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
-  const request = { clientRequestId: "decision-answer", pipelineId: "pipeline_1", action: "resolve-decision", answer: "Use Markdown.", expectedStageId: "build", expectedAttempt: 1, expectedRevision: "a".repeat(64) };
   const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
   let ticks = 0;
   const unregister = registerPipelineTick(async () => { ticks += 1; });
   try {
     const answer = await service.callTool("pipeline_action", request);
     expect(answer).toMatchObject({ ok: true, decisionAnswer });
-    await service.callTool("pipeline_action", request);
+    const accepted = findPipelineRecord(pipeline.id)!.decisionAnswers;
+    expect(accepted).toEqual([{ ...decisionAnswer, expectedRevision: revision,
+      question: "Which output format?", answer: request.answer,
+      actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
+    expect(await service.callTool("pipeline_action", request)).toMatchObject({ ok: true, decisionAnswer, replayed: true });
+    expect(findPipelineRecord(pipeline.id)!.decisionAnswers).toEqual(accepted);
     expect(calls).toEqual([{ request: { clientRequestId: request.clientRequestId, action: request.action, answer: request.answer, expectedStageId: request.expectedStageId, expectedAttempt: request.expectedAttempt, expectedRevision: request.expectedRevision }, actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
     await Promise.resolve();
     expect(ticks).toBe(1);
