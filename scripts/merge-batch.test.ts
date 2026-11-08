@@ -11,6 +11,7 @@ import type { TestRun, TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import * as merger from "./merge-batch";
+import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
 const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun => ({
@@ -1929,6 +1930,73 @@ test("a deferred conflict only fast-forwards its original branch after landing, 
   expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(sha);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
   expect(git(work, ["show", "--remerge-diff", "--format=", sha])).toContain("second resolved");
+});
+
+test.each(["same repository", "case folded without suffix", "foreign repository"] as const)("guarded deferred resolution: %s", async mode => {
+  const f = landingFixture();
+  const a = f.addPr(12, "story.txt", "first\nsecond accepted\nthird\nfourth\nfifth\n");
+  const b = f.addPr(13, "story.txt", "first\nsecond alternative\nthird\nfourth\nfifth\n");
+  await f.batch.build(`12@${a},13@${b}`); await f.batch.gate(); await f.batch.land();
+  // Model a merger-only lane rooted before the PR and main's accepted change.
+  // All PR objects came from the script's pull-ref fetch, with no branch proof.
+  git(f.repo, ["checkout", "-b", "pipeline/merger", f.base]);
+  git(f.repo, ["update-ref", "-d", "refs/remotes/origin/topic-13"]);
+  const laneHead = git(f.repo, ["rev-parse", "HEAD"]);
+  const remote = mode === "foreign repository" ? "https://github.com/other/fixture.git"
+    : mode === "case folded without suffix" ? "https://github.com/EXAMPLE/FIXTURE" : "https://github.com/example/fixture.git";
+  git(f.repo, ["config", `url.${join(f.root, "origin.git")}.insteadOf`, remote]);
+  const gh = async (args: string[]) => args[0] === "api" && args[1] === "repos/example/fixture/pulls/13"
+    ? remote : f.batch.gh(args);
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, f.batch.run, gh);
+  const trace = join(f.root, "git-trace.log");
+  const contract = await bindMergerContract(f.repo, `merger-resolve-${mode.replaceAll(" ", "-")}`,
+    { ...process.env, TMPDIR: f.root, GIT_TRACE: trace });
+  const saved = Object.fromEntries(Object.keys(contract.env).map(key => [key, process.env[key]]));
+  try {
+    Object.assign(process.env, contract.env);
+    let state = await batch.resolve(13);
+    expect(state.rows[1]!.status).toBe("deferred");
+    const work = state.resolving!.work;
+    expect(git(work, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/topic-13"])).toBe("");
+    writeFileSync(join(work, "story.txt"), "first\nsecond resolved\nthird\nfourth\nfifth\n");
+    git(work, ["add", "story.txt"]);
+    if (mode === "foreign repository") {
+      await expect(batch.resolve(13)).rejects.toThrow("Resolution branch is outside origin; no branch pushed");
+      state = batch.read();
+      expect(state.rows[1]!.status).toBe("deferred");
+      expect(report(state)).toContain("needs-review pending resolution");
+      expect(git(work, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/topic-13"])).toBe("");
+      expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(b);
+      const commands = readFileSync(trace, "utf8");
+      expect(commands).not.toContain("fetch origin +refs/heads/topic-13:");
+      expect(commands).not.toContain(`ls-remote ${remote}`);
+      expect(commands).not.toContain(`push ${remote}`);
+    } else {
+      state = await batch.resolve(13);
+      const row = state.rows[1]!, sha = row.resolution!;
+      expect(row.status).toBe("needs-review");
+      expect(report(state)).toContain(`needs-review ${sha}`);
+      expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(sha);
+      expect(git(work, ["rev-parse", "refs/remotes/origin/topic-13"])).toBe(b);
+      git(work, ["merge-base", "--is-ancestor", b, sha]);
+      expect(readFileSync(join(contract.receipt, "pushes", sha), "utf8")).toBe(`refs/heads/topic-13\n${join(f.root, "origin.git")}\n`);
+      expect(state.resolving).toBeUndefined();
+      const commands = readFileSync(trace, "utf8");
+      const fetched = commands.indexOf("fetch origin +refs/heads/topic-13:refs/remotes/origin/topic-13");
+      const checked = commands.indexOf(`ls-remote ${remote}`);
+      expect(fetched).toBeGreaterThanOrEqual(0);
+      expect(checked).toBeGreaterThan(fetched);
+    }
+    expect(existsSync(join(contract.receipt, "refused"))).toBe(false);
+    expect(await contract.settle()).toBeNull();
+    expect(git(f.repo, ["rev-parse", "HEAD"])).toBe(laneHead);
+    expect(f.calls.filter(args => args[1] === "merge")).toHaveLength(1);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(contract.receipt, { recursive: true, force: true });
+  }
 });
 
 test("required checks must all finish green; optional failures do not hold a batch", () => {
