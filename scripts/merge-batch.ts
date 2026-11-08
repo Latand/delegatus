@@ -327,6 +327,11 @@ export type RunState = {
 export type CommandResult = { code: number; output: string; report?: string };
 export type CommandRunner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<CommandResult>;
 
+function gateCannotRun(gate: Gate, result: CommandResult): boolean {
+  return result.code !== 0 && (gate.id === "dependencies"
+    || (gate.id === "tsc" && (![1, 2].includes(result.code) || !/error TS\d+:/.test(result.output))));
+}
+
 export const commandRunner: CommandRunner = (cwd, args, env = process.env) => new Promise((done, reject) => {
   const child = spawn(args[0]!, args.slice(1), { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
@@ -469,6 +474,15 @@ export class MergeBatch {
       || (carried && !receipt.members)) {
       throw new Error("Run gate before land: exact candidate has not completed full validation");
     }
+    this.assertMembershipTip(state);
+  }
+
+  private assertMembershipTip(state: RunState): void {
+    const commits = git(state.work, ["rev-list", "--reverse", `${state.base}..${state.tip}`]).split("\n").filter(Boolean);
+    const members = state.rows.filter(row => row.status === "clean").map(row => row.commit);
+    if (JSON.stringify(commits) !== JSON.stringify(members)) {
+      throw new Error("Batch tip does not match its clean membership; rebuild required");
+    }
   }
 
   private invalidate(state: RunState): void {
@@ -477,7 +491,6 @@ export class MergeBatch {
       state.validationHistory = [...state.validationHistory ?? [], { candidate, tip, members, carried }].slice(-MAX_MAIN_REFRESHES - 1);
     }
     state.gated = null;
-    this.save(state);
   }
 
   private revalidate(state: RunState): void {
@@ -970,6 +983,7 @@ export class MergeBatch {
     const state = this.read();
     if (state.revalidationExhausted) throw new Error("Membership revalidation required more than three times");
     this.assertTip(state);
+    this.assertMembershipTip(state);
     if (options) state.browser = options.browser === true;
     while (true) {
       // Nothing from an earlier iteration can certify this tuple. The only
@@ -983,7 +997,7 @@ export class MergeBatch {
         if (gate.id === "tests") continue;
         const result = await this.gateCommand(state.work, gate);
         if (!result.code) continue;
-        if (gate.id === "dependencies" || (gate.id === "tsc" && (![1, 2].includes(result.code) || !/error TS\d+:/.test(result.output)))) throw new Error(`${gate.id} gate cannot run; batch not gated`);
+        if (gateCannotRun(gate, result)) throw new Error(`${gate.id} gate cannot run; batch not gated`);
         const row = await this.culprit(state, gate);
         row.status = "culprit"; row.detail = `${gate.id}: first failing batch commit`;
         retry = true; break;
@@ -1140,14 +1154,12 @@ export class MergeBatch {
     return humanChangesRequested(decision, reviews);
   }
 
-  private async reviewMembers(state: RunState, repository: string): Promise<boolean> {
-    let blocked = false;
+  private async reviewMembers(state: RunState, repository: string): Promise<BatchRow[]> {
+    const blocked: BatchRow[] = [];
     for (const row of state.rows.filter(row => row.status === "clean")) {
       const view = await this.view(row.number);
       if (await this.reviewsBlock(repository, row.number, view.reviewDecision)) {
-        row.status = "culprit"; row.detail = "review: human change request outstanding";
-        blocked = true;
-        this.save(state);
+        blocked.push(row);
       }
     }
     return blocked;
@@ -1193,7 +1205,13 @@ export class MergeBatch {
       const verdict = requiredVerdict(required, view.statusCheckRollup ?? []);
       if (verdict === "red") { await this.traceRequiredFailure(state, required, view.statusCheckRollup); state = await this.gate(); continue; }
       if (verdict === "green" && ["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(view.mergeStateStatus)) {
-        if (await this.reviewMembers(state, repository)) {
+        const blocked = await this.reviewMembers(state, repository);
+        if (blocked.length) {
+          // All review reads succeeded. Persist removals, invalidation and
+          // their cap charge together before the rebuild can await.
+          for (const row of blocked) {
+            row.status = "culprit"; row.detail = "review: human change request outstanding";
+          }
           this.revalidate(state);
           await this.rebuild(state); state = await this.gate(); continue;
         }
@@ -1397,6 +1415,9 @@ if (import.meta.main) {
     try {
       const spec = JSON.parse(readFileSync(argument!, "utf8")) as { repo: string; stateFile: string; gate: Gate };
       const result = await new MergeBatch(spec.repo, spec.stateFile).bisectSubject(spec.gate);
+      // A checker execution failure proves nothing about this commit. Abort
+      // the bisect rather than translating it into a failing subject.
+      if (gateCannotRun(spec.gate, result)) process.exit(128);
       process.exit(result.code === 0 ? 0 : result.code >= 127 ? 125 : 1);
     } catch { process.exit(125); }
   } else {

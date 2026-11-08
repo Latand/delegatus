@@ -1478,16 +1478,17 @@ test("T4 carried hosted typecheck red runs full local attribution and real TypeS
   const runner: CommandRunner = async (cwd, args, env) => {
     if (args.includes("tsc")) {
       types++;
-      return commandRunner(cwd, [process.execPath, compiler, "--noEmit"], env);
+      return commandRunner(cwd, args.slice(2), { ...env, PATH: compilerPath });
     }
     if (args[0] === "git" && args[1] === "bisect") {
       bisects++;
       expect(args.slice(2, 4)).toEqual(["run", process.execPath]);
-      return commandRunner(cwd, ["git", "bisect", "run", process.execPath, compiler, "--noEmit"], env);
+      return commandRunner(cwd, args, { ...process.env, ...env, PATH: compilerPath });
     }
     return successfulCommand(args);
   };
   const f = landingFixture("green", runner);
+  const compilerPath = compilerShim(f.root, `exec ${shellArgument(process.execPath)} ${shellArgument(compiler)} --noEmit\n`);
   f.seed("tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, types: [], skipLibCheck: true }, include: ["*.ts"] }));
   f.seed("contract.ts", "export const requireCount = (value: number) => value;\n");
   const a = f.addPr(12, "healthy.ts", "export const healthy = true;\n");
@@ -1515,6 +1516,43 @@ test("T4 carried hosted typecheck red runs full local attribution and real TypeS
   expect(state.refreshes).toBe(2);
   expect(state.gated!.carried).toEqual([]);
   expect(state.validationHistory![0]!.carried).toHaveLength(1);
+}, 30_000);
+
+const shellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+function compilerShim(root: string, body: string): string {
+  const bin = join(root, "compiler-bin"); mkdirSync(bin);
+  const file = join(bin, "bunx");
+  writeFileSync(file, `#!/bin/sh\n${body}`); chmodSync(file, 0o755);
+  return `${bin}:${process.env.PATH}`;
+}
+
+test.each([
+  { code: 1, output: "checker startup unavailable" },
+  { code: 2, output: "" },
+  { code: 3, output: "error TS2322: incomplete checker execution" },
+  { code: 127, output: "checker unavailable" },
+])("production TypeScript bisect refuses an unavailable intermediate checker ($code: $output)", async ({ code, output }) => {
+  const f = fixture();
+  const healthy = f.addPr(12, "healthy.txt", "healthy"), bad = f.addPr(13, "bad.txt", "type error");
+  const compilerPath = compilerShim(f.root, 'if test -f bad.txt; then echo "error TS2322: fixture type error"; exit 2; fi\n'
+    + `if test -f healthy.txt; then printf '%s\\n' ${shellArgument(output)}; exit ${code}; fi\nexit 0\n`);
+  let bisects = 0;
+  const runner: CommandRunner = async (cwd, args, env) => {
+    if (args[2] === "bunx") return commandRunner(cwd, args.slice(2), { ...env, PATH: compilerPath });
+    if (args[0] === "git" && args[1] === "bisect") {
+      bisects++;
+      expect(args.slice(-2, -1)).toEqual(["_bisect"]);
+      return commandRunner(cwd, args, { ...process.env, ...env, PATH: compilerPath });
+    }
+    return successfulCommand(args);
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${healthy},13@${bad}`);
+  await expect(batch.gate()).rejects.toThrow("Bisect could not attribute tsc");
+  expect(bisects).toBe(1);
+  expect(batch.read().rows.map(row => row.status)).toEqual(["clean", "clean"]);
+  expect(batch.read().gated).toBeNull();
+  expect(git(batch.read().work, ["symbolic-ref", "--short", "HEAD"])).toBe(batch.read().branch);
 }, 30_000);
 
 test("a carried hosted red that local validation cannot reproduce stops on the next red, including after restart", async () => {
@@ -1655,6 +1693,74 @@ test.each([12, 99])("unreadable or malformed reviews for PR %s fail closed", asy
     expect(f.batch.read().mergeIntent).toBeUndefined();
   }
 }, 30_000);
+
+test.each([0, 3])("a later review-read failure preserves membership and its cap across a process restart (%s spent)", async spent => {
+  const f = landingFixture();
+  const vetoed = f.addPr(12, "vetoed.txt", "human vetoed patch"), healthy = f.addPr(13, "healthy.txt", "healthy");
+  await f.batch.build(`12@${vetoed},13@${healthy}`); await f.batch.gate();
+  const state = f.batch.read(); state.refreshes = spent; f.batch.save(state);
+  let unreadable = true;
+  const gh = async (args: string[]) => {
+    if (args[0] === "api" && args[1]?.includes("/12/reviews?")) return review("reviewer-a", "CHANGES_REQUESTED");
+    if (unreadable && args[0] === "api" && args[1]?.includes("/13/reviews?")) throw new Error("review read unavailable");
+    return f.batch.gh(args);
+  };
+  await expect(restartBatch(f, gh).land()).rejects.toThrow("review read unavailable");
+  const interrupted = f.batch.read();
+  expect(interrupted.rows.map(row => row.status)).toEqual(["clean", "clean"]);
+  expect(interrupted.refreshes).toBe(spent);
+  expect(interrupted.gated).toEqual(state.gated);
+  expect(f.calls.some(args => args[1] === "merge")).toBeFalse();
+  // A new process runs the real gate state machine with isolated fixture
+  // command results and the same forge heads. Its receipt must include both
+  // patches still present in the tip; no partial removal may be certified.
+  const source = `import { MergeBatch } from ${JSON.stringify(join(import.meta.dir, "merge-batch.ts"))};
+    const views = new Map(${JSON.stringify([...f.views])});
+    await new MergeBatch(${JSON.stringify(f.repo)}, ${JSON.stringify(f.batch.stateFile)},
+      async () => ({code: 0, output: ""}), async args => JSON.stringify(views.get(Number(args[2])))).gate();`;
+  const result = await commandRunner(f.repo, [process.execPath, "-e", source], {
+    ...isolatedEnvironment(join(f.root, "restart-gate"), process.env), TMPDIR: f.root,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
+  });
+  expect(result.code).toBe(0);
+  expect(f.batch.read().gated!.members!.map(member => member.number)).toEqual([12, 13]);
+  unreadable = false;
+  if (spent === 0) {
+    const landed = await restartBatch(f, gh).land();
+    expect(landed.refreshes).toBe(1);
+    expect(landed.rows.map(row => row.status)).toEqual(["culprit", "merged"]);
+    expect(existsSync(join(f.repo, "vetoed.txt"))).toBeFalse();
+    expect(existsSync(join(f.repo, "healthy.txt"))).toBeTrue();
+  } else {
+    await expect(restartBatch(f, gh).land()).rejects.toThrow("Membership revalidation required more than three times");
+    expect(f.batch.read().revalidationExhausted).toBeTrue();
+    expect(f.batch.read().gated).toBeNull();
+    const retry = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate"], {
+      ...isolatedEnvironment(join(f.root, "exhausted-gate"), process.env), TMPDIR: f.root,
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
+    });
+    expect(retry.code).toBe(1); expect(retry.output).toContain("Membership revalidation required more than three times");
+    expect(f.calls.some(args => args[1] === "merge")).toBeFalse();
+  }
+}, 30_000);
+
+test("a restarted gate refuses partial persisted membership while its removed patch remains in the tip", async () => {
+  const f = landingFixture();
+  const vetoed = f.addPr(12, "vetoed.txt", "human vetoed patch"), healthy = f.addPr(13, "healthy.txt", "healthy");
+  await f.batch.build(`12@${vetoed},13@${healthy}`); await f.batch.gate();
+  const state = f.batch.read();
+  state.rows[0]!.status = "culprit";
+  state.rows[0]!.detail = "review: human change request outstanding";
+  state.gated = null; state.refreshes = 1; f.batch.save(state);
+  const result = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate"], {
+    ...isolatedEnvironment(join(f.root, "partial-gate"), process.env), TMPDIR: f.root,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
+  });
+  expect(result.code).toBe(1); expect(result.output).toContain("tip does not match its clean membership");
+  expect(f.batch.read().gated).toBeNull();
+  await expect(restartBatch(f).land()).rejects.toThrow("Run gate before land");
+  expect(f.calls.some(args => args[1] === "merge")).toBeFalse();
+});
 
 test("authority changing while reviews await prevents the exact-tip merge", async () => {
   const f = landingFixture();
