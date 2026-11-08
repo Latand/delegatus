@@ -321,6 +321,7 @@ export type RunState = {
   attributionLog: AttributionRecord[];
   /** Durable across CLI restarts; every land iteration spends one poll. */
   landPolls?: number;
+  revalidationExhausted?: true;
   validationHistory?: Pick<Validation, "candidate" | "tip" | "members" | "carried">[];
 };
 export type CommandResult = { code: number; output: string; report?: string };
@@ -481,6 +482,10 @@ export class MergeBatch {
 
   private revalidate(state: RunState): void {
     this.invalidate(state);
+    if (state.refreshes >= MAX_MAIN_REFRESHES) {
+      state.revalidationExhausted = true;
+      this.save(state);
+    }
     state.refreshes = nextRefresh(state.refreshes);
     this.save(state);
   }
@@ -963,6 +968,7 @@ export class MergeBatch {
 
   async gate(options?: { browser?: boolean }): Promise<RunState> {
     const state = this.read();
+    if (state.revalidationExhausted) throw new Error("Membership revalidation required more than three times");
     this.assertTip(state);
     if (options) state.browser = options.browser === true;
     while (true) {

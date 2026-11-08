@@ -1734,7 +1734,15 @@ test("membership revalidation cap remains durable and does not certify an exhaus
   await expect(restartBatch(f).land()).rejects.toThrow("Membership revalidation required more than three times");
   expect(f.batch.read().gated).toBeNull();
   expect(f.batch.read().refreshes).toBe(3);
+  expect(f.batch.read().revalidationExhausted).toBeTrue();
   await expect(restartBatch(f).land()).rejects.toThrow("Run gate before land");
+  const result = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate"], {
+    ...isolatedEnvironment(join(f.root, "restart-gate"), process.env), TMPDIR: f.root,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
+  });
+  expect(result.code).toBe(1);
+  expect(result.output).toContain("Membership revalidation required more than three times");
+  expect(f.batch.read().gated).toBeNull();
   expect(f.calls.some(args => args[1] === "create" || args[1] === "merge")).toBeFalse();
 });
 
