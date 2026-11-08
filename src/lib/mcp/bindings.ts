@@ -1,5 +1,4 @@
 import { sessionKeyId } from "@/lib/agent/sessionKey";
-import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { pipelineDecisionRevision } from "@/lib/pipelines/decisionRevision";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -51,7 +50,7 @@ import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { curatorCallerOf } from "@/lib/memory/curation/guard";
 import { applyCuration, type CurationApply } from "@/lib/memory/curation/apply";
 import { readCuration } from "@/lib/memory/curation/read";
-import { isMutatingMcpTool, requestDigest } from "./server";
+import { isMutatingMcpTool } from "./server";
 import { permitIssueReporterTool, permitMaintainerTool, permitCuratorTool } from "./toolAllowlist";
 import { boardSelection } from "./boardSelection";
 import { budgetPage } from "./budgetPage";
@@ -8743,7 +8742,10 @@ export function viewerMcpBindings(
             const accepted = current.decisionAnswers?.find(answer => answer.clientRequestId === args.clientRequestId);
             const revision = accepted && typeof args.expectedRevision === "string"
               ? resolveShortId([accepted.expectedRevision], args.expectedRevision) : null;
-            const retained = accepted && redactPayload({ decisionAnswer: accepted });
+            const retained = accepted && redactPayload({ decisionAnswer: {
+              clientRequestId: accepted.clientRequestId, stageId: accepted.stageId,
+              attempt: accepted.attempt, nextAttempt: accepted.nextAttempt, at: accepted.at,
+            } });
             if (!accepted || revision?.kind !== "match" || accepted.answer !== args.answer
               || accepted.stageId !== args.expectedStageId || accepted.attempt !== args.expectedAttempt
               || requestDigest("pipeline_action", { decisionAnswer: received.decisionAnswer }) !== requestDigest("pipeline_action", retained!)) {
