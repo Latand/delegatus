@@ -1351,7 +1351,11 @@ export class MergeBatch {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("Invalid repository response");
     const remote = (await this.gh(["api", `repos/${repository}/pulls/${row.number}`, "--jq", ".head.repo.clone_url"])).trim();
     if (!remote || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+(?:\.git)?$/.test(remote)) throw new Error("PR branch repository unavailable");
+    if (remote.toLowerCase().replace(/\.git$/, "") !== `https://github.com/${repository}`.toLowerCase()) {
+      throw new Error("Resolution branch is outside origin; no branch pushed");
+    }
     git(work, ["check-ref-format", `refs/heads/${row.view.headRefName}`]);
+    git(work, ["fetch", "origin", `+refs/heads/${row.view.headRefName}:refs/remotes/origin/${row.view.headRefName}`]);
     // Explicit expected head plus normal push keeps this strictly fast-forward.
     const current = git(work, ["ls-remote", remote, `refs/heads/${row.view.headRefName}`]).split(/\s/)[0];
     if (current !== row.head) { row.status = "head-moved"; this.save(state); return state; }
