@@ -65,6 +65,7 @@ import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPer
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { findPipelineRecord, pipelineRevision } from "@/lib/pipelines/store";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -727,7 +728,8 @@ export async function reconcileStructuredSpawnReplay(
     assertActive?: () => void;
   } = {},
 ): Promise<SpawnReceipt & { initialMessage: "pending" | "queued" | "delivered" | "failed" }> {
-  const assertActive = () => { options.signal?.throwIfAborted(); options.assertActive?.(); };
+  let decisionCurrent: (() => void) | undefined;
+  const assertActive = () => { options.signal?.throwIfAborted(); options.assertActive?.(); decisionCurrent?.(); };
   assertActive();
   if (options.signal) client = withRuntimeRecoveryReads(client, options.signal);
   const evidenceOrNull = async <T>(read: Promise<T>): Promise<T | null> => {
@@ -740,6 +742,8 @@ export async function reconcileStructuredSpawnReplay(
   };
   const current = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
   if (!current) throw new Error("unknown spawn receipt");
+  const decision = current.state === "completed" ? null : decisionLaunchAuthorityForReceipt(registry, current);
+  if (decision) { decisionCurrent = await decision; assertActive(); }
   if (stagedLaunchRecovery(current)) {
     const recovered = await recoverStagedStructuredLaunch(launchId, registry, client, {
       now: options.now,
@@ -1432,6 +1436,8 @@ export interface StructuredSpawnInput {
       runtime admission returns, before the host starts, and once the host is
       set up, before it is published, by this call or by its staged probe. */
   authorize?: () => void | Promise<void>;
+  /** Synchronous authority at the actual native effect, including fallback. */
+  assertCurrent?: () => void;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
   /** A recovery pass tries once, then durably requeues for a later tick. */
@@ -1445,6 +1451,7 @@ export interface StructuredSpawnInput {
 }
 
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
+  input.assertCurrent?.();
   const receipt = input.registry.spawnReceipt(input.receipt.launchId);
   if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
   if (!receipt.key && input.receipt.admissionOwner && (!receipt.admissionOwner
@@ -1460,6 +1467,43 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
     throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
   }
   return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
+}
+
+/** Pin the existing decision before loading its engine. Recovery receives this
+ * same invocation-local assertion for host preparation and first delivery. */
+function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: SpawnReceipt): Promise<() => void> | null {
+  const memberships = registry.conversationMemberships(receipt.conversationId).filter(row => row.kind === "pipeline");
+  const targets = memberships.flatMap(membership => {
+    const original = findPipelineRecord(membership.containerId);
+    if (!original || !membership.stageId || !membership.round) return [];
+    const attempt = membership.stageId ? original?.runs.find(run => run.stageId === membership.stageId)?.attempts
+      .find(attempt => attempt.n === membership.round) : undefined;
+    const answer = original.decisionAnswers?.find(row => row.stageId === membership.stageId && row.nextAttempt === membership.round);
+    if (!attempt) {
+      if (answer) throw new Error("decision launch successor attempt is unavailable");
+      return [];
+    }
+    if (!attempt.decisionAnswerId) {
+      if (answer) throw new Error("decision launch answer link is unavailable");
+      return [];
+    }
+    return [{ membership, original, attempt }];
+  });
+  if (!targets.length) return null;
+  if (targets.length !== 1) return Promise.reject(new Error("decision launch membership is ambiguous"));
+  const { membership, original, attempt } = targets[0]!;
+  if (!membership.stageId || !membership.round) return Promise.reject(new Error("decision launch membership is unavailable"));
+  if (attempt.launchId !== receipt.launchId || attempt.conversationId !== receipt.conversationId || attempt.effectiveRole.engine !== receipt.engine) {
+    return Promise.reject(new Error("decision launch receipt no longer belongs to its attempt"));
+  }
+  const revision = pipelineRevision(original!);
+  return import("@/lib/pipelines/engine").then(engine => {
+    const current = findPipelineRecord(membership.containerId);
+    if (!current || pipelineRevision(current) !== revision) throw new Error("decision launch changed during preparation");
+    const assert = engine.capturePipelineDecisionLaunch(membership.containerId, membership.stageId!, membership.round!);
+    if (!assert) throw new Error("decision launch authority is unavailable");
+    assert(); return assert;
+  });
 }
 
 /** Memory preparation yields before native dispatch; a cancelled or changed
@@ -2232,6 +2276,9 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
+  const decision = input.assertCurrent ? null : decisionLaunchAuthorityForReceipt(input.registry, input.receipt);
+  if (decision) input = { ...input, assertCurrent: await decision };
+  const assertCurrent = input.assertCurrent ? () => { input.assertCurrent?.(); assertMemoryPreparedStartCurrent(input); } : undefined;
   const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
   await input.registry.recordSpawnMemoryCapOffLoop(input.receipt.launchId, agentMemoryCapForPlan(memoryCell?.plan ?? null));
   input = admittedStructuredLaunchInput(input);
@@ -2277,6 +2324,7 @@ export async function defaultStartHost(
       initialEventCursor,
       env,
       ...engineProcess.codex,
+      ...(assertCurrent ? { assertCurrent } : {}),
       ...(memoryCell ? { memoryCell } : {}),
     };
     await input.authorize?.();
@@ -2289,6 +2337,7 @@ export async function defaultStartHost(
   const options = {
     ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
     ...engineProcess.claude,
+    ...(assertCurrent ? { assertCurrent } : {}),
     ...(memoryCell ? { memoryCell } : {}),
   };
   await input.authorize?.();
@@ -2349,6 +2398,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
   }
   const origin = spawnMessageOrigin(input.receipt, input.registry);
   const delivered = await enqueueStructuredMessage({
+    ...(input.assertCurrent ? { admissionGuard: input.assertCurrent } : {}),
     path: artifactPath,
     conversationId: input.receipt.conversationId,
     clientMessageId: `spawn_${input.receipt.launchId}`,
@@ -2565,6 +2615,15 @@ export async function recoverStagedStructuredLaunch(
     const read = () => registry.spawnReceipt(launchId)!;
     const receipt = read();
     if (!receipt) throw new Error("unknown staged launch receipt");
+    const decision = receipt.state === "completed" ? null : decisionLaunchAuthorityForReceipt(registry, receipt);
+    if (decision) {
+      const assert = await decision, originalAssert = options.assertActive, originalEligible = options.eligible;
+      options = { ...options, assertActive: () => { originalAssert?.(); assert(); }, eligible: () => {
+        if (originalEligible?.() === false) return false;
+        try { assert(); return true; } catch { return false; }
+      } };
+      options.assertActive!();
+    }
     let recovery = stagedLaunchRecovery(receipt);
     const now = options.now ?? Date.now;
     // Foreground setup owns this launch until it explicitly hands recovery
@@ -2808,11 +2867,14 @@ export async function spawnStructuredConversation(
   input: StructuredSpawnInput,
   dependencies: StructuredSpawnDependencies = {},
 ): Promise<SpawnResponse> {
+  const decision = input.assertCurrent ? null : decisionLaunchAuthorityForReceipt(input.registry, input.receipt);
+  if (decision) input = { ...input, assertCurrent: await decision };
   const authorize = input.authorize;
   input = { ...input, authorize: async () => {
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
       ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
     await authorize?.();
+    input.assertCurrent?.();
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
       ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
   } };

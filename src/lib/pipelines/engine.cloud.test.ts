@@ -1669,3 +1669,41 @@ for (const pendingSource of [false, true]) test(pendingSource
     saveTasks(previousTasks);
   }
 });
+
+
+test.each([false, true])("a decision successor retains authority through configured local fallback (replaced %s)", async replaced => {
+  const { pipelineDecisionRevision } = await import("./store");
+  const { h } = await fixture({ stages: [{ ...stage, runtime: "local" }] });
+  for (let n = 0; n < 8 && !h.spawnInputs.length; n++) await step(h);
+  expect(h.spawnInputs).toHaveLength(1);
+  const { reportStageCompletion } = await import("./engine");
+  expect((await reportStageCompletion({ verdict: "needs_decision", summary: "Choose the review format?" },
+    { kind: "agent", role: "reviewer", conversationId: attempt().conversationId }, h.ports)).error).toBeUndefined();
+  const pathname = attempt().agentPath!;
+  const ended = h.finish(pathname, "needs_decision", "Choose the review format?");
+  const message = h.messages.get(pathname)!;
+  message.ts = Date.parse(h.ports.now()) + 1000;
+  h.durableTurns.set(pathname, { turn: "terminal", message, lastRecordAt: message.ts });
+  await tickPipelines([ended], h.ports);
+  await settlePipelineControllerJobs();
+  expect(lane().state).toBe("needs_decision");
+  // An explicit configured runtime is part of the new decision snapshot.
+  const rows = loadPipelines(); rows[0]!.stages[0]!.runtime = "codex-cloud"; savePipelines(rows);
+  const answered = await patchPipeline(lane().id, { action: "resolve-decision", clientRequestId: "cloud-format", answer: "Use Markdown.",
+    expectedRevision: pipelineDecisionRevision(lane())!, expectedStageId: stage.id, expectedAttempt: 1 }, h.ports);
+  expect(answered.error).toBeUndefined();
+  h.ports.cloudClient = undefined;
+  const native = h.ports.spawnAgent; let reached = false, replacement = "";
+  h.ports.spawnAgent = async (...args) => {
+    reached = true;
+    if (replaced) { const records = loadPipelines(); records[0]!.delivery!.epoch++; savePipelines(records); replacement = JSON.stringify(lane()); }
+    return native(...args);
+  };
+  for (let n = 0; n < 12 && !reached; n++) { await step(h); h.advanceWallClock(30_000); }
+  expect(attempt().executionRuntime).toBe("cloud-then-local");
+  expect(reached).toBe(true);
+  expect(h.spawnInputs).toHaveLength(replaced ? 1 : 2);
+  expect(lane().decisionAnswers).toHaveLength(1);
+  if (replaced) expect(JSON.stringify(lane())).toBe(replacement);
+  else expect(h.spawnInputs[1]!.prompt).toContain("Use Markdown.");
+});

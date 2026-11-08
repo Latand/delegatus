@@ -1,3 +1,5 @@
+import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { pipelineDecisionRevision } from "@/lib/pipelines/decisionRevision";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
@@ -11,7 +13,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswerCooperatively } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
 import { resolveIssueReportDigest } from "@/lib/issueReports/store";
-import { shortId, shortenHashesInText } from "@/lib/shortIds";
+import { shortId, shortenHashesInText, resolveShortId } from "@/lib/shortIds";
 import { relayAnswerOp } from "@/lib/externalRelay/ownerAnswer";
 import { ExternalRelayError as RelayAnswerError } from "@/lib/externalRelay/client";
 import { DocumentRefusal as RelayDocumentRefusal } from "@/lib/telegram/bot/documents";
@@ -90,7 +92,7 @@ import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { currentMcpHttpCaller, resolveMcpCallerValue, runWithMcpCallerResolution } from "./callerContext";
 import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
@@ -201,7 +203,7 @@ import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operator
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
-import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, captureDecisionAuthority, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
@@ -2655,7 +2657,7 @@ function closeReportCounts(report: PipelineCloseReport) {
   };
 }
 
-async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
   assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
@@ -2672,9 +2674,11 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const beforeFields = fieldValues(before);
   if (action === "retry-stage") retryStageLaunch(request, before ?? null);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
+  const assertAction = () => { assertWorkspaceMcpCall(); if (action === "resolve-decision") context.assertCaller?.(); };
+  assertAction();
   const result = action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
-    ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies), assertWorkspaceMcpCall)
-    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertWorkspaceMcpCall);
+    ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies), assertAction)
+    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertAction);
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
     if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
@@ -6137,9 +6141,13 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   }
   /* Stage conclusions and graph guards stay reachable without retained bodies. */
   const stageId = text(args.stageId);
+  const selected = pipeline.cursor && latestOperationalStageAttempt(pipeline, pipeline.cursor.stageId);
+  const token = pipelineDecisionRevision(pipeline);
+  const decision = token && (!stageId || (stageId === pipeline.cursor?.stageId && (args.attempt === undefined || args.attempt === selected?.n)))
+    ? { decisionRevision: token } : {};
   if (stageId) {
     const attempt = typeof args.attempt === "number" ? args.attempt : undefined;
-    return redactPayload({ ...pipelineStageRead(projectReadText(pipeline, context), stageId, attempt), task: pipeline.task, revision: recordRevision(pipeline) });
+    return redactPayload({ ...pipelineStageRead(projectReadText(pipeline, context), stageId, attempt), task: pipeline.task, revision: recordRevision(pipeline), ...decision });
   }
   if (!fullAnswer(args)) {
     const compact = pipelineCompactRow(projectReadText(pipeline, context));
@@ -6152,6 +6160,7 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
         roleId: definitions.get(stage.id)?.effectiveRole?.roleId ?? null })),
       ...pipelineCheckFields(pipeline),
       revision: recordRevision(pipeline),
+      ...decision,
       taskIds: pipeline.taskIds,
       stageDigests: stageDigests(pipeline.stages),
       graphDigest: graphDigest(pipeline.stages),
@@ -6159,7 +6168,7 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     });
   }
   /* The digests a guarded graph edit names as expectedStageDigest. */
-  return { ...redactPayload({ pipelineId, pipeline }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
+  return { ...redactPayload({ pipelineId, pipeline }), ...decision, revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
 }
 
 /** Filter and page original records, then scrub only the selected source before
@@ -8676,7 +8685,7 @@ export function viewerMcpBindings(
       { prepareAdmission: (args: McpToolArgs) => assertExplicitPipelineSource(args, domainDependencies) },
     ),
     pipeline_action: Object.assign(
-      (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
+      (args: McpToolArgs, context?: McpToolCallContext) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies, context)),
       { canonicalizeReceiptArgs: (args: McpToolArgs) => {
         if (args.action !== "resolve-decision" || typeof args.expectedRevision !== "string") return args;
         const id = required(args, "pipelineId");
@@ -8685,9 +8694,11 @@ export function viewerMcpBindings(
           : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
         if (!pipeline) return args;
         const accepted = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === args.clientRequestId);
-        const retained = accepted?.expectedRevision ?? pipelineRevision(pipeline);
-        if (!/^[a-f0-9]{7,64}$/i.test(args.expectedRevision) || !retained.toLowerCase().startsWith(args.expectedRevision.toLowerCase())) return args;
-        return { ...args, expectedRevision: retained };
+        if (!/^[a-f0-9]{7,64}$/i.test(args.expectedRevision)) return args;
+        const candidates = accepted ? [accepted.expectedRevision] : [pipelineRevision(pipeline), pipelineDecisionRevision(pipeline)].filter((hash): hash is string => hash !== null);
+        const resolved = resolveShortId(candidates, args.expectedRevision);
+        if (resolved.kind === "ambiguous") throw new McpToolRefusal("expectedRevision is ambiguous; supply the full hash", { code: "short_id_ambiguous", field: "expectedRevision", status: 409, retryable: false });
+        return resolved.kind === "match" ? { ...args, expectedRevision: resolved.value } : args;
       }, authorizeReceipt: (args: McpToolArgs) => {
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
@@ -8701,6 +8712,55 @@ export function viewerMcpBindings(
             ? legacyReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
             : decisionAnswerActorRefusal(pipeline, pauseResumeActorOf(domainDependencies), args.clientRequestId);
         if (refusal) throw new Error(refusal.error);
+        if (args.action !== "resolve-decision") return;
+        const actor = pauseResumeActorOf(domainDependencies);
+        const target = captureDecisionAuthority(pipeline, actor, args.clientRequestId);
+        // A nested resolution scope reads current sources instead of this call's
+        // memoized attribution. Keep the original generation and deputy route.
+        const identity = () => runWithMcpCallerResolution(() => {
+          const attribution = attributionOf(domainDependencies);
+          const authority = domainDependencies.attentionAuthority?.();
+          const conversation = attribution.via?.deputy ?? attribution.conversationId;
+          const snapshot = domainDependencies.registrySnapshot?.();
+          const record = conversation && snapshot?.conversations[conversation];
+          const generation = record && record.generations.at(-1);
+          const entry = record && generation && snapshot?.entries[sessionKeyId({ engine: record.engine, sessionId: generation.id })];
+          return JSON.stringify([attribution, authority, generation && [generation.id, generation.path, generation.accountId,
+            generation.launchProfile, generation.createdAt, generation.archivedAt], entry && [entry.claimOwner, entry.claimEpoch,
+            entry.artifactPath, entry.structuredHost?.process, entry.structuredHost?.endpoint]]);
+        });
+        const original = identity();
+        return (received?: McpToolPayload) => {
+          assertWorkspaceMcpCall();
+          if (identity() !== original) throw new McpToolRefusal("decision caller changed during the call", { status: 403, retryable: false });
+          const current = domainDependencies.readPipelineRecord
+            ? domainDependencies.readPipelineRecord(id)
+            : domainDependencies.getPipelines?.().pipelines.find(item => item.id === id);
+          if (!current) throw new Error("decision target is unavailable");
+          target(current);
+          const accepted = current.decisionAnswers?.find(answer => answer.clientRequestId === args.clientRequestId);
+          if (received?.ok === false && received.code !== "idempotency_conflict" && typeof args.expectedRevision === "string" && /^[a-f0-9]{7,64}$/i.test(args.expectedRevision)) {
+            const candidates = accepted ? [accepted.expectedRevision]
+              : [pipelineRevision(current), pipelineDecisionRevision(current)].filter((hash): hash is string => hash !== null);
+            if (resolveShortId(candidates, args.expectedRevision).kind !== "match" || accepted
+              && (accepted.answer !== args.answer || accepted.stageId !== args.expectedStageId || accepted.attempt !== args.expectedAttempt)) {
+              throw new McpToolRefusal("decision receipt no longer matches its guarded target", { code: "STAGE_CHANGED", field: "expectedRevision", status: 409, retryable: false });
+            }
+          }
+          if (received?.ok === true) {
+            const revision = accepted && typeof args.expectedRevision === "string"
+              ? resolveShortId([accepted.expectedRevision], args.expectedRevision) : null;
+            const retained = accepted && redactPayload({ decisionAnswer: {
+              clientRequestId: accepted.clientRequestId, stageId: accepted.stageId,
+              attempt: accepted.attempt, nextAttempt: accepted.nextAttempt, at: accepted.at,
+            } });
+            if (!accepted || revision?.kind !== "match" || accepted.answer !== args.answer
+              || accepted.stageId !== args.expectedStageId || accepted.attempt !== args.expectedAttempt
+              || requestDigest("pipeline_action", { decisionAnswer: received.decisionAnswer }) !== requestDigest("pipeline_action", retained!)) {
+              throw new McpToolRefusal("decision answer receipt no longer belongs to the current target", { status: 409, retryable: false });
+            }
+          }
+        };
       } },
     ),
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),

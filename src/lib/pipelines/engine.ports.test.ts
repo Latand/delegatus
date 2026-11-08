@@ -1363,3 +1363,50 @@ test.each(["entry", "account", "preparation", "transport", "recovery"] as const)
     setAgentRegistryForTests(null); registry.close();
   }
 });
+
+test.each(["allowed", "account", "reservation", "git", "prompt", "transport", "recovery"] as const)("decision launch authority crosses production preparation at %s", async boundary => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `decision-preparation-${boundary}.json`));
+  setAgentRegistryForTests(registry);
+  let current = true, effects = 0, reached = false;
+  const cut = (name: string) => { if (boundary === name) { reached = true; current = false; } };
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => {
+    cut("account");
+    return { kind: "available", account: { engine: "claude", accountId: "fixture-account", kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } };
+  });
+  const clientModule = await import("@/lib/runtime/client"), spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockImplementation(async () => { await Promise.resolve(); cut("git"); return {}; });
+  let recovery: (() => void | Promise<void>) | undefined;
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    await Promise.resolve(); cut("transport"); await input.authorize?.(); input.assertCurrent?.();
+    recovery = input.authorize;
+    effects++; return { path: null } as never;
+  });
+  try {
+    const operation = defaultPipelinePorts().spawnAgent({
+      role: { roleId: "builder", engine: "claude", model: "fable", effort: "high", access: "read-write", promptScaffold: "" },
+      runtimeProfile: { access: "read-write", sandbox: "full" }, cwd: process.env.LLV_STATE_DIR!,
+      project: "repo-00000000000000000000000000000002", requestedAccountId: null,
+      title: "Decision preparation", ["prompt"]: "Continue the accepted decision", parentPath: null,
+      clientAttemptId: `decision_preparation_${boundary}`, creatorConversationId: null,
+      membership: { kind: "pipeline", containerId: "decision-preparation", role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null },
+      assertCurrent: () => { if (!current) throw new Error("decision preparation authority replaced"); },
+    }, async () => { await Promise.resolve(); cut("reservation"); },
+    async () => { await Promise.resolve(); cut("prompt"); return "Continue the accepted decision"; });
+    const result = await operation.then(value => value, error => error as Error);
+    expect(effects).toBe(boundary === "allowed" || boundary === "recovery" ? 1 : 0);
+    if (boundary === "recovery") {
+      expect(recovery).toBeDefined(); cut("recovery");
+      await expect(Promise.resolve().then(() => recovery!())).rejects.toThrow("decision preparation authority replaced");
+      expect(effects).toBe(1);
+    } else if (boundary !== "allowed") {
+      expect(reached).toBe(true); expect(result).toBeInstanceOf(Error);
+    }
+    if (boundary === "account") expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+  } finally {
+    resolve.mockRestore(); client.mockRestore(); guard.mockRestore(); spawn.mockRestore();
+    setAgentRegistryForTests(null); registry.close();
+  }
+});

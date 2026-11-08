@@ -364,3 +364,40 @@ test.skipIf(!enabled || !process.env.LLV_CLAUDE_BINARY).each(profiles)("real str
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 90_000);
+
+
+test.each([false, true])("fallback exec acknowledgement rechecks decision authority (revoked %s)", async revoked => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "decision-fallback-"));
+  const tools = path.join(root, "tools"); fs.mkdirSync(tools);
+  fs.symlinkSync(fs.realpathSync(Bun.which("python3")!), path.join(tools, "python3"));
+  const marker = path.join(root, "executed");
+  const env = { ...process.env, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: path.join(root, "config"),
+    LLV_STATE_DIR: path.join(root, "state"), PATH: tools, LLV_GATE_SLOT_LEASE: undefined };
+  let owned = true, reached = false;
+  const children: ReturnType<typeof spawn>[] = [];
+  const transport: Parameters<typeof spawnManagedEngine>[6] = (command, args, options) => {
+    const child = spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
+    children.push(child);
+    // The native launcher is already held behind its exec acknowledgement.
+    // Revoke after its asynchronous readiness boundary, before engine exec.
+    Object.assign(child, { spawnReady: Promise.resolve().then(() => { reached = true; if (revoked) owned = false; }) });
+    return child;
+  };
+  try {
+    const opening = spawnManagedEngine(process.execPath, ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed")`],
+      { cwd: root, env, detached: true }, null, undefined, env, transport,
+      () => { if (!owned) throw new Error("fallback decision authority replaced"); });
+    let failure: Error | undefined;
+    const child = await opening.catch(error => { failure = error; return null; });
+    if (child) {
+      if (child.exitCode === null && child.signalCode === null) await new Promise<void>(resolve => child.once("close", () => resolve()));
+      expect(signalBoundaryOff(child)?.state).toBe("off");
+    }
+    expect(reached).toBe(true);
+    expect(fs.existsSync(marker)).toBe(!revoked);
+    if (revoked) expect(failure?.message).toContain("fallback decision authority replaced");
+  } finally {
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 20000);
