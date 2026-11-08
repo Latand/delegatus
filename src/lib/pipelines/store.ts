@@ -2004,10 +2004,10 @@ export async function withPipelineMutation<T>(
   return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
-  }, context => {
+  }, keys || beforePersist ? context => {
     if (keys && context.structural) throw new Error("controller jobs cannot replace the collection");
     beforePersist?.();
-  }, false, pipelineLockWaitMs(), observeHold, keys)));
+  } : undefined, false, pipelineLockWaitMs(), observeHold, keys)));
 }
 
 export async function withPipelineControllerMutation<T>(

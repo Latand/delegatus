@@ -945,3 +945,12 @@ test("answer completion cannot settle a receipt after its durable target was rep
   expect(fs.readFileSync(filename, "utf8")).toBe(before);
   expect(h.spawnedStages).toEqual(["build"]);
 });
+
+test("ordinary pipeline actions retain their existing workspace assertion", async () => {
+  const h = await parked();
+  const { bindings } = decisionService(h, new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "ordinary-action.json")));
+  let decisionChecks = 0;
+  await bindings.pipeline_action({ pipelineId: h.id, action: "pause" }, { assertCaller: () => { decisionChecks++; throw new Error("decision-only fixture assertion"); } });
+  expect(current().state).toBe("paused");
+  expect(decisionChecks).toBe(0);
+});

@@ -16927,6 +16927,7 @@ export async function patchPipeline(
 ): Promise<PipelinePatchResult> {
   assertAuthority?.();
   const decisionOriginal = req.action === "resolve-decision" ? findPipelineRecord(id) : null;
+  if (req.action === "resolve-decision" && !decisionOriginal) return { error: "pipeline not found", status: 404 };
   if (decisionOriginal) {
     const refused = decisionAnswerActorRefusal(decisionOriginal, actor, req.clientRequestId);
     if (refused) return refused;
@@ -16971,10 +16972,10 @@ export async function patchPipeline(
       if (pipeline && principal) pipeline.workspace ??= principal;
       if (records) await persist(records); else await persist();
     });
-  }, observeHold, () => {
+  }, observeHold, beforePersist || req.action === "resolve-decision" ? () => {
     beforePersist?.();
     if (req.action === "resolve-decision") { assertDecisionCurrent(); inputPrincipal([decisionOriginal!]); }
-  });
+  } : undefined);
   if (assertAuthority || decisionAuthority) {
     const original = ports;
     ports = new Proxy(original, { get(target, key, receiver) {
