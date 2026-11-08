@@ -743,7 +743,14 @@ test("earlier host settlement preserves the HTTP decision token and launches one
   expect(current().decisionAnswers).toHaveLength(1);
 });
 
-for (const [name, change] of relevantDecisionChanges.filter(([name]) => ["requirements", "control", "owner", "workspace"].includes(name))) {
+const decisionLaunchChanges: typeof relevantDecisionChanges = [
+  ...relevantDecisionChanges.filter(([name]) => ["requirements", "control", "owner", "workspace"].includes(name)),
+  ["successor input", p => { p.runs[0]!.attempts.at(-1)!.input += " Changed input."; }],
+  ["successor role", p => { p.runs[0]!.attempts.at(-1)!.effectiveRole.promptScaffold += " Changed role."; }],
+  ["successor definition", p => { p.runs[0]!.attempts.at(-1)!.definition!.prompt += " Changed instruction."; }],
+  ["successor answer", p => { p.runs[0]!.attempts.at(-1)!.decisionAnswerId = "replacement-answer"; }],
+];
+for (const [name, change] of decisionLaunchChanges) {
   test(`decision successor refuses authority replacement at dispatch: ${name}`, async () => {
     const h = await parked();
     expect((await patchPipeline(h.id, { ...h.request, expectedRevision: pipelineDecisionRevision(current())! }, h.ports, manager)).error).toBeUndefined();

@@ -16537,6 +16537,7 @@ function decisionLaunchFence(p: Pipeline): string {
     p.task, p.proactiveTaskIds, p.publicationAdmission, p.delivery?.operation,
     p.runs.map(run => [run.stageId, run.attempts.map(item => [item.n, item.historical, item.legacyReview, item.activatedBy,
       item.budgetSpent, item.reviewedHead, item.expectedReviewHeadSha, item.reviewHeadSha, item.acceptedForReview,
+      item.input, item.effectiveRole, item.decisionAnswerId, item.launchedBy,
       run.stageId === p.cursor?.stageId && item === currentAttempt(p, run.stageId) ? null
         : [item.input, item.output, item.report, item.verdict, item.startedAt, item.completedAt, item.definition, item.effectiveRole,
           item.launchId, item.conversationId, item.sessionId, item.agentPath, item.paneId, item.accountId, item.hostEpoch,
@@ -16554,12 +16555,14 @@ export function capturePipelineDecisionLaunch(pipelineId: string, stageId: strin
   const authority = captureDecisionAuthority(original!, answer.actor, answer.clientRequestId);
   if (attempt.activation && attempt.activation.fence !== activationFence(original!)) throw new ActivationSuperseded();
   const expected = decisionLaunchFence(original!);
+  const definition = attempt.definition && JSON.stringify(attempt.definition);
   return () => {
     const current = findPipelineRecord(pipelineId);
     const successor = current && currentAttempt(current, stageId);
     if (!current || current.state !== "running" || current.cursor?.stageId !== stageId || decisionLaunchFence(current) !== expected
       || successor?.n !== attemptNumber || successor.decisionAnswerId !== answer.clientRequestId
       || successor.completedAt || successor.verdict || successor.report) throw new ActivationSuperseded();
+    if (definition && JSON.stringify(successor.definition) !== definition) throw new ActivationSuperseded();
     authority(current);
     if (answer.actor.kind === "agent") {
       const file = readOrchestratorSeatFileOrNull();
