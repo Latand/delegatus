@@ -9687,6 +9687,16 @@ export class AgentRegistry {
     });
   }
 
+  /** Album sources need only the addressed conversation and its aliases.
+      Keep retained history keys and the global snapshot off this read. */
+  conversationTranscriptPaths(id: ViewerConversationId): string[] {
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      return conversation ? [...new Set([...conversation.continuityPaths,
+        ...conversation.generations.map(generation => generation.path)])] : [];
+    }, { skipColdKeyInitialization: true });
+  }
+
   conversationAuthorityFacts(id: string): ConversationAuthorityFacts | null {
     return withViewerOperation("orchestrator.authority", () => performanceSpans.sync("authority.facts", () => {
       if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.conversationAuthorityFacts(id);
