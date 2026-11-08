@@ -8026,7 +8026,7 @@ test("a capability write interruption before startHost retains prepublication re
 test.each(["codex", "claude"] as const)("default %s host carries decision authority through native preparation", async engine => {
   const { defaultStartHost } = await import("./structuredSpawn");
   const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-  for (const boundary of ["allowed", "import", "preparation"] as const) {
+  for (const boundary of ["allowed", "binding", "import", "preparation"] as const) {
     const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
     const marker = path.join(cwd, "native-effect");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -8049,6 +8049,10 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile,
       memberships: [{ kind: "pipeline", containerId: id, role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null }] });
     if (begun.kind !== "created") throw new Error("native decision receipt missing");
+    const bound = loadPipelines();
+    bound[0]!.runs[0]!.attempts[1]!.launchId = boundary === "binding" ? `replaced-${begun.receipt.launchId}` : begun.receipt.launchId;
+    bound[0]!.runs[0]!.attempts[1]!.conversationId = begun.receipt.conversationId;
+    savePipelines(bound);
     const replace = () => { const rows = loadPipelines(); rows[0]!.spec = "Changed requirements"; savePipelines(rows); };
     let effects = 0;
     const children: ReturnType<typeof spawn>[] = [];
