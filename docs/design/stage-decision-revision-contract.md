@@ -184,3 +184,26 @@ retries, generic authorization infrastructure, new test drivers and UI remain
 outside scope. Product changes, runtime validation, checks/merge and authorized
 installed-case acceptance remain future work. The root remains OPEN and the
 WORK release/rollout hold remains in force.
+
+## Source implementation
+
+`src/lib/pipelines/decisionRevision.ts` computes v1 from the keep-list above.
+The store, MCP projections and HTTP detail route share that primitive. Fresh
+resolve admission retains the complete-record compatibility path, stores the
+matched full hash and preserves the existing attempt and budget refusals.
+
+Action-specific assertions follow MCP scope, claim, join, binding and reply
+boundaries. Receipt completion and release accept optional synchronous callbacks
+under their existing locks; other actions retain their previous behavior. A
+successful resolve reply must still match the current target's retained durable
+answer before replay disclosure or receipt completion. The pipeline store
+forwards the resolve assertion to its existing SQLite persistence boundary.
+
+Decision continuations reconstruct launch authority from the retained answer.
+Native recovery pins that record across lazy engine loading, and the synchronous
+assertion reaches both native engines, guarded fallback execution and initial
+message admission. These additions introduce no persisted token or schema.
+
+Behavioral checks use the existing files in the harness matrix. Review, merge,
+installed acceptance and release authorization remain separate requirements;
+the root and release/rollout hold remain open.
