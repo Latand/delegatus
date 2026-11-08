@@ -1472,11 +1472,16 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
 /** Pin the existing decision before loading its engine. Recovery receives this
  * same invocation-local assertion for host preparation and first delivery. */
 function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: SpawnReceipt): Promise<() => void> | null {
-  const membership = registry.readOnlySnapshot().memberships[receipt.conversationId]?.find(row => row.kind === "pipeline");
-  const original = membership && findPipelineRecord(membership.containerId);
-  const attempt = membership?.stageId ? original?.runs.find(run => run.stageId === membership.stageId)?.attempts
-    .find(attempt => attempt.n === membership.round) : undefined;
-  if (!attempt?.decisionAnswerId || !membership?.stageId || !membership.round) return null;
+  const targets = registry.conversationMemberships(receipt.conversationId).filter(row => row.kind === "pipeline").flatMap(membership => {
+    const original = findPipelineRecord(membership.containerId);
+    const attempt = membership.stageId ? original?.runs.find(run => run.stageId === membership.stageId)?.attempts
+      .find(attempt => attempt.n === membership.round) : undefined;
+    return attempt?.decisionAnswerId ? [{ membership, original: original!, attempt }] : [];
+  });
+  if (!targets.length) return null;
+  if (targets.length !== 1) return Promise.reject(new Error("decision launch membership is ambiguous"));
+  const { membership, original, attempt } = targets[0]!;
+  if (!membership.stageId || !membership.round) return Promise.reject(new Error("decision launch membership is unavailable"));
   if (attempt.launchId !== receipt.launchId || attempt.conversationId !== receipt.conversationId || attempt.effectiveRole.engine !== receipt.engine) {
     return Promise.reject(new Error("decision launch receipt no longer belongs to its attempt"));
   }

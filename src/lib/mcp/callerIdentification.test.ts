@@ -455,9 +455,10 @@ test("SDK HTTP decision answers use production projections, guards and durable r
   const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
   const creator = "conversation_sdk_creator", now = "2026-11-03T10:00:00.000Z";
   const role = { roleId: null, engine: "codex" as const, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
-  const p = buildPipeline({ id: "sdk-decision", task: "Answer a settled decision", project: "sdk-project", repoDir: "/repo", state: "needs_decision",
+  const p = buildPipeline({ id: "sdk-decision", task: "Answer a settled decision", project: "sdk-project", repoDir: "/repo",
     srcPath: "/codex/creator.jsonl", srcConversationId: creator, now,
     stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: role }] });
+  p.state = "needs_decision";
   p.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
   p.runs[0]!.attempts.push({ n: 1, state: "needs_decision", effectiveRole: role, input: null, output: "Choose a format?",
     verdict: { status: "needs_decision", findings: [] }, error: null, startedAt: now, completedAt: now, launchId: null,

@@ -8025,18 +8025,19 @@ test("a capability write interruption before startHost retains prepublication re
 
 test.each(["codex", "claude"] as const)("default %s host carries decision authority through native preparation", async engine => {
   const { defaultStartHost } = await import("./structuredSpawn");
-  const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-  for (const boundary of ["allowed", "binding", "import", "preparation"] as const) {
+  const { buildPipeline, pipelineIdentity, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+  for (const boundary of ["allowed", "binding", "membership", "import", "preparation"] as const) {
     const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
     const marker = path.join(cwd, "native-effect");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const launchProfile = emptyLaunchProfile({ cwd, cleanMemory: true, allowSubagents: true, mcpServers: [] });
     const prior = loadPipelines();
-    const role = { roleId: "builder", engine, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
+    const role = { roleId: "builder", engine, model: null, effort: null, access: "read-write" as const, promptScaffold: "Build the requested output." };
     const at = "2026-11-03T10:00:00.000Z", id = `native-decision-${engine}-${boundary}`;
     const pipeline = buildPipeline({ id, project: "native-decision", task: "Continue the settled decision", repoDir: cwd,
-      state: "running", publication: "internal", srcPath: null, srcConversationId: null, now: at,
-      stages: [{ id: "build", kind: "run", effectiveRole: role, prompt: "Build", next: null }] });
+      publication: "internal", srcPath: null, srcConversationId: null, now: at,
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, effectiveRole: role, prompt: "Build", next: null }] });
+    pipeline.state = "running";
     pipeline.cursor = { stageId: "build", state: "spawning", input: null, activatedBy: null };
     const attempt = { n: 1, state: "needs_decision" as const, effectiveRole: role, input: null, output: "Choose a format?",
       verdict: { status: "needs_decision" as const, findings: [] }, error: null, startedAt: at, completedAt: at,
@@ -8052,6 +8053,12 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     const bound = loadPipelines();
     bound[0]!.runs[0]!.attempts[1]!.launchId = boundary === "binding" ? `replaced-${begun.receipt.launchId}` : begun.receipt.launchId;
     bound[0]!.runs[0]!.attempts[1]!.conversationId = begun.receipt.conversationId;
+    if (boundary === "membership") {
+      const otherId = `${id}-other`, other = { ...structuredClone(bound[0]!), id: otherId, ...pipelineIdentity(otherId, pipeline.task, cwd) };
+      bound.push(other);
+      registry.rememberMembership(begun.receipt.conversationId, { kind: "pipeline", containerId: otherId,
+        role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null });
+    }
     savePipelines(bound);
     const replace = () => { const rows = loadPipelines(); rows[0]!.spec = "Changed requirements"; savePipelines(rows); };
     let effects = 0;
