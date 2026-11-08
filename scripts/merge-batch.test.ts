@@ -1478,12 +1478,12 @@ test("T4 carried hosted typecheck red runs full local attribution and real TypeS
   const runner: CommandRunner = async (cwd, args, env) => {
     if (args.includes("tsc")) {
       types++;
-      return commandRunner(cwd, args.slice(2), { ...env, PATH: compilerPath });
+      return commandRunner(cwd, args.slice(2), { ...(env ?? process.env), PATH: compilerPath });
     }
     if (args[0] === "git" && args[1] === "bisect") {
       bisects++;
       expect(args.slice(2, 4)).toEqual(["run", process.execPath]);
-      return commandRunner(cwd, args, { ...process.env, ...env, PATH: compilerPath });
+      return commandRunner(cwd, args, { ...(env ?? process.env), PATH: compilerPath });
     }
     return successfulCommand(args);
   };
@@ -1538,11 +1538,11 @@ test.each([
     + `if test -f healthy.txt; then printf '%s\\n' ${shellArgument(output)}; exit ${code}; fi\nexit 0\n`);
   let bisects = 0;
   const runner: CommandRunner = async (cwd, args, env) => {
-    if (args[2] === "bunx") return commandRunner(cwd, args.slice(2), { ...env, PATH: compilerPath });
+    if (args[2] === "bunx") return commandRunner(cwd, args.slice(2), { ...(env ?? process.env), PATH: compilerPath });
     if (args[0] === "git" && args[1] === "bisect") {
       bisects++;
       expect(args.slice(-2, -1)).toEqual(["_bisect"]);
-      return commandRunner(cwd, args, { ...process.env, ...env, PATH: compilerPath });
+      return commandRunner(cwd, args, { ...(env ?? process.env), PATH: compilerPath });
     }
     return successfulCommand(args);
   };
