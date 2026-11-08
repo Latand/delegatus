@@ -30,7 +30,7 @@ const { resolvePipelineRole } = await import("@/lib/pipelines/roles");
 const { RecordedCheckStore, rowSchema, recordedRootHeld } = await import("@/lib/recordedChecks/store");
 const { recordedReportReceipts } = await import("@/lib/recordedChecks/reportGate");
 const { retainResult } = await import("@/lib/recordedChecks/service");
-const { descriptorSchema, terminalSchema, readEnvelope, digest } = await import("@/lib/recordedChecks/wire");
+const { descriptorSchema, terminalSchema, identitySchema, readEnvelope, digest } = await import("@/lib/recordedChecks/wire");
 const identity = await import("@/lib/processIdentity");
 const custody = await import("@/lib/runtime/signalSandboxContext");
 const NOW = Date.parse("2026-11-01T12:00:00Z");
@@ -450,7 +450,7 @@ for (const change of ["missing-proof", "live-owner", "accepted"] as const) test(
     if (change === "live-owner") {
       const { reportSchema } = await import("@/lib/recordedChecks/wire");
       const proof = reportSchema.parse(readEnvelope(path.join(`${f.row.log}.gate`, "supervisor.json")));
-      f.update({ custody: [{ ...proof, command: custody.cpuOwnerIdentity(process.pid) }] });
+      f.update({ custody: [{ ...proof, command: identitySchema.parse(custody.cpuOwnerIdentity(process.pid)) }] });
     }
     if (change === "accepted") f.update({ admission: "accepted" });
     release();
@@ -467,7 +467,7 @@ for (const change of ["missing-proof", "live-owner", "accepted"] as const) test(
   if (change === "live-owner") {
     const { reportSchema } = await import("@/lib/recordedChecks/wire");
     const proof = reportSchema.parse(readEnvelope(path.join(`${f.row.log}.gate`, "supervisor.json")));
-    f.update({ custody: [{ ...proof, supervisor: custody.cpuOwnerIdentity(process.pid) }] });
+    f.update({ custody: [{ ...proof, supervisor: identitySchema.parse(custody.cpuOwnerIdentity(process.pid)) }] });
   }
   if (change === "accepted") f.update({ admission: "accepted" });
   f.ports.conversationAgentActive = async () => false;
