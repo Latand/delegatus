@@ -1116,6 +1116,7 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
       return;
     }
     if (!ports.setting(read.project).enabled) return;
+    const policy = JSON.stringify(ports.setting(read.project));
     const lineage = await ports.activeSeat?.(read.project) ?? {
       srcPath: read.srcPath, srcConversationId: read.srcConversationId, srcDeputyConversationId: read.srcDeputyConversationId ?? undefined,
     };
@@ -1143,6 +1144,11 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
       return;
     }
     if (current.state !== "completed" || !mergeEligible(current) || current.lastPassedCommit !== read.lastPassedCommit
+      || current.controlGeneration !== read.controlGeneration || current.spec !== read.spec
+      || JSON.stringify(current.inputContext) !== JSON.stringify(read.inputContext)
+      || JSON.stringify(current.workspace) !== JSON.stringify(read.workspace)
+      || JSON.stringify(ports.setting(read.project)) !== policy
+      || JSON.stringify(refreshRequest(current, legacyBase)) !== JSON.stringify(refreshRequest(read, legacyBase))
       || current.merge.attempts !== read.merge.attempts || JSON.stringify(current.delivery) !== JSON.stringify(read.delivery)
       || JSON.stringify(current.merge.refresh) !== JSON.stringify(reservation)) return;
     const held = !found && refreshCapacityReason(ports, read.merge.repository, reservation.key);

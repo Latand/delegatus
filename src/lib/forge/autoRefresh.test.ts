@@ -3284,3 +3284,22 @@ test.each(["target", "time"] as const)("a keyed child with conflicting %s cannot
   expect(h.creates).toHaveLength(1);
   expect(h.merge("queued-1")!.reason).toContain("repository capacity");
 });
+
+test.each(["control", "requirements", "tasks", "policy"] as const)("refresh creation refuses %s replaced during its last lineage await", async change => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  let observed = false;
+  h.ports.activeSeat = async () => {
+    await Promise.resolve(); observed = true;
+    const parent = h.pipeline("finished");
+    if (change === "control") parent.controlGeneration = "replacement-control";
+    if (change === "requirements") parent.spec = "replacement requirements";
+    if (change === "tasks") parent.taskIds = ["replacement-task"];
+    if (change === "policy") h.setSetting({ changedAt: iso(T0 + 1) });
+    return { srcPath: null, srcConversationId: "seat-one" };
+  };
+  await h.sweep();
+  expect(observed).toBe(true);
+  expect(h.creates).toHaveLength(0);
+  expect(h.merge("finished")!.refresh!.pipelineId).toBeNull();
+  expect(h.writes).toHaveLength(0);
+});
