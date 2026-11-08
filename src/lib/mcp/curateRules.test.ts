@@ -355,6 +355,7 @@ test("SDK legacy UNKNOWN and missing witnesses remain UNKNOWN without a new appl
 test.each([
   ["before-complete", "split"], ["after-complete", "split"],
   ["before-complete", "adopt"], ["after-complete", "adopt"],
+  ["after-commit", "split"], ["after-commit", "adopt"],
 ] as const)("SDK %s process loss recovers original %s ids after an actual service restart", async (crash, kind) => {
   const candidate = importCandidate(1, { suggestedScope: "project:scheduled-custody-fixture" });
   candidate.occurrences[0].project = "scheduled-custody-fixture";
@@ -379,12 +380,27 @@ test.each([
       adopt: [{ candidate: candidate.id, occurrences: candidate.occurrences.map(o => o.id), parts: [{ to: candidate.suggestedScope, rule: "Verify current ownership immediately before changing shared state.", why: "A retained import records a recurring ownership check." }], note: "Retain this check with its project readers." }] }
       : { action: "apply", clientRequestId: "restart-split", scopes: [{ scope: f.scope, revision: 1, order: [f.id, `split:${f.id}:1`] }], split: [{ id: f.id,
       parts: [{ to: f.scope, rule: "Read the current scope before preparing stored guidance." }, { to: f.scope, rule: "Recheck current ownership immediately before the stored edit." }], note: "Keep preparation and commit checks independently readable." }] };
+    if (crash === "after-commit") {
+      const { refreshLessonKnownValues } = await import("@/lib/memory/roleStore");
+      refreshLessonKnownValues();
+      expect(fs.existsSync(lessonKnownValuesFile())).toBe(true);
+    }
     const first = await start("first", crash);
     const lost = first.client.callTool({ name: "curate_rules", arguments: args }).catch(() => null);
     await awaitFixtureFile(first.marker);
     expect(await first.child.exited).toBe(79);
     await lost;
-    const committed = JSON.parse(fs.readFileSync(first.marker, "utf8"));
+    const saved = JSON.parse(fs.readFileSync(first.marker, "utf8"));
+    const committed = crash === "after-commit" ? { ...saved, ok: true, toolName: "curate_rules", clientRequestId: args.clientRequestId, replayed: false } : saved;
+    if (crash === "after-commit") {
+      expect(committed).toMatchObject({ maintenance: { counts: "pending", knownValues: "pending", cleanup: "pending" } });
+      expect(fs.existsSync(lessonKnownValuesFile())).toBe(false);
+      const gate = ownFixtureChild(Bun.spawn([process.execPath, "scripts/privacy-publication-gate.ts", "--require-known-values", "--paths", "package.json"], {
+        env: { ...process.env, LLV_PRIVACY_KNOWN_VALUES_FILE: lessonKnownValuesFile(), LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.resolve("scripts/privacy-known-value-fingerprints.json") }, stdout: "pipe", stderr: "pipe",
+      }));
+      const [exit, output, errors] = await Promise.all([gate.exited, new Response(gate.stdout).text(), new Response(gate.stderr).text()]);
+      expect(exit).toBe(1); expect(output + errors).toContain("configuration_error");
+    }
     expect(committed).toMatchObject({ ok: true, disposition: "committed", counts: { calls: 1, split: kind === "split" ? 1 : 0 } });
     const snapshot = roleMemoryCollection()!.snapshot();
     const second = await start("second");
@@ -656,4 +672,82 @@ test("SDK duplicate during held maintenance reads the commit without joining or 
     release(); await first?.catch(() => {});
     refresh.mockRestore(); await f.close();
   }
+});
+
+
+test("parallel snapshot publication yields while curator commit owns the collection", async () => {
+  const f = await committedSdkFixture();
+  const privacy = await import("@/lib/memory/privacy");
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const { execFileSync } = await import("node:child_process");
+  const refresh = spyOn(privacy, "refreshCurationKnownValuesAsync").mockRejectedValue(new Error("fixture current refresh unavailable"));
+  const original = SqliteStateCollection.commitPatchesSync;
+  let parallelResult = "";
+  const commit = spyOn(SqliteStateCollection, "commitPatchesSync").mockImplementation((patches, options) => original(patches, {
+    ...options, beforeCommit: () => {
+      options?.beforeCommit?.();
+      parallelResult = execFileSync(process.execPath, ["-e", `
+        import { refreshLessonKnownValues } from "./src/lib/memory/roleStore";
+        try { refreshLessonKnownValues(); console.log("published"); }
+        catch (error) { console.log(error.code); }
+      `], { env: { ...process.env }, timeout: 10000, encoding: "utf8", stdio: "pipe" }).trim();
+    },
+  }));
+  const publication = path.join(root, "publication");
+  fs.mkdirSync(publication);
+  fs.writeFileSync(path.join(publication, "guidance.txt"), f.args.rewrite[0].rule + "\n");
+  fs.writeFileSync(path.join(publication, "clean.txt"), "A public description of the application.\n");
+  const gate = async (file: string) => {
+    const child = ownFixtureChild(Bun.spawn([process.execPath, "scripts/privacy-publication-gate.ts", "--repository", publication, "--require-known-values", "--paths", file], {
+      env: { ...process.env, LLV_PRIVACY_KNOWN_VALUES_FILE: lessonKnownValuesFile(), LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.resolve("scripts/privacy-known-value-fingerprints.json") }, stdout: "pipe", stderr: "pipe",
+    }));
+    const [exit, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { exit, output: output + errors };
+  };
+  try {
+    const result = await f.call(f.args);
+    expect(parallelResult).toBe("LESSON_PRIVACY_UNAVAILABLE");
+    expect(result).toMatchObject({ ok: true, disposition: "committed", maintenance: { knownValues: "pending" } });
+    expect(fs.existsSync(lessonKnownValuesFile())).toBe(false);
+    expect(await gate("guidance.txt")).toMatchObject({ exit: 1, output: expect.stringContaining("configuration_error") });
+    commit.mockRestore(); refresh.mockRestore();
+    await privacy.refreshCurationKnownValuesAsync();
+    expect(fs.readFileSync(lessonKnownValuesFile(), "utf8")).toContain(f.args.rewrite[0].rule);
+    expect(await gate("guidance.txt")).toMatchObject({ exit: 1, output: expect.stringContaining("known_value: 1") });
+    expect(await gate("clean.txt")).toMatchObject({ exit: 0 });
+    expect(await f.call(f.args)).toEqual({ ...result, replayed: true });
+    expect(readPass(f.pass.id)!.counts.calls).toBe(1);
+  } finally { commit.mockRestore(); refresh.mockRestore(); await f.close(); }
+});
+
+test.each(["apply", "replay", "read"])("service %s disclosure rechecks authority after the page cursor await", async mode => {
+  const f = await committedSdkFixture();
+  const { runAsMcpHttpCaller } = await import("./callerContext");
+  let armed = false;
+  const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(), { timings: { observe: () => {
+    if (armed) queueMicrotask(() => queueMicrotask(() => f.f.policy({ deployment: true })));
+  } } });
+  const call = (args: Record<string, unknown>) => runAsMcpHttpCaller({ capability: f.capability }, () => service.callTool("curate_rules", args));
+  try {
+    const first = mode === "replay" ? await call(f.args) : undefined;
+    if (first) expect(first).toMatchObject({ ok: true, disposition: "committed" });
+    armed = true;
+    const args = mode === "read" ? { action: "read", clientRequestId: "late-page-read", scope: f.scope } : f.args;
+    const result = await call(args);
+    const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
+    await expect(curatorRecoveryGuard(f.pass.conversationId!, f.f.sources)).rejects.toThrow();
+    expect(result).toMatchObject({ ok: false, code: "CURATE_CALLER" });
+    for (const field of ["operationId", "placeholders", "counts", "revisions", "rules"]) expect(result).not.toHaveProperty(field);
+    const snapshot = roleMemoryCollection()!.snapshot();
+    armed = false; f.f.policy({ deployment: false });
+    const recovered = await call(args);
+    if (mode === "read") expect(recovered).toMatchObject({ ok: true, revision: 1, rules: [{ id: f.id }] });
+    else {
+      expect(recovered).toMatchObject({ ok: true, replayed: true, disposition: "committed", counts: { calls: 1 }, revisions: [{ scope: f.scope, input: 1, result: 2 }] });
+      if (first) expect(recovered).toEqual({ ...first, replayed: true });
+      expect(await call(args)).toEqual(recovered);
+    }
+    expect(roleMemoryCollection()!.snapshot()).toEqual(snapshot);
+    expect(readPass(f.pass.id)!.counts.calls).toBe(mode === "read" ? 0 : 1);
+  } finally { f.f.policy({ deployment: false }); await f.close(); }
 });

@@ -305,7 +305,7 @@ async function runHttpHost(configPath: string): Promise<void> {
  * The scheduled fixture supplies only host/seat facts to the real guard. */
 async function runCuratorHttp(configPath: string) {
   const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { root: string; seatId: string; now: number;
-    portFile: string; marker: string; crash?: "before-complete" | "after-complete" };
+    portFile: string; marker: string; crash?: "before-complete" | "after-complete" | "after-commit" };
   // Each service generation uses the same editorial clock. Timers and the
   // owning runner's process deadline continue to use their native clocks.
   globalThis.Date = new Proxy(Date, {
@@ -323,9 +323,23 @@ async function runCuratorHttp(configPath: string) {
   setAgentRegistryForTests(f.registry);
   const dependencies = { ...productionDomainDependencies, curatorAdmission: (id: string | null) => curatorRecoveryGuard(id ?? "", f.sources) };
   const store = new SqliteMcpReceiptStore(path.join(config.root, "curator-receipts.sqlite"));
+  if (config.crash === "after-commit") {
+    const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+    const { curationOperationResult } = await import("@/lib/memory/curation/apply");
+    const { validCurationOperation } = await import("@/lib/memory/curation/store");
+    const commit = SqliteStateCollection.commitPatchesSync;
+    SqliteStateCollection.commitPatchesSync = (patches, options) => {
+      commit(patches, options);
+      const witness = patches.flatMap(patch => patch.records).find(validCurationOperation);
+      if (witness) {
+        fs.writeFileSync(config.marker, JSON.stringify(curationOperationResult(witness)));
+        process.exit(79);
+      }
+    };
+  }
   const complete = store.complete.bind(store);
   store.complete = (...args) => {
-    if (args[0].startsWith("curate_rules:") && config.crash) {
+    if (args[0].startsWith("curate_rules:") && config.crash && config.crash !== "after-commit") {
       if (config.crash === "after-complete") complete(...args);
       fs.writeFileSync(config.marker, JSON.stringify(args[2]));
       process.exit(79);

@@ -3802,15 +3802,18 @@ export function createMcpToolService(
       }
     },
   };
-  return withMcpPageCursors({ callTool: async (tool, args, context) => {
+  const paged = withMcpPageCursors({ callTool: async (tool, args, context) => {
     const finish = (MCP_TOOL_NAMES as readonly string[]).includes(tool)
       ? trackMcpClaim(`${tool}:${clientRequestId(args) ?? "unkeyed"}`) : () => {};
-    const curatorResponse = context?.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
     try {
-      const result = await runWithMcpCallerResolution(() => service.callTool(tool, args, { ...context, curatorResponse }));
-      return curatorDisclosureResult(tool, args, curatorResponse, result);
+      return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
     } finally { finish(); }
   } });
+  return { async callTool(tool, args, context) {
+    const curatorResponse = context?.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
+    const result = await paged.callTool(tool, args, { ...context, curatorResponse });
+    return curatorDisclosureResult(tool, args, curatorResponse, result);
+  } };
 }
 
 /**
