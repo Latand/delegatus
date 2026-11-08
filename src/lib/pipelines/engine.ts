@@ -16547,7 +16547,8 @@ function decisionLaunchFence(p: Pipeline): string {
 
 /** Reconstructed from the accepted answer and current durable successor. No
  * callback is persisted, and recovery keeps the same original answer owner. */
-export function capturePipelineDecisionLaunch(pipelineId: string, stageId: string, attemptNumber: number): (() => void) | undefined {
+export function capturePipelineDecisionLaunch(pipelineId: string, stageId: string, attemptNumber: number,
+  receiptIdentity?: { launchId: string; conversationId: string }): (() => void) | undefined {
   const original = findPipelineRecord(pipelineId);
   const attempt = original && currentAttempt(original, stageId);
   if (!original) return;
@@ -16578,6 +16579,11 @@ export function capturePipelineDecisionLaunch(pipelineId: string, stageId: strin
       || successor?.n !== attemptNumber || successor.decisionAnswerId !== answer.clientRequestId
       || successor.completedAt || successor.verdict || successor.report) throw new ActivationSuperseded();
     if (definition && JSON.stringify(successor.definition) !== definition) throw new ActivationSuperseded();
+    const launchMatches = successor.launchId === attempt.launchId
+      || (attempt.launchId == null && receiptIdentity?.launchId === successor.launchId);
+    const conversationMatches = successor.conversationId === attempt.conversationId
+      || (attempt.conversationId == null && receiptIdentity?.conversationId === successor.conversationId);
+    if (!launchMatches || !conversationMatches || successor.providerFallbackRetries !== attempt.providerFallbackRetries) throw new ActivationSuperseded();
     authority(current);
     if (current.workspace && !workspacePrincipalAllows(current.workspace, current.project)) throw new ActivationSuperseded();
     const actor = answer.actor;

@@ -13,7 +13,7 @@ const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineRevision, pipelineDecisionRevision } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
-const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
+const { createMcpToolService, FileMcpReceiptStore, McpToolRefusal } = await import("@/lib/mcp/server");
 type McpReceiptStore = import("@/lib/mcp/server").McpReceiptStore;
 type ViewerMcpDomainDependencies = import("@/lib/mcp/bindings").ViewerMcpDomainDependencies;
 type PipelinePorts = import("./engine").PipelinePorts;
@@ -549,6 +549,36 @@ function decisionService(h: Awaited<ReturnType<typeof parked>>, receipts: McpRec
   return { bindings: viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies),
     service: createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies), receipts) };
 }
+
+test("joined stale decision callers both receive the typed MCP refusal", async () => {
+  const h = await parked();
+  let release!: () => void, started!: () => void, firstCallerStale = false;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const patch: ViewerMcpDomainDependencies["patchPipeline"] = async () => {
+    started(); await blocked; firstCallerStale = true;
+    return { error: "decision receipt no longer matches its guarded target", status: 409,
+      code: "STAGE_CHANGED", field: "expectedRevision" };
+  };
+  const receipts = new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "concurrent-stale-refusal.json"));
+  const { service } = decisionService(h, receipts, () => manager.conversationId, patch);
+  const args = { ...h.request, pipelineId: h.id };
+  const refusal = () => { throw new McpToolRefusal("decision receipt no longer matches its guarded target", {
+    code: "STAGE_CHANGED", field: "expectedRevision", status: 409, retryable: false,
+  }); };
+  const first = service.callTool("pipeline_action", args, { assertCaller: () => { if (firstCallerStale) refusal(); } });
+  await entered;
+  const second = service.callTool("pipeline_action", args, { assertCaller: () => {} });
+  // Let the second request pass caller/scope checks and join the live receipt
+  // before releasing the producer's deferred STAGE_CHANGED refusal.
+  await Bun.sleep(20);
+  release();
+  const results = await Promise.all([first, second]);
+  for (const result of results) expect(result).toMatchObject({ ok: false,
+    details: { code: "STAGE_CHANGED", field: "expectedRevision", status: 409 } });
+  expect(current().decisionAnswers ?? []).toHaveLength(0);
+  expect(attemptsOf("build")).toHaveLength(1);
+});
 
 test("decision token agrees across production read projections and reaches a fresh consumer after reap progress", async () => {
   const fixture = harness(); let earlierResident = true;

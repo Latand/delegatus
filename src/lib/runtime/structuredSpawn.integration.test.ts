@@ -8027,7 +8027,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
   const { defaultStartHost } = await import("./structuredSpawn");
   const { stageDigest } = await import("@/lib/pipelines/stageDigest");
   const { buildPipeline, pipelineIdentity, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-  for (const boundary of ["allowed", "binding", "membership", "import", "owner", "preparation", "definition", "answer-removed", "target-removed", "workspace-allowed", "workspace-revoked"] as const) {
+  for (const boundary of ["allowed", "binding", "membership", "import", "owner", "preparation", "definition", "answer-removed", "target-removed", "workspace-allowed", "workspace-revoked", "launch-replaced", "conversation-replaced", "budget-replaced", "pipeline-removed"] as const) {
     const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
     const marker = path.join(cwd, "native-effect");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -8081,11 +8081,15 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     }
     savePipelines(bound);
     const replace = () => {
+      if (boundary === "pipeline-removed") { savePipelines([]); return; }
       const rows = loadPipelines();
-      if (boundary === "workspace-revoked") workspaceStore!.removeWorkspaceMember(workspaceId!, `member_${workspaceId}`);
+      if (boundary === "launch-replaced") rows[0]!.runs[0]!.attempts[1]!.launchId = `replacement-${begun.receipt.launchId}`;
+      else if (boundary === "conversation-replaced") rows[0]!.runs[0]!.attempts[1]!.conversationId = `replacement-${begun.receipt.conversationId}`;
+      else if (boundary === "budget-replaced") rows[0]!.runs[0]!.attempts[1]!.providerFallbackRetries = 1;
+      else if (boundary === "workspace-revoked") workspaceStore!.removeWorkspaceMember(workspaceId!, `member_${workspaceId}`);
       else if (boundary === "owner") rows[0]!.srcConversationId = "conversation_replacement";
       else if (boundary === "definition") rows[0]!.runs[0]!.attempts[1]!.definition!.prompt += " Changed instruction.";
-      else rows[0]!.spec = "Changed requirements";
+      else if (!["workspace-revoked"].includes(boundary)) rows[0]!.spec = "Changed requirements";
       if (boundary !== "workspace-revoked") savePipelines(rows);
     };
     let effects = 0;
@@ -8098,7 +8102,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     };
     const codexStart = CodexAppServerHost.start;
     const codex = spyOn(CodexAppServerHost, "start").mockImplementation(options => codexStart.call(CodexAppServerHost, {
-      ...options, readProtocolVersion: () => { if (["owner", "preparation", "definition", "workspace-revoked"].includes(boundary)) replace(); return "0.162.1"; },
+      ...options, readProtocolVersion: () => { if (["owner", "preparation", "definition", "workspace-revoked", "launch-replaced", "conversation-replaced", "budget-replaced", "pipeline-removed"].includes(boundary)) replace(); return "0.162.1"; },
     }));
     // Claude's real preparation awaits auth status immediately before its
     // launch setup. This is an isolated protocol reply, with no provider call.
@@ -8110,7 +8114,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
       }, "fixture-capability", {
         codex: { spawnProcess: native },
         claude: { spawnProcess: native, readAuthStatus: async () => {
-          if (["owner", "preparation", "definition", "workspace-revoked"].includes(boundary)) replace();
+          if (["owner", "preparation", "definition", "workspace-revoked", "launch-replaced", "conversation-replaced", "budget-replaced", "pipeline-removed"].includes(boundary)) replace();
           return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.209" };
         } },
       });

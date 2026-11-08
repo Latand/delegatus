@@ -2985,8 +2985,11 @@ export function createMcpToolService(
           return finish(replayed, "replay");
         } catch (error) {
           try { assertAction?.(); } catch (authorityError) { error = authorityError; }
-          if (!actionAuthorityFailed) throw error;
-          return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
+          if (!actionAuthorityFailed && !(error instanceof McpToolRefusal)) throw error;
+          return finish(failure(typedTool, requestId,
+            error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+            error instanceof Error ? error.message : String(error), false, false,
+            error instanceof McpToolRefusal ? error.details : undefined), "failure");
         }
       }
       let outcome: McpTimingOutcome = "failure";

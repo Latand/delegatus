@@ -1475,7 +1475,15 @@ function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: Spa
   const memberships = registry.conversationMemberships(receipt.conversationId).filter(row => row.kind === "pipeline");
   const targets = memberships.flatMap(membership => {
     const original = findPipelineRecord(membership.containerId);
-    if (!original || !membership.stageId || !membership.round) return [];
+    // Resume-successor receipts recover an already existing session and may
+    // retain an old pipeline membership after its lane was archived. They do
+    // not reserve a fresh decision consumer; other pipeline-bound starts fail
+    // closed when their target record is gone.
+    if (!original) {
+      if (receipt.purpose === "resume-successor") return [];
+      throw new Error("decision launch pipeline target is unavailable");
+    }
+    if (!membership.stageId || !membership.round) return [];
     const attempt = membership.stageId ? original?.runs.find(run => run.stageId === membership.stageId)?.attempts
       .find(attempt => attempt.n === membership.round) : undefined;
     const answer = original.decisionAnswers?.find(row => row.stageId === membership.stageId && row.nextAttempt === membership.round);
@@ -1500,7 +1508,8 @@ function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: Spa
   return import("@/lib/pipelines/engine").then(engine => {
     const current = findPipelineRecord(membership.containerId);
     if (!current || pipelineRevision(current) !== revision) throw new Error("decision launch changed during preparation");
-    const assert = engine.capturePipelineDecisionLaunch(membership.containerId, membership.stageId!, membership.round!);
+    const assert = engine.capturePipelineDecisionLaunch(membership.containerId, membership.stageId!, membership.round!,
+      { launchId: receipt.launchId, conversationId: receipt.conversationId });
     if (!assert) throw new Error("decision launch authority is unavailable");
     assert(); return assert;
   });
