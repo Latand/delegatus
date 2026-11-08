@@ -1,8 +1,21 @@
 # Batch merge procedure audit
 
-Status: report-only audit, first stage of board task b630f1fd. No product file,
-procedure document, role, setting or branch protection was changed. A later
-reviewed implementation on the same task owns every change proposed here.
+Status: preserved audit evidence from the report-only stage of board task
+b630f1fd. The observations and line references below remain pinned to the
+revision in Observation pin. The successor implementation applies S1–S5 in
+`scripts/merge-batch.ts`, its explicit test file and the named procedure text;
+the complete keep-list remains binding. Fixture checks establish implementation
+behaviour only. No live batch, production acceptance, timing gain or settings
+change is claimed.
+
+Implementation correction to S3: the pinned source had a generic bisect
+adapter but stopped on every nonzero TypeScript result before calling it.
+The implementation routes compiler diagnostics through that adapter and keeps
+the hard stop when the type checker cannot run. The receipt keeps the actual
+validated tuple, separate carried main/tip/time entries and bounded historical
+receipts. Membership revalidations retain the three-round cap; `land` retains
+its finite polling bound across command restarts. Human review reads cover
+both members and the batch PR.
 
 ## Originating requirement
 
