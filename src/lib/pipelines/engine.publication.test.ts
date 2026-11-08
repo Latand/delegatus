@@ -511,7 +511,7 @@ nativePublicationTest("controller publication renews cached checks after environ
     const c = await controllerPublicationFixture(roots, cleanup);
     const seeds: PublicationCheckReceipt[] = [];
     for (const id of ["seed-cold", "seed-warm"]) {
-      const env = { ...c.f.env, LLV_GATE_PUBLICATION_ID: id };
+      const env: NodeJS.ProcessEnv = { ...c.f.env, LLV_GATE_PUBLICATION_ID: id };
       // Yield while the real gate fetches from this process's port-0 server.
       const prepared = await realExec("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], c.f.dir, env, { timeoutMs: 45_000 });
       expect(prepared.code, prepared.stdout + prepared.stderr).toBe(0);
