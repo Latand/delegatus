@@ -300,7 +300,49 @@ async function runHttpHost(configPath: string): Promise<void> {
   await new Promise<never>(() => {});
 }
 
-if (process.argv[2] === "hold-sqlite") {
+/** Restart rehearsal for a domain transaction and the MCP completion gap.
+ * Both generations serve the exported route with the production SDK service.
+ * The scheduled fixture supplies only host/seat facts to the real guard. */
+async function runCuratorHttp(configPath: string) {
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { root: string; seatId: string; now: number;
+    portFile: string; marker: string; crash?: "before-complete" | "after-complete" };
+  // Each service generation uses the same editorial clock. Timers and the
+  // owning runner's process deadline continue to use their native clocks.
+  globalThis.Date = new Proxy(Date, {
+    construct: (target, args, constructor) => Reflect.construct(target, args.length ? args : [config.now], constructor),
+    get: (target, key, receiver) => key === "now" ? () => config.now : Reflect.get(target, key, receiver),
+  });
+  const { scheduledCustodyFixture } = await import("@/lib/memory/curation/custody.fixture");
+  const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { viewerMcpBindings, viewerMcpToolPolicy, productionDomainDependencies } = await import("./bindings");
+  const { setMcpHttpDependenciesForTests } = await import("./http");
+  const { POST } = await import("@/app/api/mcp/route");
+  const { NextRequest } = await import("next/server");
+  const f = scheduledCustodyFixture(config.root, { seatId: config.seatId, now: config.now });
+  setAgentRegistryForTests(f.registry);
+  const dependencies = { ...productionDomainDependencies, curatorAdmission: (id: string | null) => curatorRecoveryGuard(id ?? "", f.sources) };
+  const store = new SqliteMcpReceiptStore(path.join(config.root, "curator-receipts.sqlite"));
+  const complete = store.complete.bind(store);
+  store.complete = (...args) => {
+    if (args[0].startsWith("curate_rules:") && config.crash) {
+      if (config.crash === "after-complete") complete(...args);
+      fs.writeFileSync(config.marker, JSON.stringify(args[2]));
+      process.exit(79);
+    }
+    return complete(...args);
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), store, viewerMcpToolPolicy(dependencies));
+  setMcpHttpDependenciesForTests({ service: async () => service,
+    conversationForCapability: value => f.registry.conversationIdForSpawnCapabilityDigest(crypto.createHash("sha256").update(value).digest("hex")) });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => POST(new NextRequest(request)) });
+  fs.writeFileSync(config.portFile, String(server.port));
+  await new Promise<never>(() => {});
+}
+
+if (process.argv[2] === "curator-http") {
+  await runCuratorHttp(process.argv[3]!);
+} else if (process.argv[2] === "hold-sqlite") {
   const { Database } = await import("bun:sqlite");
   const db = new Database(process.argv[3]!);
   const ready = process.argv[4]!;
