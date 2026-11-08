@@ -447,7 +447,7 @@ test("SDK HTTP decision answers use production projections, guards and durable r
   const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
   const { NextRequest } = await import("next/server");
   const { handleMcpHttpRequest, setMcpHttpDependenciesForTests } = await import("./http");
-  const { viewerMcpBindings } = await import("./bindings");
+  const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
   type ViewerMcpDomainDependencies = import("./bindings").ViewerMcpDomainDependencies;
   const { createMcpToolService, FileMcpReceiptStore } = await import("./server");
   const { buildPipeline, savePipelines, findPipelineRecord, pipelineDecisionRevision } = await import("@/lib/pipelines/store");
@@ -465,9 +465,10 @@ test("SDK HTTP decision answers use production projections, guards and durable r
   savePipelines([p]); registerPipelineTick(async () => {});
   const token = pipelineDecisionRevision(p)!;
   const dependencies: Partial<ViewerMcpDomainDependencies> = { readPipelineRecord: findPipelineRecord, patchPipeline,
+    attentionAuthority: () => ({ kind: "worker", conversationId: creator, role: "orchestrator" }),
     callerAttribution: () => ({ kind: "manager", conversationId: creator, role: "orchestrator" }) };
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies),
-    new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "sdk-decision-receipts.json")), { permit: () => ({ allowed: true }) });
+    new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "sdk-decision-receipts.json")), viewerMcpToolPolicy(dependencies as ViewerMcpDomainDependencies));
   setMcpHttpDependenciesForTests({ service: async () => service, conversationForCapability: () => creator });
   const listener = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request => handleMcpHttpRequest(new NextRequest(request)) });
   const client = new Client({ name: "decision-sdk-fixture", version: "1" });
