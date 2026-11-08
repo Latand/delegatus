@@ -181,8 +181,8 @@ pass is claimed from reading a diff.
 Historical hidden-writer attribution, serving identity, old-lane recovery,
 comparison adoption, extra review grants, a new token ledger/schema, automatic
 retries, generic authorization infrastructure, new test drivers and UI remain
-outside scope. Product changes, runtime validation, checks/merge and authorized
-installed-case acceptance remain future work. The root remains OPEN and the
+outside scope. Source implementation is summarized below. Required publication
+checks, merge and authorized installed-case acceptance remain pending. The root remains OPEN and the
 WORK release/rollout hold remains in force.
 
 ## Source implementation
