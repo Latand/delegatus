@@ -16932,6 +16932,8 @@ export async function patchPipeline(
   const originalFull = decisionOriginal && pipelineRevision(decisionOriginal);
   const legacyDecision = decisionOriginal && typeof req.expectedRevision === "string" && originalFull
     && matchesShortId(originalFull, req.expectedRevision);
+  const decisionChanged = new Error("the pipeline changed since it was read; read it again before answering");
+  const changedDecisionResult = (): PipelinePatchResult => ({ error: decisionChanged.message, status: 409, code: "STAGE_CHANGED", field: "expectedRevision" });
   const assertDecisionCurrent = () => {
     if (!decisionOriginal || !decisionAuthority) return;
     assertAuthority?.();
@@ -16939,7 +16941,7 @@ export async function patchPipeline(
     if (!current) throw new Error("decision target is unavailable");
     decisionAuthority(current);
     if ((legacyDecision ? pipelineRevision(current) !== originalFull : pipelineDecisionRevision(current) !== originalDecision)) {
-      throw new Error("decision changed during admission");
+      throw decisionChanged;
     }
   };
   const decisionPrincipal = decisionOriginal && workspaceMemberId
@@ -17245,8 +17247,10 @@ export async function patchPipeline(
         const refusal = decisionAnswerActorRefusal(snapshot, actor, req.clientRequestId);
         if (refusal) return refusal;
       }
-      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports,
-        req.action === "retry-stage", req.action === "resolve-decision" ? assertDecisionCurrent : undefined);
+      try {
+        decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports,
+          req.action === "retry-stage", req.action === "resolve-decision" ? assertDecisionCurrent : undefined);
+      } catch (error) { if (error === decisionChanged) return changedDecisionResult(); throw error; }
     }
   }
 
@@ -18513,7 +18517,7 @@ export async function patchPipeline(
     }
     await persist();
     return graphEdit ? { pipeline, graphEdit, ...legacyAnswer } : { pipeline };
-  });
+  }).catch(error => { if (error === decisionChanged) return changedDecisionResult(); throw error; });
   if (req.action !== "close" && req.action !== "delete" && req.action !== "resolve-decision" && req.action !== "continue-review"
     && patched.pipeline?.delivery?.operation?.state === "pending") {
     requestPipelineTick();

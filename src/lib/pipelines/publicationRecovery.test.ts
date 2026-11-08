@@ -1384,6 +1384,49 @@ test("producer reads stay outside the shared mutation lease and stale decisions 
   }
 });
 
+test.each(["allowed", "delivery", "interrupted", "durable", "activity"] as const)("decision producer evidence retains original authority after %s", async boundary => {
+  const { pipelineDecisionRevision } = await import("./store");
+  const f = await fixture();
+  try {
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    const parked = current(), attempt = parked.runs[0]!.attempts[0]!;
+    const requestedAt = f.h.ports.now(), responseAt = Date.parse(requestedAt) + 1;
+    attempt.publicationRepair = { sha: parked.lastPassedCommit!, baseSha: parked.baseRef,
+      operationId: parked.delivery!.operation!.id, stageId: "build", attempt: 1, refusedAt: requestedAt,
+      detail: "pre-push refused", paths: [], messageTs: Date.parse(requestedAt) - 1,
+      requestedAt, settledAt: requestedAt };
+    savePipelines([parked]);
+    let reached = false, replacement = "";
+    const after = async (name: string) => {
+      await Promise.resolve();
+      if (name !== boundary) return;
+      reached = true;
+      const row = current(); row.delivery!.epoch++; savePipelines([row]);
+      replacement = JSON.stringify(current());
+    };
+    f.h.ports.stageRepairDelivery = async () => { await after("delivery"); return { operationId: null, state: "unreserved", safeToReplace: true }; };
+    f.h.ports.conversationTurnInterrupted = async () => { await after("interrupted"); return false; };
+    f.h.ports.durableTurnEvidence = async () => { await after("durable"); return { turn: "terminal", message: { text: "repair response", ts: responseAt }, lastRecordAt: responseAt }; };
+    f.h.ports.conversationAgentActive = async () => { await after("activity"); return false; };
+    const request = { action: "resolve-decision" as const, clientRequestId: `producer-cut-${boundary}`,
+      answer: "Continue after the settled repair.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineDecisionRevision(current())! };
+    const result = await rawPatchPipeline(parked.id, request, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR).catch(error => error as Error);
+    if (boundary === "allowed") {
+      expect(result).toMatchObject({ decisionAnswer: { nextAttempt: 2 } });
+      await tickPipelines([], f.h.ports);
+      expect(f.h.spawnInputs).toHaveLength(2);
+    } else {
+      expect(reached).toBe(true);
+      expect(current().decisionAnswers ?? []).toEqual([]);
+      expect(current().runs[0]!.attempts).toHaveLength(1);
+      expect(f.h.spawnInputs).toHaveLength(1);
+      expect(JSON.stringify(current())).toBe(replacement);
+      expect(result).toBeInstanceOf(Error);
+    }
+  } finally { f.close(); }
+});
+
 test.each(["status", "branch", "head"])("a producer repair head raced at its final %s observation stays unpublished", async observation => {
   const f = await fixture();
   try {
