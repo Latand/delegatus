@@ -21134,6 +21134,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     } as unknown as MaintenanceRun;
     /* The maintainer runs on Claude here, so the failure and its remedy name Claude. */
     const failed = { ...base, state: "failed" as const, endedAt: stamp(60), failure: { kind: "no-account" as const, detail: "no account", engine: "claude" as const } } as MaintenanceRun;
+    failed.log = { ...failed.log, audit: { version: 1, rows: [], manifest: null, complete: false, error: "source-unavailable", window: { lower: failed.claimedAt, upper: failed.claimedAt, sources: [], gaps: ["source-unavailable"] } } };
     const live = { ...base, state: "running" as const, claimedAt: stamp(6), launchedAt: stamp(5) } as MaintenanceRun;
     /* Recorded and lapsing on one UTC day, the case the short title is for:
        near midnight «45 min ago» and «in 2 hours» straddle it, and the title
@@ -21666,7 +21667,9 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       "/api/monitor/seat-tick/settings": () => Response.json(tickAnswer()),
       "/api/roles": rolesAnswer,
     });
-    const browser = await chromium.launch(LAUNCH);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => { sockets.close(); server.stop(); throw error; });
     const readings: Record<string, unknown>[] = [];
     try {
       for (const lang of ["en", "uk"] as const) {
@@ -21739,6 +21742,14 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
                 await page.waitForTimeout(500);
                 await page.screenshot({ path: path.join(SHOTS, `${label}-${tab}.png`) });
               }
+              await page.locator('[data-phone-kanban-column="blocked"] button', { hasText: /Board maintenance|Обслуговування дошки/ }).first().click();
+              await page.locator('[data-phone-task-description]').click();
+              const auditDescription = page.locator('[data-phone-task-editor="description"] textarea');
+              await auditDescription.waitFor();
+              expect(await auditDescription.inputValue()).toContain(lang === "en" ? "Audit: partial coverage; 0: 0/0/0/0/0" : "Аудит: неповне покриття; 0: 0/0/0/0/0");
+              await page.screenshot({ path: path.join(SHOTS, `${label}-audit-description.png`) });
+              await page.locator('[data-phone-task-edit-cancel]').click();
+              await page.locator('[data-mobile2-back]').click();
               /* The notice opens the task screen; its 44 px control opens the
                  tick sheet over it, through the nav the seat sheet's row uses. */
               await page.locator('[data-phone-kanban-tab="inbox"]').click();
@@ -21760,7 +21771,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           }
         }
       }
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); sockets.close(); server.stop(); }
     fs.writeFileSync(path.join(SHOTS, "board-cards-readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
     for (const entry of readings.filter((reading) => reading.phone) as Array<{ label: string; controlHeight: number; tickSheetOpened: boolean }>) {
       expect(entry.controlHeight, `${entry.label} the tick control is a 44 px target`).toBeGreaterThanOrEqual(44);
@@ -21780,6 +21791,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
         expect(run.timeShown, `${entry.label} the run's time is drawn inside its title`).toBe(true);
       }
       expect(entry.failedBody, `${entry.label} failed card text`).toContain(en ? "Failed: no Claude account is available for this project." : "Не вдалося: немає доступного акаунта Claude");
+      expect(entry.failedBody, `${entry.label} request audit preview`).toContain(en ? "Audit: partial coverage; 0: 0/0/0/0/0" : "Аудит: неповне покриття; 0: 0/0/0/0/0");
       /* The button answers on a folded seat: it unfolds and the panel opens. */
       expect(entry.foldedBefore, `${entry.label} the seat was folded and drew no chip`).toBe(true);
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);

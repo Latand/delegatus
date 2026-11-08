@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
@@ -27,7 +27,7 @@ function harness(archiveOverride = true, evidenceOrOverrides: TaskWorkEvidence[]
   let response = { status: 202, body: { state: "starting", conversationId: ["conversation", "fixture-worker"].join("_"), launchId: "fixture-launch", path: "/fixtures/worker.jsonl" } as Record<string, unknown> };
   const sources: SeatTickSources = { ...defaultSeatTickSources(), now: () => now, tasks, pipelines: () => [{ repoDir: "/fixtures/repository", project: PROJECT, createdAt: new Date(NOW).toISOString() } as never], registry: () => registry, latestDeployment: () => ({ state: "ok", value: null }) };
   sources.settings = project => ({ ...defaultSeatTickSettings(project), maintenance: { enabled: true, intervalHours: 3, updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
-  const ports: BoardMaintenancePorts = { sources, evidence: async () => evidence, ...(archiveOverride ? { archive: run => { archived.push(run.runId); } } : {}), locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
+  const ports: BoardMaintenancePorts = { sources, auditInput: async () => undefined, evidence: async () => evidence, ...(archiveOverride ? { archive: run => { archived.push(run.runId); } } : {}), locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
   return { controller: productionBoardMaintenanceController(sources, { ...ports, ...overrides }), sources, registry, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
 }
 test("off, no seat, live run and deploy defer without spending the slot", async () => {
@@ -310,7 +310,7 @@ test("update admission rechecks after evidence and retains an undispatched claim
   const run = h.run();
   expect(h.bodies).toHaveLength(0); expect(run.launchId).toBeNull();
   h.now(NOW + 7 * 3600000);
-  const recovered = productionBoardMaintenanceController(h.sources, { observe: async () => ({ state: "running" }), evidence: async () => [], launch: async body => {
+  const recovered = productionBoardMaintenanceController(h.sources, { auditInput: async () => undefined, observe: async () => ({ state: "running" }), evidence: async () => [], launch: async body => {
     h.bodies.push(body); return { status: 202, body: { state: "starting", conversationId: "conversation_fixture_held", launchId: "held-launch" } };
   } });
   await recovered.reconcile(PROJECT);
@@ -443,7 +443,7 @@ test("skip, coalescing and cooldown survive fresh controller processes", async (
       const now = Date.parse(${JSON.stringify(at)});
       const sources = { ...defaultSeatTickSources(), now: () => now, tasks: () => [], pipelines: () => [{ project: PROJECT, repoDir: "/fixtures/repository" }], latestDeployment: () => ({ state: "ok", value: null }) };
       let launches = 0;
-      const controller = productionBoardMaintenanceController(sources, { evidence: async () => [], archive: () => {}, locale: () => "en", timeZone: () => "UTC", observe: async () => ({ state: "ended", finalText: "Verdict: pass" }), launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_fixture_window", launchId: "fixture-window-launch" } }; } });
+      const controller = productionBoardMaintenanceController(sources, { auditInput: async () => undefined, evidence: async () => [], archive: () => {}, locale: () => "en", timeZone: () => "UTC", observe: async () => ({ state: "ended", finalText: "Verdict: pass" }), launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_fixture_window", launchId: "fixture-window-launch" } }; } });
       const request = input(); request.now = now; request.settings = effectiveSeatTickSettings(readSeatTickSettings(PROJECT), now, 300000);
       await controller.reconcile(PROJECT);
       await controller.launchIfDue(request); await controller.launchIfDue(request);
@@ -496,4 +496,293 @@ test("a submitted receipt reconciles outside the window before its binding check
   await h.controller.reconcile(PROJECT);
   expect(readMaintenanceRun(run.runId)!.state).toBe("succeeded");
   expect(h.bodies).toHaveLength(0);
+});
+
+
+test("request audit refuses a final without its own manifest on the production controller", async () => {
+  const h = harness();
+  h.sources.seatFor = () => ({ active: { ...input().seat!, state: "active" }, pending: null, history: [] }) as never;
+  const controller = productionBoardMaintenanceController(h.sources, { evidence: async () => [], archive: () => {}, launch: async () => ({ status: 202, body: { state: "starting" } }), observe: async () => ({ state: "ended", finalText: "Verdict: pass" }) });
+  await controller.launchIfDue(input());
+  const run = maintenanceRuns(PROJECT).at(-1)!;
+  expect(run.launchBody).toBeDefined();
+  await controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(run.runId)?.state).toBe("failed");
+  expect(readMaintenanceProject(PROJECT)?.audit?.through).toBeNull();
+  expect(readMaintenanceProject(PROJECT)?.audit?.window?.upper).toBe(run.claimedAt);
+});
+
+test("request audit pins payload and refuses the replaced owner after the last native launch await", async () => {
+  const { auditFixture } = await import("./testFixture");
+  const h = harness(true, { auditInput: async run => ({ ...auditFixture(run), revision: 0 }) });
+  h.sources.seatFor = () => ({ active: input().seat!, pending: null, history: [] }) as never;
+  let release!: () => void; let entered!: () => void;
+  const arrived = new Promise<void>(resolve => { entered = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  let effects = 0;
+  const controller = productionBoardMaintenanceController(h.sources, { auditInput: async run => ({ ...auditFixture(run), revision: 0 }), evidence: async () => [], launch: async (_body, authorize) => { entered(); await barrier; authorize!(); effects++; return { status: 202, body: {} }; } });
+  const launched = controller.launchIfDue(input());
+  await Promise.race([arrived, launched.then(() => { throw Error("launch returned before its barrier"); })]);
+  const run = h.run(); const body = run.launchBody;
+  h.sources.seatFor = () => ({ active: { ...input().seat!, seatEpoch: 2 }, pending: null, history: [] }) as never;
+  release();
+  await expect(launched).rejects.toThrow("authority changed");
+  expect(effects).toBe(0); expect(readMaintenanceRun(run.runId)?.launchBody).toEqual(body);
+  expect(readMaintenanceProject(PROJECT)?.audit?.window?.upper).toBe(run.claimedAt);
+});
+
+test("request audit ignores stale observe after its run settles elsewhere", async () => {
+  const h = harness(); await h.controller.launchIfDue(input()); const run = h.run();
+  let release!: () => void; let entered!: () => void;
+  const arrived = new Promise<void>(resolve => { entered = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const observer = productionBoardMaintenanceController(h.sources, { observe: async () => { entered(); await barrier; return { state: "ended", finalText: "Verdict: pass" }; } });
+  const observation = observer.reconcile(PROJECT); await arrived;
+  const { patchMaintenanceRun } = await import("./store");
+  patchMaintenanceRun(run.runId, { state: "failed", failure: { kind: "agent-fail", detail: "independent terminal result" } });
+  release(); await observation;
+  expect(readMaintenanceRun(run.runId)?.failure?.detail).toBe("independent terminal result");
+});
+
+test("audit preparation refuses native seat replacement during its evidence await", async () => {
+  const h = harness();
+  h.sources.seatFor = () => ({ active: input().seat!, pending: null, history: [] }) as never;
+  const id = input().seat!.conversationId;
+  const snapshot = structuredClone(h.registry.readOnlySnapshot());
+  snapshot.conversations[id] = { id, engine: "codex", projectOwnership: { project: PROJECT }, generations: [{ id: "original-generation", path: "fixture-seat.jsonl", launchProfile: {} }] } as never;
+  h.sources.registry = () => ({ conversation: () => snapshot.conversations[id], readOnlySnapshot: () => snapshot, spawnReceiptForClientAttempt: () => null }) as never;
+  let dispatches = 0;
+  const controller = productionBoardMaintenanceController(h.sources, {
+    evidence: async () => { snapshot.conversations[id].generations[0].id = "replacement-generation"; return []; },
+    launch: async () => { dispatches++; return { status: 202, body: {} }; },
+  });
+  expect(await controller.launchIfDue(input())).toContain("claim replaced");
+  expect(dispatches).toBe(0);
+  expect(h.run().launchBody).toBeUndefined();
+});
+
+
+test("production audit input covers rotated seats, exact window and revised operator forms", async () => {
+  const h = harness(); const run = claim();
+  const { buildMaintenanceAuditInput } = await import("./audit");
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { messageTextDigest } = await import("@/lib/team/events");
+  const { viewerReadTools, openPinnedTranscript } = await import("@/lib/mcp/bindings");
+  resetTeamStoreForTests();
+  const store = teamStore();
+  const owner = claimInstall(store, "Fixture owner", { surface: "desktop", browser: "chrome" }, NOW - 3600000).member;
+  const ids = [input().seat!.conversationId, "conversation_fixture-previous-seat"];
+  const snapshot = structuredClone(h.registry.readOnlySnapshot());
+  const times = [NOW - 1000, NOW, NOW - 3600000];
+  for (const [index, id] of ids.entries()) {
+    const transcript = path.join(held.dir, `audit-${index}.jsonl`);
+    const records = (index ? [times[2]] : times.slice(0, 2)).map((time, i) => {
+      const text = `fixture request ${index}-${i}`;
+      store.recordMessageAuthor({ clientMessageId: `fixture-message-${index}-${i}`, conversationId: id, memberId: owner.id, at: new Date(time).toISOString(), textDigest: messageTextDigest(text) });
+      return { type: "response_item", timestamp: new Date(time).toISOString(), payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } };
+    });
+    fs.writeFileSync(transcript, records.map(r => JSON.stringify(r)).join("\n") + "\n");
+    snapshot.conversations[id] = { id, engine: "codex", projectOwnership: { project: PROJECT }, generations: [{ id: `native-${index}`, path: transcript, launchProfile: {}, createdAt: new Date(NOW - 4000000).toISOString() }], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  }
+  fs.writeFileSync(statePath("orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 3, seats: {}, pending: {}, revocations: [], history: [], seatLineage: ids.map((conversationId, i) => ({ project: PROJECT, conversationId, seatEpoch: i + 1 })) }));
+  h.sources.registry = () => ({ ...h.registry, conversation: (id: string) => snapshot.conversations[id], readOnlySnapshot: () => snapshot }) as never;
+  const form = { id: `pr_${"a".repeat(32)}`, taskId: "fixture-form-task", project: PROJECT, title: "Fixture questions", createdAt: new Date(NOW - 86400000).toISOString(), source: { conversationId: ids[0] }, publicationKey: "fixture-publication", inputDigest: "fixture-input", variants: [], questions: [{ id: "question", text: "Next action", options: [{ label: "Wait", recommended: true }] }], decision: { chosen: [], comment: "", skipped: true, answers: [{ questionId: "question", options: [], skipped: true }], at: new Date(NOW - 500).toISOString(), decidedBy: { kind: "member", memberId: owner.id }, revision: 2, delivery: { state: "pending", clientMessageId: "fixture-decision", conversationId: ids[0], text: "fixture" } } };
+  h.sources.tasks = () => [{ id: form.taskId, project: PROJECT, prototypeReviews: [form] }] as never;
+  const registryModule = await import("@/lib/agent/registry");
+  const registrySpy = spyOn(registryModule, "agentRegistry").mockReturnValue({ conversationForPath: (file: string) => Object.values(snapshot.conversations).find(c => c.generations.some(g => g.path === file)) } as never);
+  const reader = viewerReadTools({ pinnedTranscript: (file: string) => openPinnedTranscript(file, { roots: [["codex-sessions", held.dir]], pathAllowed: candidate => candidate.startsWith(held.dir + path.sep) }), selectedContext: { registry: () => ({ readOnlySnapshot: () => snapshot }) } } as never);
+  const ports = { artifact: (file: string) => { const stat = fs.statSync(file); return { artifact: `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`, size: stat.size }; }, read: async (file: string, since: string, cursor?: string) => await reader.conversation_messages({ transcriptPath: file, since, cursor, full: true, kinds: ["message"], roles: ["user"], maxChars: 16000 }) as never };
+  try {
+    const audit = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 0, through: new Date(NOW - 3600000).toISOString(), window: null }, ports);
+    expect(audit.window.sources.map(s => s.gap)).toEqual([null, null, null]);
+    expect(audit.window.sources).toHaveLength(3); expect(audit.operator).toEqual({ kind: "member", memberId: owner.id });
+    expect(audit.occurrences.map(o => o.at).sort()).toEqual([new Date(NOW - 3600000).toISOString(), new Date(NOW - 1000).toISOString(), new Date(NOW - 500).toISOString()]);
+    expect(audit.occurrences.every(o => o.verified)).toBe(true);
+    const frozen = structuredClone(audit);
+    fs.appendFileSync(snapshot.conversations[ids[0]].generations[0].path, JSON.stringify({ type: "response_item", timestamp: new Date(NOW + 1000).toISOString(), payload: { type: "message", role: "user", content: [{ type: "input_text", text: "later request" }] } }) + "\n");
+    const next = await buildMaintenanceAuditInput({ ...run, claimedAt: new Date(NOW + 3600000).toISOString() }, h.sources, { version: 1, revision: 1, through: null, window: frozen.window }, ports);
+    expect(next.window.upper).toBe(frozen.window.upper); expect(next.occurrences).toEqual(frozen.occurrences);
+    const decisionInput = JSON.parse(audit.occurrences.find(o => o.source === audit.window.sources.find(s => s.kind === "decision")!.key)!.text);
+    expect(decisionInput.decision).toMatchObject({ revision: 2, skipped: true, answers: [{ skipped: true }] });
+    const oversizedForm = structuredClone(form);
+    oversizedForm.decision.comment = "я".repeat(24000);
+    h.sources.tasks = () => [{ id: form.taskId, project: PROJECT, prototypeReviews: [oversizedForm] }] as never;
+    const oversized = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 0, through: frozen.window.lower, window: null }, ports);
+    const oversizeSource = oversized.window.sources.find(s => s.kind === "decision")!;
+    expect(oversizeSource.gap).toBe(`decision-record-oversize:${oversizeSource.key}`);
+    expect(oversized.unread[oversizeSource.key]).toEqual({ seq: 0, requestIndex: 0 });
+    expect(oversized.occurrences.some(o => o.source === oversizeSource.key)).toBe(false);
+    h.sources.tasks = () => [{ id: form.taskId, project: PROJECT, prototypeReviews: [form] }] as never;
+    const { initializeStateCollections } = await import("@/lib/state/sqliteStateStore");
+    const { SEAT_DECISIONS_COLLECTION } = await import("@/lib/prototypeReview/seatRounds");
+    const tailId = `pr_${(257).toString(16).padStart(32, "0")}`;
+    const tail = { ...structuredClone(form), id: tailId, taskId: null, decision: { ...structuredClone(form.decision), delivery: { ...form.decision.delivery, clientMessageId: "fixture-tail-decision" } } };
+    initializeStateCollections(statePath("state.sqlite"), [{ collection: SEAT_DECISIONS_COLLECTION, schemaVersion: 1, migrationId: "seat-decisions-v1", key: (raw: unknown) => (raw as { id: string }).id,
+      loadRecords: () => [...Array.from({ length: 256 }, (_, i) => ({ id: `pr_${(i + 1).toString(16).padStart(32, "0")}` })), tail] }]);
+    const bounded = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 0, through: frozen.window.lower, window: null }, ports);
+    expect(bounded.window.decisionScanComplete).toBe(false);
+    expect(bounded.window.decisionCursor).toBe(`pr_${(256).toString(16).padStart(32, "0")}`);
+    const continued = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: bounded.window }, ports);
+    expect(continued.window.upper).toBe(bounded.window.upper);
+    expect(continued.window.decisionScanComplete).toBe(true);
+    expect(continued.window.gaps).not.toContain("seat-decisions-unread");
+    const tailSource = continued.window.sources.find(s => s.decision?.roundId === tailId)!;
+    expect(continued.occurrences.some(o => o.source === tailSource.key && o.verified)).toBe(true);
+    form.decision.revision = 3; form.decision.at = new Date(NOW + 1000).toISOString(); Object.assign(form.decision, { rejected: true });
+    const rejected = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: frozen.window }, ports);
+    expect(rejected.window.sources.find(s => s.kind === "decision")!.gap).toBe("decision-replaced");
+    fs.renameSync(snapshot.conversations[ids[0]].generations[0].path, snapshot.conversations[ids[0]].generations[0].path + ".old");
+    fs.writeFileSync(snapshot.conversations[ids[0]].generations[0].path, "replacement");
+    const replaced = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: frozen.window }, ports);
+    expect(replaced.window.sources.find(s => s.path === snapshot.conversations[ids[0]].generations[0].path)!.gap).toBe("artifact-replaced");
+  } finally { registrySpy.mockRestore(); resetTeamStoreForTests(); }
+});
+
+
+test("request audit validates the actual final-tail reader and refuses a final displaced beyond 128 KiB", async () => {
+  const h = harness(); const run = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { observeMaintenanceRun } = await import("./run");
+  const { parseMaintenanceReport } = await import("./text");
+  const registryModule = await import("@/lib/agent/registry");
+  const audit = auditFixture(run); const file = path.join(held.dir, "final-reader.jsonl");
+  const final = `audit-manifest: ${JSON.stringify({ version: 1, runId: run.runId, revision: 1, lower: audit.window.lower, upper: audit.window.upper, rows: 0, occurrences: audit.occurrences.map(o => ({ key: o.key, requests: 0, nextIndex: 0 })) })}\nVerdict: pass`;
+  const at = new Date(NOW + 1000).toISOString();
+  const fake = { spawnReceiptForClientAttempt: () => ({ state: "completed", conversationId: "conversation_fixture-final", launchId: "fixture-final", artifactPath: file }), conversation: () => ({ engine: "codex", generations: [{ path: file }] }) };
+  const spy = spyOn(registryModule, "agentRegistry").mockReturnValue(fake as never);
+  h.sources.registry = () => fake as never;
+  h.sources.liveness = async () => [{ reason: "host_gone_turn_settled", lastRecordAt: at }] as never;
+  try {
+    const envelope = (text: string) => JSON.stringify({ type: "response_item", timestamp: at, payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text }] } }) + "\n";
+    fs.writeFileSync(file, envelope(final));
+    const observed = await observeMaintenanceRun(run, h.sources);
+    expect(observed.state).toBe("ended");
+    expect(parseMaintenanceReport(observed.finalText ?? "", audit).audit).toMatchObject({ complete: true, error: null });
+    const nearBudget = `${"left: aabbccdd | ".concat("я".repeat(290), "\n").repeat(150)}${final}`;
+    expect(Buffer.byteLength(nearBudget)).toBeGreaterThan(85 * 1024);
+    fs.writeFileSync(file, envelope(nearBudget));
+    const whole = await observeMaintenanceRun(run, h.sources);
+    expect(whole.finalText).toBe(nearBudget);
+    expect(parseMaintenanceReport(whole.finalText ?? "", audit).audit).toMatchObject({ complete: true, error: null });
+    fs.appendFileSync(file, JSON.stringify({ type: "trace", padding: "я".repeat(140000) }) + "\n");
+    const displaced = await observeMaintenanceRun(run, h.sources);
+    expect(parseMaintenanceReport(displaced.finalText ?? "", audit).audit).toMatchObject({ complete: false, error: "manifest-identity-or-count" });
+    fs.writeFileSync(file, envelope(final.replace(run.runId, "foreign-run")));
+    const foreign = await observeMaintenanceRun(run, h.sources);
+    expect(parseMaintenanceReport(foreign.finalText ?? "", audit).audit!.error).not.toBeNull();
+  } finally { spy.mockRestore(); }
+});
+
+
+test("production audit input retains partial pages, cursor resets and unverified or truncated occurrences", async () => {
+  const h = harness(); const run = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { buildMaintenanceAuditInput } = await import("./audit");
+  const audit = auditFixture(run); const source = audit.window.sources[0];
+  const prior = { version: 1 as const, revision: 1, through: null, window: audit.window };
+  const record = { seq: 5, ts: audit.occurrences[0].at, text: "operator request", author: { kind: "operator" } };
+  const artifact = () => ({ artifact: source.artifact!, size: source.size });
+  let reads = 0;
+  const partial = await buildMaintenanceAuditInput(run, h.sources, prior, { artifact, read: async (_path, _since, cursor) => { reads++; return cursor ? { records: [{ ...record, seq: 1 }], hasMore: false } : { records: [record], hasMore: true, cursor: "ephemeral-page", scanned: { capped: true } }; } });
+  expect(reads).toBe(2); expect(partial.occurrences.map(o => o.seq)).toEqual([5, 1]); expect(partial.unread[source.key]).toBeNull();
+  for (const [flag, gap] of [["truncated", "record-truncated"], ["unknown-author", "author-unverified"], ["foreign-member", "author-unverified"]]) {
+    const value = await buildMaintenanceAuditInput(run, h.sources, prior, { artifact, read: async () => ({ records: [{ ...record, ...(flag === "truncated" ? { truncated: true } : { author: flag === "foreign-member" ? { kind: "member", memberId: "unverified-member" } : undefined }) }], hasMore: false }) });
+    expect(value.occurrences[0].gap).toBe(gap);
+  }
+  const reset = await buildMaintenanceAuditInput(run, h.sources, prior, { artifact, read: async () => ({ records: [], hasMore: false, cursorReset: true }) });
+  expect(reset.window.sources[0].gap).toBe("cursor-reset"); expect(reset.window.sources[0].from).toBeNull();
+  const capped = await buildMaintenanceAuditInput(run, h.sources, prior, { artifact, read: async () => ({ records: [record], hasMore: false, scanned: { capped: true } }) });
+  expect(capped.window.sources[0].gap).toBe("page-continuation-missing");
+  const missing = await buildMaintenanceAuditInput(run, h.sources, { ...prior, window: { ...prior.window, sources: [{ ...source, from: { seq: 3, requestIndex: 1 } }] } }, { artifact, read: async () => ({ records: [record], hasMore: false }) });
+  expect(missing.window.sources[0].gap).toBe("occurrence-unavailable");
+});
+
+
+test("a failed partial audit resumes the same frozen message request after controller restart", async () => {
+  const { auditFixture } = await import("./testFixture");
+  const { auditRequestKey } = await import("./audit");
+  const h = harness();
+  h.sources.seatFor = () => ({ active: input().seat!, pending: null, history: [] }) as never;
+  const make = () => productionBoardMaintenanceController(h.sources, { evidence: async () => [], archive: () => {}, auditInput: async (run, _sources, state) => {
+    const audit = auditFixture(run);
+    if (state?.window) { audit.window = structuredClone(state.window) as typeof audit.window; audit.occurrences[0].requestIndex = state.window.sources[0].from?.requestIndex ?? 0; }
+    return { ...audit, revision: state?.revision ?? 0 };
+  }, launch: async () => ({ status: 202, body: { state: "starting" } }), observe: async run => {
+    const audit = run.audit!; const occurrence = audit.occurrences[0]; const index = occurrence.requestIndex;
+    const row = { key: auditRequestKey(occurrence.key, index), occurrence: occurrence.key, requestIndex: index, at: occurrence.at, request: `request ${index}`, outcome: index ? "cancelled" : "done", taskId: null, code: "observed", merge: "unread", install: "unread", acceptance: "observed", checkedAt: run.claimedAt, next: "", dueAt: null, dueTz: null, mutation: null };
+    const manifest = { version: 1, runId: run.runId, revision: audit.revision, lower: audit.window.lower, upper: audit.window.upper, rows: 1, occurrences: [{ key: occurrence.key, requests: 2, nextIndex: index + 1 }] };
+    return { state: "ended", finalText: `audit-row: ${JSON.stringify(row)}\naudit-manifest: ${JSON.stringify(manifest)}\nVerdict: ${index ? "pass" : "fail"}` };
+  } });
+  await make().launchIfDue(input()); const first = h.run(); const upper = first.audit!.window.upper;
+  await make().reconcile(PROJECT);
+  expect(readMaintenanceRun(first.runId)?.state).toBe("failed");
+  expect(readMaintenanceProject(PROJECT)?.audit?.window?.sources[0].from).toEqual({ seq: 1, requestIndex: 1 });
+  h.now(NOW + 3 * 3600000);
+  await make().launchIfDue(input()); const second = h.run();
+  expect(second.audit!.window.upper).toBe(upper); expect(second.audit!.occurrences[0].requestIndex).toBe(1);
+  await make().reconcile(PROJECT);
+  expect(readMaintenanceRun(second.runId)?.log.audit?.rows.map(r => r.requestIndex)).toEqual([1]);
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: upper, window: null, revision: 4 });
+});
+
+
+test("manifest byte admission continues at the next authored part without consuming its requests", async () => {
+  const h = harness(); const run = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { buildMaintenanceAuditInput, auditRequestKey } = await import("./audit");
+  const { parseMaintenanceReport } = await import("./text");
+  const fixture = auditFixture(run); fixture.window.sources[0].key = "source-" + "s".repeat(10500);
+  const source = fixture.window.sources[0];
+  const ports = { artifact: () => ({ artifact: source.artifact!, size: source.size }), read: async () => ({ records: [{ seq: 1, ts: fixture.occurrences[0].at, text: "ab", parts: [{ textStart: 0, textEnd: 1, author: { kind: "operator" } }, { textStart: 1, textEnd: 2, author: { kind: "operator" } }] }], hasMore: false }) };
+  const first = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 0, through: null, window: fixture.window }, ports);
+  expect(first.occurrences.map(o => o.part)).toEqual([0]);
+  expect(first.unread[source.key]).toEqual({ seq: 1, part: 1, requestIndex: 0 });
+  const o = first.occurrences[0];
+  const row = { key: auditRequestKey(o.key, 0), occurrence: o.key, requestIndex: 0, at: o.at, request: "a", outcome: "done", taskId: null, code: "observed", merge: "", install: "", acceptance: "", checkedAt: first.snapshotAt, next: "", dueAt: null, dueTz: null, mutation: null };
+  const manifest = { version: 1, runId: run.runId, revision: first.revision, lower: first.window.lower, upper: first.window.upper, rows: 1, occurrences: [{ key: o.key, requests: 1, nextIndex: 1 }] };
+  const checkpoint = parseMaintenanceReport(`audit-row: ${JSON.stringify(row)}\naudit-manifest: ${JSON.stringify(manifest)}\nVerdict: pass`, first).audit!;
+  expect(checkpoint.error).toBeNull(); expect(checkpoint.window.sources[0].from).toEqual({ seq: 1, part: 1, requestIndex: 0 });
+  const next = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: checkpoint.window }, ports);
+  expect(next.occurrences.map(o => [o.part, o.requestIndex])).toEqual([[1, 0]]);
+});
+
+
+test("native delivery provenance verifies solo operator occurrences and keeps repeated sends separate", async () => {
+  const h = harness(); const run = claim();
+  const { buildMaintenanceAuditInput } = await import("./audit");
+  const { messageTextDigest } = await import("@/lib/runtime/messageTextDigest");
+  const registryModule = await import("@/lib/agent/registry");
+  const directory = path.join(process.env.LLV_CODEX_HOME!, "sessions"); fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, "audit-native.jsonl"); const text = "same request";
+  const offsets = [1000, 500, 250, 100];
+  fs.writeFileSync(file, offsets.map(offset => JSON.stringify({ type: "response_item", timestamp: new Date(NOW - offset).toISOString(), payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } })).join("\n") + "\n");
+  const snapshot = structuredClone(h.registry.readOnlySnapshot()); const id = run.seat.conversationId;
+  snapshot.conversations[id] = { id, engine: "codex", projectOwnership: { project: PROJECT }, generations: [{ id: "fixture-native-generation", path: file, launchProfile: {}, createdAt: new Date(NOW - 5000).toISOString() }], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  for (const [index, offset] of offsets.slice(0, 3).entries()) snapshot.heldDeliveries[`fixture-delivery-${index}`] = { conversationId: id, state: "delivered", deliveredAt: new Date(NOW - offset).toISOString(), contentDigest: messageTextDigest(text), clientMessageId: `fixture-send-${index}`, command: { origin: { kind: index === 2 ? "agent" : "operator", ...(index === 2 ? { role: "builder" } : {}) } } } as never;
+  const registry = { readOnlySnapshot: () => snapshot, conversation: (value: string) => snapshot.conversations[value], conversationForPath: (value: string) => value === file ? snapshot.conversations[id] : null };
+  h.sources.registry = () => registry as never;
+  const spy = spyOn(registryModule, "agentRegistry").mockReturnValue(registry as never);
+  try {
+    const audit = await buildMaintenanceAuditInput(run, h.sources);
+    expect(audit.window.sources[0].gap).toBeNull();
+    expect(audit.occurrences.filter(o => o.verified).map(o => o.at).sort()).toEqual([new Date(NOW - 1000).toISOString(), new Date(NOW - 500).toISOString()]);
+    expect(audit.occurrences.filter(o => !o.verified)).toHaveLength(1);
+    expect(new Set(audit.occurrences.map(o => o.key)).size).toBe(3);
+  } finally { spy.mockRestore(); }
+});
+
+
+test("request audit freezes its window with the original launch body across a controller restart", async () => {
+  const h = harness(); h.sources.seatFor = () => ({ active: input().seat!, pending: null, history: [] }) as never;
+  const bodies: Record<string, unknown>[] = [];
+  const ports = { evidence: async () => [], archive: () => {}, launch: async (body: Record<string, unknown>) => { bodies.push(body); return { status: 202, body: { state: "starting" } }; }, observe: async () => ({ state: "running" as const }) };
+  await productionBoardMaintenanceController(h.sources, ports).launchIfDue(input());
+  const first = h.run();
+  expect(first.audit?.window.upper).toBe(first.claimedAt);
+  expect(first.audit?.window.lower).toBe("1970-01-01T00:00:00.000Z");
+  h.now(NOW + 60000);
+  await productionBoardMaintenanceController(h.sources, { ...ports, evidence: async () => { throw Error("stored launch must not rebuild its input"); } }).reconcile(PROJECT);
+  expect(bodies).toHaveLength(2); expect(bodies[1]).toEqual(bodies[0]);
+  expect(readMaintenanceRun(first.runId)?.audit).toEqual(first.audit);
 });

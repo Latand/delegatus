@@ -41,7 +41,8 @@ import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer"
 import { readBridgeReportLog } from "@/lib/bridge/store";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
-import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
+import { maintainerCallerOf, maintainerCallerChanged, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
+import { auditTaskWriteRefusal, auditSourceMarker } from "@/lib/boardMaintenance/audit";
 import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
@@ -90,7 +91,7 @@ import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { currentMcpHttpCaller, resolveMcpCallerValue, runWithMcpCallerResolution } from "./callerContext";
 import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
@@ -2019,10 +2020,27 @@ function maintenanceCaller(dependencies: ViewerMcpDomainDependencies): Maintaine
   if (!conversationId || !dependencies.registrySnapshot) return null;
   return maintainerCallerOf(conversationId, dependencies.registrySnapshot());
 }
+function currentMaintenanceWriter(initial: MaintainerCaller | null, dependencies: ViewerMcpDomainDependencies | undefined): MaintainerCaller | null {
+  if (!initial || !dependencies) return initial;
+  const current = runWithMcpCallerResolution(() => maintenanceCaller(dependencies));
+  if (maintainerCallerChanged(initial, current)) throw new McpToolRefusal("Maintenance caller authority changed before the task commit.", { code: "maintainer_authority_changed", status: 403 });
+  return current;
+}
+function assertAuditTaskWrite(caller: MaintainerCaller | null, args: McpToolArgs, tasks: readonly BoardTask[], task: BoardTask | undefined, dependencies?: ViewerMcpDomainDependencies): void {
+  if (!caller) return;
+  const reason = auditTaskWriteRefusal(caller.run?.audit, args, tasks, task, dependencies?.registrySnapshot?.());
+  if (reason) throw new McpToolRefusal(reason, { code: "maintainer_audit_refused", status: 403 });
+}
 function assertMaintenanceWrite(caller: MaintainerCaller | null, args: McpToolArgs, task?: BoardTask, create = false, openPipeline?: string, liveAgent?: string, retiredSeat = false): void {
   if (!caller) return;
   const refusal = maintainerTaskWriteRefusal({ caller, args, task, create, openPipeline, liveAgent, retiredSeat });
   if (refusal) throw new McpToolRefusal(refusal.error, { code: refusal.code, field: refusal.field, status: 403 });
+}
+function assertMaintenanceSourceMarkers(caller: MaintainerCaller | null, before: BoardTask | undefined, after: BoardTask): void {
+  if (!caller || !before) return;
+  const retained = new Set(after.details?.split("\n") ?? []);
+  const markers = before.details?.split("\n").filter(line => /^Maintenance request: request-v1:[a-f0-9]{64}:\d+$/.test(line)) ?? [];
+  if (markers.some(marker => !retained.has(marker))) throw new McpToolRefusal("Maintenance source markers preserve committed request outcomes and cannot be replaced.", { code: "maintainer_delete_refused", field: "details", status: 403 });
 }
 function logMaintenanceWrite(caller: MaintainerCaller | null, tool: "create_task" | "update_task", before: BoardTask | undefined, after: BoardTask, fields: string[]): void {
   if (!caller?.run || fields.length === 0) return;
@@ -2299,6 +2317,13 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   let matchedFields: string[] | undefined;
   const result = await waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
     assertWorkspaceMcpCall(typeof input.project === "string" ? input.project : undefined);
+    const current = currentMaintenanceWriter(maintainer, dependencies);
+    assertMaintenanceWrite(current, args, undefined, true);
+    assertAuditTaskWrite(current, args, state.tasks, undefined, dependencies);
+    const sourceKey = typeof input.findingKey === "string" && input.findingKey.startsWith("request-v1:") ? input.findingKey : null;
+    const accounted = sourceKey && current?.run?.audit ? state.tasks.find(task => typeof input.project === "string" && canonicalOrchestratorProject(task.project) === canonicalOrchestratorProject(input.project) && task.details?.split("\n").includes(auditSourceMarker(sourceKey))) : null;
+    if (accounted) return { state: undefined, result: { ok: true as const, task: accounted, tasks: state.tasks, recentCreates: state.recentCreates, replay: true, matched: true } };
+
     let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
@@ -2311,6 +2336,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     if (outcome.ok && outcome.matched) {
       prior = state.tasks.find(task => task.id === outcome.task.id);
       assertMaintenanceWrite(maintainer, { note: input.note ?? null }, prior);
+      assertMaintenanceSourceMarkers(current, prior, outcome.task);
       matchedFields = changedFieldNames(fieldValues(prior), outcome.task);
     }
     if (outcome.ok) assertWorkspaceMcpCall(outcome.task.project);
@@ -2414,14 +2440,22 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));
     if (maintainer && closingOrHiding && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
     const retiredSeat = !!maintainer && closingOrHiding && !!prior && !!dependencies.registrySnapshot && retiredSeatTask(prior, dependencies.registrySnapshot());
-    assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent, retiredSeat);
+    const current = currentMaintenanceWriter(maintainer, dependencies);
+    assertMaintenanceWrite(current, args, prior, false, open?.id, liveAgent, retiredSeat);
+    assertAuditTaskWrite(current, args, tasks, prior, dependencies);
+    const duplicateSource = !!current?.run?.audit && typeof patch.appendLine === "string" && patch.appendLine.startsWith("Maintenance request: ") && !!prior?.details?.split("\n").includes(patch.appendLine);
+    if (duplicateSource) delete patch.appendLine;
     const before = fieldValues(prior);
     const noteAuthor = caller.kind === "manager"
       ? { kind: "orchestrator" as const, conversationId: caller.conversationId }
       : { kind: "agent" as const, conversationId: caller.conversationId };
     const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", conversationId: caller.conversationId ?? undefined, noteAuthor, statusActor: pauseResumeActorOf(dependencies), seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
-    if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
+    if (outcome.ok) {
+      assertMaintenanceSourceMarkers(current, prior, outcome.task);
+      if (duplicateSource && prior && Object.keys(patch).every(key => key === "expectedProject" || key === "expectedRevision")) return { tasks: undefined, result: { ...outcome, task: prior, tasks } };
+      changedFields = changedFieldNames(before, outcome.task);
+    }
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) {

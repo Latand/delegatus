@@ -27,6 +27,7 @@ export interface MaintenanceRunLog {
   attention: MaintenanceAttention[];
   leftAlone: MaintenanceLeftAlone[];
   verdict: "pass" | "fail" | "needs_decision" | null;
+  audit?: MaintenanceAuditResult;
 }
 export interface MaintenanceCounts {
   writes: number;
@@ -56,6 +57,7 @@ export interface MaintenanceRun {
   conversationId: string | null;
   transcriptPath: string | null;
   launchBody?: Record<string, unknown>;
+  audit?: MaintenanceAuditInput;
   /** An undispatched claim keeps its identity across an update admission hold. */
   admissionDeferred?: boolean;
   launchedAt: string | null;
@@ -80,5 +82,99 @@ export interface MaintenanceProject {
   lastSlotKey: string | null;
   currentRunId: string | null;
   runIds: string[];
+  audit?: MaintenanceAuditState;
+}
+/** Private, immutable evidence. None of these locators belongs in a card preview. */
+export interface MaintenanceAuditSource {
+  key: string;
+  kind: "transcript" | "decision";
+  conversationId: string;
+  generation: string;
+  path: string | null;
+  artifact: string | null;
+  size: number;
+  from: { seq: number; part?: number; requestIndex: number } | null;
+  complete: boolean;
+  gap: string | null;
+  decision?: { roundId: string; revision: number; taskId: string | null; deliveryKey?: string; operationId?: string };
+}
+export interface MaintenanceAuditOccurrence {
+  key: string;
+  source: string;
+  seq: number;
+  part: number;
+  at: string;
+  requestIndex: number;
+  text: string;
+  verified: boolean;
+  gap: string | null;
+}
+export interface MaintenanceAuditWindow {
+  lower: string;
+  upper: string;
+  sources: MaintenanceAuditSource[];
+  gaps: string[];
+  decisionAliases?: string[];
+  /** Existing taskless-form raw-key scan, retained across bounded batches. */
+  decisionCursor?: string;
+  decisionScanComplete?: boolean;
+}
+export interface MaintenanceAuditState {
+  version: 1;
+  revision: number;
+  through: string | null;
+  window: MaintenanceAuditWindow | null;
+}
+export interface MaintenanceAuditInput {
+  version: 1;
+  runId: string;
+  project: string;
+  revision: number;
+  seat: MaintenanceRun["seat"];
+  operator: { kind: "member"; memberId: string } | { kind: "operator" } | null;
+  snapshotAt: string;
+  authority?: string | null;
+  window: MaintenanceAuditWindow;
+  occurrences: MaintenanceAuditOccurrence[];
+  /** Per-source first record beyond this batch, independent of MCP cursor handles. */
+  unread: Record<string, { seq: number; part?: number; requestIndex: number } | null>;
+}
+export type MaintenanceRequestOutcome = "done" | "running" | "filed" | "updated" | "cancelled" | "unverified";
+export interface MaintenanceAuditRow {
+  key: string;
+  occurrence: string;
+  requestIndex: number;
+  at: string;
+  request: string;
+  outcome: MaintenanceRequestOutcome;
+  taskId: string | null;
+  code: string;
+  merge: string;
+  install: string;
+  acceptance: string;
+  checkedAt: string;
+  next: string;
+  dueAt: string | null;
+  dueTz: string | null;
+  mutation: { key: string; state: "readback" | "uncertain" } | null;
+}
+export interface MaintenanceAuditManifest {
+  version: 1;
+  runId: string;
+  revision: number;
+  lower: string;
+  upper: string;
+  rows: number;
+  /** Every supplied occurrence, including messages containing zero requests. */
+  occurrences: Array<{ key: string; requests: number; nextIndex: number }>;
+}
+export interface MaintenanceAuditResult {
+  version: 1;
+  rows: MaintenanceAuditRow[];
+  manifest: MaintenanceAuditManifest | null;
+  complete: boolean;
+  error: string | null;
+  refusedOccurrence?: string | null;
+  window: MaintenanceAuditWindow;
 }
 export interface MaintenanceConversationIndex { kind: "conversation"; conversationId: string; runId: string }

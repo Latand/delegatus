@@ -1635,3 +1635,39 @@ the hidden card actually leaves the board (§2.3); maintenance independent of
 the wake switch (§2.8); at most one blocked maintenance card per project
 (§6.5); the maintainer's writes limited to create and update, with deletes,
 hides and details overwrites refused (§7).
+
+
+## Request audit protocol
+
+Regular maintenance also reconciles verified operator requests with their actual
+outcomes. Its controller freezes the own-seat transcript roster, artifact identities,
+operator provenance, decision revisions and half-open time window before dispatch.
+The saved launch payload is replayed unchanged. Legacy runs and scheduling timestamps
+supply no audit watermark.
+
+The existing task tools remain automatic. A request receives its own occurrence key;
+repeated requests can share an outcome task. The maintainer searches every task state,
+including Done, and commits a source marker with any task mutation. It preserves the
+outcome's date, hold, owner, finding key and unfinished criteria. Missing dates use a
+verified operator deadline or a concrete date within 24 hours of planning, with a zone.
+Code, merge, installation and acceptance are recorded separately.
+
+The final contains versioned JSON rows and a closing manifest. A batch holds at most
+200 whole request rows and 32768 UTF-8 bytes; decision inputs hold at most 24000
+serialized characters. Preview fields hold at most 300 characters. The complete final
+also reserves room inside the existing 128 KiB transcript reader. Invalid, missing,
+foreign or truncated manifests never advance coverage. Unknown authors, partial reads,
+replaced artifacts and uncertain effects keep their exact gap.
+
+The existing maintenance collection stores the frozen window and source positions
+independently of its ten-run history. Prefix progress and batch settlement commit in
+one revision-checked transaction. The next regular run resumes the unread request,
+including a request inside a multi-request message. A committed task marker recovers
+an effect lost before the final report or change log. Ordinary maintenance results
+remain available alongside partial audit coverage. Announcements change no coverage.
+
+The controller rechecks its original run, seat, native authority and audit revision
+after waits, including native launch admission. Task callbacks recheck the original
+maintainer against the current conversation, generation, project, role and claim at
+the synchronous store boundary. This preserves current automatic metadata authority.
+Source delivery and installed regular-run acceptance remain separate checks.

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { redactMonitorText } from "@/lib/monitor/redact";
-import { emptyMaintenanceCounts, emptyMaintenanceLog, maintenanceRunIsLive, MAINTENANCE_LOG_ENTRY_LIMIT, MAINTENANCE_RUN_RETENTION, type MaintenanceRun, type MaintenanceProject, type MaintenanceConversationIndex, type MaintenanceChange } from "./types";
+import { emptyMaintenanceCounts, emptyMaintenanceLog, maintenanceRunIsLive, MAINTENANCE_LOG_ENTRY_LIMIT, MAINTENANCE_RUN_RETENTION, type MaintenanceRun, type MaintenanceProject, type MaintenanceConversationIndex, type MaintenanceChange, type MaintenanceAuditInput } from "./types";
 
 type Row = MaintenanceRun | MaintenanceProject | MaintenanceConversationIndex;
 const COLLECTION = "board_maintenance_runs";
@@ -82,7 +82,7 @@ export function claimMaintenanceRun(input: { project: string; now: number; inter
       tx.delete(`r:${id}`);
     }
     tx.put(run);
-    tx.put({ kind: "project", project: input.project, lastClaimAt: run.claimedAt, lastLaunchAt: recordedLaunchAt, lastLaunchRunId: recordedLaunchRunId, lastSlotKey: slotKey, currentRunId: runId, runIds: ids.slice(-MAINTENANCE_RUN_RETENTION) });
+    tx.put({ kind: "project", project: input.project, lastClaimAt: run.claimedAt, lastLaunchAt: recordedLaunchAt, lastLaunchRunId: recordedLaunchRunId, lastSlotKey: slotKey, currentRunId: runId, runIds: ids.slice(-MAINTENANCE_RUN_RETENTION), ...(held?.audit ? { audit: held.audit } : {}) });
     return { claimed: true as const, run };
   });
 }
@@ -91,7 +91,7 @@ export function patchMaintenanceRun(runId: string, patch: Partial<MaintenanceRun
   return collection(true)!.boundedPatch(8, tx => {
     const held = tx.get(`r:${runId}`) as MaintenanceRun | null;
     if (!held || !maintenanceRunIsLive(held)) return held;
-    const next = { ...held, ...patch, ...(held.launchBody ? { launchBody: held.launchBody } : {}), kind: "run" as const, runId, project: held.project };
+    const next = { ...held, ...patch, ...(held.launchBody ? { launchBody: held.launchBody, audit: held.audit } : {}), kind: "run" as const, runId, project: held.project };
     tx.put(next);
     if (patch.launchedAt && (!held.launchedAt || held.admissionDeferred)) {
       const project = tx.get(`p:${held.project}`) as MaintenanceProject | null;
@@ -107,6 +107,45 @@ export function patchMaintenanceRun(runId: string, patch: Partial<MaintenanceRun
 }
 export const bindMaintenanceConversation = patchMaintenanceRun;
 export const settleMaintenanceRun = patchMaintenanceRun;
+/** Claim, audit revision and exact launch bytes are committed together. */
+export function saveMaintenanceAuditLaunch(runId: string, audit: MaintenanceAuditInput, body: Record<string, unknown>, authorize: () => boolean = () => true): MaintenanceRun | null {
+  return collection(true)!.boundedPatch(8, tx => {
+    const run = tx.get(`r:${runId}`) as MaintenanceRun | null;
+    const project = run ? tx.get(`p:${run.project}`) as MaintenanceProject | null : null;
+    if (!run || !project || project.currentRunId !== runId || !maintenanceRunIsLive(run) || run.launchBody || (project.audit?.revision ?? 0) !== audit.revision - 1 || audit.runId !== runId || audit.project !== run.project) return null;
+    if (audit.version !== 1 || !Number.isSafeInteger(audit.revision) || JSON.stringify(audit.seat) !== JSON.stringify(run.seat) || !(Date.parse(audit.window.lower) < Date.parse(audit.window.upper)) || Date.parse(audit.window.upper) > Date.parse(run.claimedAt)) return null;
+    const frozen = project.audit?.window;
+    if (frozen && (frozen.lower !== audit.window.lower || frozen.upper !== audit.window.upper || frozen.sources.some((source, i) => source.key !== audit.window.sources[i]?.key)
+      || frozen.decisionScanComplete !== false && frozen.sources.length !== audit.window.sources.length)) return null;
+    if (!frozen && project.audit?.through && audit.window.lower !== project.audit.through) return null;
+    if (!authorize()) return null;
+    const next = { ...run, audit, launchBody: body, state: "launching" as const };
+    tx.put(next);
+    tx.put({ ...project, audit: { version: 1, revision: audit.revision, through: project.audit?.through ?? null, window: audit.window } });
+    return next;
+  });
+}
+/** The checked prefix and terminal run have one writer and one transaction. */
+export function settleMaintenanceAudit(run: MaintenanceRun, patch: Partial<MaintenanceRun>, authorize: () => boolean = () => true): MaintenanceRun | null {
+  return collection(true)!.boundedPatch(8, tx => {
+    const held = tx.get(`r:${run.runId}`) as MaintenanceRun | null;
+    const project = tx.get(`p:${run.project}`) as MaintenanceProject | null;
+    if (!held?.audit || !run.audit || !project?.audit || project.currentRunId !== run.runId || !maintenanceRunIsLive(held) || project.audit.revision !== run.audit.revision || held.conversationId !== run.conversationId || held.launchId !== run.launchId || JSON.stringify(held.seat) !== JSON.stringify(run.seat)) return null;
+    if (!authorize()) return null;
+    const audit = patch.log?.audit;
+    if (patch.state !== "succeeded" && patch.state !== "failed") return null;
+    const manifest = audit?.manifest;
+    const valid = audit && !audit.error && manifest?.runId === held.runId && manifest.revision === held.audit.revision && manifest.lower === held.audit.window.lower && manifest.upper === held.audit.window.upper && manifest.rows === audit.rows.length;
+    const state = { ...project.audit, revision: project.audit.revision + 1,
+      through: valid && audit && audit.complete ? run.audit.window.upper : project.audit.through,
+      window: valid && audit ? audit.complete ? null : audit.window : project.audit.window };
+    const next = { ...held, ...patch, kind: "run" as const, runId: held.runId, project: held.project, audit: held.audit, launchBody: held.launchBody,
+      counts: held.counts, changedTaskIds: held.changedTaskIds, log: { ...held.log, attention: patch.log?.attention ?? held.log.attention, leftAlone: patch.log?.leftAlone ?? held.log.leftAlone, verdict: patch.log?.verdict ?? held.log.verdict, ...(audit ? { audit } : {}) } };
+    tx.put(next);
+    tx.put({ ...project, currentRunId: null, audit: state });
+    return next;
+  });
+}
 export function recordMaintenanceChange(runId: string, change: MaintenanceChange): void {
   collection(true)!.boundedPatch(2, tx => {
     const run = tx.get(`r:${runId}`) as MaintenanceRun | null;
