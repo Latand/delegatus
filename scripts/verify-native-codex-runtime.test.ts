@@ -9,6 +9,28 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
+test.each(["success", "failure"])("the native verifier uses the project test timeout and retains the %s verdict", outcome => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-runner-timeout-"));
+  roots.push(root);
+  const target = path.join(root, "src/lib/runtime/codexSteerDelivery.integration.test.ts");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `import { expect, test } from "bun:test";
+test("native verifier timeout fixture", async () => {
+  // Cross Bun's five-second default while staying inside the project timeout.
+  await Bun.sleep(5_100);
+  expect(${JSON.stringify(outcome)}).toBe("success");
+});`);
+  const result = spawnSync(process.execPath, [path.join(import.meta.dir, "verify-native-codex-runtime.ts"), process.execPath, "--steering-only"], {
+    cwd: root, env: process.env, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL",
+  });
+  expect(result.error).toBeUndefined();
+  const output = result.stdout + result.stderr;
+  expect(output).not.toContain("timed out");
+  expect(result.status).toBe(outcome === "success" ? 0 : 1);
+  expect(output).toContain(outcome === "success" ? "1 pass" : "1 fail");
+  if (outcome === "failure") expect(output).toContain('expect(received).toBe(expected)');
+}, 40_000);
+
 test.skipIf(process.platform !== "linux")("the native verifier's private environment admits its real nested test runner", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-runner-admission-"));
   roots.push(root);
