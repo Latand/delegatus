@@ -8738,8 +8738,16 @@ export function viewerMcpBindings(
             : domainDependencies.getPipelines?.().pipelines.find(item => item.id === id);
           if (!current) throw new Error("decision target is unavailable");
           target(current);
+          const accepted = current.decisionAnswers?.find(answer => answer.clientRequestId === args.clientRequestId);
+          if (received?.ok === false && typeof args.expectedRevision === "string" && /^[a-f0-9]{7,64}$/i.test(args.expectedRevision)) {
+            const candidates = accepted ? [accepted.expectedRevision]
+              : [pipelineRevision(current), pipelineDecisionRevision(current)].filter((hash): hash is string => hash !== null);
+            if (resolveShortId(candidates, args.expectedRevision).kind !== "match" || accepted
+              && (accepted.answer !== args.answer || accepted.stageId !== args.expectedStageId || accepted.attempt !== args.expectedAttempt)) {
+              throw new McpToolRefusal("decision receipt no longer matches its guarded target", { code: "STAGE_CHANGED", field: "expectedRevision", status: 409, retryable: false });
+            }
+          }
           if (received?.ok === true) {
-            const accepted = current.decisionAnswers?.find(answer => answer.clientRequestId === args.clientRequestId);
             const revision = accepted && typeof args.expectedRevision === "string"
               ? resolveShortId([accepted.expectedRevision], args.expectedRevision) : null;
             const retained = accepted && redactPayload({ decisionAnswer: {

@@ -817,7 +817,7 @@ test("receipt cleanup rechecks authority before deleting an unadmitted claim", a
     args[4]?.();
     throw new StoreBusyBeforeAdmissionError("fixture writer refused before admission");
   });
-  const operation = service.callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: "0".repeat(64) });
+  const operation = service.callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: pipelineDecisionRevision(current())! });
   await entered;
   const before = fs.readFileSync(filename, "utf8"); caller = "conversation_foreign"; resume();
   expect((await operation).ok).toBe(false);
@@ -953,4 +953,20 @@ test("ordinary pipeline actions retain their existing workspace assertion", asyn
   await bindings.pipeline_action({ pipelineId: h.id, action: "pause" }, { assertCaller: () => { decisionChecks++; throw new Error("decision-only fixture assertion"); } });
   expect(current().state).toBe("paused");
   expect(decisionChecks).toBe(0);
+});
+
+test("a stale pending answer cannot settle another creator's receipt", async () => {
+  const h = await interruptedAnswer("before-admission"), original = current(), before = h.receiptContents();
+  const row = structuredClone(original); row.srcConversationId = "conversation_other"; savePipelines([row]);
+  const replacement = JSON.stringify(current());
+  const refused = await h.reopen("conversation_other").callTool("pipeline_action", h.args);
+  expect(refused.ok).toBe(false); expect(refused.decisionAnswer).toBeUndefined();
+  expect(h.receiptContents()).toBe(before);
+  expect(JSON.stringify(current())).toBe(replacement);
+  savePipelines([original]);
+  expect(await h.reopen().callTool("pipeline_action", h.args)).toMatchObject({ ok: true });
+  await tickPipelines([], h.ports);
+  expect(current().decisionAnswers).toHaveLength(1);
+  expect(attemptsOf("build")).toHaveLength(2);
+  expect(h.spawnedStages).toEqual(["build", "build"]);
 });

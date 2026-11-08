@@ -196,7 +196,8 @@ Action-specific assertions follow MCP scope, claim, join, binding and reply
 boundaries. Receipt completion and release accept optional synchronous callbacks
 under their existing locks; other actions retain their previous behavior. A
 successful resolve reply must still match the current target's retained durable
-answer before replay disclosure or receipt completion. The pipeline store
+answer before replay disclosure or receipt completion. Settling or replaying a
+refusal also requires its guarded decision or retained answer to remain current. The pipeline store
 forwards the resolve assertion to its existing SQLite persistence boundary.
 
 Decision continuations reconstruct launch authority from the retained answer.
