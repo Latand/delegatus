@@ -728,7 +728,8 @@ export async function reconcileStructuredSpawnReplay(
     assertActive?: () => void;
   } = {},
 ): Promise<SpawnReceipt & { initialMessage: "pending" | "queued" | "delivered" | "failed" }> {
-  const assertActive = () => { options.signal?.throwIfAborted(); options.assertActive?.(); };
+  let decisionCurrent: (() => void) | undefined;
+  const assertActive = () => { options.signal?.throwIfAborted(); options.assertActive?.(); decisionCurrent?.(); };
   assertActive();
   if (options.signal) client = withRuntimeRecoveryReads(client, options.signal);
   const evidenceOrNull = async <T>(read: Promise<T>): Promise<T | null> => {
@@ -741,6 +742,8 @@ export async function reconcileStructuredSpawnReplay(
   };
   const current = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
   if (!current) throw new Error("unknown spawn receipt");
+  const decision = current.state === "completed" ? null : decisionLaunchAuthorityForReceipt(registry, current);
+  if (decision) { decisionCurrent = await decision; assertActive(); }
   if (stagedLaunchRecovery(current)) {
     const recovered = await recoverStagedStructuredLaunch(launchId, registry, client, {
       now: options.now,
@@ -1464,6 +1467,24 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
     throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
   }
   return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
+}
+
+/** Pin the existing decision before loading its engine. Recovery receives this
+ * same invocation-local assertion for host preparation and first delivery. */
+function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: SpawnReceipt): Promise<() => void> | null {
+  const membership = registry.readOnlySnapshot().memberships[receipt.conversationId]?.find(row => row.kind === "pipeline");
+  const original = membership && findPipelineRecord(membership.containerId);
+  const decision = membership?.stageId && original?.runs.find(run => run.stageId === membership.stageId)?.attempts
+    .find(attempt => attempt.n === membership.round)?.decisionAnswerId;
+  if (!decision || !membership?.stageId || !membership.round) return null;
+  const revision = pipelineRevision(original!);
+  return import("@/lib/pipelines/engine").then(engine => {
+    const current = findPipelineRecord(membership.containerId);
+    if (!current || pipelineRevision(current) !== revision) throw new Error("decision launch changed during preparation");
+    const assert = engine.capturePipelineDecisionLaunch(membership.containerId, membership.stageId!, membership.round!);
+    if (!assert) throw new Error("decision launch authority is unavailable");
+    assert(); return assert;
+  });
 }
 
 /** Memory preparation yields before native dispatch; a cancelled or changed
@@ -2236,21 +2257,8 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
-  const invocationCurrent = input.assertCurrent;
-  const membership = input.registry.readOnlySnapshot().memberships[input.receipt.conversationId]?.find(row => row.kind === "pipeline");
-  const original = membership && findPipelineRecord(membership.containerId);
-  const decision = membership?.stageId && original?.runs.find(run => run.stageId === membership.stageId)?.attempts
-    .find(attempt => attempt.n === membership.round)?.decisionAnswerId;
-  let decisionCurrent: (() => void) | undefined;
-  if (decision && membership?.stageId && membership.round) {
-    const revision = pipelineRevision(original!);
-    const engine = await import("@/lib/pipelines/engine");
-    const current = findPipelineRecord(membership.containerId);
-    if (!current || pipelineRevision(current) !== revision) throw new Error("decision launch changed during preparation");
-    decisionCurrent = engine.capturePipelineDecisionLaunch(membership.containerId, membership.stageId, membership.round);
-    if (!decisionCurrent) throw new Error("decision launch authority is unavailable");
-  }
-  if (invocationCurrent || decisionCurrent) input = { ...input, assertCurrent: () => { invocationCurrent?.(); decisionCurrent?.(); } };
+  const decision = input.assertCurrent ? null : decisionLaunchAuthorityForReceipt(input.registry, input.receipt);
+  if (decision) input = { ...input, assertCurrent: await decision };
   const assertCurrent = input.assertCurrent ? () => { input.assertCurrent?.(); assertMemoryPreparedStartCurrent(input); } : undefined;
   const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
   await input.registry.recordSpawnMemoryCapOffLoop(input.receipt.launchId, agentMemoryCapForPlan(memoryCell?.plan ?? null));
@@ -2588,6 +2596,15 @@ export async function recoverStagedStructuredLaunch(
     const read = () => registry.spawnReceipt(launchId)!;
     const receipt = read();
     if (!receipt) throw new Error("unknown staged launch receipt");
+    const decision = receipt.state === "completed" ? null : decisionLaunchAuthorityForReceipt(registry, receipt);
+    if (decision) {
+      const assert = await decision, originalAssert = options.assertActive, originalEligible = options.eligible;
+      options = { ...options, assertActive: () => { originalAssert?.(); assert(); }, eligible: () => {
+        if (originalEligible?.() === false) return false;
+        try { assert(); return true; } catch { return false; }
+      } };
+      options.assertActive!();
+    }
     let recovery = stagedLaunchRecovery(receipt);
     const now = options.now ?? Date.now;
     // Foreground setup owns this launch until it explicitly hands recovery
@@ -2831,6 +2848,8 @@ export async function spawnStructuredConversation(
   input: StructuredSpawnInput,
   dependencies: StructuredSpawnDependencies = {},
 ): Promise<SpawnResponse> {
+  const decision = input.assertCurrent ? null : decisionLaunchAuthorityForReceipt(input.registry, input.receipt);
+  if (decision) input = { ...input, assertCurrent: await decision };
   const authorize = input.authorize;
   input = { ...input, authorize: async () => {
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),

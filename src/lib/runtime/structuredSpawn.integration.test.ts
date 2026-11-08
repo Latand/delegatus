@@ -7042,8 +7042,12 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
     ["no drain", "none"],
     ["a drain running before staging", "before-staging"],
     ["a drain committed after staging", "after-staging"],
+    ["current decision authority", "authority-current"],
+    ["decision authority replaced at message reservation", "authority-replaced"],
   ] as const)("starts its first turn on that account and materializes its transcript (%s)", async (_label, drainMode) => {
-    const drain = drainMode !== "none";
+    const drain = drainMode === "before-staging" || drainMode === "after-staging";
+    const decision = drainMode === "authority-current" || drainMode === "authority-replaced";
+    let decisionOwned = true, admissionReached = false;
     const id = crypto.randomUUID();
     const root = path.join(sandbox, `non-routed-first-turn-${transport}-${drainMode}-${id}`);
     const cwd = path.join(root, "project");
@@ -7084,6 +7088,12 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
     const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
     const client = runtimeClient(journal);
+    const hold = registry.holdDeliveryOffLoop;
+    const reservation = decision ? spyOn(registry, "holdDeliveryOffLoop").mockImplementation(async (...args) => {
+      await Promise.resolve(); admissionReached = true;
+      if (drainMode === "authority-replaced") decisionOwned = false;
+      return hold.apply(registry, args);
+    }) : null;
     await bindStructuredDeliveryQueue([], { registry, client });
     try {
       /* Account A is routed; the pool placed this launch on account B. */
@@ -7127,6 +7137,7 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
         "prompt": "start on the account the pool chose",
         registry,
         client,
+        ...(decision ? { assertCurrent: () => { if (!decisionOwned) throw new Error("decision delivery authority replaced"); } } : {}),
       }, {
         // This executable is a protocol fixture. The signal suite separately
         // qualifies the default native boundary without an inherited gate lease.
@@ -7140,7 +7151,17 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
           if (drainMode === "after-staging") commitDrain();
           return publishStructuredDeliveryHost({ key, host }, ownsOperation);
         },
-      });
+      }).catch(error => { if (drainMode === "authority-replaced") return error as Error; throw error; });
+
+      if (decision) expect(admissionReached).toBe(true);
+      if (drainMode === "authority-replaced") {
+        const seen = JSON.parse(fs.readFileSync(path.join(cwd, ".claude-fixture.json"), "utf8")) as { turns: string[] };
+        expect(seen.turns).toEqual([]);
+        expect(await client.operationStatus(`spawn_message_${begun.receipt.launchId}`)).toBeNull();
+        expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+        expect(response).toBeInstanceOf(Error);
+        return;
+      }
 
       const receipt = registry.snapshot().receipts[begun.receipt.launchId]!;
       const sessionId = receipt.key!.sessionId;
@@ -7174,6 +7195,7 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
         .filter((delivery) => delivery.clientMessageId === `spawn_${begun.receipt.launchId}`))
         .toMatchObject([{ state: "delivered" }]);
     } finally {
+      reservation?.mockRestore();
       /* The published host owns the child; releasing it reaps the process. */
       const key = Object.values(registry.snapshot().receipts)[0]?.key;
       if (key) await releaseStructuredDeliveryHost(key);

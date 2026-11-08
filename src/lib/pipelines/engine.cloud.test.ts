@@ -1679,7 +1679,12 @@ test.each([false, true])("a decision successor retains authority through configu
   const { reportStageCompletion } = await import("./engine");
   expect((await reportStageCompletion({ verdict: "needs_decision", summary: "Choose the review format?" },
     { kind: "agent", role: "reviewer", conversationId: attempt().conversationId }, h.ports)).error).toBeUndefined();
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision", "Choose the review format?")], h.ports);
+  const pathname = attempt().agentPath!;
+  const ended = h.finish(pathname, "needs_decision", "Choose the review format?");
+  const message = h.messages.get(pathname)!;
+  message.ts = Date.parse(h.ports.now()) + 1000;
+  h.durableTurns.set(pathname, { turn: "terminal", message, lastRecordAt: message.ts });
+  await tickPipelines([ended], h.ports);
   await settlePipelineControllerJobs();
   expect(lane().state).toBe("needs_decision");
   // An explicit configured runtime is part of the new decision snapshot.
