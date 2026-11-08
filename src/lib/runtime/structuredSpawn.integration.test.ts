@@ -8040,10 +8040,10 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
       // The positive engine executes its marker and exits without an RPC
       // handshake; the authority refusal must precede that actual exec.
       const rejection = await opening.then(() => null, error => error as Error);
-      expect(rejection).toBeInstanceOf(Error);
-      if (revoked) expect(rejection?.message).toContain("decision native authority replaced");
       expect(effects, rejection?.message).toBe(revoked ? 0 : 1);
       expect(fs.existsSync(marker)).toBe(!revoked);
+      expect(rejection).toBeInstanceOf(Error);
+      if (revoked) expect(rejection?.message).toContain("decision native authority replaced");
     } finally {
       codex.mockRestore();
       for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");

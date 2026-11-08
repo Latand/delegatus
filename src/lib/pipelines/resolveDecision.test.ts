@@ -647,10 +647,10 @@ test.each(["allowed", "new-attempt", "writer"])("decision persistence checks cur
       owned = false; writer!.exec("ROLLBACK"); writer!.close(); writer = undefined;
     }
     const settled = await result;
-    if (boundary === "allowed") expect(settled).toMatchObject({ decisionAnswer: { nextAttempt: 2 } });
-    else expect(settled).toBeInstanceOf(Error);
     expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "allowed" ? 1 : 0);
     expect(attemptsOf("build")).toHaveLength(boundary === "allowed" ? 2 : 1);
+    if (boundary === "allowed") expect(settled).toMatchObject({ decisionAnswer: { nextAttempt: 2 } });
+    else expect(settled).toBeInstanceOf(Error);
   } finally { if (writer) { writer.exec("ROLLBACK"); writer.close(); } await result; }
 });
 
