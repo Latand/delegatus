@@ -705,3 +705,17 @@ test("capacity admission explicitly refuses a truncated repository candidate set
   expect(f.lane()).toEqual(before);
   expect(f.h.spawnInputs).toHaveLength(1);
 });
+
+test("refresh expiry refuses delivery ownership already lost before its first observation", async () => {
+  const f = await capacityLane();
+  const rows = loadPipelines();
+  const lane = rows.find(row => row.id === f.id)!;
+  lane.delivery!.active = false; lane.delivery!.ownerId = "replacement-owner";
+  savePipelines(rows);
+  f.advance(60 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.lane().refreshOf?.capacityRefusal).toContain("ownership changed");
+  expect(f.lane().stateDetail).toContain("UNKNOWN");
+  expect(yieldedAttempt(f).suspension?.capacityYield?.settledAt).toBeUndefined();
+  expect(f.h.calls.filter(call => call.startsWith("stop-host:"))).toHaveLength(0);
+});

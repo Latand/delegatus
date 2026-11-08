@@ -9285,6 +9285,12 @@ function refreshContinuationAllowed(pipeline: Pipeline, stage: PipelineStage, at
     && !refreshExecutionRefusal(live, ports);
 }
 
+function refreshDeliveryRefusal(pipeline: Pipeline): string | null {
+  return !pipeline.delivery?.active || pipeline.delivery.disposition !== "owner" || pipeline.delivery.ownerId !== pipeline.id
+    || deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }))
+    ? "refresh delivery ownership changed; execution remains UNKNOWN" : null;
+}
+
 /** Derives authority from the original reservation on every execution boundary. */
 function refreshExecutionRefusal(pipeline: Pipeline, ports: Pick<PipelinePorts, "now">, capacity = true): string | null {
   if (!pipeline.refreshOf || pipeline.cursor?.stageId !== "refresh") return null;
@@ -9295,8 +9301,8 @@ function refreshExecutionRefusal(pipeline: Pipeline, ports: Pick<PipelinePorts, 
   if ("reason" in origin) return origin.reason;
   if (unixMs(ports.now()) >= unixMs(origin.capacity.deadline)) return REFRESH_CAPACITY_EXPIRED;
   if (capacityYieldPending(pipeline)) return "refresh capacity yield is awaiting confirmed settlement";
-  if (!pipeline.delivery?.active || pipeline.delivery.disposition !== "owner" || pipeline.delivery.ownerId !== pipeline.id
-    || deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }))) return "refresh delivery ownership changed";
+  const deliveryRefusal = refreshDeliveryRefusal(pipeline);
+  if (deliveryRefusal) return deliveryRefusal;
   if (!capacity) return null;
   const repository = pipeline.delivery?.target.repository;
   if (!repository) return "refresh repository identity is unavailable";
@@ -9338,6 +9344,13 @@ async function prepareRefreshCapacityYield(pipeline: Pipeline, ports: PipelinePo
       pipeline.refreshOf.capacityRefusal = origin.reason;
       pipeline.stateDetail = origin.reason;
       await persist();
+    }
+    return true;
+  }
+  const deliveryRefusal = refreshDeliveryRefusal(pipeline);
+  if (deliveryRefusal) {
+    if (pipeline.refreshOf.capacityRefusal !== deliveryRefusal || pipeline.stateDetail !== deliveryRefusal) {
+      pipeline.refreshOf.capacityRefusal = deliveryRefusal; pipeline.stateDetail = deliveryRefusal; await persist();
     }
     return true;
   }
@@ -9444,7 +9457,7 @@ async function drainRefreshCapacityYield(id: string, ports: PipelinePorts): Prom
       try {
         const live = findPipelineRecord(id), current = live && currentAttempt(live, target.stageId);
         const marker = current?.suspension?.capacityYield;
-        if (!live || !current || !marker || live.closedAt || live.hiddenAt
+        if (!live || !current || !marker || live.closedAt || live.hiddenAt || refreshDeliveryRefusal(live)
           || marker.authority !== original.authority || marker.reservationKey !== original.reservationKey
           || marker.deadline !== original.deadline || JSON.stringify(marker.target) !== JSON.stringify(target)
           || JSON.stringify(target) !== JSON.stringify({ stageId: target.stageId, attempt: current.n, launchId: current.launchId,
