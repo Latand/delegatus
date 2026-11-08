@@ -213,7 +213,7 @@ async function committedSdkFixture(store = new MemoryMcpReceiptStore()) {
   const scope = roleScope(CUSTODY_PROJECT, "builder"), id = "r_sdk-commit-source";
   roleMemoryCollection(true)!.boundedPatch(8, tx => {
     const stamp = new Date(CUSTODY_NOW).toISOString();
-    tx.put({ kind: "rule", id, scope, rule: "Inspect the current scope before committing stored guidance.", why: "A previous change used an obsolete scope revision.", state: "active", hints: [], source: { project: CUSTODY_PROJECT, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false }, createdAt: stamp, changedAt: stamp });
+    tx.put({ kind: "rule", id, scope, rule: "Inspect the current scope before committing stored guidance.", why: "A previous change used an obsolete scope revision.", state: "active", hints: [], source: { project: CUSTODY_PROJECT, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" }, createdAt: stamp, changedAt: stamp });
     tx.put({ kind: "scope", scope, revision: 1, active: [id], history: [] });
   });
   const clock = spyOn(admission, "defaultSeatTickAdmissionSources").mockImplementation(() => f.sources);

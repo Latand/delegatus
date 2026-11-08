@@ -94,8 +94,15 @@ function evidence(repo: string | null, where: string | undefined) {
   if (path.isAbsolute(relative) || !resolved.startsWith(`${root}${path.sep}`) || !fs.statSync(resolved).isFile()) refuse("CURATE_EVIDENCE", "evidence must name a file inside this repository");
 }
 
+type CurationApplyResult = { placeholders: Record<string, string>; counts: CuratorPass["counts"] };
+type CurationApplyOptions = { refreshKnownValues?: boolean; operation?: CurationOperationContext };
+
+export function applyCuration(pass: CuratorPass, input: CurationApply, now: string | undefined,
+  options: CurationApplyOptions & { operation: CurationOperationContext }): ReturnType<typeof curationOperationResult>;
+export function applyCuration(pass: CuratorPass, input: CurationApply, now?: string,
+  options?: CurationApplyOptions): CurationApplyResult | ReturnType<typeof curationOperationResult>;
 /** The partition, all text and every level boundary are checked before any row is committed. */
-export function applyCuration(pass: CuratorPass, input: CurationApply, now = new Date().toISOString(), options: { refreshKnownValues?: boolean; operation?: CurationOperationContext } = {}) {
+export function applyCuration(pass: CuratorPass, input: CurationApply, now = new Date().toISOString(), options: CurationApplyOptions = {}): CurationApplyResult | ReturnType<typeof curationOperationResult> {
   const operation = options.operation;
   operation?.assertCurrent();
   const fresh = readPassAuthority(pass.id);
@@ -111,7 +118,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
   const held = roleMemoryCollection(true)!;
   const imports = fresh.importBatch ? importCollection(true)! : undefined;
   const operations = operation ? curationCollection(true)! : undefined;
-  let result!: { placeholders: Record<string, string>; counts: CuratorPass["counts"] };
+  let result!: CurationApplyResult;
   const prepare = () => {
     const records = new Map<string, RoleMemoryRow>();
     let remaining = 4096;
