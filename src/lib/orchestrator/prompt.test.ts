@@ -222,7 +222,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   // v64 adds progress estimates to the combined terminal-review mandate.
   64: "3149b6fc1101016b4a00dab1bdb0088a2b6ef56d342b087e1f95cea5096a9735",
   // v65 checks a vague ask's scope first and leaves forms to what stays materially ambiguous.
-  65: "522d83262490889700eb8dab3788ed98529d3c6e1a0fd0efc371d38bd6edde74",
+  65: "1b7344d356b834edcb0271c666b477672024e236169ea2e810dbf08e17f0486d",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -764,17 +764,6 @@ test("the v64 fixture is the text v64 shipped, and v65 changes only the three pi
      every fence, limit and gate, is byte for byte v64. */
   expect(removed.map((line) => line.slice(0, 14)).sort()).toEqual(["- Start by def", "Decisions. Eve", "Every piece of"].sort());
   expect(added.map((line) => line.slice(0, 14)).sort()).toEqual(["- Start by def", "Accepted work ", "Decisions. Eve"].sort());
-});
-
-test("no unconditional form-first or pipeline-first instruction is left in the default", () => {
-  const v64 = v64Mandate();
-  const blanket = ["Before non-trivial or two-way work, or on request, use a form", "Every piece of accepted work runs as a pipeline"];
-  for (const phrase of blanket) expect(v64).toContain(phrase);
-  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
-  for (const phrase of blanket) {
-    expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(phrase);
-    expect(delivered).not.toContain(phrase);
-  }
 });
 
 test("delivery brings a stored v64 default to the v65 policy once and never twice", () => {

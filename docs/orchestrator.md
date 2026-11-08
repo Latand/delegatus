@@ -2,7 +2,8 @@
 
 Every project in Delegatus can designate one agent as its **orchestrator**.
 You tell it what you want shipped, in the orchestrator panel above the board;
-it opens a task for each piece of work, runs each as a pipeline, merges
+it opens a task for each piece of work, runs work that needs agents as a
+pipeline, merges
 according to the project's merge setting, and reports back. It works through
 Delegatus's own HTTP API and MCP tools, so everything it starts is a card you
 can open, read, interrupt or take over.
