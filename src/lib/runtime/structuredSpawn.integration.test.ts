@@ -8003,14 +8003,32 @@ test("a capability write interruption before startHost retains prepublication re
 
 test.each(["codex", "claude"] as const)("default %s host carries decision authority through native preparation", async engine => {
   const { defaultStartHost } = await import("./structuredSpawn");
-  for (const revoked of [false, true]) {
+  const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+  for (const boundary of ["allowed", "import", "preparation"] as const) {
     const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
     const marker = path.join(cwd, "native-effect");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const launchProfile = emptyLaunchProfile({ cwd, cleanMemory: true, allowSubagents: true, mcpServers: [] });
-    const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile });
+    const prior = loadPipelines();
+    const role = { roleId: "builder", engine, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
+    const at = "2026-11-03T10:00:00.000Z", id = `native-decision-${engine}-${boundary}`;
+    const pipeline = buildPipeline({ id, project: "native-decision", task: "Continue the settled decision", repoDir: cwd,
+      state: "running", publication: "internal", srcPath: null, srcConversationId: null, now: at,
+      stages: [{ id: "build", kind: "run", effectiveRole: role, prompt: "Build", next: null }] });
+    pipeline.cursor = { stageId: "build", state: "spawning", input: null, activatedBy: null };
+    const attempt = { n: 1, state: "needs_decision" as const, effectiveRole: role, input: null, output: "Choose a format?",
+      verdict: { status: "needs_decision" as const, findings: [] }, error: null, startedAt: at, completedAt: at,
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null };
+    pipeline.runs[0]!.attempts.push(attempt, { ...attempt, n: 2, state: "pending", output: null, verdict: null,
+      startedAt: null, completedAt: null, decisionAnswerId: "native-answer" });
+    pipeline.decisionAnswers = [{ clientRequestId: "native-answer", expectedRevision: "a".repeat(64),
+      stageId: "build", attempt: 1, nextAttempt: 2, question: "Choose a format?", answer: "Use Markdown.", actor: { kind: "operator" }, at }];
+    savePipelines([pipeline]);
+    const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile,
+      memberships: [{ kind: "pipeline", containerId: id, role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null }] });
     if (begun.kind !== "created") throw new Error("native decision receipt missing");
-    let owned = true, effects = 0;
+    const replace = () => { const rows = loadPipelines(); rows[0]!.spec = "Changed requirements"; savePipelines(rows); };
+    let effects = 0;
     const children: ReturnType<typeof spawn>[] = [];
     const native = (_command: string, _args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) => {
       effects++;
@@ -8020,7 +8038,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     };
     const codexStart = CodexAppServerHost.start;
     const codex = spyOn(CodexAppServerHost, "start").mockImplementation(options => codexStart.call(CodexAppServerHost, {
-      ...options, readProtocolVersion: () => { if (revoked) owned = false; return "0.162.1"; },
+      ...options, readProtocolVersion: () => { if (boundary === "preparation") replace(); return "0.162.1"; },
     }));
     // Claude's real preparation awaits auth status immediately before its
     // launch setup. This is an isolated protocol reply, with no provider call.
@@ -8029,25 +8047,24 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
         spec: { engine, command: engine, cwd, windowName: "decision", launchProfile },
         account: { engine, accountId: null, kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
         ["prompt"]: "", client: {} as RuntimeHostClient,
-        assertCurrent: () => { if (!owned) throw new Error("decision native authority replaced"); },
       }, "fixture-capability", {
         codex: { spawnProcess: native },
         claude: { spawnProcess: native, readAuthStatus: async () => {
-          if (revoked) owned = false;
+          if (boundary === "preparation") replace();
           return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.209" };
         } },
       });
+      if (boundary === "import") queueMicrotask(replace);
       // The positive engine executes its marker and exits without an RPC
       // handshake; the authority refusal must precede that actual exec.
       const rejection = await opening.then(() => null, error => error as Error);
-      expect(effects, rejection?.message).toBe(revoked ? 0 : 1);
-      expect(fs.existsSync(marker)).toBe(!revoked);
+      expect(effects, rejection?.message).toBe(boundary === "allowed" ? 1 : 0);
+      expect(fs.existsSync(marker)).toBe(boundary === "allowed");
       expect(rejection).toBeInstanceOf(Error);
-      if (revoked) expect(rejection?.message).toContain("decision native authority replaced");
     } finally {
       codex.mockRestore();
       for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-      registry.close();
+      registry.close(); savePipelines(prior);
     }
   }
 });

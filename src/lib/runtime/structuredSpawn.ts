@@ -65,6 +65,7 @@ import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPer
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { findPipelineRecord, pipelineRevision } from "@/lib/pipelines/store";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -2237,9 +2238,18 @@ export async function defaultStartHost(
   input = admittedStructuredLaunchInput(input);
   const invocationCurrent = input.assertCurrent;
   const membership = input.registry.readOnlySnapshot().memberships[input.receipt.conversationId]?.find(row => row.kind === "pipeline");
-  const decisionCurrent = membership?.stageId && membership.round
-    ? (await import("@/lib/pipelines/engine")).capturePipelineDecisionLaunch(membership.containerId, membership.stageId, membership.round)
-    : undefined;
+  const original = membership && findPipelineRecord(membership.containerId);
+  const decision = membership?.stageId && original?.runs.find(run => run.stageId === membership.stageId)?.attempts
+    .find(attempt => attempt.n === membership.round)?.decisionAnswerId;
+  let decisionCurrent: (() => void) | undefined;
+  if (decision && membership?.stageId && membership.round) {
+    const revision = pipelineRevision(original!);
+    const engine = await import("@/lib/pipelines/engine");
+    const current = findPipelineRecord(membership.containerId);
+    if (!current || pipelineRevision(current) !== revision) throw new Error("decision launch changed during preparation");
+    decisionCurrent = engine.capturePipelineDecisionLaunch(membership.containerId, membership.stageId, membership.round);
+    if (!decisionCurrent) throw new Error("decision launch authority is unavailable");
+  }
   if (invocationCurrent || decisionCurrent) input = { ...input, assertCurrent: () => { invocationCurrent?.(); decisionCurrent?.(); } };
   const assertCurrent = input.assertCurrent ? () => { input.assertCurrent?.(); assertMemoryPreparedStartCurrent(input); } : undefined;
   const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
