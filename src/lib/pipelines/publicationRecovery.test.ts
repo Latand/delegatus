@@ -1401,11 +1401,13 @@ test.each(["allowed", "delivery", "interrupted", "durable", "activity"] as const
       await Promise.resolve();
       if (name !== boundary) return;
       reached = true;
-      const row = current(); row.delivery!.epoch++; savePipelines([row]);
+      const row = current(); row.delivery!.epoch++;
+      if (row.delivery!.operation) row.delivery!.operation.epoch = row.delivery!.epoch;
+      savePipelines([row]);
       replacement = JSON.stringify(current());
     };
     f.h.ports.stageRepairDelivery = async () => { await after("delivery"); return { operationId: null, state: "unreserved", safeToReplace: true }; };
-    f.h.ports.conversationTurnInterrupted = async () => { await after("interrupted"); return false; };
+    f.h.ports.conversationTurnInterrupted = async () => { await after("interrupted"); return null; };
     f.h.ports.durableTurnEvidence = async () => { await after("durable"); return { turn: "terminal", message: { text: "repair response", ts: responseAt }, lastRecordAt: responseAt }; };
     f.h.ports.conversationAgentActive = async () => { await after("activity"); return false; };
     const request = { action: "resolve-decision" as const, clientRequestId: `producer-cut-${boundary}`,
@@ -1418,11 +1420,12 @@ test.each(["allowed", "delivery", "interrupted", "durable", "activity"] as const
       expect(f.h.spawnInputs).toHaveLength(2);
     } else {
       expect(reached).toBe(true);
+      expect(replacement).not.toBe("");
       expect(current().decisionAnswers ?? []).toEqual([]);
       expect(current().runs[0]!.attempts).toHaveLength(1);
       expect(f.h.spawnInputs).toHaveLength(1);
       expect(JSON.stringify(current())).toBe(replacement);
-      expect(result).toBeInstanceOf(Error);
+      expect(result).toMatchObject({ code: "STAGE_CHANGED", field: "expectedRevision" });
     }
   } finally { f.close(); }
 });

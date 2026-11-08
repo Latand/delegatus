@@ -16939,10 +16939,10 @@ export async function patchPipeline(
     assertAuthority?.();
     const current = findPipelineRecord(id);
     if (!current) throw new Error("decision target is unavailable");
-    decisionAuthority(current);
     if ((legacyDecision ? pipelineRevision(current) !== originalFull : pipelineDecisionRevision(current) !== originalDecision)) {
       throw decisionChanged;
     }
+    decisionAuthority(current);
   };
   const decisionPrincipal = decisionOriginal && workspaceMemberId
     ? JSON.stringify(requireMemberWorkspacePrincipal(workspaceMemberId, decisionOriginal.project)) : null;
