@@ -1474,8 +1474,8 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
 function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: SpawnReceipt): Promise<() => void> | null {
   const membership = registry.readOnlySnapshot().memberships[receipt.conversationId]?.find(row => row.kind === "pipeline");
   const original = membership && findPipelineRecord(membership.containerId);
-  const attempt = membership?.stageId && original?.runs.find(run => run.stageId === membership.stageId)?.attempts
-    .find(attempt => attempt.n === membership.round);
+  const attempt = membership?.stageId ? original?.runs.find(run => run.stageId === membership.stageId)?.attempts
+    .find(attempt => attempt.n === membership.round) : undefined;
   if (!attempt?.decisionAnswerId || !membership?.stageId || !membership.round) return null;
   if (attempt.launchId !== receipt.launchId || attempt.conversationId !== receipt.conversationId || attempt.effectiveRole.engine !== receipt.engine) {
     return Promise.reject(new Error("decision launch receipt no longer belongs to its attempt"));
