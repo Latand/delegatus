@@ -51,7 +51,7 @@ import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { curatorCallerOf } from "@/lib/memory/curation/guard";
 import { applyCuration, type CurationApply } from "@/lib/memory/curation/apply";
 import { readCuration } from "@/lib/memory/curation/read";
-import { isMutatingMcpTool } from "./server";
+import { isMutatingMcpTool, requestDigest } from "./server";
 import { permitIssueReporterTool, permitMaintainerTool, permitCuratorTool } from "./toolAllowlist";
 import { boardSelection } from "./boardSelection";
 import { budgetPage } from "./budgetPage";
@@ -8731,7 +8731,7 @@ export function viewerMcpBindings(
             entry.artifactPath, entry.structuredHost?.process, entry.structuredHost?.endpoint]]);
         });
         const original = identity();
-        return () => {
+        return (received?: McpToolPayload) => {
           assertWorkspaceMcpCall();
           if (identity() !== original) throw new McpToolRefusal("decision caller changed during the call", { status: 403, retryable: false });
           const current = domainDependencies.readPipelineRecord
@@ -8739,6 +8739,17 @@ export function viewerMcpBindings(
             : domainDependencies.getPipelines?.().pipelines.find(item => item.id === id);
           if (!current) throw new Error("decision target is unavailable");
           target(current);
+          if (received?.ok === true) {
+            const accepted = current.decisionAnswers?.find(answer => answer.clientRequestId === args.clientRequestId);
+            const revision = accepted && typeof args.expectedRevision === "string"
+              ? resolveShortId([accepted.expectedRevision], args.expectedRevision) : null;
+            const retained = accepted && redactPayload({ decisionAnswer: accepted });
+            if (!accepted || revision?.kind !== "match" || accepted.answer !== args.answer
+              || accepted.stageId !== args.expectedStageId || accepted.attempt !== args.expectedAttempt
+              || requestDigest("pipeline_action", { decisionAnswer: received.decisionAnswer }) !== requestDigest("pipeline_action", retained!)) {
+              throw new McpToolRefusal("decision answer receipt no longer belongs to the current target", { status: 409, retryable: false });
+            }
+          }
         };
       } },
     ),

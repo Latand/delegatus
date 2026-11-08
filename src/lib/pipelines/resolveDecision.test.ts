@@ -865,3 +865,31 @@ test.each(["allowed", "ended"])("decision deputy authority is current after newA
     expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "allowed" ? 1 : 0);
   } finally { endDeputy(`decision-deputy-${boundary}`, { outcome: "done", now: new Date(at) }); setSystemTime(); }
 });
+
+
+test("cached decision replay refuses a rebound target without changing the original receipt", async () => {
+  const h = await interruptedAnswer("after-answer");
+  const accepted = await h.reopen().callTool("pipeline_action", h.args);
+  expect(accepted.ok).toBe(true);
+  const original = current(), receiptsBefore = h.receiptContents();
+  const durable = new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, `receipts-${h.id}.json`));
+  const { bindings } = decisionService(h, durable);
+  let replacement = "";
+  bindings.pipeline_action.receiptScope = async () => {
+    const row = structuredClone(original), attempt = row.runs[0]!.attempts[0]!;
+    row.runs[0]!.attempts = [attempt]; row.decisionAnswers = [];
+    attempt.output = "Choose another output format?"; attempt.report!.summary = attempt.output;
+    row.state = "needs_decision"; row.cursor = { stageId: "build", state: "running", input: attempt.input, activatedBy: attempt.activatedBy ?? null };
+    savePipelines([row]); replacement = JSON.stringify(current());
+    return null;
+  };
+  const refused = await createMcpToolService(bindings, durable).callTool("pipeline_action", h.args);
+  expect(refused.ok).toBe(false);
+  expect(refused.decisionAnswer).toBeUndefined();
+  expect(JSON.stringify(current())).toBe(replacement);
+  expect(h.receiptContents()).toBe(receiptsBefore);
+  savePipelines([original]);
+  expect(await h.reopen().callTool("pipeline_action", h.args)).toEqual({ ...accepted, replayed: true });
+  expect(h.receiptContents()).toBe(receiptsBefore);
+  expect(h.spawnedStages).toEqual(["build"]);
+});

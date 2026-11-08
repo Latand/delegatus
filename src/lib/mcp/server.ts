@@ -407,7 +407,7 @@ export interface McpDispatchTracker {
 }
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
-  authorizeReceipt?: (args: McpToolArgs) => void | (() => void) | Promise<void | (() => void)>;
+  authorizeReceipt?: (args: McpToolArgs) => void | ((result?: McpToolPayload) => void) | Promise<void | ((result?: McpToolPayload) => void)>;
   /** Fresh admission checks, after authority and existing-receipt lookup,
       before any claim. Mutable names must not conceal a recorded result. */
   prepareAdmission?: (args: McpToolArgs) => void | Promise<void>;
@@ -2914,15 +2914,15 @@ export function createMcpToolService(
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
       }
-      let assertAction: (() => void) | undefined;
+      let assertAction: ((result?: McpToolPayload) => void) | undefined;
       let actionAuthorityFailed = false;
       try {
         const authorize = bindings[typedTool].authorizeReceipt;
         const assertion = authorize ? await authorize(effectiveArgs) : undefined;
         if (typedTool === "pipeline_action" && effectiveArgs.action === "resolve-decision" && typeof assertion === "function") {
           const assertCaller = context.assertCaller;
-          assertAction = () => {
-            try { assertCaller?.(); assertion(); } catch (error) { actionAuthorityFailed = true; throw error; }
+          assertAction = result => {
+            try { assertCaller?.(); assertion(result); } catch (error) { actionAuthorityFailed = true; throw error; }
           };
           context = { ...context, assertCaller: assertAction };
           assertAction();
@@ -2976,7 +2976,7 @@ export function createMcpToolService(
         const replayStartedAt = performance.now();
         try {
           const replayed = { ...await active.result, replayed: true };
-          assertAction?.();
+          assertAction?.(replayed);
           phaseDurations.replay = performance.now() - replayStartedAt;
           return finish(replayed, "replay");
         } catch (error) {
@@ -3550,7 +3550,7 @@ export function createMcpToolService(
           }
         }
         const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, assertAction));
-        assertAction?.();
+        assertAction?.(claim.kind === "replay" ? claim.result : undefined);
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -3773,7 +3773,7 @@ export function createMcpToolService(
       inFlight.set(key, { digest, result });
       try {
         const answered = await result;
-        assertAction?.();
+        assertAction?.(answered);
         return finish(revalidateNative() ?? answered, outcome, unfinishedAgeMs);
       } catch (error) {
         if (!actionAuthorityFailed) throw error;
