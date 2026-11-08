@@ -8739,7 +8739,7 @@ export function viewerMcpBindings(
           if (!current) throw new Error("decision target is unavailable");
           target(current);
           const accepted = current.decisionAnswers?.find(answer => answer.clientRequestId === args.clientRequestId);
-          if (received?.ok === false && typeof args.expectedRevision === "string" && /^[a-f0-9]{7,64}$/i.test(args.expectedRevision)) {
+          if (received?.ok === false && received.code !== "idempotency_conflict" && typeof args.expectedRevision === "string" && /^[a-f0-9]{7,64}$/i.test(args.expectedRevision)) {
             const candidates = accepted ? [accepted.expectedRevision]
               : [pipelineRevision(current), pipelineDecisionRevision(current)].filter((hash): hash is string => hash !== null);
             if (resolveShortId(candidates, args.expectedRevision).kind !== "match" || accepted
