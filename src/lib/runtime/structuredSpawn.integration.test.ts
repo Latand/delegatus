@@ -8027,7 +8027,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
   const { defaultStartHost } = await import("./structuredSpawn");
   const { stageDigest } = await import("@/lib/pipelines/stageDigest");
   const { buildPipeline, pipelineIdentity, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-  for (const boundary of ["allowed", "binding", "membership", "import", "preparation", "definition"] as const) {
+  for (const boundary of ["allowed", "binding", "membership", "import", "owner", "preparation", "definition"] as const) {
     const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
     const marker = path.join(cwd, "native-effect");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -8066,7 +8066,8 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     savePipelines(bound);
     const replace = () => {
       const rows = loadPipelines();
-      if (boundary === "definition") rows[0]!.runs[0]!.attempts[1]!.definition!.prompt += " Changed instruction.";
+      if (boundary === "owner") rows[0]!.srcConversationId = "conversation_replacement";
+      else if (boundary === "definition") rows[0]!.runs[0]!.attempts[1]!.definition!.prompt += " Changed instruction.";
       else rows[0]!.spec = "Changed requirements";
       savePipelines(rows);
     };
@@ -8080,7 +8081,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     };
     const codexStart = CodexAppServerHost.start;
     const codex = spyOn(CodexAppServerHost, "start").mockImplementation(options => codexStart.call(CodexAppServerHost, {
-      ...options, readProtocolVersion: () => { if (boundary === "preparation" || boundary === "definition") replace(); return "0.162.1"; },
+      ...options, readProtocolVersion: () => { if (["owner", "preparation", "definition"].includes(boundary)) replace(); return "0.162.1"; },
     }));
     // Claude's real preparation awaits auth status immediately before its
     // launch setup. This is an isolated protocol reply, with no provider call.
@@ -8092,7 +8093,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
       }, "fixture-capability", {
         codex: { spawnProcess: native },
         claude: { spawnProcess: native, readAuthStatus: async () => {
-          if (boundary === "preparation" || boundary === "definition") replace();
+          if (["owner", "preparation", "definition"].includes(boundary)) replace();
           return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.209" };
         } },
       });
