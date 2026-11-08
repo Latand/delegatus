@@ -532,7 +532,17 @@ function decisionService(h: Awaited<ReturnType<typeof parked>>, receipts: McpRec
 }
 
 test("decision token agrees across production read projections and reaches a fresh consumer after reap progress", async () => {
-  const h = await parked();
+  const fixture = harness(); let earlierResident = true;
+  fixture.ports.stageHostResident = async target => target.conversationId === "conversation_stage_1" && earlierResident;
+  fixture.ports.conversationAgentActive = async id => id === "conversation_stage_1" ? earlierResident : false;
+  const id = await started(fixture.ports, [stage("prepare", "build"), stage("build", "verify"), stage("verify", null)]);
+  expect((await fixture.report(1, { verdict: "pass", summary: "Prepared." })).error).toBeUndefined();
+  await tickPipelines([fixture.endTurn(1, "Prepared.")], fixture.ports);
+  await tickPipelines([], fixture.ports);
+  expect((await fixture.report(2, { verdict: "needs_decision", summary: "Choose a format?" })).error).toBeUndefined();
+  await tickPipelines([fixture.endTurn(2, "Awaiting format.")], fixture.ports);
+  const h = { ...fixture, id, request: { action: "resolve-decision" as const, clientRequestId: "answer-format", answer: "Use Markdown.",
+    expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(current()) } };
   const token = pipelineDecisionRevision(current())!;
   const receipts = new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "token-positive.json"));
   const { service } = decisionService(h, receipts);
@@ -541,29 +551,37 @@ test("decision token agrees across production read projections and reaches a fre
   }
   expect((await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "verify" })).decisionRevision).toBeUndefined();
   const before = pipelineRevision(current());
-  // The controller performs a real absence settlement of the completed host.
-  const rows = loadPipelines();
-  rows[0]!.terminalReap = { rounds: 1, stopped: 0, lastAt: h.ports.now(), settledAttempts: [], settledAt: null,
-    attemptRounds: { "build:1": 1 } };
-  savePipelines(rows);
+  // The earlier host, retained throughout the question, now really settles.
+  expect(current().terminalReap?.settledAttempts ?? []).not.toContain("prepare:1");
+  earlierResident = false;
   await tickPipelines([], h.ports);
-  expect(current().terminalReap?.settledAttempts).toContain("build:1");
+  expect(current().terminalReap?.settledAttempts).toContain("prepare:1");
   expect(pipelineRevision(current())).not.toBe(before);
   expect(pipelineDecisionRevision(current())).toBe(token);
   const args = { ...h.request, pipelineId: h.id, expectedRevision: token.slice(0, 8).toUpperCase() };
   expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: true, replayed: false });
   expect(current().decisionAnswers?.[0]?.expectedRevision).toBe(token);
   await tickPipelines([], h.ports);
-  expect(h.spawnedStages, current().runs[0]?.attempts.at(-1)?.error ?? current().stateDetail ?? "stage dispatch").toEqual(["build", "build"]);
-  expect(h.prompts[1]).toContain("Use Markdown.");
+  expect(h.spawnedStages, current().stateDetail ?? "stage dispatch").toEqual(["prepare", "build", "build"]);
+  expect(h.prompts[2]).toContain("Use Markdown.");
   expect(await service.callTool("pipeline_action", { ...args, expectedRevision: token })).toMatchObject({ ok: true, replayed: true });
   expect(current().decisionAnswers).toHaveLength(1);
   expect(attemptsOf("build")).toHaveLength(2);
+  expect((await h.report(3, { verdict: "needs_decision", summary: "Choose the export format?" })).error).toBeUndefined();
+  await tickPipelines([h.endTurn(3, "Awaiting export format.")], h.ports);
+  const nextToken = pipelineDecisionRevision(current())!;
+  expect(nextToken).not.toBe(token);
+  expect((await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "build", attempt: 1 })).decisionRevision).toBeUndefined();
+  expect((await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "build", attempt: 2 })).decisionRevision).toBe(nextToken.slice(0, 8));
+  expect(await service.callTool("pipeline_action", { ...args, expectedRevision: token })).toMatchObject({ ok: true, replayed: true });
+  expect(current().decisionAnswers).toHaveLength(1);
+  expect(h.spawnedStages).toEqual(["prepare", "build", "build"]);
 });
 
 const relevantDecisionChanges: Array<[string, (pipeline: Pipeline) => void]> = [
   ["question", p => { p.runs[0]!.attempts[0]!.output = "Choose another format."; }],
   ["report", p => { p.runs[0]!.attempts[0]!.report!.summary = "Changed report"; }],
+  ["verdict", p => { p.runs[0]!.attempts[0]!.verdict!.status = "fail"; }],
   ["definition", p => { p.stages[0]!.prompt += " changed"; }],
   ["requirements", p => { p.spec += " changed"; }],
   ["input", p => { p.runs[0]!.attempts[0]!.input = "Changed input"; }],
