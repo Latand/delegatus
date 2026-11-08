@@ -7999,3 +7999,55 @@ test("a capability write interruption before startHost retains prepublication re
     expect(starts).toBe(0);
   } finally { interrupted.mockRestore(); setAgentRegistryForTests(null); registry.close(); journal.close(); }
 });
+
+
+test.each(["codex", "claude"] as const)("default %s host carries decision authority through native preparation", async engine => {
+  const { defaultStartHost } = await import("./structuredSpawn");
+  for (const revoked of [false, true]) {
+    const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
+    const marker = path.join(cwd, "native-effect");
+    const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const launchProfile = emptyLaunchProfile({ cwd, cleanMemory: true, allowSubagents: true, mcpServers: [] });
+    const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile });
+    if (begun.kind !== "created") throw new Error("native decision receipt missing");
+    let owned = true, effects = 0;
+    const children: ReturnType<typeof spawn>[] = [];
+    const native = (_command: string, _args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) => {
+      effects++;
+      const child = spawn(process.execPath, ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed")`],
+        { ...options, stdio: ["pipe", "pipe", "pipe"] });
+      children.push(child); return child;
+    };
+    const codexStart = CodexAppServerHost.start;
+    const codex = spyOn(CodexAppServerHost, "start").mockImplementation(options => codexStart.call(CodexAppServerHost, {
+      ...options, readProtocolVersion: () => { if (revoked) owned = false; return "0.162.1"; },
+    }));
+    // Claude's real preparation awaits auth status immediately before its
+    // launch setup. This is an isolated protocol reply, with no provider call.
+    try {
+      const opening = defaultStartHost({ engine, registry, receipt: begun.receipt,
+        spec: { engine, command: engine, cwd, windowName: "decision", launchProfile },
+        account: { engine, accountId: null, kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+        ["prompt"]: "", client: {} as RuntimeHostClient,
+        assertCurrent: () => { if (!owned) throw new Error("decision native authority replaced"); },
+      }, "fixture-capability", {
+        codex: { spawnProcess: native },
+        claude: { spawnProcess: native, readAuthStatus: async () => {
+          if (revoked) owned = false;
+          return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.209" };
+        } },
+      });
+      // The positive engine executes its marker and exits without an RPC
+      // handshake; the authority refusal must precede that actual exec.
+      const rejection = await opening.then(() => null, error => error as Error);
+      expect(rejection).toBeInstanceOf(Error);
+      if (revoked) expect(rejection?.message).toContain("decision native authority replaced");
+      expect(effects, rejection?.message).toBe(revoked ? 0 : 1);
+      expect(fs.existsSync(marker)).toBe(!revoked);
+    } finally {
+      codex.mockRestore();
+      for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      registry.close();
+    }
+  }
+});

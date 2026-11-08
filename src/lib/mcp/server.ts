@@ -407,7 +407,7 @@ export interface McpDispatchTracker {
 }
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
-  authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+  authorizeReceipt?: (args: McpToolArgs) => void | (() => void) | Promise<void | (() => void)>;
   /** Fresh admission checks, after authority and existing-receipt lookup,
       before any claim. Mutable names must not conceal a recorded result. */
   prepareAdmission?: (args: McpToolArgs) => void | Promise<void>;
@@ -727,13 +727,13 @@ export type ReceiptClaim =
 export interface McpReceiptStore {
   /** beforeClaim runs synchronously under the store lock, before any row is created. */
   claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim | Promise<ReceiptClaim>;
-  complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
+  complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention, beforeComplete?: () => void): void | Promise<void>;
   /** Drop an unsettled claim so its `clientRequestId` can be used again
       (#1766). Only a claim this call still holds — same digest, no result
       recorded — is released; settled claims remain durable. Fenced seat
       retries are replaced atomically by claim. Optional so a minimal store keeps working: without it an unadmitted
       refusal is settled as before rather than silently stranding a claim. */
-  release?(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean | Promise<boolean>;
+  release?(key: string, digest: string, unadmittedBinding?: McpRequestBinding, beforeRelease?: () => void): boolean | Promise<boolean>;
 }
 
 /**
@@ -869,13 +869,15 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return receipt.result ? { kind: "replay", result: receipt.result, record } : { kind: "pending", record };
   }
 
-  complete(key: string, digest: string, result: McpToolResult): void {
+  complete(key: string, digest: string, result: McpToolResult, _retention?: ReceiptRetention, beforeComplete?: () => void): void {
+    beforeComplete?.();
     const receipt = this.receipts.get(key);
     if (!receipt || receipt.digest !== digest) throw new Error("MCP receipt ownership changed");
     this.receipts.set(key, { ...receipt, digest, result, stage: "settled" });
   }
 
-  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
+  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding, beforeRelease?: () => void): boolean {
+    beforeRelease?.();
     const receipt = this.receipts.get(key);
     if (!receipt || receipt.digest !== receiptStoreDigest(digest, unadmittedBinding) || receipt.result || receipt.recoveryResult
       || (unadmittedBinding && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
@@ -1746,8 +1748,9 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     });
   }
 
-  async complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): Promise<void> {
+  async complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention, beforeComplete?: () => void): Promise<void> {
     await withFileLock(this.filePath, () => {
+      beforeComplete?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
       if (!receipt || receipt.digest !== digest) throw new Error("MCP receipt ownership changed");
@@ -1764,8 +1767,9 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     });
   }
 
-  async release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): Promise<boolean> {
+  async release(key: string, digest: string, unadmittedBinding?: McpRequestBinding, beforeRelease?: () => void): Promise<boolean> {
     return withFileLock(this.filePath, () => {
+      beforeRelease?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
       if (!receipt || receipt.digest !== receiptStoreDigest(digest, unadmittedBinding) || receipt.result || receipt.recoveryResult
@@ -2008,10 +2012,11 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void {
+  complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention, beforeComplete?: () => void): void {
     const resultJson = JSON.stringify(result);
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      beforeComplete?.();
       const receipt = this.db.query<Pick<StoredSqliteReceipt, "digest" | "binding_json"> & { retention: ReceiptRetention }, [string]>(`
         SELECT digest, retention, binding_json
         FROM mcp_receipts
@@ -2033,9 +2038,10 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
+  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding, beforeRelease?: () => void): boolean {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      beforeRelease?.();
       const receipt = this.db.query<Pick<StoredSqliteReceipt, "digest" | "result_json" | "recovery_result_json" | "stage" | "binding_json">, [string]>(`
         SELECT digest, result_json, recovery_result_json, stage, binding_json
         FROM mcp_receipts
@@ -2908,9 +2914,19 @@ export function createMcpToolService(
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
       }
+      let assertAction: (() => void) | undefined;
+      let actionAuthorityFailed = false;
       try {
         const authorize = bindings[typedTool].authorizeReceipt;
-        if (authorize) await authorize(effectiveArgs);
+        const assertion = authorize ? await authorize(effectiveArgs) : undefined;
+        if (typedTool === "pipeline_action" && effectiveArgs.action === "resolve-decision" && typeof assertion === "function") {
+          const assertCaller = context.assertCaller;
+          assertAction = () => {
+            try { assertCaller?.(); assertion(); } catch (error) { actionAuthorityFailed = true; throw error; }
+          };
+          context = { ...context, assertCaller: assertAction };
+          assertAction();
+        }
       } catch (error) {
         return finish(failure(typedTool, requestId,
           error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
@@ -2921,6 +2937,7 @@ export function createMcpToolService(
       let scope: string | null;
       try {
         scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
+        assertAction?.();
       } catch (error) {
         // Nothing is claimed yet, so the same key may be tried again as it is.
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
@@ -2936,7 +2953,14 @@ export function createMcpToolService(
       const digestArgs: McpToolArgs = recoverable
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
-      const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
+      let canonicalArgs: McpToolArgs;
+      try { assertAction?.(); canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs; }
+      catch (error) {
+        if (typedTool !== "pipeline_action" || effectiveArgs.action !== "resolve-decision") throw error;
+        return finish(failure(typedTool, requestId,
+        error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+        error instanceof Error ? error.message : String(error), false, false,
+        error instanceof McpToolRefusal ? error.details : undefined), "failure"); }
       const digest = requestDigest(typedTool, canonicalArgs);
       const key = receiptKey(typedTool, requestId, scope);
       const finishReceipt = trackMcpClaim(key, digest);
@@ -2950,9 +2974,16 @@ export function createMcpToolService(
           return finish(failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true), "conflict");
         }
         const replayStartedAt = performance.now();
-        const replayed = { ...await active.result, replayed: true };
-        phaseDurations.replay = performance.now() - replayStartedAt;
-        return finish(replayed, "replay");
+        try {
+          const replayed = { ...await active.result, replayed: true };
+          assertAction?.();
+          phaseDurations.replay = performance.now() - replayStartedAt;
+          return finish(replayed, "replay");
+        } catch (error) {
+          try { assertAction?.(); } catch (authorityError) { error = authorityError; }
+          if (!actionAuthorityFailed) throw error;
+          return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
+        }
       }
       let outcome: McpTimingOutcome = "failure";
       let revalidateNative: () => McpToolResult | null = () => null;
@@ -3518,7 +3549,8 @@ export function createMcpToolService(
             }, false);
           }
         }
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, assertAction));
+        assertAction?.();
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -3617,6 +3649,7 @@ export function createMcpToolService(
         let settled: McpToolResult;
         let unadmitted = false;
         const bindingStartedAt = performance.now();
+        assertAction?.();
         try {
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true }
@@ -3724,20 +3757,27 @@ export function createMcpToolService(
            behaviour every refusal had before. A release that finds the row
            already settled (another process answered under this key) changes
            nothing and this answer still stands for the caller. */
+        assertAction?.();
         if (unadmitted && receipts.release) {
           const releaseStartedAt = performance.now();
-          await receipts.release(key, digest, localBinding);
+          await receipts.release(key, digest, localBinding, assertAction);
+          assertAction?.();
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
-        await measure("completion", () => receipts.complete(key, digest, settled, retention));
+        await measure("completion", () => receipts.complete(key, digest, settled, retention, assertAction));
+        assertAction?.();
         return settled;
       })();
       inFlight.set(key, { digest, result });
       try {
         const answered = await result;
+        assertAction?.();
         return finish(revalidateNative() ?? answered, outcome, unfinishedAgeMs);
+      } catch (error) {
+        if (!actionAuthorityFailed) throw error;
+        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
       }
@@ -4413,7 +4453,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("Legacy continue-review field: new additional rounds are refused; retained only to replay an already accepted historical request"),
     reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow, or 3 when none is recorded. More than 3 requires an explicit value."),
     implementerStageId: z.string().min(1).optional().describe("preview/convert-legacy-review only: the run stage whose role the fix stage copies, when more than one run passes into the review."),
-    expectedRevision: z.string().regex(/^[0-9a-f]{7,64}$/i).optional(),
+    expectedRevision: z.string().regex(/^[0-9a-f]{7,64}$/i).optional().describe("For resolve-decision: decisionRevision from get_pipeline, or its conservative complete-record revision. Other actions retain complete-record revision guards."),
     expectedStageId: z.string().min(1).optional(),
     expectedAttempt: z.number().int().nonnegative().optional().describe("With expectedStageId, or with override-stage applyNow: the attempt number the caller saw."),
     expectedConversationId: z.string().min(1).optional().describe("override-stage applyNow only: the conversation the caller saw running the attempt; another one is refused with STAGE_CHANGED."),

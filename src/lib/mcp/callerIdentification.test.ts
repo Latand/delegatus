@@ -440,3 +440,48 @@ test("an HTTP MCP client initializes and discovers tools on migrated state acros
     f.sandbox.release();
   }
 });
+
+
+test("SDK HTTP decision answers use production projections, guards and durable replay", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { NextRequest } = await import("next/server");
+  const { handleMcpHttpRequest, setMcpHttpDependenciesForTests } = await import("./http");
+  const { viewerMcpBindings } = await import("./bindings");
+  type ViewerMcpDomainDependencies = import("./bindings").ViewerMcpDomainDependencies;
+  const { createMcpToolService, FileMcpReceiptStore } = await import("./server");
+  const { buildPipeline, savePipelines, findPipelineRecord, pipelineDecisionRevision } = await import("@/lib/pipelines/store");
+  const { patchPipeline } = await import("@/lib/pipelines/engine");
+  const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+  const creator = "conversation_sdk_creator", now = "2026-11-03T10:00:00.000Z";
+  const role = { roleId: null, engine: "codex" as const, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
+  const p = buildPipeline({ id: "sdk-decision", task: "Answer a settled decision", project: "sdk-project", repoDir: "/repo", state: "needs_decision",
+    srcPath: "/codex/creator.jsonl", srcConversationId: creator, now,
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: role }] });
+  p.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+  p.runs[0]!.attempts.push({ n: 1, state: "needs_decision", effectiveRole: role, input: null, output: "Choose a format?",
+    verdict: { status: "needs_decision", findings: [] }, error: null, startedAt: now, completedAt: now, launchId: null,
+    conversationId: "conversation_sdk_producer", sessionId: null, agentPath: null, paneId: null, flowId: null });
+  savePipelines([p]); registerPipelineTick(async () => {});
+  const token = pipelineDecisionRevision(p)!;
+  const dependencies: Partial<ViewerMcpDomainDependencies> = { readPipelineRecord: findPipelineRecord, patchPipeline,
+    callerAttribution: () => ({ kind: "manager", conversationId: creator, role: "orchestrator" }) };
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies),
+    new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "sdk-decision-receipts.json")), { permit: () => ({ allowed: true }) });
+  setMcpHttpDependenciesForTests({ service: async () => service, conversationForCapability: () => creator });
+  const listener = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request => handleMcpHttpRequest(new NextRequest(request)) });
+  const client = new Client({ name: "decision-sdk-fixture", version: "1" });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), { requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } } }));
+    const read = await client.callTool({ name: "get_pipeline", arguments: { pipelineId: p.id } });
+    expect(read.structuredContent?.decisionRevision).toBe(token.slice(0, 8));
+    const args = { pipelineId: p.id, action: "resolve-decision", clientRequestId: "sdk-answer", expectedRevision: token.slice(0, 8),
+      expectedStageId: "build", expectedAttempt: 1, answer: "Use Markdown." };
+    const accepted = await client.callTool({ name: "pipeline_action", arguments: args });
+    expect(accepted.structuredContent).toMatchObject({ ok: true });
+    expect((await client.callTool({ name: "pipeline_action", arguments: { ...args, expectedRevision: token } })).structuredContent)
+      .toMatchObject({ ok: true, replayed: true });
+    expect(findPipelineRecord(p.id)?.decisionAnswers).toHaveLength(1);
+    expect(findPipelineRecord(p.id)?.runs[0]?.attempts).toHaveLength(2);
+  } finally { await client.close(); listener.stop(true); setMcpHttpDependenciesForTests(null); }
+});

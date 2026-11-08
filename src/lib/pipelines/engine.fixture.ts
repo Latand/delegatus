@@ -81,8 +81,8 @@ afterAll(async () => {
 
 /** These state-machine assertions wait for remote settlement. Immediate
     acceptance and concurrent reads are covered by remoteActions.test.ts. */
-const patchPipeline: typeof rawPatchPipeline = async (id, request, ports = defaultPipelinePorts(), actor) => {
-  const accepted = await rawPatchPipeline(id, request, ports, actor);
+const patchPipeline: typeof rawPatchPipeline = async (id, request, ports = defaultPipelinePorts(), actor, assertAuthority, workspaceMemberId) => {
+  const accepted = await rawPatchPipeline(id, request, ports, actor, assertAuthority, workspaceMemberId);
   if (accepted.error || !accepted.pipeline) return accepted;
   if (accepted.pipeline.remoteAction?.state === "pending") await engineModule.settlePendingRemoteActions(ports);
   let current = loadPipelines().find((pipeline) => pipeline.id === id) ?? accepted.pipeline;
@@ -216,16 +216,20 @@ function harness() {
     },
     spawnReceipt: () => null,
     claimSpawnRetry: () => "claimed",
-    spawnAgent: async (input, onReserved) => {
+    spawnAgent: async (input, onReserved, preparePrompt, admissionPhase) => {
+      input.assertCurrent?.();
       const { role, title, parentPath, clientAttemptId, membership, supersedes } = input;
       const accountId = input.requestedAccountId ?? (input.unavailableAccountIds?.includes(LIMITED_ACCOUNT) ? SPARE_ACCOUNT : LIMITED_ACCOUNT);
       spawn += 1;
-      spawnInputs.push(structuredClone(input));
+      const { assertCurrent, ...record } = input;
+      spawnInputs.push({ ...structuredClone(record), ...(assertCurrent ? { assertCurrent } : {}) });
       spawnRoles.push(structuredClone(role));
       spawnTitles.push(title);
       calls.push(`spawn:${clientAttemptId}:parent=${parentPath ?? "root"}:supersedes=${supersedes ?? "none"}`);
       calls.push(`membership:${membership.kind}:${membership.containerId}:${membership.slot}:${membership.role}:${membership.stageOrder}:round=${membership.round}`);
       await onReserved({ launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, accountId });
+      input.assertCurrent?.();
+      void preparePrompt; void admissionPhase;
       return { launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, sessionId: `session-${spawn}`, transcript: `/codex/stage-${spawn}.jsonl`, paneId: `%${spawn}`, accountId };
     },
     paneAgentAlive: async () => paneAlive,
@@ -356,7 +360,7 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   // Model native dispatch: each reservation gets its own starting head and
   // generated hooks, including successor stages in the same worktree.
   const spawnAgent = h.ports.spawnAgent;
-  h.ports.spawnAgent = async (input, onReserved) => {
+  h.ports.spawnAgent = async (input, onReserved, preparePrompt, admissionPhase) => {
     const launchId = `native-${input.clientAttemptId}`;
     const spawned = await spawnAgent(input, async reservation => {
       await onReserved({ ...reservation, launchId });
@@ -364,7 +368,7 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
       const source = await repositoryPublicationSource(input.cwd, { ...process.env, ...guard }, realExec);
       agentEnv = { ...guard, ...agentPublicationIdentityEnv(source) };
       agentWorktree = input.cwd;
-    });
+    }, preparePrompt, admissionPhase);
     return { ...spawned, launchId };
   };
   // Agent Git commands and the controller share one deterministic clock.

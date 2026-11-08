@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, spyOn, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +10,7 @@ import type { FileEntry } from "@/lib/types";
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-decision-continuation-"));
 const { createPipelineFromRequest, reportStageCompletion, tickPipelines, patchPipeline } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, savePipelines, pipelineRevision } = await import("./store");
+const { loadPipelines, savePipelines, pipelineRevision, pipelineDecisionRevision } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
@@ -79,6 +79,7 @@ function harness() {
     spawnReceipt: () => null,
     claimSpawnRetry: () => "claimed",
     spawnAgent: async (input, onReserved) => {
+      input.assertCurrent?.();
       spawnedStages.push(input.membership.stageId ?? "");
       prompts.push(input.prompt);
       const n = spawnedStages.length;
@@ -195,7 +196,7 @@ test.each(["0", "1"])("settled question -> fenced answer -> fresh attempt -> fin
     return spawn(...args);
   };
   await tickPipelines([], h.ports);
-  expect(h.spawnedStages).toEqual(["build", "build"]);
+  expect(h.spawnedStages, current().runs[0]?.attempts.at(-1)?.error ?? current().stateDetail ?? "stage dispatch").toEqual(["build", "build"]);
   expect(h.prompts[1]).toContain("Which output format should I use?");
   expect(h.prompts[1]).toContain("Use Markdown.");
   expect(attemptsOf("build")[1]!.conversationId).not.toBe(original!.conversationId);
@@ -224,12 +225,13 @@ test("identical replay returns its durable answer after restart and rollback wit
   expect((await patchPipeline(h.id, { ...h.request, answer: "Use HTML." }, h.ports, manager)).status).toBe(409);
   // Rollback continues draining already admitted work.
   await tickPipelines([], h.ports);
-  expect(h.spawnedStages).toEqual(["build", "build"]);
+  expect(h.spawnedStages, current().runs[0]?.attempts.at(-1)?.error ?? current().stateDetail ?? "stage dispatch").toEqual(["build", "build"]);
 });
 
 /** Leave a real file receipt claimed at either crash boundary, then reopen it. */
 async function interruptedAnswer(boundary: "before-admission" | "after-answer", patch = {}) {
   const h = await parked();
+  h.request.expectedRevision = pipelineDecisionRevision(current())!;
   const args = { ...h.request, ...patch, pipelineId: h.id };
   const filename = path.join(process.env.LLV_STATE_DIR!, `receipts-${h.id}.json`);
   const receipts = new FileMcpReceiptStore(filename);
@@ -237,9 +239,9 @@ async function interruptedAnswer(boundary: "before-admission" | "after-answer", 
   const bindingsFor = (conversationId = manager.conversationId) => {
     const dependencies: Partial<ViewerMcpDomainDependencies> = {
       readPipelineRecord: () => current(),
-      patchPipeline: async (id, request, _ports, actor) => {
+      patchPipeline: async (id, request, _ports, actor, assertAuthority, workspaceMemberId) => {
         admissions += 1;
-        return patchPipeline(id, request, h.ports, actor);
+        return patchPipeline(id, request, h.ports, actor, assertAuthority, workspaceMemberId);
       },
       callerAttribution: () => ({ kind: "manager", conversationId, role: "orchestrator" }),
     };
@@ -282,7 +284,7 @@ test.each(["before-admission", "after-answer"] as const)("MCP restart %s recover
   expect(h.spawnedStages).toEqual(["build"]);
   expect(await h.reopen().callTool("pipeline_action", h.args)).toEqual({ ...answer, replayed: true });
   await tickPipelines([], h.ports);
-  expect(h.spawnedStages).toEqual(["build", "build"]);
+  expect(h.spawnedStages, current().runs[0]?.attempts.at(-1)?.error ?? current().stateDetail ?? "stage dispatch").toEqual(["build", "build"]);
   expect(h.prompts[1]).toContain(h.request.answer);
   expect(await h.reopen().callTool("pipeline_action", h.args)).toEqual({ ...answer, replayed: true });
   expect(current().decisionAnswers).toHaveLength(1);
@@ -304,7 +306,7 @@ test.each(["before-admission", "after-answer"] as const)("MCP restart %s recheck
   expect(current().decisionAnswers).toHaveLength(1);
   expect(attemptsOf("build")).toHaveLength(2);
   await tickPipelines([], h.ports);
-  expect(h.spawnedStages).toEqual(["build", "build"]);
+  expect(h.spawnedStages, current().runs[0]?.attempts.at(-1)?.error ?? current().stateDetail ?? "stage dispatch").toEqual(["build", "build"]);
 });
 
 test("MCP completed replay refuses another actor without replacing the creator receipt", async () => {
@@ -516,4 +518,350 @@ for (const mode of ["member", "owner", "revoked-before-persist", "store-lost-bef
     resetTeamStoreForTests(); process.env.LLV_STATE_DIR = previous;
     fs.rmSync(state, { recursive: true, force: true });
   }
+});
+
+/** Production bindings and receipts consume the same original snapshot. */
+function decisionService(h: Awaited<ReturnType<typeof parked>>, receipts: McpReceiptStore, caller = () => manager.conversationId, patch?: ViewerMcpDomainDependencies["patchPipeline"]) {
+  const dependencies: Partial<ViewerMcpDomainDependencies> = {
+    readPipelineRecord: id => current().id === id ? current() : null,
+    patchPipeline: patch ?? ((id, request, _ports, actor, authority, member) => patchPipeline(id, request, h.ports, actor, authority, member)),
+    callerAttribution: () => ({ kind: "manager", conversationId: caller(), role: "orchestrator" }),
+  };
+  return { bindings: viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies),
+    service: createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies), receipts) };
+}
+
+test("decision token agrees across production read projections and reaches a fresh consumer after reap progress", async () => {
+  const h = await parked();
+  const token = pipelineDecisionRevision(current())!;
+  const receipts = new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "token-positive.json"));
+  const { service } = decisionService(h, receipts);
+  for (const projection of [{}, { stageId: "build" }, { full: true }] as Array<{stageId?: string; full?: boolean}>) {
+    expect((await service.callTool("get_pipeline", { pipelineId: h.id, ...projection })).decisionRevision).toBe(projection.full ? token : token.slice(0, 8));
+  }
+  expect((await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "verify" })).decisionRevision).toBeUndefined();
+  const before = pipelineRevision(current());
+  // The controller performs a real absence settlement of the completed host.
+  const rows = loadPipelines();
+  rows[0]!.terminalReap = { rounds: 1, stopped: 0, lastAt: h.ports.now(), settledAttempts: [], settledAt: null,
+    attemptRounds: { "build:1": 1 } };
+  savePipelines(rows);
+  await tickPipelines([], h.ports);
+  expect(current().terminalReap?.settledAttempts).toContain("build:1");
+  expect(pipelineRevision(current())).not.toBe(before);
+  expect(pipelineDecisionRevision(current())).toBe(token);
+  const args = { ...h.request, pipelineId: h.id, expectedRevision: token.slice(0, 8).toUpperCase() };
+  expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: true, replayed: false });
+  expect(current().decisionAnswers?.[0]?.expectedRevision).toBe(token);
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages, current().runs[0]?.attempts.at(-1)?.error ?? current().stateDetail ?? "stage dispatch").toEqual(["build", "build"]);
+  expect(h.prompts[1]).toContain("Use Markdown.");
+  expect(await service.callTool("pipeline_action", { ...args, expectedRevision: token })).toMatchObject({ ok: true, replayed: true });
+  expect(current().decisionAnswers).toHaveLength(1);
+  expect(attemptsOf("build")).toHaveLength(2);
+});
+
+const relevantDecisionChanges: Array<[string, (pipeline: Pipeline) => void]> = [
+  ["question", p => { p.runs[0]!.attempts[0]!.output = "Choose another format."; }],
+  ["report", p => { p.runs[0]!.attempts[0]!.report!.summary = "Changed report"; }],
+  ["definition", p => { p.stages[0]!.prompt += " changed"; }],
+  ["requirements", p => { p.spec += " changed"; }],
+  ["input", p => { p.runs[0]!.attempts[0]!.input = "Changed input"; }],
+  ["producer", p => { p.runs[0]!.attempts[0]!.conversationId = "conversation_replacement"; }],
+  ["budget", p => { p.runs[0]!.attempts[0]!.providerFallbackRetries = 1; }],
+  ["control", p => { p.controlGeneration = "changed-control"; }],
+  ["owner", p => { p.srcConversationId = "conversation_replacement"; }],
+  ["workspace", p => { p.workspace = { memberId: "member-replacement", workspaceId: "workspace-replacement" }; }],
+  ["delivery-owner", p => { p.delivery!.active = false; p.delivery!.ownerId = "replacement-lane"; }],
+  ["delivery-epoch", p => { p.delivery!.epoch++; }],
+  ["delivery-target", p => { p.delivery!.target.branch += "-replacement"; }],
+  ["delivery-permission", p => { p.delivery!.active = false; p.delivery!.publish = "disabled"; }],
+  ["delivery-active", p => { p.delivery!.active = false; }],
+  ["attempt", p => { p.runs[0]!.attempts.push({ ...structuredClone(p.runs[0]!.attempts[0]!), n: 2 }); }],
+];
+for (const [name, change] of relevantDecisionChanges) test(`decision token refuses changed ${name} without modifying its replacement`, async () => {
+  const h = await parked(), token = pipelineDecisionRevision(current())!;
+  const records = loadPipelines(); change(records[0]!); savePipelines(records);
+  expect(pipelineDecisionRevision(current())).not.toBe(token);
+  const replacement = JSON.stringify(current());
+  const refused = await patchPipeline(h.id, { ...h.request, expectedRevision: token }, h.ports, manager);
+  expect(refused.pipeline).toBeUndefined();
+  expect(JSON.stringify(current())).toBe(replacement);
+  expect(h.spawnedStages).toEqual(["build"]);
+});
+
+test("decision projection keeps canonical object keys, array order, null leaves and exact text", async () => {
+  await parked();
+  const p = current(), token = pipelineDecisionRevision(p);
+  const reorder = (value: unknown): unknown => Array.isArray(value) ? value.map(reorder)
+    : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).reverse().map(([key, child]) => [key, reorder(child)])) : value;
+  expect(pipelineDecisionRevision(reorder(p) as Pipeline)).toBe(token);
+  const absent = structuredClone(p); absent.spec = undefined;
+  const explicitNull = structuredClone(absent); Object.assign(explicitNull, { spec: null });
+  expect(pipelineDecisionRevision(absent)).toBe(pipelineDecisionRevision(explicitNull));
+  const changed = structuredClone(p); changed.runs[0]!.attempts[0]!.output += " ";
+  expect(pipelineDecisionRevision(changed)).not.toBe(token);
+});
+
+test.each(["scope", "claim", "complete"])("production receipt %s rejects caller replacement without another answer", async boundary => {
+  const h = await parked(), token = pipelineDecisionRevision(current())!;
+  let caller = manager.conversationId;
+  const store = new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, `receipt-race-${boundary}.json`));
+  const receipts: McpReceiptStore = {
+    claim: async (...args) => { const result = await store.claim(...args); if (boundary === "claim") caller = "conversation_foreign"; return result; },
+    complete: async (...args) => { await store.complete(...args); if (boundary === "complete") caller = "conversation_foreign"; },
+  };
+  const { bindings } = decisionService(h, receipts, () => caller);
+  if (boundary === "scope") bindings.pipeline_action.receiptScope = async () => { caller = "conversation_foreign"; return null; };
+  const result = await createMcpToolService(bindings, receipts).callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: token });
+  expect(result.ok).toBe(false);
+  expect(result.decisionAnswer).toBeUndefined();
+  expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "complete" ? 1 : 0);
+  expect(attemptsOf("build")).toHaveLength(boundary === "complete" ? 2 : 1);
+  expect(h.spawnedStages).toEqual(["build"]);
+});
+
+
+test.each(["allowed", "new-attempt", "writer"])("decision persistence checks current authority at %s", async boundary => {
+  const h = await parked(), token = pipelineDecisionRevision(current())!;
+  const { Database } = await import("bun:sqlite");
+  const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
+  let owned = true, writer: InstanceType<typeof Database> | undefined, armed = true;
+  const now = h.ports.now;
+  h.ports.now = () => {
+    if (armed) {
+      armed = false;
+      if (boundary === "new-attempt") queueMicrotask(() => { owned = false; });
+      if (boundary === "writer") { writer = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite")); writer.exec("BEGIN IMMEDIATE"); }
+    }
+    return now();
+  };
+  const operation = patchPipeline(h.id, { ...h.request, expectedRevision: token }, h.ports, manager, () => { if (!owned) throw new Error("decision invocation revoked"); });
+  // Attach the rejection handler before yielding to the injected newAttempt cut.
+  const result = operation.then(value => value, error => error as Error);
+  try {
+    if (boundary === "writer") {
+      const deadline = performance.now() + 2000;
+      while (!stateLockWaitsInFlight().some(wait => wait.callSite === "state.transaction.pipelines") && performance.now() < deadline) await Bun.sleep(1);
+      expect(stateLockWaitsInFlight().some(wait => wait.callSite === "state.transaction.pipelines")).toBe(true);
+      owned = false; writer!.exec("ROLLBACK"); writer!.close(); writer = undefined;
+    }
+    const settled = await result;
+    if (boundary === "allowed") expect(settled).toMatchObject({ decisionAnswer: { nextAttempt: 2 } });
+    else expect(settled).toBeInstanceOf(Error);
+    expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "allowed" ? 1 : 0);
+    expect(attemptsOf("build")).toHaveLength(boundary === "allowed" ? 2 : 1);
+  } finally { if (writer) { writer.exec("ROLLBACK"); writer.close(); } await result; }
+});
+
+test("production canonicalizer refuses ambiguous decision prefixes and keeps distinct full hashes", async () => {
+  const h = await parked();
+  const revisions = await import("./decisionRevision");
+  const store = await import("./store");
+  const left = "abcdef12" + "1".repeat(56), right = "abcdef12" + "2".repeat(56);
+  const decision = spyOn(revisions, "pipelineDecisionRevision").mockReturnValue(left);
+  const legacy = spyOn(store, "pipelineRevision").mockReturnValue(right);
+  try {
+    const { bindings } = decisionService(h, new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "ambiguous.json")));
+    const canonicalize = bindings.pipeline_action.canonicalizeReceiptArgs!;
+    const args = { ...h.request, pipelineId: h.id, expectedRevision: "abcdef12" };
+    expect(() => canonicalize(args)).toThrow("ambiguous");
+    expect(canonicalize({ ...args, expectedRevision: left }).expectedRevision).toBe(left);
+    expect(canonicalize({ ...args, expectedRevision: right }).expectedRevision).toBe(right);
+    expect(await patchPipeline(h.id, { ...h.request, expectedRevision: "abcdef12" }, h.ports, manager))
+      .toMatchObject({ code: "short_id_ambiguous", field: "expectedRevision" });
+  } finally { decision.mockRestore(); legacy.mockRestore(); }
+});
+
+test("HTTP detail and answer use the same decision identity and reject a lost operator session", async () => {
+  const { NextRequest } = await import("next/server");
+  const { GET, PATCH } = await import("@/app/api/pipelines/[id]/route");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+  const h = await parked(), token = pipelineDecisionRevision(current())!;
+  const headers = { host: "localhost", cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json" };
+  const read = await GET(new NextRequest(`http://localhost/api/pipelines/${h.id}`, { headers }), { params: Promise.resolve({ id: h.id }) });
+  expect((await read.json()).decisionRevision).toBe(token);
+  const request = new NextRequest(`http://localhost/api/pipelines/${h.id}`, { method: "PATCH", headers,
+    body: JSON.stringify({ ...h.request, expectedRevision: token }) });
+  const before = JSON.stringify(current());
+  const body = request.json.bind(request);
+  request.json = async () => { const value = await body(); request.cookies.delete("llv_operator"); return value; };
+  expect((await PATCH(request, { params: Promise.resolve({ id: h.id }) })).status).toBe(403);
+  expect(JSON.stringify(current())).toBe(before);
+});
+
+
+test("earlier host settlement preserves the HTTP decision token and launches one fresh consumer", async () => {
+  const { NextRequest } = await import("next/server");
+  const { GET, PATCH } = await import("@/app/api/pipelines/[id]/route");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+  const h = harness(); let earlierResident = true;
+  h.ports.stageHostResident = async target => target.conversationId === "conversation_stage_1" && earlierResident;
+  h.ports.conversationAgentActive = async id => id === "conversation_stage_1" ? earlierResident : false;
+  const id = await started(h.ports, [stage("prepare", "build"), stage("build", "verify"), stage("verify", null)]);
+  expect((await h.report(1, { verdict: "pass", summary: "Prepared." })).error).toBeUndefined();
+  await tickPipelines([h.endTurn(1, "Prepared.")], h.ports);
+  await tickPipelines([], h.ports);
+  expect((await h.report(2, { verdict: "needs_decision", summary: "Choose a format?" })).error).toBeUndefined();
+  await tickPipelines([h.endTurn(2, "Awaiting format.")], h.ports);
+  expect(current().state).toBe("needs_decision");
+  const token = pipelineDecisionRevision(current())!, full = pipelineRevision(current());
+  expect(current().terminalReap?.settledAttempts ?? []).not.toContain("prepare:1");
+  earlierResident = false;
+  await tickPipelines([], h.ports);
+  expect(current().terminalReap?.settledAttempts).toContain("prepare:1");
+  expect(pipelineRevision(current())).not.toBe(full);
+  expect(pipelineDecisionRevision(current())).toBe(token);
+  const headers = { host: "localhost", cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json" };
+  const read = await GET(new NextRequest(`http://localhost/api/pipelines/${id}`, { headers }), { params: Promise.resolve({ id }) });
+  expect((await read.json()).decisionRevision).toBe(token);
+  const response = await PATCH(new NextRequest(`http://localhost/api/pipelines/${id}`, { method: "PATCH", headers,
+    body: JSON.stringify({ action: "resolve-decision", clientRequestId: "http-format", answer: "Use Markdown.",
+      expectedStageId: "build", expectedAttempt: 1, expectedRevision: token }) }), { params: Promise.resolve({ id }) });
+  expect(response.status, JSON.stringify(await response.json())).toBe(200);
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages).toEqual(["prepare", "build", "build"]);
+  expect(h.prompts[2]).toContain("Use Markdown.");
+  expect(current().decisionAnswers).toHaveLength(1);
+});
+
+for (const [name, change] of relevantDecisionChanges.filter(([name]) => ["requirements", "control", "owner", "workspace"].includes(name))) {
+  test(`decision successor refuses authority replacement at dispatch: ${name}`, async () => {
+    const h = await parked();
+    expect((await patchPipeline(h.id, { ...h.request, expectedRevision: pipelineDecisionRevision(current())! }, h.ports, manager)).error).toBeUndefined();
+    const spawn = h.ports.spawnAgent;
+    let reached = false, replacement = "";
+    h.ports.spawnAgent = async (...args) => {
+      reached = true;
+      const rows = loadPipelines(); change(rows[0]!); savePipelines(rows); replacement = JSON.stringify(current());
+      return spawn(...args);
+    };
+    await tickPipelines([], h.ports);
+    expect(reached).toBe(true);
+    expect(h.spawnedStages).toEqual(["build"]);
+    expect(current().decisionAnswers).toHaveLength(1);
+    expect(JSON.stringify(current())).toBe(replacement);
+  });
+}
+
+
+for (const boundary of ["claim", "complete", "join"] as const) test(`receipt ${boundary} checks authority inside its final storage boundary`, async () => {
+  const h = await parked(), token = pipelineDecisionRevision(current())!;
+  let caller = manager.conversationId;
+  const filename = path.join(process.env.LLV_STATE_DIR!, `receipt-final-${boundary}.json`);
+  const durable = new FileMcpReceiptStore(filename);
+  let enter!: () => void, resume!: () => void, joined!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<void>(resolve => { resume = resolve; });
+  const joining = new Promise<void>(resolve => { joined = resolve; });
+  let scopes = 0;
+  const receipts: McpReceiptStore = {
+    claim: async (...args) => { if (boundary === "claim") { enter(); await held; } return durable.claim(...args); },
+    complete: async (...args) => { if (boundary !== "claim") { enter(); await held; } return durable.complete(...args); },
+  };
+  const { bindings } = decisionService(h, receipts, () => caller);
+  bindings.pipeline_action.receiptScope = async () => { if (++scopes === 2) joined(); return null; };
+  const service = createMcpToolService(bindings, receipts);
+  const args = { ...h.request, pipelineId: h.id, expectedRevision: token };
+  const first = service.callTool("pipeline_action", args);
+  await entered;
+  const before = fs.existsSync(filename) ? fs.readFileSync(filename, "utf8") : null;
+  const second = boundary === "join" ? service.callTool("pipeline_action", args) : null;
+  if (second) { await joining; await new Promise<void>(resolve => setImmediate(resolve)); }
+  caller = "conversation_foreign"; resume();
+  expect((await first).ok).toBe(false);
+  if (second) expect((await second).ok).toBe(false);
+  expect(fs.existsSync(filename) ? fs.readFileSync(filename, "utf8") : null).toBe(before);
+  expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "claim" ? 0 : 1);
+  expect(h.spawnedStages).toEqual(["build"]);
+});
+
+
+test("receipt cleanup rechecks authority before deleting an unadmitted claim", async () => {
+  const h = await parked(); let caller = manager.conversationId;
+  const filename = path.join(process.env.LLV_STATE_DIR!, "receipt-release.json");
+  const durable = new FileMcpReceiptStore(filename);
+  let enter!: () => void, resume!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; }), held = new Promise<void>(resolve => { resume = resolve; });
+  const receipts: McpReceiptStore = {
+    claim: (...args) => durable.claim(...args), complete: (...args) => durable.complete(...args),
+    release: async (...args) => { enter(); await held; return durable.release(...args); },
+  };
+  const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
+  const { service } = decisionService(h, receipts, () => caller, async (...args) => {
+    args[4]?.();
+    throw new StoreBusyBeforeAdmissionError("fixture writer refused before admission");
+  });
+  const operation = service.callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: "0".repeat(64) });
+  await entered;
+  const before = fs.readFileSync(filename, "utf8"); caller = "conversation_foreign"; resume();
+  expect((await operation).ok).toBe(false);
+  expect(fs.readFileSync(filename, "utf8")).toBe(before);
+  expect(current().decisionAnswers ?? []).toEqual([]);
+});
+
+
+test.each(["allowed", "scope", "claim"])("real registry capability remains current through decision %s", async boundary => {
+  const h = await parked();
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { attentionCallerAuthority } = await import("@/lib/attention/callerAuthority");
+  const { attentionCallerSources } = await import("@/lib/mcp/bindings");
+  const { runAsMcpHttpCaller } = await import("@/lib/mcp/callerContext");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `decision-caller-${boundary}.json`), undefined, undefined, { sqliteMode: "off" });
+  try {
+    const launch = registry.beginSpawn("codex", "/repo", { project: "viewer", title: "Decision caller authority fixture" });
+    const capability = registry.rotateSpawnCapabilityForReceipt(launch.launchId);
+    const rows = loadPipelines(); rows[0]!.srcConversationId = launch.conversationId; savePipelines(rows);
+    const token = pipelineDecisionRevision(current())!;
+    const filename = path.join(process.env.LLV_STATE_DIR!, `real-caller-${boundary}-receipts.json`);
+    const durable = new FileMcpReceiptStore(filename);
+    const receipts: McpReceiptStore = {
+      claim: async (...args) => { if (boundary === "claim") { await Promise.resolve(); registry.rotateSpawnCapabilityForReceipt(launch.launchId); } return durable.claim(...args); },
+      complete: (...args) => durable.complete(...args),
+    };
+    const dependencies: Partial<ViewerMcpDomainDependencies> = {
+      readPipelineRecord: () => current(),
+      patchPipeline: (id, request, _ports, actor, authority, member) => patchPipeline(id, request, h.ports, actor, authority, member),
+      attentionAuthority: () => attentionCallerAuthority(attentionCallerSources(registry)),
+      registrySnapshot: () => registry.readOnlySnapshot(),
+    };
+    const bindings = viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies);
+    if (boundary === "scope") bindings.pipeline_action.receiptScope = async () => { registry.rotateSpawnCapabilityForReceipt(launch.launchId); return null; };
+    const result = await runAsMcpHttpCaller({ capability }, () => createMcpToolService(bindings, receipts).callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: token }));
+    expect(result.ok).toBe(boundary === "allowed");
+    expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "allowed" ? 1 : 0);
+    if (boundary !== "allowed") expect(fs.existsSync(filename)).toBe(false);
+  } finally { registry.close(); }
+});
+
+
+test.each(["allowed", "ended"])("decision deputy authority is current after newAttempt: %s", async boundary => {
+  const { beginDeputy, recordDeputyFork, endDeputy } = await import("@/lib/orchestrator/deputies");
+  const { orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+  const at = "2026-11-03T10:00:00.000Z"; setSystemTime(new Date(at));
+  try {
+    const h = await parked(), project = current().project, key = `decision-deputy-${boundary}`;
+    let time = Date.parse(at); h.ports.now = () => new Date(time += 1000).toISOString();
+    expect(beginOrchestratorSeatIntent({ project, clientRequestId: key, mode: "spawn", mandate: "Run the project", now: at }).kind).toBe("begun");
+    expect(completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: manager.conversationId, path: null, now: at }).kind).toBe("activated");
+    const seat = orchestratorSeatFor(project).active!;
+    const begun = beginDeputy({ project, seatConversationId: manager.conversationId, seatEpoch: seat.seatEpoch, seatPath: null,
+      clientRequestId: key, ask: { text: "Answer the format decision", images: 0, sender: null }, now: new Date(at), askId: key });
+    if (begun.kind !== "begun") throw new Error("decision deputy did not begin");
+    const deputy = `conversation_deputy_${boundary}`;
+    recordDeputyFork(begun.deputy.askId, { deputyConversationId: deputy, artifactPath: `/codex/deputy-${boundary}.jsonl`, forkRecordCount: 1 });
+    const actor = { ...manager, via: { deputy } };
+    if (boundary === "ended") {
+      const now = h.ports.now; let once = true;
+      h.ports.now = () => { if (once) { once = false; queueMicrotask(() => endDeputy(begun.deputy.askId, { outcome: "done", now: new Date(at) })); } return now(); };
+    }
+    const outcome = await patchPipeline(h.id, { ...h.request, expectedRevision: pipelineDecisionRevision(current())! }, h.ports, actor).catch(error => error as Error);
+    if (boundary === "ended") expect(outcome).toBeInstanceOf(Error);
+    else {
+      expect(outcome).toMatchObject({ decisionAnswer: { actor } });
+      await tickPipelines([], h.ports);
+      expect(h.spawnedStages).toEqual(["build", "build"]);
+    }
+    expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "allowed" ? 1 : 0);
+  } finally { endDeputy(`decision-deputy-${boundary}`, { outcome: "done", now: new Date(at) }); setSystemTime(); }
 });

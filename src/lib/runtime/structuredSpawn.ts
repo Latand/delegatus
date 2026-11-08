@@ -1432,6 +1432,8 @@ export interface StructuredSpawnInput {
       runtime admission returns, before the host starts, and once the host is
       set up, before it is published, by this call or by its staged probe. */
   authorize?: () => void | Promise<void>;
+  /** Synchronous authority at the actual native effect, including fallback. */
+  assertCurrent?: () => void;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
   /** A recovery pass tries once, then durably requeues for a later tick. */
@@ -1445,6 +1447,7 @@ export interface StructuredSpawnInput {
 }
 
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
+  input.assertCurrent?.();
   const receipt = input.registry.spawnReceipt(input.receipt.launchId);
   if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
   if (!receipt.key && input.receipt.admissionOwner && (!receipt.admissionOwner
@@ -2232,6 +2235,13 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
+  const invocationCurrent = input.assertCurrent;
+  const membership = input.registry.readOnlySnapshot().memberships[input.receipt.conversationId]?.find(row => row.kind === "pipeline");
+  const decisionCurrent = membership?.stageId && membership.round
+    ? (await import("@/lib/pipelines/engine")).capturePipelineDecisionLaunch(membership.containerId, membership.stageId, membership.round)
+    : undefined;
+  input = { ...input, assertCurrent: () => { invocationCurrent?.(); decisionCurrent?.(); } };
+  const assertCurrent = () => { input.assertCurrent?.(); assertMemoryPreparedStartCurrent(input); };
   const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
   await input.registry.recordSpawnMemoryCapOffLoop(input.receipt.launchId, agentMemoryCapForPlan(memoryCell?.plan ?? null));
   input = admittedStructuredLaunchInput(input);
@@ -2277,6 +2287,7 @@ export async function defaultStartHost(
       initialEventCursor,
       env,
       ...engineProcess.codex,
+      assertCurrent,
       ...(memoryCell ? { memoryCell } : {}),
     };
     await input.authorize?.();
@@ -2289,6 +2300,7 @@ export async function defaultStartHost(
   const options = {
     ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
     ...engineProcess.claude,
+    assertCurrent,
     ...(memoryCell ? { memoryCell } : {}),
   };
   await input.authorize?.();
@@ -2349,6 +2361,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
   }
   const origin = spawnMessageOrigin(input.receipt, input.registry);
   const delivered = await enqueueStructuredMessage({
+    ...(input.assertCurrent ? { admissionGuard: input.assertCurrent } : {}),
     path: artifactPath,
     conversationId: input.receipt.conversationId,
     clientMessageId: `spawn_${input.receipt.launchId}`,
@@ -2813,6 +2826,7 @@ export async function spawnStructuredConversation(
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
       ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
     await authorize?.();
+    input.assertCurrent?.();
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
       ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
   } };

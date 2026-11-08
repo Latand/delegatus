@@ -1,3 +1,4 @@
+export { pipelineDecisionRevision } from "./decisionRevision";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
@@ -1997,13 +1998,16 @@ export async function withPipelineMutation<T>(
     (records: readonly Pipeline[]): Promise<void>;
   }) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
+  beforePersist?: () => void,
 ): Promise<T> {
+  const keys = controllerPipelineKeys();
   return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
-  }, controllerPipelineKeys() ? context => {
-    if (context.structural) throw new Error("controller jobs cannot replace the collection");
-  } : undefined, false, pipelineLockWaitMs(), observeHold, controllerPipelineKeys())));
+  }, context => {
+    if (keys && context.structural) throw new Error("controller jobs cannot replace the collection");
+    beforePersist?.();
+  }, false, pipelineLockWaitMs(), observeHold, keys)));
 }
 
 export async function withPipelineControllerMutation<T>(

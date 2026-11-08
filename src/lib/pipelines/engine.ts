@@ -1,3 +1,4 @@
+import { pipelineDecisionRevision, passedStagePublicationPark, passedStageCustodyPark } from "./decisionRevision";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
@@ -327,6 +328,8 @@ export interface PipelinePorts {
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
+    /** Invocation-local authority fence; never serialized into activation input. */
+    assertCurrent?: () => void;
     workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
     role: EffectivePipelineRole;
     /** Immutable repository-policy and tool-boundary pair for this attempt. */
@@ -784,6 +787,7 @@ async function spawnPipelineAgent(
   const workspace = input.workspace ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId), input.creatorConversationId);
   let workspaceAccountId: string | null = null;
   const assertAdmissionCurrent = () => {
+    input.assertCurrent?.();
     if (performance.now() >= deadline) throw new SpawnAdmissionBudgetExhausted();
     if (workspace && !workspacePrincipalAllows(workspace, input.project)) throw new Error("workspace access denied");
     if (workspace && workspaceAccountId) {
@@ -1037,6 +1041,7 @@ async function spawnPipelineAgent(
       roleMemoryRevision,
       registry,
       client,
+      assertCurrent: assertAdmissionCurrent,
       authorize: async () => {
         assertAdmissionCurrent();
         // Native admission retries yield too. Recheck the durable activation
@@ -5031,27 +5036,7 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
   return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
 }
 
-function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
-  const detail = pipeline.stateDetail;
-  // Older engines passed the accepted attempt to park() on HEAD verification
-  // failure, so its pass verdict survived with a needs_decision state.
-  return pipeline.cursor?.state === "committing" && attempt !== null && stageHeadAccepted(attempt)
-    && (detail?.startsWith("publishing the passed stage:") === true
-      || ((attempt.state === "passed" || attempt.state === "needs_decision") && (detail?.startsWith("the worktree moved to ") === true
-        || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
-}
-
 const CUSTODY_ACCEPTANCE_RECOVERY = "To accept the stage's own work without a new lane, review the lane head, then call pipeline_action publish with acceptedSha set to that clean worktree HEAD (the lane's creator, its project's seat or the operator); resolve-decision instead continues in a fresh attempt.";
-
-/** Custody can refuse a pass before its head is accepted or completedAt is
- * recorded. A guarded answer may retire that attempt for a fresh repair, or
- * publish with acceptedSha accepts its reviewed clean head in place. */
-function passedStageCustodyPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
-  const detail = pipeline.stateDetail;
-  return pipeline.cursor?.state === "committing" && attempt?.state === "needs_decision"
-    && attempt.verdict?.status === "pass" && (detail?.startsWith("settling the stage push:") === true
-      || detail?.startsWith("stage push refused:") === true);
-}
 
 function awaitingPassedPublication(pipeline: Pipeline): boolean {
   const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
@@ -5742,17 +5727,22 @@ function publicationRepairIdentity(pipeline: Pipeline, attempt: PipelineStageAtt
 }
 
 async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  ports: PipelinePorts, confirmHostGone = false): Promise<RepairProducerEvidence | undefined> {
+  ports: PipelinePorts, confirmHostGone = false, assertCurrent?: () => void): Promise<RepairProducerEvidence | undefined> {
   const worker = publicationRepairWorker(pipeline, attempt)?.attempt ?? attempt;
   const repairIdentity = publicationRepairIdentity(pipeline, attempt);
   if (!worker.conversationId) return { conversationId: null, repairIdentity, active: false, durable: null };
   const conversationId = worker.conversationId;
   const proveGone = confirmHostGone ? ports.publicationRepairProducerGone : undefined;
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
+  assertCurrent?.();
   const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
+  assertCurrent?.();
   const durable = await stageRepairEvidence(worker, ports);
+  assertCurrent?.();
   const observedGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
+  assertCurrent?.();
   const observedActive = await ports.conversationAgentActive(conversationId).catch(() => null);
+  assertCurrent?.();
   // Activity is read last and can observe adoption after the absence proof.
   // Invalidate that older death evidence everywhere the retry consumes it.
   const hostGone = observedActive === true ? false : observedGone;
@@ -7756,7 +7746,8 @@ function holdActivationAdmission(attempt: PipelineStageAttempt, now: string): vo
 function activationFence(pipeline: Pipeline): string {
   return JSON.stringify([pipeline.state, pipeline.cursor?.stageId, pipeline.stages,
     pipeline.graphEdits, pipeline.pausedAt, pipeline.resumedAt, pipeline.closedAt,
-    ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration])]);
+    ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration]),
+    ...(pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId)?.decisionAnswerId ? [decisionLaunchFence(pipeline)] : [])]);
 }
 
 function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefined): boolean {
@@ -7827,7 +7818,8 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             const claimed = await withPipelineMutation(async (pipelines, persist) => {
               const pipeline = pipelines.find((item) => item.id === snapshot.id);
               const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
-              if (!pipeline || hasRetiredStage(pipeline.stages) || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
+              if (!pipeline || hasRetiredStage(pipeline.stages) || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)
+                || attempt.decisionAnswerId && activationFence(pipeline) !== reservation.fence) return null;
               // The mutation lease may have waited while update admission closed.
               if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
                 holdActivationAdmission(attempt, ports.now());
@@ -7900,6 +7892,10 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
                 const live = pipelines.find((item) => item.id === claimed.id);
                 const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
                 if (!live || hasRetiredStage(live.stages) || current?.activation?.id !== activation.id) return;
+                if (current.decisionAnswerId) {
+                  const answer = live.decisionAnswers?.find(answer => answer.clientRequestId === current.decisionAnswerId);
+                  if (!answer || decisionAnswerActorRefusal(live, answer.actor, answer.clientRequestId)) return;
+                }
                 if (!finished) {
                   // Leave uncertain dispatch in custody, readable by every generation.
                   if (admissionHeld) holdActivationAdmission(current, ports.now());
@@ -7909,6 +7905,9 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
                 }
                 close = current.activation.closeRequested === true;
                 if (close) live.activationCloseRequested = true;
+                // A decision executor that sent nothing cannot rewrite the
+                // replacement whose authority made it refuse.
+                if (!dispatched && current.decisionAnswerId && activationFence(live) !== activation.fence) return;
                 const unchanged = activationFence(live) === activation.fence && JSON.stringify(current) === expectedAttempt;
                 if (unchanged) {
                   for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
@@ -8238,6 +8237,8 @@ async function spawnRunStage(
   ports: PipelinePorts, persist: () => void | Promise<void>,
   prepareInput = false,
 ): Promise<void> {
+  const assertDecisionLaunch = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n);
+  assertDecisionLaunch?.();
   const recoveringReservation = attempt.activation?.replay === true;
   let roleMemoryWaitReady = false;
   let admissionStartedAt = attempt.activation?.admissionStartedAt;
@@ -8249,6 +8250,7 @@ async function spawnRunStage(
     if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
     const setupAbort = new AbortController();
     const assertSetupCurrent = () => {
+      assertDecisionLaunch?.();
       const current = findPipelineRecord(pipeline.id);
       if (attempt.activation) {
         const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
@@ -8440,12 +8442,14 @@ async function spawnRunStage(
         const scopePrompt = (prompt: string) => scopeEvidence ? `${prompt}\n\nFrozen scope-review evidence:\n${scopeEvidence}` : prompt;
         spawned = await ports.spawnAgent({
           ...spawnInput,
+          ...(assertDecisionLaunch ? { assertCurrent: assertSetupCurrent } : {}),
           "prompt": scopePrompt(spawnInput.prompt),
           clientAttemptId: callId,
           spawnAdmissionDeadline,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}),
           ...(memory.cleanMemory ? { cleanMemory: true } : {}),
         }, async (reservation) => {
+          assertDecisionLaunch?.();
           assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline, "dispatch", { id: reservation.accountId ?? null, engine: attempt.effectiveRole.engine, model: attempt.effectiveRole.model });
           if (attempt.activation) attempt.activation.phase = "dispatching";
           attempt.launchId = reservation.launchId;
@@ -9506,6 +9510,7 @@ function priorWriterStopKey(pipeline: Pipeline, waitingStageId: string, attempt:
 /** Cloud I/O owns a bounded controller job, never the lane mutation lease.
  * Only this attempt's unchanged durable cloud intent may consume its result. */
 function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, phaseDone?: Promise<void>): boolean {
+  const assertDecisionCurrent = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n);
   const original = structuredClone(attempt.cloud!);
   const id = pipeline.id, stageId = stage.id, n = attempt.n;
   const runtime = attemptCloudRuntime(stage, attempt), label = cloudLabel(runtime), engine = cloudEngine(runtime);
@@ -9664,6 +9669,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const accountGuard = guardAccount(account);
       let privacyRevision: string | undefined;
       const assertCurrent = () => {
+        assertDecisionCurrent?.();
         accountGuard();
         if (privacyRevision !== undefined && storedLessonRevision() !== privacyRevision) throw new Error(`${label} input privacy changed`);
       };
@@ -9875,6 +9881,8 @@ function cloudProjectSetupError(pipeline: Pipeline, stage: PipelineStage): strin
 
 async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
+  const assertDecisionCurrent = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n);
+  assertDecisionCurrent?.();
   const bound = attemptStage(stage, attempt);
   const runtime = attemptCloudRuntime(stage, attempt), label = cloudLabel(runtime), engine = cloudEngine(runtime);
   const reject = async (error: string) => {
@@ -9955,6 +9963,7 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
       if (await holdForPriorStageWriters(pipeline, stage, attempt, ports, persist)) return;
       const reader = pipelineRecordReader(pipeline.id), authority = cloudExecutionFence(pipeline, stage.id);
       const assertCurrent = () => {
+        assertDecisionCurrent?.();
         const current = reader.read();
         if (!current || cloudExecutionFence(current, stage.id) !== authority) throw new Error(`${label} diff authority changed`);
         const prior = current.runs.flatMap(run => run.attempts.filter(candidate =>
@@ -16479,10 +16488,86 @@ export function decisionAnswerActorRefusal(
   }
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
   if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
-    && prior.actor.conversationId !== actor.conversationId))) {
+    && (prior.actor.conversationId !== actor.conversationId || prior.actor.via?.deputy !== actor.via?.deputy)))) {
     return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
   }
   return null;
+}
+
+/** Capture the existing decision route once; an in-flight call cannot adopt a
+ * replacement seat or target merely because that replacement is authorized. */
+export function captureDecisionAuthority(pipeline: Pipeline, actor: PauseResumeActor | null, key: unknown): (current: Pipeline) => void {
+  const identity = (p: Pipeline) => JSON.stringify([p.id, p.project, p.srcConversationId, p.srcPath,
+    p.srcDeputyConversationId, p.workspace && [p.workspace.memberId, p.workspace.workspaceId],
+    p.repoDir, p.worktreeDir, p.branch, p.controlGeneration, p.closedAt, p.hiddenAt, p.activationCloseRequested,
+    p.delivery && [[p.delivery.target.repository, p.delivery.target.remote, p.delivery.target.branch,
+      p.delivery.target.pr, p.delivery.target.prRepository, p.delivery.target.rejectedHead],
+      p.delivery.ownerId, p.delivery.epoch, p.delivery.active, p.delivery.publish, p.delivery.disposition]]);
+  const seat = (p: Pipeline) => {
+    if (actor?.kind !== "agent") return null;
+    const file = readOrchestratorSeatFileOrNull();
+    if (!file) throw new Error("decision authority is unavailable");
+    const project = canonicalOrchestratorProject(p.project);
+    const deputy = actor.via ? productionDeputyPrincipal(actor.via.deputy) : null;
+    if (actor.via && (!deputy || deputy.seatConversationId !== actor.conversationId
+      || canonicalOrchestratorProject(deputy.project) !== project)) throw new Error("decision deputy authority is unavailable");
+    return JSON.stringify([
+      deputy,
+      project,
+      actor.conversationId === p.srcConversationId ? null : (() => { const active = orchestratorSeatIn(file, project).active; return active && [active.conversationId, active.seatEpoch, active.workspace]; })(),
+      (file.seatLineage ?? []).filter(row => row.project === project && row.conversationId === actor.conversationId),
+      file.revocations.filter(row => row.project === project && row.conversationId === actor.conversationId),
+    ]);
+  };
+  const original = identity(pipeline), route = seat(pipeline);
+  const assert = (current: Pipeline) => {
+    const refusal = decisionAnswerActorRefusal(current, actor, key);
+    if (identity(current) !== original || seat(current) !== route || refusal) throw new Error(refusal?.error ?? "decision authority changed during the call");
+  };
+  assert(pipeline);
+  return assert;
+}
+
+function decisionLaunchFence(p: Pipeline): string {
+  return JSON.stringify([p.id, p.project, p.srcConversationId, p.srcPath, p.srcDeputyConversationId, p.workspace,
+    p.repoDir, p.worktreeDir, p.branch, p.delivery && [p.delivery.target, p.delivery.ownerId, p.delivery.epoch, p.delivery.active, p.delivery.publish, p.delivery.disposition],
+    p.spec, p.inputContext, p.taskIds, p.finishesTaskIds, p.baseRef, p.baseBranch,
+    p.baseRefPinned, p.lastPassedCommit, p.publication, p.publishedCommit, p.stages, p.graphEdits?.at(-1)?.seq,
+    p.reviewGrants, p.reviewAcceptances, p.reviewPending, p.legacyReviewConversions, p.refreshOf, p.creationRequest, p.decisionAnswers,
+    p.task, p.proactiveTaskIds, p.publicationAdmission, p.delivery?.operation,
+    p.runs.map(run => [run.stageId, run.attempts.map(item => [item.n, item.historical, item.legacyReview, item.activatedBy,
+      item.budgetSpent, item.reviewedHead, item.expectedReviewHeadSha, item.reviewHeadSha, item.acceptedForReview,
+      run.stageId === p.cursor?.stageId && item === currentAttempt(p, run.stageId) ? null
+        : [item.input, item.output, item.report, item.verdict, item.startedAt, item.completedAt, item.definition, item.effectiveRole,
+          item.launchId, item.conversationId, item.sessionId, item.agentPath, item.paneId, item.accountId, item.hostEpoch,
+          item.runtimeSwitches, item.publicationRepair, item.commitRepair, item.providerRecoveryBudget, item.providerFallbackRetries]])])]);
+}
+
+/** Reconstructed from the accepted answer and current durable successor. No
+ * callback is persisted, and recovery keeps the same original answer owner. */
+export function capturePipelineDecisionLaunch(pipelineId: string, stageId: string, attemptNumber: number): (() => void) | undefined {
+  const original = findPipelineRecord(pipelineId);
+  const attempt = original && currentAttempt(original, stageId);
+  if (!attempt?.decisionAnswerId) return;
+  const answer = original!.decisionAnswers?.find(answer => answer.clientRequestId === attempt.decisionAnswerId);
+  if (!answer || answer.stageId !== stageId || answer.nextAttempt !== attemptNumber || attempt.n !== attemptNumber) throw new ActivationSuperseded();
+  const authority = captureDecisionAuthority(original!, answer.actor, answer.clientRequestId);
+  if (attempt.activation && attempt.activation.fence !== activationFence(original!)) throw new ActivationSuperseded();
+  const expected = decisionLaunchFence(original!);
+  return () => {
+    const current = findPipelineRecord(pipelineId);
+    const successor = current && currentAttempt(current, stageId);
+    if (!current || current.state !== "running" || current.cursor?.stageId !== stageId || decisionLaunchFence(current) !== expected
+      || successor?.n !== attemptNumber || successor.decisionAnswerId !== answer.clientRequestId
+      || successor.completedAt || successor.verdict || successor.report) throw new ActivationSuperseded();
+    authority(current);
+    if (answer.actor.kind === "agent") {
+      const file = readOrchestratorSeatFileOrNull();
+      const project = canonicalOrchestratorProject(current.project);
+      if (!file || file.revocations.some(row => row.project === project && row.conversationId === answer.actor.conversationId
+        && Date.parse(row.revokedAt) >= Date.parse(answer.at))) throw new ActivationSuperseded();
+    }
+  };
 }
 
 /** Accepting an answer reserves work; publication continuations first verify
@@ -16512,8 +16597,9 @@ async function resolveDecision(
   }
   // Rollback disables admission; durable answers and pending attempts remain readable/drainable.
   if (process.env.LLV_PIPELINE_RESOLVE_DECISION === "0") return { error: "resolve-decision is disabled", status: 409 };
-  const answeredRevision = pipelineRevision(pipeline);
-  if (!matchesShortId(answeredRevision, req.expectedRevision!)) {
+  const matched = resolveShortId([pipelineDecisionRevision(pipeline), pipelineRevision(pipeline)].filter((hash): hash is string => hash !== null), req.expectedRevision!);
+  if (matched.kind === "ambiguous") return { error: "expectedRevision is ambiguous; supply the full hash", status: 409, code: "short_id_ambiguous", field: "expectedRevision" };
+  if (matched.kind === "none") {
     return { error: "the pipeline changed since it was read; read it again before answering", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const expectation = expectedStageRefusal(pipeline, req);
@@ -16547,7 +16633,7 @@ async function resolveDecision(
     if (repairRefusal) return { error: repairRefusal, status: 409 };
   }
   const decision: PipelineDecisionAnswer = {
-    clientRequestId: req.clientRequestId, expectedRevision: answeredRevision,
+    clientRequestId: req.clientRequestId, expectedRevision: matched.value,
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
     question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
@@ -16836,13 +16922,38 @@ export async function patchPipeline(
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
   assertAuthority?.();
+  const decisionOriginal = req.action === "resolve-decision" ? findPipelineRecord(id) : null;
+  if (decisionOriginal) {
+    const refused = decisionAnswerActorRefusal(decisionOriginal, actor, req.clientRequestId);
+    if (refused) return refused;
+  }
+  const decisionAuthority = decisionOriginal ? captureDecisionAuthority(decisionOriginal, actor, req.clientRequestId) : null;
+  const originalDecision = decisionOriginal && pipelineDecisionRevision(decisionOriginal);
+  const originalFull = decisionOriginal && pipelineRevision(decisionOriginal);
+  const legacyDecision = decisionOriginal && typeof req.expectedRevision === "string" && originalFull
+    && matchesShortId(originalFull, req.expectedRevision);
+  const assertDecisionCurrent = () => {
+    if (!decisionOriginal || !decisionAuthority) return;
+    assertAuthority?.();
+    const current = findPipelineRecord(id);
+    if (!current) throw new Error("decision target is unavailable");
+    decisionAuthority(current);
+    if ((legacyDecision ? pipelineRevision(current) !== originalFull : pipelineDecisionRevision(current) !== originalDecision)) {
+      throw new Error("decision changed during admission");
+    }
+  };
+  const decisionPrincipal = decisionOriginal && workspaceMemberId
+    ? JSON.stringify(requireMemberWorkspacePrincipal(workspaceMemberId, decisionOriginal.project)) : null;
   const memberInput = workspaceMemberId && ["resolve-decision", "continue-review", "update-draft", "add-stage", "override-stage"].includes(req.action);
   const inputPrincipal = (pipelines: readonly Pipeline[]) => {
     const pipeline = pipelines.find(item => item.id === id);
-    return memberInput && pipeline ? requireMemberWorkspacePrincipal(workspaceMemberId!, pipeline.project) : null;
+    const principal = memberInput && pipeline ? requireMemberWorkspacePrincipal(workspaceMemberId!, pipeline.project) : null;
+    if (req.action === "resolve-decision" && decisionOriginal && workspaceMemberId && JSON.stringify(principal) !== decisionPrincipal) throw new Error("decision workspace authority changed");
+    return principal;
   };
-  const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
+  const scopedMutation: typeof withPipelineMutation = (mutate, observeHold, beforePersist) => withPipelineMutation((pipelines, persist) => {
     assertAuthority?.();
+    if (decisionAuthority) { const current = pipelines.find(item => item.id === id); if (current) decisionAuthority(current); }
     inputPrincipal(pipelines);
     return mutate(pipelines, async (records?: readonly Pipeline[]) => {
       assertAuthority?.();
@@ -16854,12 +16965,15 @@ export async function patchPipeline(
       if (pipeline && principal) pipeline.workspace ??= principal;
       if (records) await persist(records); else await persist();
     });
-  }, observeHold);
-  if (assertAuthority) {
+  }, observeHold, () => {
+    beforePersist?.();
+    if (req.action === "resolve-decision") { assertDecisionCurrent(); inputPrincipal([decisionOriginal!]); }
+  });
+  if (assertAuthority || decisionAuthority) {
     const original = ports;
     ports = new Proxy(original, { get(target, key, receiver) {
       const value = Reflect.get(target, key, receiver);
-      return typeof value === "function" ? (...args: unknown[]) => { assertAuthority(); return Reflect.apply(value, target, args); } : value;
+      return typeof value === "function" ? (...args: unknown[]) => { assertAuthority?.(); assertDecisionCurrent(); return Reflect.apply(value, target, args); } : value;
     } });
   }
   if (hasRetiredStage([req.stage])) return STAGE_RETIREMENT;
@@ -17132,7 +17246,7 @@ export async function patchPipeline(
         if (refusal) return refusal;
       }
       decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports,
-        req.action === "retry-stage");
+        req.action === "retry-stage", req.action === "resolve-decision" ? assertDecisionCurrent : undefined);
     }
   }
 
@@ -17168,7 +17282,7 @@ export async function patchPipeline(
     }
     if (req.action === "resolve-decision") {
       const result = await resolveDecision(pipeline, req, actor, ports, decisionProducerEvidence);
-      if (result.pipeline && !result.replayed) await persist();
+      if (result.pipeline && !result.replayed) { assertDecisionCurrent(); await persist(); }
       return result;
     }
     if (req.action === "accept-head") {
