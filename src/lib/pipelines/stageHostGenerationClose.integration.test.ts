@@ -1634,3 +1634,137 @@ test.each(["pipelines.json", "pipelines-archive.json"])("null legacy %s defers s
     generationEnvironment.LLV_STATE_DIR = previousGeneration;
   }
 });
+
+
+async function capacityPipeline(current: Lane) {
+  savePipelines([]);
+  const pipeline = pipelineFor(current, { attemptState: "running" });
+  pipeline.stages[0]!.id = "refresh";
+  pipeline.runs[0]!.stageId = "refresh";
+  pipeline.cursor!.stageId = "refresh";
+  const deliveryTarget = { repository: "repo-capacity-fixture", remote: "https://github.com/example/project.git",
+    branch: "refs/heads/capacity-topic", pr: 1 };
+  pipeline.delivery = { target: deliveryTarget, disposition: "owner", publish: "enabled", active: true,
+    ownerId: pipeline.id, epoch: 1, journal: [] };
+  const parent = structuredClone(pipeline);
+  parent.id = "capacity-origin";
+  parent.worktreeDir = parent.worktreeDir.replace(pipeline.id, parent.id);
+  parent.branch = parent.branch.replace(pipeline.id, parent.id);
+  parent.state = "completed"; parent.cursor = null; parent.closedAt = "2026-11-01T12:00:00.000Z";
+  parent.runs[0]!.attempts = [];
+  parent.delivery!.active = false; parent.delivery!.ownerId = parent.id;
+  parent.merge = { state: "refreshing", by: null, repository: "example/project", prNumber: 1,
+    policyChangedAt: parent.closedAt, reviewedHead: pipeline.lastPassedCommit, chain: [pipeline.lastPassedCommit],
+    updates: [], seenChecks: [], head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null,
+    requestedAt: parent.closedAt, mergedHead: null, mergeCommit: null, method: null, mergedAt: null,
+    attempts: 0, reason: null, blockedAt: null, updatedAt: parent.closedAt };
+  const { refreshReservation } = await import("@/lib/forge/autoRefresh");
+  parent.merge.refresh = refreshReservation(parent, "a".repeat(40), pipeline.lastPassedCommit, Date.parse(parent.closedAt), "main");
+  parent.merge.refresh.pipelineId = pipeline.id;
+  pipeline.refreshOf = { pipelineId: parent.id, base: parent.merge.refresh.base };
+  pipeline.creationRequest = { key: parent.merge.refresh.key, digest: parent.merge.refresh.digest };
+  savePipelines([parent, pipeline]);
+  const { realExec } = await import("@/lib/workflows/provision");
+  const { controllerCommitIdentityEnv } = await import("@/lib/git/controllerCommitIdentity");
+  const identity = controllerCommitIdentityEnv();
+  fs.mkdirSync(pipeline.worktreeDir, { recursive: true });
+  const git = async (...args: string[]) => {
+    const result = await realExec("git", args, pipeline.worktreeDir, identity);
+    expect(result.code, result.stderr).toBe(0);
+    return result.stdout;
+  };
+  await git("init");
+  fs.writeFileSync(path.join(pipeline.worktreeDir, "tracked.txt"), "original\n");
+  await git("add", "tracked.txt"); await git("commit", "-m", "Fixture base");
+  fs.writeFileSync(path.join(pipeline.worktreeDir, "tracked.txt"), "staged\n"); await git("add", "tracked.txt");
+  fs.appendFileSync(path.join(pipeline.worktreeDir, "tracked.txt"), "unstaged\n");
+  fs.writeFileSync(path.join(pipeline.worktreeDir, "untracked.txt"), "preserve\n");
+  const head = (await git("rev-parse", "HEAD")).trim();
+  fs.writeFileSync(path.join(pipeline.worktreeDir, ".git", "MERGE_HEAD"), head + "\n");
+  const snapshot = async () => ({ head: await git("rev-parse", "HEAD"), index: await git("ls-files", "--stage"),
+    status: await git("status", "--porcelain"), merge: fs.readFileSync(path.join(pipeline.worktreeDir, ".git", "MERGE_HEAD"), "utf8"),
+    tracked: fs.readFileSync(path.join(pipeline.worktreeDir, "tracked.txt"), "utf8"),
+    untracked: fs.readFileSync(path.join(pipeline.worktreeDir, "untracked.txt"), "utf8") });
+  const ports = defaultPipelinePorts();
+  ports.now = () => "2026-11-01T13:00:00.000Z";
+  const { invalidateProviderContinuation } = await import("./engine");
+  ports.invalidateProviderContinuation = (id, eligible) => invalidateProviderContinuation(id, runtimeHostClient(generationEnvironment)!, eligible);
+  return { id: pipeline.id, ports, head, snapshot };
+}
+
+test("active refresh capacity stops its real owned tree, preserves Git inputs and leaves a sentinel alive", async () => {
+  const current = await lane("tree");
+  const other = bystander();
+  const f = await capacityPipeline(current);
+  const before = await f.snapshot();
+  await tickPipelines([], f.ports);
+  const pipeline = pipelineRecord(f.id);
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  expect(attempt.suspension?.capacityYield).toMatchObject({ headBefore: f.head, headAfter: f.head,
+    settledAt: "2026-11-01T13:00:00.000Z" });
+  expect(pipeline.state).toBe("paused");
+  expect(attempt.verdict).toBeNull();
+  await settles(() => !current.hostA.alive() && !current.descendant!.alive(), "owned refresh tree exit");
+  expect(await f.snapshot()).toEqual(before);
+  expect(other.alive()).toBeTrue();
+  expect(signalsTo(other.pid)).toEqual([]);
+  expect(signalsTo(current.incumbent.pid)).toEqual([]);
+  expect(signalsTo(runtimeHost!.pid!)).toEqual([]);
+});
+
+test("refresh capacity waits for an owned descendant that outlives its stopped host", async () => {
+  const current = await lane("tree");
+  const other = bystander();
+  const f = await capacityPipeline(current);
+  const pipeline = pipelineRecord(f.id);
+  pipeline.runs[0]!.attempts[0]!.unresolvedTermination = { survivors: [current.descendant!.identity],
+    error: "owned check survived its host", recordedAt: f.ports.now() };
+  savePipelines([pipelineRecord("capacity-origin"), pipeline]);
+  await current.hostA.end();
+  expect(current.descendant!.alive()).toBeTrue();
+  await tickPipelines([], f.ports);
+  let attempt = pipelineRecord(f.id).runs[0]!.attempts[0]!;
+  expect(attempt.suspension?.stoppedAt).toBeDefined();
+  expect(attempt.suspension?.capacityYield?.settledAt).toBeUndefined();
+  expect(other.alive()).toBeTrue();
+  await current.descendant!.end();
+  await tickPipelines([], f.ports);
+  attempt = pipelineRecord(f.id).runs[0]!.attempts[0]!;
+  expect(attempt.suspension?.capacityYield?.settledAt).toBeDefined();
+  expect(attempt.verdict).toBeNull();
+  expect(other.alive()).toBeTrue();
+  expect(signalsTo(other.pid)).toEqual([]);
+});
+
+test.each(["control", "owner", "epoch", "launch", "target", "requirements", "policy"] as const)("active refresh capacity rechecks %s inside the real stop adapter after its last await", async change => {
+  const current = await lane("tree");
+  const f = await capacityPipeline(current);
+  const { withPipelineMutation } = await import("./store");
+  let awaited = 0;
+  const native = defaultPipelinePorts({ termination: { terminateOwnedHost: async () => {
+    awaited++;
+    if (change === "policy") {
+      const { mergeOnReviewSetting, setMergeOnReview } = await import("@/lib/projects/settings");
+      const project = pipelineRecord(f.id).project;
+      expect(setMergeOnReview(project, !mergeOnReviewSetting(project).enabled, "operator", "2026-11-01T13:01:00.000Z")).not.toBeNull();
+    } else await withPipelineMutation(async (rows, persist) => {
+      const pipeline = rows.find(row => row.id === f.id)!;
+      if (change === "control") pipeline.controlGeneration = "replacement-control";
+      if (change === "owner") { pipeline.delivery!.active = false; pipeline.delivery!.ownerId = "replacement-owner"; }
+      if (change === "epoch") pipeline.delivery!.epoch++;
+      if (change === "launch") pipeline.runs[0]!.attempts[0]!.launchId = "replacement-launch";
+      if (change === "target") pipeline.delivery!.target.branch = "refs/heads/replacement-target";
+      if (change === "requirements") pipeline.spec = "replacement requirements";
+      await persist([pipeline]);
+    });
+    return false;
+  } } });
+  f.ports.stopStageAgent = native.stopStageAgent;
+  await tickPipelines([], f.ports);
+  expect(awaited).toBeGreaterThan(0);
+  expect(pipelineRecord(f.id).runs[0]!.attempts[0]!.suspension?.capacityYield?.settledAt).toBeUndefined();
+  expect(current.hostA.alive()).toBeTrue();
+  expect(current.descendant!.alive()).toBeTrue();
+  expect(signalsTo(current.hostA.pid)).toEqual([]);
+  expect(signalsTo(current.descendant!.pid)).toEqual([]);
+});

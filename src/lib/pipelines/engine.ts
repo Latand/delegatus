@@ -1,3 +1,6 @@
+import { refreshCapacityOrigin, refreshCapacityHolders, refreshConcurrency, capacityYieldPending, REFRESH_CAPACITY_EXPIRED } from "./refreshCapacity";
+import { mergeOnReviewSetting } from "@/lib/projects/settings";
+import { pipelineRefreshCapacityCandidates } from "./store";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
@@ -401,7 +404,7 @@ export interface PipelinePorts {
   paneAgentAlive(paneId: string): Promise<boolean>;
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
-  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true; recordedIdentity?: true; eligible?: () => boolean;
+  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true; recordedIdentity?: true; capacityYield?: true; eligible?: () => boolean;
     requireIdleEvidence?: true;
     providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
     recordedSurvivors?: readonly ProcessIdentity[] }): Promise<PipelineStageStopResult>;
@@ -418,6 +421,11 @@ export interface PipelinePorts {
   /** Residency read with no side effects: `false` means the host is
       demonstrably gone. Used to retire an unconfirmed kill without re-killing. */
   stageHostResident(target: PipelineStageHostRef): Promise<boolean>;
+  /** Capacity may invalidate an old stop only on affirmative reappearance. */
+  stageHostPresence?(target: PipelineStageHostRef): Promise<"resident" | "absent" | "unknown">;
+  /** Read the original receiver receipt after a dispatched suspension. Missing
+      or compacted evidence never authorizes a second send. */
+  suspensionStopReceipt?(operationId: string, target: PipelineStageHostRef): Promise<PipelineStageStopResult | null>;
   /** What still runs, with no stream, for any registry row of these
       conversations, or null when nothing does (#2790). */
   stageHostTreeStillRunning?(conversationIds: readonly string[]): string | null;
@@ -541,7 +549,7 @@ export interface PipelinePorts {
   /** Journal proof that the accepted continuation was refused before execution. */
   conversationDeliveryRetryable?(conversationId: string, clientMessageId: string): Promise<boolean>;
   /** Withdraw queued automatic continuations before acknowledging operator control. */
-  invalidateProviderContinuation?(conversationId: string): Promise<void>;
+  invalidateProviderContinuation?(conversationId: string, eligible?: () => boolean): Promise<void>;
   /** A fresh live quota reading after the limit proves the source recovered. */
   claudeAccountRecovered?(accountId: string, limitedAt: number, model: string | null): boolean;
   /** Fresh provider proof after a cut, including a successful sign-in. */
@@ -783,7 +791,14 @@ async function spawnPipelineAgent(
   let deadline = input.spawnAdmissionDeadline ?? Infinity;
   const workspace = input.workspace ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId), input.creatorConversationId);
   let workspaceAccountId: string | null = null;
+  const initialRefresh = findPipelineRecord(input.membership.containerId);
+  const refreshFence = initialRefresh && refreshWriterFence(initialRefresh);
+  const refreshPolicy = refreshFence && JSON.stringify(mergeOnReviewSetting(input.project));
   const assertAdmissionCurrent = () => {
+    const lane = refreshFence ? findPipelineRecord(input.membership.containerId) : null;
+    if (refreshFence && (!lane || refreshWriterFence(lane) !== refreshFence
+      || JSON.stringify(mergeOnReviewSetting(input.project)) !== refreshPolicy
+      || refreshExecutionRefusal(lane, { now: () => new Date().toISOString() }))) throw new ActivationSuperseded();
     if (performance.now() >= deadline) throw new SpawnAdmissionBudgetExhausted();
     if (workspace && !workspacePrincipalAllows(workspace, input.project)) throw new Error("workspace access denied");
     if (workspace && workspaceAccountId) {
@@ -1608,6 +1623,7 @@ async function stopStageHostByRecordedIdentity(
   onCapture?: (capture: StructuredTerminationCapture | null) => void,
   /** Told once the stop has released the host or is about to signal it. */
   onFirstEffect?: () => void,
+  operationId?: string,
 ): Promise<PipelineStageStopResult> {
   const registry = agentRegistry();
   const refused = (reason: string): PipelineStageStopResult => ({
@@ -1672,7 +1688,7 @@ async function stopStageHostByRecordedIdentity(
     ?? registry.readOnlySnapshot().entries[sessionKeyId(probe.key)]?.structuredTerminationSurvivors ?? [];
   const outcome = await terminateStructuredHostTree(ref, {
     ...termination,
-    stopOrigin: { path: "pipeline-stage-stop", operationId: `${target.launchId}:${target.stageId}:${target.attempt}` },
+    stopOrigin: { path: "pipeline-stage-stop", operationId: operationId ?? `${target.launchId}:${target.stageId}:${target.attempt}` },
     retainedSurvivors,
     authorize,
     onFirstEffect: () => {
@@ -2266,7 +2282,35 @@ export function defaultPipelinePorts(
       if (observation.kind === "failure") return true;
       return [...observation.panes.values()].some(pane => pane.paneId === paneId);
     },
-    stopStageAgent: async (target, options) => options?.recordedIdentity
+    suspensionStopReceipt: async (operationId, target) => {
+      const client = runtimeHostClient();
+      const receipt = await client?.operationStatus(operationId);
+      if (receipt?.operationId !== operationId || receipt.receipt.operationId !== operationId || receipt.receipt.kind !== "kill"
+        || receipt.receipt.conversationId !== target.conversationId || receipt.receipt.status !== "delivered") return null;
+      const launch = target.launchId ? registry.spawnReceipt(target.launchId) : null;
+      if (!launch?.key || launch.conversationId !== target.conversationId) return null;
+      const probe = await stageHostProbe(target);
+      if (probe && (sessionKeyId(launch.key) !== sessionKeyId(probe.key) || launch.artifactPath !== probe.transcriptPath)) return null;
+      return !probe?.resident() ? { outcome: "stopped" } : null;
+    },
+    stopStageAgent: async (target, options) => options?.capacityYield
+      ? withViewerOperation("pipelines.capacity-stop", async () => {
+        const probe = await stageHostProbe(target);
+        const launch = target.launchId ? registry.spawnReceipt(target.launchId) : null;
+        const guard = () => {
+          const current = target.launchId ? registry.spawnReceipt(target.launchId) : null;
+          return options.eligible?.() === true && !!launch?.key && !!current?.key && !!probe
+            && launch.conversationId === target.conversationId && current.conversationId === launch.conversationId
+            && sessionKeyId(current.key) === sessionKeyId(launch.key) && sessionKeyId(launch.key) === sessionKeyId(probe.key)
+            && current.artifactPath === launch.artifactPath && launch.artifactPath === probe.transcriptPath ? null
+            : { status: 409 as const, error: "refresh capacity stop authority or original launch changed" };
+        };
+        const refusal = guard();
+        if (refusal) return { outcome: "failed", error: refusal.error };
+        if (!probe?.resident()) return { outcome: "not-running" };
+        return stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, guard, undefined, undefined, options.operationId);
+      })
+      : options?.recordedIdentity
       ? withViewerOperation("pipelines.evidence", async () => {
         const receipt = target.launchId ? registry.spawnReceipt(target.launchId) : null;
         const stamp = stageArtifactStamp(receipt?.artifactPath);
@@ -2410,6 +2454,10 @@ export function defaultPipelinePorts(
         }
       }
       return null;
+    },
+    stageHostPresence: async target => {
+      try { return (await stageHostProbe(target))?.resident() ? "resident" : "absent"; }
+      catch { return "unknown"; }
     },
     stageHostResident: async (target) => {
       try {
@@ -2633,7 +2681,7 @@ export function defaultPipelinePorts(
       }
       return result?.ok === true;
     },
-    invalidateProviderContinuation,
+    invalidateProviderContinuation: (conversationId, eligible) => invalidateProviderContinuation(conversationId, runtimeHostClient(), eligible),
     runtimeSwitchControl: async (conversationId, path, action, operationId, target) => {
       const conversation = registry.conversation(conversationId as ViewerConversationId);
       if (conversation?.reconfigure?.operationId === operationId) return;
@@ -3820,6 +3868,7 @@ async function recoverProviderCut(
     scheduleProviderWake(ports, wait.resumeAt);
     return true;
   }
+  if (await prepareRefreshCapacityYield(pipeline, ports, persist)) return true;
   if (target) {
     // A reseat request acknowledges intent; only a fresh host binds the target here.
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
@@ -3840,7 +3889,10 @@ async function recoverProviderCut(
   const cutTs = wait.turnTs;
   const controlGeneration = pipeline.controlGeneration;
   let continuationRefusal: string | null = null;
+  const refreshPolicy = pipeline.refreshOf && stage.id === "refresh" ? JSON.stringify(mergeOnReviewSetting(pipeline.project)) : null;
   const continuationAllowed = async () => {
+    if (!refreshContinuationAllowed(pipeline, stage, attempt, ports)
+      || refreshPolicy !== null && JSON.stringify(mergeOnReviewSetting(pipeline.project)) !== refreshPolicy) return false;
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
       continuationRefusal = "operator-stop authority holds provider recovery";
       return false;
@@ -3864,7 +3916,10 @@ async function recoverProviderCut(
       : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
       : latest.terminalProviderMessage?.ts !== cutTs ? "terminal provider record no longer matches the cut"
       : stageAccountBlocked(pipeline, attempt, ports);
-    return continuationRefusal === null;
+    const currentRefresh = findPipelineRecord(pipeline.id);
+    return continuationRefusal === null && refreshContinuationAllowed(pipeline, stage, attempt, ports)
+      && (refreshPolicy === null || JSON.stringify(mergeOnReviewSetting(pipeline.project)) === refreshPolicy)
+      && (!currentRefresh || !refreshExecutionRefusal(currentRefresh, ports));
   };
   let delivered: boolean;
   try {
@@ -3910,13 +3965,16 @@ async function stopStageForRecovery(target: PipelineStageHostRef, ports: Pipelin
 }
 
 /** Withdraw the idle revision a queued provider continuation was admitted against. */
-export async function invalidateProviderContinuation(conversationId: string, client = runtimeHostClient()): Promise<void> {
+export async function invalidateProviderContinuation(conversationId: string, client = runtimeHostClient(), eligible?: () => boolean): Promise<void> {
   if (!client) throw new Error("runtime host is unavailable");
   // Informational session events consume a revision. Held deliveries retain
   // their old fence and are refused when they subsequently reach the journal.
-  await withConversationActuation(conversationId, () => client.append({ scope: { type: "session", id: conversationId },
+  await withConversationActuation(conversationId, () => {
+    if (eligible?.() === false) throw new Error("continuation withdrawal authority changed");
+    return client.append({ scope: { type: "session", id: conversationId },
     kind: "pipeline.provider-continuation-cancelled", payload: { conversationId },
-    producer: { kind: "viewer-command", eventKey: `provider-cancel:${crypto.randomUUID()}` } }));
+    producer: { kind: "viewer-command", eventKey: `provider-cancel:${crypto.randomUUID()}` } });
+  });
 }
 
 async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, condition: ProviderCondition, ports: PipelinePorts, persist: () => void | Promise<void>, target: string | null): Promise<boolean> {
@@ -7368,7 +7426,10 @@ async function continueRestoredClaudeStage(
     try { return await ports.conversationOperatorStopped(conversationId, attemptEvidenceFloor(attempt) ?? attempt.startedAt ?? recovery.cutAt, ignored); }
     catch { return true; }
   };
+  const refreshPolicy = pipeline.refreshOf && stage.id === "refresh" ? JSON.stringify(mergeOnReviewSetting(pipeline.project)) : null;
   const continuationAllowed = async () => {
+    if (!refreshContinuationAllowed(pipeline, stage, attempt, ports)
+      || refreshPolicy !== null && JSON.stringify(mergeOnReviewSetting(pipeline.project)) !== refreshPolicy) return false;
     if (!current() || await operatorStopped()) return false;
     const latest = await read();
     if (!current() || await operatorStopped()) return false;
@@ -7384,7 +7445,10 @@ async function continueRestoredClaudeStage(
     if (!current()) return false;
     const latestActive = await ports.conversationAgentActive(conversationId);
     if (!current() || await operatorStopped()) return false;
-    return current() && !restartCutHoldsStageRecovery(attempt, ports)
+    const currentRefresh = findPipelineRecord(pipeline.id);
+    return refreshContinuationAllowed(pipeline, stage, attempt, ports)
+      && (refreshPolicy === null || JSON.stringify(mergeOnReviewSetting(pipeline.project)) === refreshPolicy)
+      && (!currentRefresh || !refreshExecutionRefusal(currentRefresh, ports)) && current() && !restartCutHoldsStageRecovery(attempt, ports)
       && !deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
       && !ports.conversationDeliveryOutstanding?.(conversationId)
       && (latestActive !== true || !!latestInterrupted)
@@ -7797,6 +7861,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
   if ((ports.structuredDeliveryPublication?.() ?? "ready") !== "ready") { await drainPipelineCloses(ports); return; }
   const owner = captureProcessIdentity(process.pid);
   for (const snapshot of await selectControllerPipelines("activation")) {
+    if (refreshExecutionRefusal(snapshot, ports)) continue;
     for (const run of controllerRuns(snapshot)) for (const original of run.attempts) {
       const reservation = original.activation;
       if (!reservation || activeActivations.has(reservation.id) || !controllerAttemptSelected(snapshot.id, run.stageId, original.n)) continue;
@@ -8250,6 +8315,7 @@ async function spawnRunStage(
     const setupAbort = new AbortController();
     const assertSetupCurrent = () => {
       const current = findPipelineRecord(pipeline.id);
+      if (current && refreshExecutionRefusal(current, ports)) throw new ActivationSuperseded();
       if (attempt.activation) {
         const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
         if (!current || activationFence(current) !== attempt.activation.fence
@@ -8435,6 +8501,7 @@ async function spawnRunStage(
       delete attempt.spawnAdmissionBudget!.inFlightKind;
       await persist();
       try {
+        assertSetupCurrent();
         assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
         const scopeEvidence = proactiveScopeReviewEvidence(findPipelineRecord(pipeline.id) ?? pipeline, stage.id);
         const scopePrompt = (prompt: string) => scopeEvidence ? `${prompt}\n\nFrozen scope-review evidence:\n${scopeEvidence}` : prompt;
@@ -8461,6 +8528,7 @@ async function spawnRunStage(
           const remaining = switchSpawnAdmissionPhase(attempt, ports.now(), kind);
           const deadline = performance.now() + remaining;
           await persist();
+          assertSetupCurrent();
           if (performance.now() >= deadline) throw new SpawnAdmissionBudgetExhausted(spawnAdmissionFailure(attempt));
           return deadline;
         });
@@ -9194,6 +9262,106 @@ function accountHoldDetail(attempt: PipelineStageAttempt, hold: PipelineAccountH
     ? ` to reset at ${new Date(hold.resetsAt * 1_000).toISOString()}` : " until a new reading shows capacity"}; keeping the current worktree`;
 }
 
+function recordedRefreshOrigin(pipeline: Pipeline) {
+  try { return refreshCapacityOrigin(pipeline, pipeline.refreshOf ? findPipelineRecord(pipeline.refreshOf.pipelineId) : null); }
+  catch { return { reason: "refresh capacity origin is unreadable; execution remains UNKNOWN" }; }
+}
+
+function refreshWriterFence(pipeline: Pipeline): string | null {
+  if (!pipeline.refreshOf || pipeline.cursor?.stageId !== "refresh") return null;
+  const attempt = currentAttempt(pipeline, "refresh");
+  return JSON.stringify([activationFence(pipeline), pipeline.spec, pipeline.inputContext, pipeline.workspace,
+    pipeline.repoDir, pipeline.worktreeDir, pipeline.branch, pipeline.baseRef, pipeline.lastPassedCommit,
+    pipeline.refreshOf && [pipeline.refreshOf.pipelineId, pipeline.refreshOf.base, pipeline.refreshOf.capacity],
+    pipeline.creationRequest, pipeline.delivery && [pipeline.delivery.ownerId, pipeline.delivery.epoch,
+      pipeline.delivery.active, pipeline.delivery.publish, pipeline.delivery.target], attempt?.n, attempt?.definition, attempt?.input]);
+}
+
+function refreshContinuationAllowed(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  if (!pipeline.refreshOf || stage.id !== "refresh") return true;
+  const live = findPipelineRecord(pipeline.id), current = live && currentAttempt(live, stage.id);
+  return !!live && !!current && refreshWriterFence(live) === refreshWriterFence(pipeline)
+    && current.n === attempt.n && current.launchId === attempt.launchId && current.conversationId === attempt.conversationId
+    && !refreshExecutionRefusal(live, ports);
+}
+
+/** Derives authority from the original reservation on every execution boundary. */
+function refreshExecutionRefusal(pipeline: Pipeline, ports: Pick<PipelinePorts, "now">, capacity = true): string | null {
+  if (!pipeline.refreshOf || pipeline.cursor?.stageId !== "refresh") return null;
+  const attempt = currentAttempt(pipeline, "refresh");
+  if (pipeline.cursor.state !== "pending" && attempt && ["committing", "passed", "skipped"].includes(attempt.state)
+    && !capacityYieldPending(pipeline)) return null;
+  const origin = recordedRefreshOrigin(pipeline);
+  if ("reason" in origin) return origin.reason;
+  if (unixMs(ports.now()) >= unixMs(origin.capacity.deadline)) return REFRESH_CAPACITY_EXPIRED;
+  if (capacityYieldPending(pipeline)) return "refresh capacity yield is awaiting confirmed settlement";
+  if (!pipeline.delivery?.active || pipeline.delivery.disposition !== "owner" || pipeline.delivery.ownerId !== pipeline.id
+    || deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }))) return "refresh delivery ownership changed";
+  if (!capacity) return null;
+  const repository = pipeline.delivery?.target.repository;
+  if (!repository) return "refresh repository identity is unavailable";
+  try {
+    const holders = refreshCapacityHolders(pipelineRefreshCapacityCandidates(repository), repository,
+      row => row.delivery?.target.repository, pipeline.id);
+    return holders.length >= refreshConcurrency(Number(process.env.LLV_MERGE_REFRESH_CONCURRENCY))
+      ? "waiting for repository capacity held by another refresh" : null;
+  } catch (error) {
+    return `refresh repository capacity is unreadable; admission remains UNKNOWN: ${redactBounded(String(error), 200)}`;
+  }
+}
+
+function refreshYieldAuthority(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): string {
+  return crypto.createHash("sha256").update(JSON.stringify([activationFence(pipeline), pipeline.cursor,
+    pipeline.id, pipeline.project, pipeline.repoDir, pipeline.worktreeDir, pipeline.branch,
+    pipeline.baseRef, pipeline.baseBranch, pipeline.lastPassedCommit, pipeline.publishedCommit,
+    pipeline.spec, pipeline.inputContext, pipeline.taskIds, pipeline.workspace, pipeline.decisionAnswers,
+    pipeline.refreshOf && [pipeline.refreshOf.pipelineId, pipeline.refreshOf.base, pipeline.refreshOf.capacity],
+    pipeline.creationRequest, pipeline.delivery && [pipeline.delivery.ownerId, pipeline.delivery.epoch,
+      pipeline.delivery.active, pipeline.delivery.publish, pipeline.delivery.target],
+    stage, attempt.n, attempt.launchId, attempt.conversationId, attempt.agentPath, attempt.paneId,
+    attempt.input, attempt.definition, attempt.effectiveRole, attempt.accountId,
+    mergeOnReviewSetting(pipeline.project), ports.allowedAccountIds?.(pipeline.project, attempt.effectiveRole.engine),
+  ])).digest("hex");
+}
+
+/** A yield blocks ordinary recovery, even in paused and needs_decision. Slow
+ * stop and evidence work is driven after releasing the collection lease. */
+async function prepareRefreshCapacityYield(pipeline: Pipeline, ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  if (pipeline.state === "draft" || !pipeline.refreshOf || pipeline.cursor?.stageId !== "refresh" && !capacityYieldPending(pipeline)) return false;
+  const stage = currentStage(pipeline);
+  if (!stage) return false;
+  let attempt = currentAttempt(pipeline, stage.id);
+  if (attempt && ["committing", "passed", "skipped"].includes(attempt.state) && !pipeline.refreshOf.capacityRefusal) return false;
+  const origin = recordedRefreshOrigin(pipeline);
+  if ("reason" in origin) {
+    if (pipeline.refreshOf.capacityRefusal !== origin.reason || pipeline.stateDetail !== origin.reason) {
+      pipeline.refreshOf.capacityRefusal = origin.reason;
+      pipeline.stateDetail = origin.reason;
+      await persist();
+    }
+    return true;
+  }
+  if (pipeline.refreshOf.capacityRefusal) { delete pipeline.refreshOf.capacityRefusal; await persist(); }
+  if (attempt && ["committing", "passed", "skipped"].includes(attempt.state)) return false;
+  if (attempt?.suspension?.capacityYield) return true;
+  if (!pipeline.refreshOf.capacity) {
+    pipeline.refreshOf.capacity = { ...origin.capacity }; delete pipeline.refreshOf.capacityRefusal; await persist();
+  }
+  const remaining = unixMs(origin.capacity.deadline) - unixMs(ports.now());
+  if (remaining > 0) { ports.scheduleTick?.(remaining); return false; }
+  attempt ??= await newAttempt(pipeline, stage);
+  if (!attempt) return true;
+  if (pipeline.state !== "paused") { pipeline.pausedState = pipeline.state; pipeline.state = "paused"; }
+  attempt.suspension ??= { reason: "pause", detail: REFRESH_CAPACITY_EXPIRED, requestedAt: ports.now() };
+  const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
+  attempt.suspension.capacityYield = { reservationKey: origin.capacity.key, deadline: origin.capacity.deadline,
+    target, authority: refreshYieldAuthority(pipeline, stage, attempt, ports) };
+  pipeline.stateDetail = REFRESH_CAPACITY_EXPIRED;
+  await persist();
+  return true;
+}
+
 function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
   return `stage-suspend-${pipeline.id}-${stage.id}-${attempt.n}-${Date.parse(attempt.suspension!.requestedAt)}-${attempt.suspension!.stopRevision ?? 0}`;
 }
@@ -9220,6 +9388,7 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
     || target.paneId && await ports.paneAgentAlive(target.paneId))) {
     suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
     delete suspension.stoppedAt;
+    if (suspension.capacityYield) { delete suspension.capacityYield.stopRequestedAt; delete suspension.capacityYield.settledAt; }
     await persist();
   }
   if (!suspension.stoppedAt) {
@@ -9233,7 +9402,8 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
       }
       if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
         if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
-        pipeline.stateDetail = `${suspension.detail}; waiting for host termination: ${"error" in stopped ? stopped.error : stopped.outcome}`;
+        pipeline.stateDetail = `${suspension.detail}; waiting for host termination: ${"error" in stopped ? stopped.error
+          : suspension.capacityYield && "detail" in stopped ? stopped.detail : stopped.outcome}`;
         await persist(); ports.scheduleTick?.(1_000); return false;
       }
       suspension.stoppedAt = ports.now();
@@ -9252,6 +9422,192 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
     await persist(); ports.scheduleTick?.(1_000); return false;
   }
   return true;
+}
+
+/** The shared lease protects checkpoints only. A slow host or transcript
+ * cannot keep unrelated pipeline mutations waiting behind termination. */
+async function drainRefreshCapacityYield(id: string, ports: PipelinePorts): Promise<void> {
+  const lock = path.join(pipelineArtifactsDir(id), "refresh-capacity-yield.lock");
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  const descriptor = await acquirePublicationFileLock(lock);
+  if (descriptor === null) { ports.scheduleTick?.(1000); return; }
+  let intentAuthority: string | null = null;
+  try {
+    const pipeline = findPipelineRecord(id);
+    const stage = pipeline && currentStage(pipeline);
+    const attempt = stage && pipeline && currentAttempt(pipeline, stage.id);
+    const original = attempt?.suspension?.capacityYield;
+    if (!pipeline || !stage || !attempt || !original) return;
+    intentAuthority = original.authority;
+    const target = { ...original.target };
+    const eligible = () => {
+      try {
+        const live = findPipelineRecord(id), current = live && currentAttempt(live, target.stageId);
+        const marker = current?.suspension?.capacityYield;
+        if (!live || !current || !marker || live.closedAt || live.hiddenAt
+          || marker.authority !== original.authority || marker.reservationKey !== original.reservationKey
+          || marker.deadline !== original.deadline || JSON.stringify(marker.target) !== JSON.stringify(target)
+          || JSON.stringify(target) !== JSON.stringify({ stageId: target.stageId, attempt: current.n, launchId: current.launchId,
+            conversationId: current.conversationId, agentPath: current.agentPath, paneId: current.paneId })) return false;
+        const origin = live.refreshOf && recordedRefreshOrigin(live);
+        return !!origin && !("reason" in origin) && origin.capacity.key === marker.reservationKey && origin.capacity.deadline === marker.deadline
+          && refreshYieldAuthority(live, stage!, current, ports) === marker.authority;
+      } catch { return false; } // Unreadable authority retains the original intent without effects.
+    };
+    const assertEligible = () => { if (!eligible()) throw new StateSnapshotChangedError(); };
+    const checkpoint = async () => {
+      await withPipelineMutation(async (rows, persist) => {
+        assertEligible();
+        const live = rows.find(row => row.id === id)!;
+        const current = currentAttempt(live, target.stageId)!;
+        // Report arrivals are preserved: only this suspension and its reason
+        // are written from the external executor's snapshot.
+        current.suspension = structuredClone(attempt!.suspension);
+        live.stateDetail = pipeline!.stateDetail;
+        await persist([live]);
+      });
+      assertEligible();
+    };
+    const outside = controllerSnapshotPorts(ports, assertEligible, id);
+    if (original.settledAt) {
+      if (await outside.stageHostPresence?.(target) !== "resident") return;
+      delete original.settledAt;
+      await checkpoint();
+    }
+    if (original.headBefore === undefined) {
+      if (outside.worktreePresent(pipeline.worktreeDir)) {
+        const head = await outside.exec("git", ["rev-parse", "--verify", "HEAD"], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
+        if (head.code !== 0 || !/^[a-f0-9]{40}$/i.test(head.stdout.trim())) throw new Error("refresh HEAD before stop is unreadable");
+        original.headBefore = head.stdout.trim();
+      } else {
+        if (target.launchId || target.conversationId || target.agentPath || target.paneId || attempt.startedAt) {
+          throw new Error("refresh checkout is missing; original HEAD remains UNKNOWN");
+        }
+        original.headBefore = null;
+      }
+      await checkpoint();
+    }
+    // Re-read the report before stop, even when its turn still owes completion.
+    if (target.agentPath) await outside.durableTurnEvidence(attempt.effectiveRole.engine, target.agentPath, undefined, attemptEvidenceFloor(attempt));
+    const guarded: PipelinePorts = { ...outside,
+      stageHostResident: async received => {
+        const presence = await outside.stageHostPresence?.(received);
+        if (!presence || presence === "unknown") throw new Error("original host presence is unreadable; UNKNOWN, stop proof retained");
+        return presence === "resident";
+      },
+      // A pane liveness failure supplies no affirmative reappearance proof.
+      paneAgentAlive: async paneId => await outside.stageHostPresence?.(target) === "resident" && await outside.paneAgentAlive(paneId),
+      invalidateProviderContinuation: async conversationId => {
+        assertEligible();
+        if (original.continuationWithdrawnAt) return;
+        if (!ports.invalidateProviderContinuation) throw new Error("continuation withdrawal proof is unavailable");
+        await ports.invalidateProviderContinuation(conversationId, eligible);
+        assertEligible();
+        original.continuationWithdrawnAt = ports.now();
+        await checkpoint();
+      },
+      stopStageAgent: async (received, options) => {
+        assertEligible();
+        if (JSON.stringify(received) !== JSON.stringify(target)) throw new StateSnapshotChangedError();
+        if (!target.agentPath && !target.paneId && (!target.launchId && !target.conversationId
+          && undispatchedRunAttempt(pipeline!, stage!, attempt!)
+          || target.launchId && outside.spawnReceipt(target.launchId)?.neverBegan === true)) return { outcome: "not-running" };
+        if (original.stopRequestedAt) {
+          const result = await outside.suspensionStopReceipt?.(options!.operationId!, target);
+          assertEligible();
+          return result ?? { outcome: "unconfirmed", operationId: options!.operationId!, detail: "original stop receipt is missing or incomplete; UNKNOWN, no resend" };
+        }
+        original.stopRequestedAt = ports.now();
+        await checkpoint();
+        assertEligible();
+        const stopped = await ports.stopStageAgent(target, { ...options, capacityYield: true, eligible });
+        assertEligible();
+        return stopped;
+      },
+      stopStagePane: async () => !target.paneId || !await outside.paneAgentAlive(target.paneId)
+        ? { outcome: "not-running" }
+        : { outcome: "unknown", detail: "refresh pane termination requires original identity proof; UNKNOWN" },
+    };
+    if (!await stopSuspendedStage(pipeline, stage, attempt, guarded, checkpoint)) return;
+    const quiescent = async (): Promise<StageTurnEvidence | null> => {
+      assertEligible();
+      if (await outside.stageHostResident(target) || target.paneId && await outside.paneAgentAlive(target.paneId)) throw new Error("refresh writer remains resident");
+      if (!ports.stageHostTreeStillRunning || outside.stageHostTreeStillRunning?.(target.conversationId ? [target.conversationId] : [])) {
+        throw new Error("refresh owned process tree is unresolved");
+      }
+      if (!target.agentPath && target.launchId && outside.spawnReceipt(target.launchId)?.neverBegan !== true) {
+        throw new Error("original refresh transcript is unavailable; owned work remains UNKNOWN");
+      }
+      const durable = target.agentPath ? await outside.durableTurnEvidence(attempt!.effectiveRole.engine, target.agentPath,
+        undefined, attemptEvidenceFloor(attempt!)) : null;
+      if (target.agentPath && !durable?.backgroundTasks) throw new Error("refresh owned background work is unreadable; UNKNOWN");
+      if (durable?.backgroundTasks?.length) throw new Error("refresh owned background work is unsettled");
+      if (target.launchId && recordedReportReceipts(target.launchId).some(row => row.pending || !row.complete && !row.exclusion)) {
+        throw new Error("refresh owned checks have incomplete settlement");
+      }
+      if (pipelineSurvivorRefusal(findPipelineRecord(id)!) || target.conversationId
+        && (!ports.conversationDeliveryOutstanding || outside.conversationDeliveryOutstanding?.(target.conversationId))) {
+        throw new Error("refresh delivery settlement is unresolved");
+      }
+      assertEligible();
+      return durable;
+    };
+    await quiescent();
+    if (outside.worktreePresent(pipeline.worktreeDir)) {
+      const head = await outside.exec("git", ["rev-parse", "--verify", "HEAD"], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
+      if (head.code !== 0 || !/^[a-f0-9]{40}$/i.test(head.stdout.trim())) throw new Error("refresh HEAD after stop is unreadable");
+      original.headAfter = head.stdout.trim();
+    } else if (original.headBefore !== null) throw new Error("refresh checkout disappeared during stop");
+    // Final evidence read includes a report delivered during the HEAD read.
+    const durable = await quiescent();
+    await withPipelineControllerMutation(async (rows, persist, assertCurrent) => {
+      assertEligible();
+      const live = rows.find(row => row.id === id)!;
+      const current = currentAttempt(live, target.stageId)!;
+      if (current.report && !reportTurnFinished(current, durable)) {
+        live.stateDetail = "refresh report is pending its terminal turn; capacity retained";
+        await persist([live]);
+        return;
+      }
+      current.suspension = structuredClone(attempt!.suspension);
+      current.suspension!.capacityYield!.settledAt = ports.now();
+      const externalAuthority = () => JSON.stringify([recordedRefreshOrigin(live), mergeOnReviewSetting(live.project),
+        ports.allowedAccountIds?.(live.project, current.effectiveRole.engine)]);
+      const authority = externalAuthority();
+      const assertSettlement = () => {
+        assertCurrent(live);
+        if (externalAuthority() !== authority || ports.stageHostTreeStillRunning?.(target.conversationId ? [target.conversationId] : [])
+          || target.conversationId && ports.conversationDeliveryOutstanding?.(target.conversationId)
+          || target.launchId && recordedReportReceipts(target.launchId).some(row => row.pending || !row.complete && !row.exclusion)) {
+          throw new StateSnapshotChangedError();
+        }
+      };
+      const finalPorts = controllerSnapshotPorts({ ...ports, deferStageGit: true }, assertSettlement, id);
+      const save = async () => { assertSettlement(); await persist([live]); };
+      if (!await settleOnRecordedReport(live, stage!, current, finalPorts, save, durable)) {
+        const parsed = durable?.turn === "terminal" && !durable.terminalProviderMessage && durable.message
+          && durable.message.ts > unixMs(attemptEvidenceFloor(current)) ? parsePipelineStageVerdict(durable.message.text) : null;
+        if (parsed) {
+          live.state = "running";
+          await settleStageVerdict(live, stage!, current, parsed, finalPorts, save);
+        } else live.stateDetail = `${REFRESH_CAPACITY_EXPIRED}; writer and owned work stopped; checkout preserved`;
+      }
+      if (live.pause && live.state !== "paused") { live.pausedState = live.state === "draft" ? "running" : live.state; live.state = "paused"; }
+      await save();
+    });
+  } catch (error) {
+    if (!(error instanceof StateSnapshotChangedError)) {
+      await withPipelineMutation(async (rows, persist) => {
+        const live = rows.find(row => row.id === id), current = live?.cursor && currentAttempt(live, live.cursor.stageId);
+        const stage = live && currentStage(live);
+        if (!live || !stage || !current?.suspension?.capacityYield || current.suspension.capacityYield.authority !== intentAuthority
+          || refreshYieldAuthority(live, stage, current, ports) !== intentAuthority) return;
+        const detail = `${REFRESH_CAPACITY_EXPIRED}; ${redactBounded(String(error), 300)}`;
+        if (live.stateDetail !== detail) { live.stateDetail = detail; await persist([live]); }
+      });
+    }
+    ports.scheduleTick?.(1000);
+  } finally { releasePublicationFileLock(descriptor); }
 }
 
 function terminalCloudResultRejected(attempt: PipelineStageAttempt): boolean {
@@ -9308,6 +9664,11 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   recordAccountHold(attempt, blocked, ports);
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
+  const capacityRefusal = refreshExecutionRefusal(pipeline, ports);
+  if (capacityRefusal) {
+    if (pipeline.stateDetail !== capacityRefusal) { pipeline.stateDetail = capacityRefusal; await persist(); }
+    ports.scheduleTick?.(1000); return true;
+  }
   if (attempt.suspension.retryRequestedAt && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE) attempt.error = null;
   if (attempt.conversationId && ports.conversationOperatorStopped) {
     try {
@@ -9993,6 +10354,12 @@ async function tickRunStage(
   persist: () => void | Promise<void>,
   recoveryAccountingDeadline: number,
 ): Promise<void> {
+  const refreshRefusal = refreshExecutionRefusal(pipeline, ports, pipeline.cursor?.state === "pending");
+  if (refreshRefusal) {
+    if (pipeline.stateDetail !== refreshRefusal) { pipeline.stateDetail = refreshRefusal; await persist(); }
+    ports.scheduleTick?.(1000);
+    return;
+  }
   const canSpendRecoveryCheck = () => ports.monotonicNow() < recoveryAccountingDeadline;
   const prior = currentAttempt(pipeline, stage.id);
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
@@ -10472,6 +10839,7 @@ async function tickRunStage(
   }
   // A persisted provider wait owns recovery even when startup restores an idle
   // host behind a stale open-turn scan. Let its controller inspect durable progress.
+  if (await prepareRefreshCapacityYield(pipeline, ports, persist)) return;
   if (!attempt.providerWait && entry && structuredActive !== false && paneActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
 
   if (!canSpendRecoveryCheck()) return;
@@ -11241,7 +11609,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
       ...admitted.flatMap(row => { const current = findPipelineRecord(row.id); return current ? [current] : []; })]
       .map(row => [row.id, row])).values()].filter((pipeline) =>
       pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt
-      && (!publishesRemoteBranch(pipeline) || pipeline.delivery)
+      && (!publishesRemoteBranch(pipeline) || pipeline.delivery) && !refreshExecutionRefusal(pipeline, ports)
       /* A lane waiting out a transient failure keeps its backoff: its own
          scheduled tick provisions it when the wait falls due. */
       && !(pipeline.provisioningWait && unixMs(pipeline.provisioningWait.retryAfter) > nowMs));
@@ -11260,13 +11628,17 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
     const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
     const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
       if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
-        || JSON.stringify(provisionFence(record)) !== fence) abort.abort();
+        || JSON.stringify(provisionFence(record)) !== fence || refreshExecutionRefusal(record, ports, false)) abort.abort();
     });
     return { pipeline, abort, revalidate };
   });
   const revalidate = () => {
     try {
-      for (const job of jobs) job.revalidate();
+      for (const job of jobs) {
+        job.revalidate();
+        const live = findPipelineRecord(job.pipeline.id);
+        if (!live || refreshExecutionRefusal(live, ports, false)) job.abort.abort();
+      }
     } catch {
       // An unreadable registry cannot authorize more provisioning work.
       for (const job of jobs) job.abort.abort();
@@ -12002,8 +12374,10 @@ async function recoverWaitingStageLaunches(ports: PipelinePorts): Promise<Map<st
       stateDetail: pipeline.stateDetail, attemptError: attempt.error };
     const eligible = () => {
       const latest = findPipelineRecord(pipeline.id);
-      return !!latest && stagedRecoveryMatches(latest, expected) && !pipelineSurvivorRefusal(latest);
+      return !!latest && stagedRecoveryMatches(latest, expected) && !pipelineSurvivorRefusal(latest)
+        && !refreshExecutionRefusal(latest, ports);
     };
+    if (!eligible()) continue;
     await ports.recoverStagedLaunch(attempt.launchId, eligible);
     observed.set(pipeline.id, expected);
   }
@@ -14388,6 +14762,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       }
       if (changed) { tx.put(pipeline); closedLaunchesChanged = true; }
     }, 2);
+    const refreshYieldIds = new Set<string>();
     const ingressHeads = await collectReviewIngressHeads(ports);
     const controllerPorts: PipelinePorts = { ...ports, cloudJobContext: { ports, phaseDone }, deferStageGit: true, reviewIngressHead: (pipeline) => {
       const observed = ingressHeads.get(pipeline.id);
@@ -14471,6 +14846,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           await persistPipeline();
           changed = true;
         }
+        if (await prepareRefreshCapacityYield(pipeline, lanePorts, persistPipeline)) {
+          if (currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.suspension?.capacityYield) refreshYieldIds.add(pipeline.id);
+          return;
+        }
         if (pipelineHasActivation(pipeline)) return;
         let pipelineChanged = performanceSpans.sync("controller.lane", () => rebindPipelineAttemptPaths(pipeline, lanePorts));
         const guardedStage = currentStage(pipeline);
@@ -14551,6 +14930,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             provisioned,
           ) || pipelineChanged;
         }
+        if (currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.suspension?.capacityYield) refreshYieldIds.add(pipeline.id);
         if (pipelineChanged) {
           changed = true;
           await persistPipeline();
@@ -14558,6 +14938,11 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       }), { batchSize: 1, timeBudgetMs: 16 });
       return { pipelines, changed };
     }, ports.observeControllerLeaseHold, true);
+    for (const id of refreshYieldIds) {
+      if (scoped) {
+        if (!queueControllerJob(id, () => withControllerPipelineScope([id], () => drainRefreshCapacityYield(id, ports)))) ports.scheduleTick?.(1000);
+      } else await drainRefreshCapacityYield(id, ports);
+    }
     const settledGitIds = new Set<string>();
     // The separate publication pool must not bypass this pass's ownership
     // preparation, including a refusal or admission backoff. Only its
@@ -15355,7 +15740,7 @@ type CreatePipelineOptions = {
   admitConversationReplay?: (pipeline: Pipeline) => void;
   /** Internal controller creates may retain a structured creator without a transcript. */
   creatorLineage?: PipelineCreatorLineage;
-  refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
+  refreshOf?: import("./types").PipelineRefreshOf & { lineage: PipelineCreatorLineage };
   creationRequest?: { key: string; digest: string };
   ensureTask?: BoardTask;
   spawnParams?: TaskPipelineSpawnParams;
@@ -15438,6 +15823,8 @@ export async function createPipelineFromRequest(
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
+  options = { ...options, ...(options.refreshOf ? { refreshOf: structuredClone(options.refreshOf) } : {}),
+    ...(options.creationRequest ? { creationRequest: { ...options.creationRequest } } : {}) };
   // Interactive callers can acknowledge the existing durable creation queue
   // when a writer is busy. Share one admission deadline with the earlier
   // validation/preflight work, leaving time for the acknowledgement to render.
@@ -15454,7 +15841,18 @@ export async function createPipelineFromRequest(
     if (replay) {
       if (replay.creationRequest?.digest !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
       const repositoryInitialization = await readRepositoryInitialization(replay.repoDir);
-      return { pipeline: replay, ...(options.conversationSource ? { replayed: true } : {}), ...(repositoryInitialization ? { repositoryInitialization } : {}) };
+      const current = pipelineDeliveryLookup({ requestKey: options.creationRequest.key });
+      if (!current || current.id !== replay.id || current.creationRequest?.digest !== options.creationRequest.digest) {
+        return { error: "idempotency_conflict: creation authority changed", status: 409 };
+      }
+      if (options.refreshOf || current.refreshOf?.capacity) {
+        const candidate = { ...current, ...(options.refreshOf ? { refreshOf: options.refreshOf } : {}) };
+        const origin = recordedRefreshOrigin(candidate);
+        if ("reason" in origin) return { error: origin.reason, status: 409 };
+        const recorded = recordedRefreshOrigin(current);
+        if ("reason" in recorded) return { error: recorded.reason, status: 409 };
+      }
+      return { pipeline: current, ...(options.conversationSource ? { replayed: true } : {}), ...(repositoryInitialization ? { repositoryInitialization } : {}) };
     }
   }
   if (hasRetiredStage(req.stages)) return STAGE_RETIREMENT;
@@ -15682,9 +16080,10 @@ export async function createPipelineFromRequest(
   }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(prRepository ? { prRepository } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
-  pipeline.creationRequest = options.creationRequest;
+  pipeline.creationRequest = options.creationRequest ? { ...options.creationRequest } : undefined;
   if (options.conversationSource) pipeline.conversationSource = { ...options.conversationSource };
-  if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
+  if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base,
+    ...(options.refreshOf.capacity ? { capacity: { ...options.refreshOf.capacity } } : {}) };
   // Both creation paths finish task preflight before entering their pipeline
   // mutation, so assignment can reuse an earlier explicit creation.
   const tasks = loadTasksByIds(new Set(taskIds));
@@ -15692,6 +16091,14 @@ export async function createPipelineFromRequest(
   if (taskLinkError) return { error: taskLinkError, status: 400 };
   const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
   if (elsewhere) return elsewhere;
+  if (pipeline.refreshOf) {
+    const existing = pipeline.creationRequest && pipelineDeliveryLookup({ requestKey: pipeline.creationRequest.key });
+    const candidate = { ...pipeline, id: existing?.id ?? pipeline.id, delivery: { ...pipeline.delivery!, target } };
+    const origin = refreshCapacityOrigin(candidate, findPipelineRecord(pipeline.refreshOf.pipelineId));
+    if ("reason" in origin) return { error: origin.reason, status: 409 };
+    pipeline.refreshOf.capacity = { ...origin.capacity };
+    if (!existing && unixMs(ports.now()) >= unixMs(origin.capacity.deadline)) return { error: REFRESH_CAPACITY_EXPIRED, status: 409 };
+  }
   try {
     await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
   } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
@@ -15702,6 +16109,13 @@ export async function createPipelineFromRequest(
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf, admissionDeadline,
         assertAuthority: () => {
           assertWorkspaceExecution(project);
+          if (pipeline.refreshOf) {
+            const existing = pipeline.creationRequest && pipelineDeliveryLookup({ requestKey: pipeline.creationRequest.key });
+            const candidate = { ...pipeline, id: existing?.id ?? pipeline.id, delivery: { ...pipeline.delivery!, target } };
+            const origin = refreshCapacityOrigin(candidate, findPipelineRecord(pipeline.refreshOf.pipelineId));
+            if ("reason" in origin) throw new Error(origin.reason);
+            if (!existing && unixMs(ports.now()) >= unixMs(origin.capacity.deadline)) throw new Error(REFRESH_CAPACITY_EXPIRED);
+          }
           if (workspace && !workspacePrincipalAllows(workspace, project)) throw new Error("workspace access denied");
         }, prepare: options.beforeConversationCreate,
         admit: options.admitConversationCreate, admitReplay: options.admitConversationReplay, onReplay: () => { replayed = true; },
@@ -17148,6 +17562,10 @@ export async function patchPipeline(
       }
       return { error: "pipeline not found", status: 404 };
     }
+    if (["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "override-stage"].includes(req.action)) {
+      const refusal = refreshExecutionRefusal(pipeline, ports);
+      if (refusal) return { error: refusal, status: 409 };
+    }
     if (["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "accept-head", "publish"].includes(req.action)) {
       const error = proactivePipelineExecutionError(pipeline, "prepare");
       if (error) return { error, status: 403 };
@@ -17560,13 +17978,15 @@ export async function patchPipeline(
         }
       }
     } else if (req.action === "resume") {
+      const refreshRefusal = refreshExecutionRefusal(pipeline, ports);
+      if (refreshRefusal) return { error: refreshRefusal, status: 409 };
       if (pipeline.state !== "paused") return { error: "pipeline is not paused", status: 409 };
       pipeline.state = pipeline.pausedState ?? "running";
       pipeline.pausedState = null;
       delete pipeline.pause;
       pipeline.resumedAt = ports.now();
       pipeline.controlGeneration = crypto.randomUUID();
-      if (attempt?.suspension) {
+      if (attempt?.suspension && !pipeline.refreshOf?.capacity) {
         attempt.suspension.requestedAt = pipeline.resumedAt;
         delete attempt.suspension.stoppedAt;
         delete attempt.suspension.operatorStoppedAt;
@@ -17577,6 +17997,8 @@ export async function patchPipeline(
         : pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
+      const refreshRefusal = refreshExecutionRefusal(pipeline, ports);
+      if (refreshRefusal) return { error: refreshRefusal, status: 409 };
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt, true);
       if (budgetRefusal) return budgetRefusal;
       if (pipeline.remoteAction?.state === "pending") {

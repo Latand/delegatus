@@ -429,7 +429,7 @@ export type PipelineStageAttempt = {
   cloud?: import("./cloudStage").CloudStageAttempt;
   executionRuntime?: "local" | "cloud" | "cloud-then-local";
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
-  suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
+  suspension?: { capacityYield?: PipelineCapacityYield; reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
     /** Explicit retry binds the current stage after stop and delivery settlement. */
     retryRequestedAt?: string;
     hold?: PipelineAccountHold };
@@ -1375,12 +1375,37 @@ export const PIPELINE_MERGE_LIVE_STATES: ReadonlySet<PipelineMergeState> = new S
 
 export type PipelineMergeMethod = "squash" | "merge" | "rebase";
 
+/** Wall-clock policy of the original durable refresh admission. */
+export type PipelineRefreshCapacity = {
+  key: string;
+  digest: string;
+  head: string;
+  requestedAt: string;
+  deadline: string;
+};
+
+export type PipelineCapacityYield = {
+  reservationKey: string;
+  deadline: string;
+  headBefore?: string | null;
+  headAfter?: string;
+  settledAt?: string;
+  /** Fixed before the first external await; a new target never inherits this stop. */
+  target: { stageId: string; attempt: number; launchId: string | null; conversationId: string | null; agentPath: string | null; paneId: string | null };
+  authority: string;
+  continuationWithdrawnAt?: string;
+  stopRequestedAt?: string;
+};
+
 export type PipelineRefreshOf = {
+  capacity?: PipelineRefreshCapacity;
+  capacityRefusal?: string;
   pipelineId: string;
   base: string;
 };
 
 export type PipelineRefresh = {
+  capacityDeadline?: string;
   /** Forge base captured with the tip; absent on older reservations. */
   baseBranch?: string;
   attempt: number;
