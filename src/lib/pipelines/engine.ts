@@ -428,7 +428,7 @@ export interface PipelinePorts {
   suspensionStopReceipt?(operationId: string, target: PipelineStageHostRef): Promise<PipelineStageStopResult | null>;
   /** What still runs, with no stream, for any registry row of these
       conversations, or null when nothing does (#2790). */
-  stageHostTreeStillRunning?(conversationIds: readonly string[]): string | null;
+  stageHostTreeStillRunning?(conversationIds: readonly string[], launchIds?: readonly string[]): string | null;
   /** Stops a settled earlier stage agent whose recorded processes still run in
       the worktree a new attempt is waiting for, by those recorded identities
       only. `deferred` while its host is in a turn. */
@@ -1153,7 +1153,7 @@ export type StageStopProbes = {
 type StageHostProbe = {
   conversationId: ViewerConversationId;
   transcriptPath: string;
-  /** The conversation's current generation: the one registry row a stop may act on. */
+  /** The registry identity selected by the matching launch receipt and artifact. */
   key: SessionKey;
   resident(): boolean;
   /** Nothing can deliver to what still runs (#2790): the row says the stream
@@ -2453,13 +2453,20 @@ export function defaultPipelinePorts(
     stopSettledStageWriter: (target, operationId) => withViewerOperation("pipelines.prior-writer-stop", () =>
       performanceSpans.wait("pipeline.prior-writer-stop", () =>
         stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination }))),
-    stageHostTreeStillRunning: (conversationIds) => {
+    stageHostTreeStillRunning: (conversationIds, launchIds = []) => {
       const current = registry.readOnlySnapshot();
-      for (const id of conversationIds) {
+      for (const [index, id] of conversationIds.entries()) {
         if (!id.startsWith("conversation_")) continue;
-        const conversation = current.conversations[registry.canonicalConversationId(id as ViewerConversationId)];
+        const canonicalId = registry.canonicalConversationId(id as ViewerConversationId);
+        const conversation = current.conversations[canonicalId];
+        const launchId = launchIds[index];
+        const receipts = launchId ? [current.receipts[launchId]].filter(Boolean)
+          : registryRowsMatching(current, "receipts", "conversationId", canonicalId);
         for (const generation of conversation?.generations ?? []) {
-          const key = sessionKeyId({ engine: conversation!.engine, sessionId: generation.id });
+          const receipt = receipts.filter(candidate => candidate.conversationId
+            && registry.canonicalConversationId(candidate.conversationId) === canonicalId
+            && candidate.key?.engine === conversation!.engine && candidate.artifactPath === generation.path).at(-1);
+          const key = sessionKeyId(receipt?.key ?? { engine: conversation!.engine, sessionId: generation.id });
           const entry = current.entries[key];
           if (!entry) return `${id}: registry evidence for the recorded host tree is missing`;
           const running = recordedHostTreeStillRunning(entry);
@@ -9507,7 +9514,10 @@ async function drainRefreshCapacityYield(id: string, ports: PipelinePorts): Prom
           ? await outside.durableTurnEvidence(attempt.effectiveRole.engine, target.agentPath, attempt.report?.at, attemptEvidenceFloor(attempt))
           : null;
         assertEligible();
-        if (!attempt.report || !reportTurnFinished(attempt, reportEvidence)) return;
+        const terminalFallback = !attempt.report && reportEvidence?.turn === "terminal" && !reportEvidence.terminalProviderMessage
+          && reportEvidence.message && reportEvidence.message.ts > unixMs(attemptEvidenceFloor(attempt))
+          && parsePipelineStageVerdict(reportEvidence.message.text);
+        if (!terminalFallback && (!attempt.report || !reportTurnFinished(attempt, reportEvidence))) return;
       }
     }
     if (original.headBefore === undefined) {
@@ -9568,7 +9578,7 @@ async function drainRefreshCapacityYield(id: string, ports: PipelinePorts): Prom
     const quiescent = async (): Promise<StageTurnEvidence | null> => {
       assertEligible();
       if (await outside.stageHostResident(target) || target.paneId && await outside.paneAgentAlive(target.paneId)) throw new Error("refresh writer remains resident");
-      if (!ports.stageHostTreeStillRunning || outside.stageHostTreeStillRunning?.(target.conversationId ? [target.conversationId] : [])) {
+      if (!ports.stageHostTreeStillRunning || outside.stageHostTreeStillRunning?.(target.conversationId ? [target.conversationId] : [], target.launchId ? [target.launchId] : [])) {
         throw new Error("refresh owned process tree is unresolved");
       }
       if (!target.agentPath && target.launchId && outside.spawnReceipt(target.launchId)?.neverBegan !== true) {
@@ -9612,7 +9622,7 @@ async function drainRefreshCapacityYield(id: string, ports: PipelinePorts): Prom
       const authority = externalAuthority();
       const assertSettlement = () => {
         assertCurrent(live);
-        if (externalAuthority() !== authority || ports.stageHostTreeStillRunning?.(target.conversationId ? [target.conversationId] : [])
+        if (externalAuthority() !== authority || ports.stageHostTreeStillRunning?.(target.conversationId ? [target.conversationId] : [], target.launchId ? [target.launchId] : [])
           || target.conversationId && ports.conversationDeliveryOutstanding?.(target.conversationId)
           || target.launchId && recordedReportReceipts(target.launchId).some(row => row.pending || !row.complete && !row.exclusion)) {
           throw new StateSnapshotChangedError();

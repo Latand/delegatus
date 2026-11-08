@@ -410,7 +410,7 @@ test("settled capacity yield has stable history and reappearance alone renews st
   } finally { observation.db.close(); }
 });
 
-test.each(["none", "requirements", "control", "policy"] as const)(
+test.each(["none", "requirements", "control", "policy", "unlink-task", "clear-finishes"] as const)(
   "a second conflicted PR is admitted after confirmed stop and its creator fences %s changes",
   async change => {
   const f = await capacityLane();
@@ -429,6 +429,14 @@ test.each(["none", "requirements", "control", "policy"] as const)(
   second.merge!.prNumber = 2;
   second.merge!.state = "queued";
   delete second.merge!.refresh;
+  if (change === "unlink-task" || change === "clear-finishes") {
+    const { saveTasks } = await import("@/lib/tasks/store");
+    const now = f.h.ports.now();
+    saveTasks([{ id: "capacity-task", project: second.project, text: "Refresh task", status: "inbox", placement: "unplaced",
+      assignments: [], createdAt: now, updatedAt: now }]);
+    second.taskIds = ["capacity-task"];
+    second.finishesTaskIds = ["capacity-task"];
+  }
   const fix = { ...structuredClone(second.stages[0]!), id: "fix" };
   const review = second.stages[0]!;
   review.id = "review";
@@ -482,6 +490,12 @@ test.each(["none", "requirements", "control", "policy"] as const)(
         if (change === "control") live.controlGeneration = "replacement-control";
         await persist([live]);
       });
+      if (change === "unlink-task" || change === "clear-finishes") {
+        const answer = await patchPipeline(second.id, change === "unlink-task"
+          ? { action: "unlink-task", taskId: "capacity-task" }
+          : { action: "link-task", taskId: "capacity-task", finishes: false }, f.h.ports);
+        expect(answer.error).toBeUndefined();
+      }
       if (change === "policy") {
         setMergeOnReview(second.project, false, "fixture", f.h.ports.now());
         policy = mergeOnReviewSetting(second.project);
@@ -646,6 +660,25 @@ test("a terminal report arriving after the settled yield is reconciled exactly o
   expect(yieldedAttempt(f).verdict).toEqual(verdict);
   expect(yieldedAttempt(f).state).toBe(attemptState);
   expect(yieldedAttempt(f).suspension).toEqual(suspension);
+  expect(f.h.calls.filter(call => call.startsWith("stop-host:")).length).toBe(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("a late terminal transcript fallback settles after a completed capacity yield", async () => {
+  const f = await capacityLane();
+  f.advance(60 * 60_000);
+  await tickPipelines([], f.h.ports);
+  const settledAt = yieldedAttempt(f).suspension?.capacityYield?.settledAt;
+  expect(settledAt).toBeDefined();
+  const at = Date.parse(f.h.ports.now()) + 1;
+  f.h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { ts: at, text: '```json\n{"status":"pass","findings":[]}\n```' },
+    lastRecordAt: at, backgroundTasks: [] });
+
+  await tickPipelines([], f.h.ports);
+
+  expect(yieldedAttempt(f).report).toBeUndefined();
+  expect(yieldedAttempt(f).verdict?.status).toBe("pass");
+  expect(yieldedAttempt(f).suspension?.capacityYield?.settledAt).toBe(settledAt);
   expect(f.h.calls.filter(call => call.startsWith("stop-host:")).length).toBe(1);
   expect(f.h.spawnInputs).toHaveLength(1);
 });

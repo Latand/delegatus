@@ -1692,11 +1692,21 @@ async function capacityPipeline(current: Lane) {
   return { id: pipeline.id, ports, head, snapshot };
 }
 
-test("active refresh capacity stops its real owned tree, preserves Git inputs and leaves a sentinel alive", async () => {
+test("an ended materialized host tree resolves through its receipt identity and preserves Git inputs", async () => {
   const current = await lane("tree");
+  const registry = structuredClone(current.registry.readOnlySnapshot());
+  const conversation = registry.conversations[current.conversationId]!;
+  const generation = conversation.generations.at(-1)!;
+  generation.id = `${generation.id}-materialized`;
+  fs.writeFileSync(current.registryPath, JSON.stringify(registry));
+  const generationId = current.registry.readOnlySnapshot().conversations[current.conversationId]?.generations.at(-1)?.id;
+  expect(generationId).toBeDefined();
+  expect(generationId).not.toBe(current.key.sessionId);
   const other = bystander();
   const f = await capacityPipeline(current);
   const before = await f.snapshot();
+  await current.hostA.end();
+  await current.descendant!.end();
   await tickPipelines([], f.ports);
   const pipeline = pipelineRecord(f.id);
   const attempt = pipeline.runs[0]!.attempts[0]!;
