@@ -704,8 +704,10 @@ test("HTTP detail and answer use the same decision identity and reject a lost op
   const before = JSON.stringify(current());
   const body = request.json.bind(request);
   request.json = async () => { const value = await body(); request.cookies.delete("llv_operator"); return value; };
-  expect((await PATCH(request, { params: Promise.resolve({ id: h.id }) })).status).toBe(403);
+  const response = await PATCH(request, { params: Promise.resolve({ id: h.id }) });
+  expect(current().decisionAnswers?.length ?? 0).toBe(0);
   expect(JSON.stringify(current())).toBe(before);
+  expect(response.status).toBe(403);
 });
 
 
