@@ -16550,7 +16550,16 @@ function decisionLaunchFence(p: Pipeline): string {
 export function capturePipelineDecisionLaunch(pipelineId: string, stageId: string, attemptNumber: number): (() => void) | undefined {
   const original = findPipelineRecord(pipelineId);
   const attempt = original && currentAttempt(original, stageId);
-  if (!attempt?.decisionAnswerId) return;
+  // A native receipt that still belongs to a pipeline stage can outlive the
+  // answer link it was created from. Detect that broken custody from the
+  // durable answer's successor target and refuse closed instead of treating
+  // it as an ordinary launch.
+  if (!original || !attempt) throw new ActivationSuperseded();
+  if (!attempt.decisionAnswerId) {
+    if (original.decisionAnswers?.some(answer => answer.stageId === stageId && answer.nextAttempt === attemptNumber))
+      throw new ActivationSuperseded();
+    return;
+  }
   const answer = original!.decisionAnswers?.find(answer => answer.clientRequestId === attempt.decisionAnswerId);
   if (!answer || answer.stageId !== stageId || answer.nextAttempt !== attemptNumber || attempt.n !== attemptNumber) throw new ActivationSuperseded();
   const authority = captureDecisionAuthority(original!, answer.actor, answer.clientRequestId);
@@ -16565,6 +16574,7 @@ export function capturePipelineDecisionLaunch(pipelineId: string, stageId: strin
       || successor.completedAt || successor.verdict || successor.report) throw new ActivationSuperseded();
     if (definition && JSON.stringify(successor.definition) !== definition) throw new ActivationSuperseded();
     authority(current);
+    if (current.workspace && !workspacePrincipalAllows(current.workspace, current.project)) throw new ActivationSuperseded();
     const actor = answer.actor;
     if (actor.kind === "agent") {
       const file = readOrchestratorSeatFileOrNull();

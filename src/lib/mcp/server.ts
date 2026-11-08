@@ -2943,7 +2943,11 @@ export function createMcpToolService(
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
           return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
         }
-        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), true), "failure");
+        return finish(failure(typedTool, requestId,
+          error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+          error instanceof Error ? error.message : String(error),
+          error instanceof McpToolRefusal ? error.details.retryable === true : true, false,
+          error instanceof McpToolRefusal ? error.details : undefined), "failure");
       }
 
       /* #1490: `recoveryOnly` decides only whether an absent claim may start
@@ -3778,7 +3782,10 @@ export function createMcpToolService(
         return finish(revalidateNative() ?? answered, outcome, unfinishedAgeMs);
       } catch (error) {
         if (!actionAuthorityFailed) throw error;
-        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
+        return finish(failure(typedTool, requestId,
+          error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+          error instanceof Error ? error.message : String(error), false, false,
+          error instanceof McpToolRefusal ? error.details : undefined), "failure");
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
       }

@@ -339,7 +339,9 @@ test.each([
   const h = await interruptedAnswer("before-admission", patch);
   const before = current();
   const result = await h.reopen().callTool("pipeline_action", h.args);
-  expect(result).toMatchObject({ ok: false, code: "tool_failed" });
+  if (patch.expectedRevision) expect(result).toMatchObject({ ok: false, code: "STAGE_CHANGED", retryable: false,
+    details: { code: "STAGE_CHANGED", field: "expectedRevision", status: 409 } });
+  else expect(result).toMatchObject({ ok: false, code: "tool_failed" });
   expect(current()).toEqual(before);
 });
 
@@ -438,6 +440,23 @@ test("short decision revisions are stored whole, stale reads refuse and full-for
   const accepted = await patchPipeline(h.id, { ...h.request, expectedRevision: full.slice(0, 8).toUpperCase() }, h.ports, manager);
   expect(accepted.error).toBeUndefined(); expect(accepted.decisionAnswer!.expectedRevision).toBe(full);
   expect((await patchPipeline(h.id, h.request, h.ports, manager)).replayed).toBe(true);
+});
+
+test("legacy full-revision refusal keeps its typed MCP envelope and does not answer", async () => {
+  const h = await parked();
+  const fullRevision = pipelineRevision(current());
+  const receipts = new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "legacy-stale-refusal.json"));
+  const { service } = decisionService(h, receipts);
+  const changed = current();
+  changed.runs[0]!.attempts[0]!.output = "Choose a different format?";
+  savePipelines([changed]);
+  const before = current();
+  const result = await service.callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: fullRevision });
+  expect(result).toMatchObject({ ok: false, code: "STAGE_CHANGED", retryable: false,
+    details: { code: "STAGE_CHANGED", field: "expectedRevision", status: 409 } });
+  expect(current()).toEqual(before);
+  expect(current().decisionAnswers ?? []).toHaveLength(0);
+  expect(attemptsOf("build")).toHaveLength(1);
 });
 
 

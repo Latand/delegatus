@@ -1472,11 +1472,22 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
 /** Pin the existing decision before loading its engine. Recovery receives this
  * same invocation-local assertion for host preparation and first delivery. */
 function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: SpawnReceipt): Promise<() => void> | null {
-  const targets = registry.conversationMemberships(receipt.conversationId).filter(row => row.kind === "pipeline").flatMap(membership => {
+  const memberships = registry.conversationMemberships(receipt.conversationId).filter(row => row.kind === "pipeline");
+  const targets = memberships.flatMap(membership => {
     const original = findPipelineRecord(membership.containerId);
+    if (!original || !membership.stageId || !membership.round) return [];
     const attempt = membership.stageId ? original?.runs.find(run => run.stageId === membership.stageId)?.attempts
       .find(attempt => attempt.n === membership.round) : undefined;
-    return attempt?.decisionAnswerId ? [{ membership, original: original!, attempt }] : [];
+    const answer = original.decisionAnswers?.find(row => row.stageId === membership.stageId && row.nextAttempt === membership.round);
+    if (!attempt) {
+      if (answer) throw new Error("decision launch successor attempt is unavailable");
+      return [];
+    }
+    if (!attempt.decisionAnswerId) {
+      if (answer) throw new Error("decision launch answer link is unavailable");
+      return [];
+    }
+    return [{ membership, original, attempt }];
   });
   if (!targets.length) return null;
   if (targets.length !== 1) return Promise.reject(new Error("decision launch membership is ambiguous"));
