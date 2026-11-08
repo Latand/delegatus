@@ -3757,7 +3757,7 @@ export function createMcpToolService(
            behaviour every refusal had before. A release that finds the row
            already settled (another process answered under this key) changes
            nothing and this answer still stands for the caller. */
-        assertAction?.();
+        assertAction?.(settled);
         if (unadmitted && receipts.release) {
           const releaseStartedAt = performance.now();
           await receipts.release(key, digest, localBinding, assertAction);
@@ -3766,8 +3766,9 @@ export function createMcpToolService(
           return settled;
         }
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
-        await measure("completion", () => receipts.complete(key, digest, settled, retention, assertAction));
-        assertAction?.();
+        const beforeComplete = assertAction ? () => assertAction?.(settled) : undefined;
+        await measure("completion", () => receipts.complete(key, digest, settled, retention, beforeComplete));
+        assertAction?.(settled);
         return settled;
       })();
       inFlight.set(key, { digest, result });

@@ -893,3 +893,30 @@ test("cached decision replay refuses a rebound target without changing the origi
   expect(h.receiptContents()).toBe(receiptsBefore);
   expect(h.spawnedStages).toEqual(["build"]);
 });
+
+
+test("answer completion cannot settle a receipt after its durable target was replaced", async () => {
+  const h = await parked();
+  const filename = path.join(process.env.LLV_STATE_DIR!, "completion-target-replacement.json");
+  const durable = new FileMcpReceiptStore(filename);
+  let before = "", replacement = "";
+  const receipts: McpReceiptStore = {
+    claim: (...args) => durable.claim(...args),
+    complete: async (...args) => {
+      before = fs.readFileSync(filename, "utf8");
+      const row = current(), attempt = row.runs[0]!.attempts[0]!;
+      row.runs[0]!.attempts = [attempt]; row.decisionAnswers = [];
+      attempt.output = "Choose another format?"; attempt.report!.summary = attempt.output;
+      row.state = "needs_decision"; row.cursor = { stageId: "build", state: "running", input: attempt.input, activatedBy: attempt.activatedBy ?? null };
+      savePipelines([row]); replacement = JSON.stringify(current());
+      await durable.complete(...args);
+    },
+  };
+  const { service } = decisionService(h, receipts);
+  const result = await service.callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: pipelineDecisionRevision(current())! });
+  expect(result.ok).toBe(false);
+  expect(result.decisionAnswer).toBeUndefined();
+  expect(JSON.stringify(current())).toBe(replacement);
+  expect(fs.readFileSync(filename, "utf8")).toBe(before);
+  expect(h.spawnedStages).toEqual(["build"]);
+});
