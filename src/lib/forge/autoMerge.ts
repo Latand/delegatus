@@ -1,4 +1,4 @@
-import { refreshCapacity, refreshCapacityHolders, refreshConcurrency } from "@/lib/pipelines/refreshCapacity";
+import { refreshCapacity, refreshCapacityHolders, refreshConcurrency, refreshCreationAuthority } from "@/lib/pipelines/refreshCapacity";
 import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
 import { assertProactivePipelineExecution, proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -1116,7 +1116,8 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
       return;
     }
     if (!ports.setting(read.project).enabled) return;
-    const policy = JSON.stringify(ports.setting(read.project));
+    const policy = ports.setting(read.project);
+    const policySnapshot = JSON.stringify(policy);
     const lineage = await ports.activeSeat?.(read.project) ?? {
       srcPath: read.srcPath, srcConversationId: read.srcConversationId, srcDeputyConversationId: read.srcDeputyConversationId ?? undefined,
     };
@@ -1147,7 +1148,7 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
       || current.controlGeneration !== read.controlGeneration || current.spec !== read.spec
       || JSON.stringify(current.inputContext) !== JSON.stringify(read.inputContext)
       || JSON.stringify(current.workspace) !== JSON.stringify(read.workspace)
-      || JSON.stringify(ports.setting(read.project)) !== policy
+      || JSON.stringify(ports.setting(read.project)) !== policySnapshot
       || JSON.stringify(refreshRequest(current, legacyBase)) !== JSON.stringify(refreshRequest(read, legacyBase))
       || current.merge.attempts !== read.merge.attempts || JSON.stringify(current.delivery) !== JSON.stringify(read.delivery)
       || JSON.stringify(current.merge.refresh) !== JSON.stringify(reservation)) return;
@@ -1158,6 +1159,7 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
     }
     const result = await ports.startRefresh(refreshRequest(read, legacyBase), {
       creationRequest: { key: reservation.key, digest: reservation.digest },
+      refreshAuthority: refreshCreationAuthority(read, policy),
       refreshOf: { pipelineId: read.id, base: reservation.base, capacity: refreshCapacity(reservation), lineage },
     });
     // A replay may race another sweep; write only while this reservation waits.

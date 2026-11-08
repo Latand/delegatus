@@ -410,7 +410,9 @@ test("settled capacity yield has stable history and reappearance alone renews st
   } finally { observation.db.close(); }
 });
 
-test("a second conflicted PR is admitted by the real sweep only after controller stop settlement", async () => {
+test.each(["none", "requirements", "control", "policy"] as const)(
+  "a second conflicted PR is admitted after confirmed stop and its creator fences %s changes",
+  async change => {
   const f = await capacityLane();
   const { sweepAutoMerge, resetAutoMergeForTests, MERGE_POLL_MS } = await import("@/lib/forge/autoMerge");
   const { createPipelineFromRequest } = await import("./engine");
@@ -443,9 +445,12 @@ test("a second conflicted PR is admitted by the real sweep only after controller
   const lookup = f.h.ports.roleLookup;
   f.h.ports.roleLookup = role => role === "merger"
     ? { engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: "Fixture merger" } : lookup!(role);
+  const { mergeOnReviewSetting, setMergeOnReview } = await import("@/lib/projects/settings");
+  setMergeOnReview(second.project, true, "fixture", f.h.ports.now());
+  let policy = mergeOnReviewSetting(second.project);
   const ports: import("@/lib/forge/autoMerge").AutoMergePorts = {
     now: () => Date.parse(f.h.ports.now()), loadPipelines,
-    setting: () => ({ enabled: true, changedAt: "2026-11-01T11:00:00.000Z", changedBy: "operator" }),
+    setting: () => policy,
     cachedState: () => null, pullRequestOf: row => row.merge?.prNumber ? { repository: "example/project", number: row.merge.prNumber } : null,
     mutate: (id, change) => withPipelineMutation(async (rows, persist) => {
       const row = rows.find(row => row.id === id); if (!row || !change(row)) return false;
@@ -462,8 +467,28 @@ test("a second conflicted PR is admitted by the real sweep only after controller
       throw new Error(`unexpected forge observation ${args.join(" ")}`);
     },
     write: async () => { throw new Error("fixture must never merge a conflicting PR"); },
-    startRefresh: async (request, options) => { creates++; return createPipelineFromRequest(request, f.h.ports, options); },
+    startRefresh: async (request, options) => {
+      creates++;
+      return createPipelineFromRequest(request, f.h.ports, options);
+    },
   };
+  if (change !== "none") {
+    const preflight = f.h.ports.preflightRepo;
+    f.h.ports.preflightRepo = async repoDir => {
+      const result = await preflight(repoDir);
+      await withPipelineMutation(async (rows, persist) => {
+        const live = rows.find(row => row.id === second.id)!;
+        if (change === "requirements") live.spec = "replacement refresh requirements";
+        if (change === "control") live.controlGeneration = "replacement-control";
+        await persist([live]);
+      });
+      if (change === "policy") {
+        setMergeOnReview(second.project, false, "fixture", f.h.ports.now());
+        policy = mergeOnReviewSetting(second.project);
+      }
+      return result;
+    };
+  }
   await sweepAutoMerge(ports);
   expect(loadPipelines().find(row => row.id === second.id)!.merge!.reason).toContain("repository capacity");
   f.advance(60 * 60_000);
@@ -476,10 +501,15 @@ test("a second conflicted PR is admitted by the real sweep only after controller
   await sweepAutoMerge(ports);
   expect(creates).toBe(1);
   const reservation = loadPipelines().find(row => row.id === second.id)!.merge!.refresh!;
-  expect(reservation.pipelineId).not.toBeNull();
-  const admitted = loadPipelines().find(row => row.id === reservation.pipelineId)!;
-  expect(admitted.state).toBe("provisioning");
-  expect(admitted.refreshOf?.capacity?.requestedAt).toBe(f.h.ports.now());
+  if (change === "none") {
+    expect(reservation.pipelineId).not.toBeNull();
+    const admitted = loadPipelines().find(row => row.id === reservation.pipelineId)!;
+    expect(admitted.state).toBe("provisioning");
+    expect(admitted.refreshOf?.capacity?.requestedAt).toBe(f.h.ports.now());
+  } else {
+    expect(reservation.pipelineId).toBeNull();
+    expect(loadPipelines().some(row => row.creationRequest?.key === reservation.key)).toBeFalse();
+  }
   expect(f.lane().delivery).toEqual(firstOwner);
   expect(yieldedAttempt(f).verdict).toBeNull();
 });
@@ -587,6 +617,37 @@ test("a report whose turn is still busy retains capacity after host stop", async
   await tickPipelines([], f.h.ports);
   expect(yieldedAttempt(f).suspension?.capacityYield?.settledAt).toBeDefined();
   expect(yieldedAttempt(f).verdict?.status).toBe("pass");
+});
+
+test("a terminal report arriving after the settled yield is reconciled exactly once", async () => {
+  const f = await capacityLane();
+  f.advance(60 * 60_000);
+  await tickPipelines([], f.h.ports);
+  const settledAt = yieldedAttempt(f).suspension?.capacityYield?.settledAt;
+  expect(settledAt).toBeDefined();
+
+  await withPipelineMutation(async (rows, persist) => {
+    const lane = rows.find(row => row.id === f.id)!;
+    lane.runs[0]!.attempts[0]!.report = recoveryReport(f.h.ports.now());
+    await persist([lane]);
+  });
+  f.h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: null,
+    lastRecordAt: Date.parse(f.h.ports.now()), backgroundTasks: [] });
+  await tickPipelines([], f.h.ports);
+
+  expect(yieldedAttempt(f).verdict?.status).toBe("pass");
+  expect(yieldedAttempt(f).suspension?.capacityYield?.settledAt).toBe(settledAt);
+  expect(f.h.calls.filter(call => call.startsWith("stop-host:")).length).toBe(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  const verdict = structuredClone(yieldedAttempt(f).verdict);
+  const attemptState = yieldedAttempt(f).state;
+  const suspension = structuredClone(yieldedAttempt(f).suspension);
+  await tickPipelines([], f.h.ports);
+  expect(yieldedAttempt(f).verdict).toEqual(verdict);
+  expect(yieldedAttempt(f).state).toBe(attemptState);
+  expect(yieldedAttempt(f).suspension).toEqual(suspension);
+  expect(f.h.calls.filter(call => call.startsWith("stop-host:")).length).toBe(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
 });
 
 

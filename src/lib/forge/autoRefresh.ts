@@ -2,12 +2,14 @@ import { REFRESH_CAPACITY_MS } from "@/lib/pipelines/refreshCapacity";
 import { createHash } from "node:crypto";
 import type { CreatePipelineRequest, Pipeline, PipelineRefresh, PipelineRefreshOf } from "@/lib/pipelines/types";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
+import type { RefreshCreationAuthority } from "@/lib/pipelines/refreshCapacity";
 import { mergeEligible } from "./autoMerge";
 import { pipelineHasPullRequest } from "./resolve";
 
 export type RefreshLineage = { srcPath: string | null; srcConversationId: string | null; srcDeputyConversationId?: string };
 export type RefreshOptions = {
   creationRequest: { key: string; digest: string };
+  refreshAuthority: RefreshCreationAuthority;
   refreshOf: PipelineRefreshOf & { lineage: RefreshLineage };
 };
 

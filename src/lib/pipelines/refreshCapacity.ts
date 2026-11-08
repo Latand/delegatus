@@ -1,8 +1,20 @@
 import type { Pipeline, PipelineRefresh, PipelineRefreshCapacity } from "./types";
+import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 
 /** Chosen policy, measured from reservation admission, including time paused. */
 export const REFRESH_CAPACITY_MS = 60 * 60_000;
 export const REFRESH_CAPACITY_EXPIRED = "refresh capacity budget expired; original reservation cannot resume";
+
+export type RefreshCreationAuthority = Pick<Pipeline, "id" | "project" | "repoDir" | "spec" | "inputContext"
+  | "workspace" | "controlGeneration" | "lastPassedCommit" | "delivery"> & { mergePolicy: MergeOnReviewSetting };
+
+/** Bind child admission to the exact producer snapshot that authorized it. */
+export function refreshCreationAuthority(pipeline: Pipeline, mergePolicy: MergeOnReviewSetting): RefreshCreationAuthority {
+  return structuredClone({ id: pipeline.id, project: pipeline.project, repoDir: pipeline.repoDir,
+    spec: pipeline.spec, inputContext: pipeline.inputContext, workspace: pipeline.workspace,
+    controlGeneration: pipeline.controlGeneration, lastPassedCommit: pipeline.lastPassedCommit,
+    delivery: pipeline.delivery, mergePolicy });
+}
 
 export function refreshCapacity(reservation: PipelineRefresh): PipelineRefreshCapacity {
   return { key: reservation.key, digest: reservation.digest, head: reservation.head, requestedAt: reservation.requestedAt,

@@ -1736,6 +1736,31 @@ test("refresh capacity waits for an owned descendant that outlives its stopped h
   expect(signalsTo(other.pid)).toEqual([]);
 });
 
+test("a missing registry row keeps capacity UNKNOWN while the original refresh writer lives", async () => {
+  const current = await lane("tree");
+  const other = bystander();
+  const f = await capacityPipeline(current);
+  const snapshot = JSON.parse(fs.readFileSync(current.registryPath, "utf8")) as { entries: Record<string, unknown> };
+  delete snapshot.entries[sessionKeyId(current.key)];
+  fs.writeFileSync(current.registryPath, JSON.stringify(snapshot));
+
+  await tickPipelines([], f.ports);
+
+  const pipeline = pipelineRecord(f.id);
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  expect(current.hostA.alive()).toBeTrue();
+  expect(current.descendant!.alive()).toBeTrue();
+  expect(other.alive()).toBeTrue();
+  expect(attempt.suspension?.capacityYield?.settledAt).toBeUndefined();
+  expect(pipeline.stateDetail).toContain("waiting for host termination");
+  const { pipelineRefreshCapacityCandidates } = await import("./store");
+  const { refreshCapacityHolders } = await import("./refreshCapacity");
+  const repository = pipeline.delivery!.target.repository;
+  expect(refreshCapacityHolders(pipelineRefreshCapacityCandidates(repository), repository,
+    row => row.delivery?.target.repository).map(row => row.id)).toContain(f.id);
+  expect(signalsTo(other.pid)).toEqual([]);
+});
+
 test.each(["control", "owner", "epoch", "launch", "target", "requirements", "policy"] as const)("active refresh capacity rechecks %s inside the real stop adapter after its last await", async change => {
   const current = await lane("tree");
   const f = await capacityPipeline(current);

@@ -1,4 +1,4 @@
-import { refreshCapacityOrigin, refreshCapacityHolders, refreshConcurrency, capacityYieldPending, REFRESH_CAPACITY_EXPIRED } from "./refreshCapacity";
+import { refreshCapacityOrigin, refreshCapacityHolders, refreshConcurrency, capacityYieldPending, refreshCreationAuthority, REFRESH_CAPACITY_EXPIRED, type RefreshCreationAuthority } from "./refreshCapacity";
 import { mergeOnReviewSetting } from "@/lib/projects/settings";
 import { pipelineRefreshCapacityCandidates } from "./store";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -1288,7 +1288,9 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
        beside it (#2790). */
     resident: () => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
-      if (!entry) return false;
+      // A missing row cannot prove that the recorded launch or its child tree
+      // has ended. Keep capacity fenced until positive stop evidence exists.
+      if (!entry) return true;
       if (engineProcessMayRun(entry)) return true;
       /* A host stop captures its child's tree before the first signal, and a
          tool that left the group outlives the engine. Until each captured
@@ -2449,7 +2451,10 @@ export function defaultPipelinePorts(
         if (!id.startsWith("conversation_")) continue;
         const conversation = current.conversations[registry.canonicalConversationId(id as ViewerConversationId)];
         for (const generation of conversation?.generations ?? []) {
-          const running = recordedHostTreeStillRunning(current.entries[sessionKeyId({ engine: conversation!.engine, sessionId: generation.id })]);
+          const key = sessionKeyId({ engine: conversation!.engine, sessionId: generation.id });
+          const entry = current.entries[key];
+          if (!entry) return `${id}: registry evidence for the recorded host tree is missing`;
+          const running = recordedHostTreeStillRunning(entry);
           if (running) return `${id}: ${running}`;
         }
       }
@@ -9483,9 +9488,19 @@ async function drainRefreshCapacityYield(id: string, ports: PipelinePorts): Prom
     };
     const outside = controllerSnapshotPorts(ports, assertEligible, id);
     if (original.settledAt) {
-      if (await outside.stageHostPresence?.(target) !== "resident") return;
-      delete original.settledAt;
-      await checkpoint();
+      const presence = await outside.stageHostPresence?.(target);
+      assertEligible();
+      if (presence === "resident") {
+        delete original.settledAt;
+        await checkpoint();
+      } else {
+        if (presence !== "absent") return;
+        const reportEvidence = target.agentPath
+          ? await outside.durableTurnEvidence(attempt.effectiveRole.engine, target.agentPath, attempt.report?.at, attemptEvidenceFloor(attempt))
+          : null;
+        assertEligible();
+        if (!attempt.report || !reportTurnFinished(attempt, reportEvidence)) return;
+      }
     }
     if (original.headBefore === undefined) {
       if (outside.worktreePresent(pipeline.worktreeDir)) {
@@ -15754,6 +15769,8 @@ type CreatePipelineOptions = {
   /** Internal controller creates may retain a structured creator without a transcript. */
   creatorLineage?: PipelineCreatorLineage;
   refreshOf?: import("./types").PipelineRefreshOf & { lineage: PipelineCreatorLineage };
+  /** Producer snapshot hash, checked again at each refresh creation effect. */
+  refreshAuthority?: RefreshCreationAuthority;
   creationRequest?: { key: string; digest: string };
   ensureTask?: BoardTask;
   spawnParams?: TaskPipelineSpawnParams;
@@ -15837,6 +15854,7 @@ export async function createPipelineFromRequest(
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
   options = { ...options, ...(options.refreshOf ? { refreshOf: structuredClone(options.refreshOf) } : {}),
+    ...(options.refreshAuthority ? { refreshAuthority: structuredClone(options.refreshAuthority) } : {}),
     ...(options.creationRequest ? { creationRequest: { ...options.creationRequest } } : {}) };
   // Interactive callers can acknowledge the existing durable creation queue
   // when a writer is busy. Share one admission deadline with the earlier
@@ -15868,6 +15886,14 @@ export async function createPipelineFromRequest(
       return { pipeline: current, ...(options.conversationSource ? { replayed: true } : {}), ...(repositoryInitialization ? { repositoryInitialization } : {}) };
     }
   }
+  const refreshAuthorityRefusal = (): string | null => {
+    if (!options.refreshOf?.capacity) return null;
+    if (!options.refreshAuthority) return "refresh creation source authority is missing; UNKNOWN";
+    const parent = findPipelineRecord(options.refreshOf.pipelineId);
+    return parent && JSON.stringify(refreshCreationAuthority(parent, mergeOnReviewSetting(parent.project)))
+      === JSON.stringify(options.refreshAuthority)
+      ? null : "refresh creation source requirements or authority changed; refusing stale reservation";
+  };
   if (hasRetiredStage(req.stages)) return STAGE_RETIREMENT;
   /* #1026: every request-shape constraint is evaluated before the request is
      answered, and the response carries all of them. The checks and their
@@ -15955,6 +15981,8 @@ export async function createPipelineFromRequest(
   assertWorkspaceExecution();
   const admission = (await ports.preflightRepo(requestedRepoDir));
   assertWorkspaceExecution();
+  const preflightAuthorityRefusal = refreshAuthorityRefusal();
+  if (preflightAuthorityRefusal) return { error: preflightAuthorityRefusal, status: 409 };
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
   const initializationAnswer = admission.repositoryInitialization ? { repositoryInitialization: admission.repositoryInitialization } : {};
@@ -16112,9 +16140,13 @@ export async function createPipelineFromRequest(
     pipeline.refreshOf.capacity = { ...origin.capacity };
     if (!existing && unixMs(ports.now()) >= unixMs(origin.capacity.deadline)) return { error: REFRESH_CAPACITY_EXPIRED, status: 409 };
   }
+  const reservationAuthorityRefusal = refreshAuthorityRefusal();
+  if (reservationAuthorityRefusal) return { error: reservationAuthorityRefusal, status: 409 };
   try {
     await reserveProactiveLane(pipeline, options.creationRequest?.key ?? options.spawnParams?.launchId ?? pipeline.id);
   } catch (error) { return { error: error instanceof Error ? error.message : String(error), status: 403 }; }
+  const postReservationAuthorityRefusal = refreshAuthorityRefusal();
+  if (postReservationAuthorityRefusal) return { error: postReservationAuthorityRefusal, status: 409 };
   if (!options.ensureTask) {
     let created: Pipeline;
     let replayed = false;
@@ -16122,6 +16154,8 @@ export async function createPipelineFromRequest(
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf, admissionDeadline,
         assertAuthority: () => {
           assertWorkspaceExecution(project);
+          const authorityRefusal = refreshAuthorityRefusal();
+          if (authorityRefusal) throw new Error(authorityRefusal);
           if (pipeline.refreshOf) {
             const existing = pipeline.creationRequest && pipelineDeliveryLookup({ requestKey: pipeline.creationRequest.key });
             const candidate = { ...pipeline, id: existing?.id ?? pipeline.id, delivery: { ...pipeline.delivery!, target } };
@@ -16143,6 +16177,8 @@ export async function createPipelineFromRequest(
   }
   return withPipelineMutation(async (pipelines, persist) => {
     assertWorkspaceExecution(project);
+    const authorityRefusal = refreshAuthorityRefusal();
+    if (authorityRefusal) return { error: authorityRefusal, status: 409 };
     if (workspace && !workspacePrincipalAllows(workspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
     if (options.ensureTask && options.spawnParams) {
       const decision = ensurePipelineForTask(options.ensureTask, pipelines, options.spawnParams);
@@ -16165,6 +16201,8 @@ export async function createPipelineFromRequest(
     if (taskLinkError) return { error: taskLinkError, status: 400 };
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
     if (elsewhere) return elsewhere;
+    const finalAuthorityRefusal = refreshAuthorityRefusal();
+    if (finalAuthorityRefusal) return { error: finalAuthorityRefusal, status: 409 };
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     await persist();
