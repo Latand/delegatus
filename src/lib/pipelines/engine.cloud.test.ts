@@ -1693,15 +1693,17 @@ test.each([false, true])("a decision successor retains authority through configu
     expectedRevision: pipelineDecisionRevision(lane())!, expectedStageId: stage.id, expectedAttempt: 1 }, h.ports);
   expect(answered.error).toBeUndefined();
   h.ports.cloudClient = undefined;
-  const native = h.ports.spawnAgent; let reached = false;
+  const native = h.ports.spawnAgent; let reached = false, replacement = "";
   h.ports.spawnAgent = async (...args) => {
     reached = true;
-    if (replaced) { const records = loadPipelines(); records[0]!.delivery!.epoch++; savePipelines(records); }
+    if (replaced) { const records = loadPipelines(); records[0]!.delivery!.epoch++; savePipelines(records); replacement = JSON.stringify(lane()); }
     return native(...args);
   };
-  for (let n = 0; n < 12 && !reached; n++) await step(h);
+  for (let n = 0; n < 12 && !reached; n++) { await step(h); h.advanceWallClock(30_000); }
   expect(attempt().executionRuntime).toBe("cloud-then-local");
   expect(reached).toBe(true);
   expect(h.spawnInputs).toHaveLength(replaced ? 1 : 2);
   expect(lane().decisionAnswers).toHaveLength(1);
+  if (replaced) expect(JSON.stringify(lane())).toBe(replacement);
+  else expect(h.spawnInputs[1]!.prompt).toContain("Use Markdown.");
 });
