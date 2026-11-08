@@ -7747,7 +7747,8 @@ function activationFence(pipeline: Pipeline): string {
   return JSON.stringify([pipeline.state, pipeline.cursor?.stageId, pipeline.stages,
     pipeline.graphEdits, pipeline.pausedAt, pipeline.resumedAt, pipeline.closedAt,
     ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration]),
-    ...(pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId)?.decisionAnswerId ? [decisionLaunchFence(pipeline)] : [])]);
+    ...(pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId)?.decisionAnswerId
+      ? [decisionLaunchFence(pipeline), currentAttempt(pipeline, pipeline.cursor.stageId)?.definition] : [])]);
 }
 
 function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefined): boolean {

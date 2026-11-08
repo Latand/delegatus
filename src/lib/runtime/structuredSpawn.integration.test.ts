@@ -8025,8 +8025,9 @@ test("a capability write interruption before startHost retains prepublication re
 
 test.each(["codex", "claude"] as const)("default %s host carries decision authority through native preparation", async engine => {
   const { defaultStartHost } = await import("./structuredSpawn");
+  const { stageDigest } = await import("@/lib/pipelines/stageDigest");
   const { buildPipeline, pipelineIdentity, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-  for (const boundary of ["allowed", "binding", "membership", "import", "preparation"] as const) {
+  for (const boundary of ["allowed", "binding", "membership", "import", "preparation", "definition"] as const) {
     const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
     const marker = path.join(cwd, "native-effect");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -8043,7 +8044,10 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
       verdict: { status: "needs_decision" as const, findings: [] }, error: null, startedAt: at, completedAt: at,
       launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null };
     pipeline.runs[0]!.attempts.push(attempt, { ...attempt, n: 2, state: "pending", output: null, verdict: null,
-      startedAt: null, completedAt: null, decisionAnswerId: "native-answer" });
+      startedAt: null, completedAt: null, decisionAnswerId: "native-answer", definition: {
+        boundAt: at, stageDigest: stageDigest(pipeline.stages[0]!), ["prompt"]: pipeline.stages[0]!.prompt,
+        account: null, role: { roleId: "builder" }, sandbox: null, outputs: null,
+      } });
     pipeline.decisionAnswers = [{ clientRequestId: "native-answer", expectedRevision: "a".repeat(64),
       stageId: "build", attempt: 1, nextAttempt: 2, question: "Choose a format?", answer: "Use Markdown.", actor: { kind: "operator" }, at }];
     savePipelines([pipeline]);
@@ -8060,7 +8064,12 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
         role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null });
     }
     savePipelines(bound);
-    const replace = () => { const rows = loadPipelines(); rows[0]!.spec = "Changed requirements"; savePipelines(rows); };
+    const replace = () => {
+      const rows = loadPipelines();
+      if (boundary === "definition") rows[0]!.runs[0]!.attempts[1]!.definition!.prompt += " Changed instruction.";
+      else rows[0]!.spec = "Changed requirements";
+      savePipelines(rows);
+    };
     let effects = 0;
     const children: ReturnType<typeof spawn>[] = [];
     const native = (_command: string, _args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) => {
@@ -8071,7 +8080,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     };
     const codexStart = CodexAppServerHost.start;
     const codex = spyOn(CodexAppServerHost, "start").mockImplementation(options => codexStart.call(CodexAppServerHost, {
-      ...options, readProtocolVersion: () => { if (boundary === "preparation") replace(); return "0.162.1"; },
+      ...options, readProtocolVersion: () => { if (boundary === "preparation" || boundary === "definition") replace(); return "0.162.1"; },
     }));
     // Claude's real preparation awaits auth status immediately before its
     // launch setup. This is an isolated protocol reply, with no provider call.
@@ -8083,7 +8092,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
       }, "fixture-capability", {
         codex: { spawnProcess: native },
         claude: { spawnProcess: native, readAuthStatus: async () => {
-          if (boundary === "preparation") replace();
+          if (boundary === "preparation" || boundary === "definition") replace();
           return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.209" };
         } },
       });
