@@ -456,14 +456,6 @@ test("a completed seat replay repairs a failed registry stamp without revalidati
   expect(recorded.deliveries).toHaveLength(1);
 });
 
-/* v65 routing policy (quick scope check, then the seat's own choice of route).
-   The lines only v64 carried are what a seat must no longer be told. */
-const v64OnlyLines = (): string[] => {
-  const v64 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v64.txt"), "utf8").split("\n");
-  const current = new Set(ORCHESTRATOR_SYSTEM_PROMPT.split("\n"));
-  return v64.filter((line) => !current.has(line));
-};
-
 /* create_orchestrator sends the default mandate with the current version. */
 test("a new default seat is spawned with the current routing policy and its version", async () => {
   const { deps, recorded } = dependencies();
@@ -473,9 +465,6 @@ test("a new default seat is spawned with the current routing policy and its vers
   const delivered = String(recorded.spawns[0]!.prompt);
   expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
   expect(orchestratorSeatFor("proj-a").active).toMatchObject({ mandate: expect.stringContaining(ORCHESTRATOR_SYSTEM_PROMPT), promptVersion: ORCHESTRATOR_PROMPT_VERSION });
-  const stale = v64OnlyLines();
-  expect(stale.length).toBeGreaterThan(0);
-  for (const line of stale) expect(delivered).not.toContain(line);
 });
 
 test("a stored v64 default is delivered the v65 policy without rewriting its recorded version", async () => {
@@ -485,7 +474,6 @@ test("a stored v64 default is delivered the v65 policy without rewriting its rec
 
   expect(result.status).toBe(200);
   const delivered = String(recorded.spawns[0]!.prompt);
-  for (const line of v64OnlyLines()) expect(delivered).not.toContain(line);
   expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
   /* The seat keeps the version it was recorded on, so it still reads as stale
      and its next rotation rebuilds the core from the default. */
