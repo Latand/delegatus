@@ -460,7 +460,7 @@ test("SDK HTTP decision answers use production projections, guards and durable r
     stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: role }] });
   p.state = "needs_decision";
   p.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
-  p.runs[0]!.attempts.push({ n: 1, state: "needs_decision", effectiveRole: role, input: null, output: "Choose a format?",
+  p.runs[0]!.attempts.push({ n: 1, state: "needs_decision", effectiveRole: role, input: null, activatedBy: null, output: "Choose a format?",
     verdict: { status: "needs_decision", findings: [] }, error: null, startedAt: now, completedAt: now, launchId: null,
     conversationId: "conversation_sdk_producer", sessionId: null, agentPath: null, paneId: null, flowId: null });
   savePipelines([p]); registerPipelineTick(async () => {});
@@ -476,7 +476,7 @@ test("SDK HTTP decision answers use production projections, guards and durable r
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), { requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } } }));
     const read = await client.callTool({ name: "get_pipeline", arguments: { pipelineId: p.id } });
-    expect(read.structuredContent?.decisionRevision).toBe(token.slice(0, 8));
+    expect(read.structuredContent).toMatchObject({ decisionRevision: token.slice(0, 8) });
     const args = { pipelineId: p.id, action: "resolve-decision", clientRequestId: "sdk-answer", expectedRevision: token.slice(0, 8),
       expectedStageId: "build", expectedAttempt: 1, answer: "Use Markdown." };
     const accepted = await client.callTool({ name: "pipeline_action", arguments: args });

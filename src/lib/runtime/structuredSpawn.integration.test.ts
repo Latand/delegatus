@@ -8040,7 +8040,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
       stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, effectiveRole: role, prompt: "Build", next: null }] });
     pipeline.state = "running";
     pipeline.cursor = { stageId: "build", state: "spawning", input: null, activatedBy: null };
-    const attempt = { n: 1, state: "needs_decision" as const, effectiveRole: role, input: null, output: "Choose a format?",
+    const attempt = { n: 1, state: "needs_decision" as const, effectiveRole: role, input: null, activatedBy: null, output: "Choose a format?",
       verdict: { status: "needs_decision" as const, findings: [] }, error: null, startedAt: at, completedAt: at,
       launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null };
     pipeline.runs[0]!.attempts.push(attempt, { ...attempt, n: 2, state: "pending", output: null, verdict: null,
@@ -8088,7 +8088,7 @@ test.each(["codex", "claude"] as const)("default %s host carries decision author
     try {
       const opening = defaultStartHost({ engine, registry, receipt: begun.receipt,
         spec: { engine, command: engine, cwd, windowName: "decision", launchProfile },
-        account: { engine, accountId: null, kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+        account: { engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
         ["prompt"]: "", client: {} as RuntimeHostClient,
       }, "fixture-capability", {
         codex: { spawnProcess: native },

@@ -16565,10 +16565,11 @@ export function capturePipelineDecisionLaunch(pipelineId: string, stageId: strin
       || successor.completedAt || successor.verdict || successor.report) throw new ActivationSuperseded();
     if (definition && JSON.stringify(successor.definition) !== definition) throw new ActivationSuperseded();
     authority(current);
-    if (answer.actor.kind === "agent") {
+    const actor = answer.actor;
+    if (actor.kind === "agent") {
       const file = readOrchestratorSeatFileOrNull();
       const project = canonicalOrchestratorProject(current.project);
-      if (!file || file.revocations.some(row => row.project === project && row.conversationId === answer.actor.conversationId
+      if (!file || file.revocations.some(row => row.project === project && row.conversationId === actor.conversationId
         && Date.parse(row.revokedAt) >= Date.parse(answer.at))) throw new ActivationSuperseded();
     }
   };

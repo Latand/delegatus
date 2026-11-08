@@ -547,9 +547,12 @@ test("decision token agrees across production read projections and reaches a fre
   const receipts = new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "token-positive.json"));
   const { service } = decisionService(h, receipts);
   for (const projection of [{}, { stageId: "build" }, { full: true }] as Array<{stageId?: string; full?: boolean}>) {
-    expect((await service.callTool("get_pipeline", { pipelineId: h.id, ...projection })).decisionRevision).toBe(projection.full ? token : token.slice(0, 8));
+    expect(await service.callTool("get_pipeline", { pipelineId: h.id, ...projection }))
+      .toMatchObject({ ok: true, decisionRevision: projection.full ? token : token.slice(0, 8) });
   }
-  expect((await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "verify" })).decisionRevision).toBeUndefined();
+  const unrelated = await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "verify" });
+  expect(unrelated.ok).toBe(true);
+  expect(unrelated).not.toHaveProperty("decisionRevision");
   const before = pipelineRevision(current());
   // The earlier host, retained throughout the question, now really settles.
   expect(current().terminalReap?.settledAttempts ?? []).not.toContain("prepare:1");
@@ -571,8 +574,11 @@ test("decision token agrees across production read projections and reaches a fre
   await tickPipelines([h.endTurn(3, "Awaiting export format.")], h.ports);
   const nextToken = pipelineDecisionRevision(current())!;
   expect(nextToken).not.toBe(token);
-  expect((await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "build", attempt: 1 })).decisionRevision).toBeUndefined();
-  expect((await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "build", attempt: 2 })).decisionRevision).toBe(nextToken.slice(0, 8));
+  const historical = await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "build", attempt: 1 });
+  expect(historical.ok).toBe(true);
+  expect(historical).not.toHaveProperty("decisionRevision");
+  expect(await service.callTool("get_pipeline", { pipelineId: h.id, stageId: "build", attempt: 2 }))
+    .toMatchObject({ ok: true, decisionRevision: nextToken.slice(0, 8) });
   expect(await service.callTool("pipeline_action", { ...args, expectedRevision: token })).toMatchObject({ ok: true, replayed: true });
   expect(current().decisionAnswers).toHaveLength(1);
   expect(h.spawnedStages).toEqual(["prepare", "build", "build"]);
@@ -633,7 +639,7 @@ test.each(["scope", "claim", "complete"])("production receipt %s rejects caller 
   if (boundary === "scope") bindings.pipeline_action.receiptScope = async () => { caller = "conversation_foreign"; return null; };
   const result = await createMcpToolService(bindings, receipts).callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: token });
   expect(result.ok).toBe(false);
-  expect(result.decisionAnswer).toBeUndefined();
+  expect(result).not.toHaveProperty("decisionAnswer");
   expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "complete" ? 1 : 0);
   expect(attemptsOf("build")).toHaveLength(boundary === "complete" ? 2 : 1);
   expect(h.spawnedStages).toEqual(["build"]);
@@ -912,7 +918,7 @@ test("cached decision replay refuses a rebound target without changing the origi
   };
   const refused = await createMcpToolService(bindings, durable).callTool("pipeline_action", h.args);
   expect(refused.ok).toBe(false);
-  expect(refused.decisionAnswer).toBeUndefined();
+  expect(refused).not.toHaveProperty("decisionAnswer");
   expect(JSON.stringify(current())).toBe(replacement);
   expect(h.receiptContents()).toBe(receiptsBefore);
   savePipelines([original]);
@@ -942,7 +948,7 @@ test("answer completion cannot settle a receipt after its durable target was rep
   const { service } = decisionService(h, receipts);
   const result = await service.callTool("pipeline_action", { ...h.request, pipelineId: h.id, expectedRevision: pipelineDecisionRevision(current())! });
   expect(result.ok).toBe(false);
-  expect(result.decisionAnswer).toBeUndefined();
+  expect(result).not.toHaveProperty("decisionAnswer");
   expect(JSON.stringify(current())).toBe(replacement);
   expect(fs.readFileSync(filename, "utf8")).toBe(before);
   expect(h.spawnedStages).toEqual(["build"]);
@@ -962,7 +968,7 @@ test("a stale pending answer cannot settle another creator's receipt", async () 
   const row = structuredClone(original); row.srcConversationId = "conversation_other"; savePipelines([row]);
   const replacement = JSON.stringify(current());
   const refused = await h.reopen("conversation_other").callTool("pipeline_action", h.args);
-  expect(refused.ok).toBe(false); expect(refused.decisionAnswer).toBeUndefined();
+  expect(refused.ok).toBe(false); expect(refused).not.toHaveProperty("decisionAnswer");
   expect(h.receiptContents()).toBe(before);
   expect(JSON.stringify(current())).toBe(replacement);
   savePipelines([original]);
