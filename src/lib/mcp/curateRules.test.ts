@@ -16,7 +16,7 @@ import { AgentRegistry, setAgentRegistryForTests, type RegistryFile } from "@/li
 import { newRuleId, roleMemoryCollection, roleScope } from "@/lib/memory/roleStore";
 import { claimPass, patchPass, readPass, curationCollection } from "@/lib/memory/curation/store";
 import { productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy } from "./bindings";
-import { createMcpToolService, MemoryMcpReceiptStore, requestDigest, TOOL_INPUT_SCHEMAS } from "./server";
+import { createMcpToolService, MemoryMcpReceiptStore, McpToolTimingAggregate, requestDigest, TOOL_INPUT_SCHEMAS } from "./server";
 import type { ViewerMcpDomainDependencies } from "./bindings";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
@@ -724,9 +724,11 @@ test.each(["apply", "replay", "read"])("service %s disclosure rechecks authority
   const f = await committedSdkFixture();
   const { runAsMcpHttpCaller } = await import("./callerContext");
   let armed = false;
-  const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(), { timings: { observe: () => {
+  const timings = new McpToolTimingAggregate();
+  timings.observe = () => {
     if (armed) queueMicrotask(() => queueMicrotask(() => f.f.policy({ deployment: true })));
-  } } });
+  };
+  const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(), { timings });
   const call = (args: Record<string, unknown>) => runAsMcpHttpCaller({ capability: f.capability }, () => service.callTool("curate_rules", args));
   try {
     const first = mode === "replay" ? await call(f.args) : undefined;
