@@ -1274,11 +1274,19 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
   const conversation = byId ?? (target.agentPath ? registry.conversationForPath(target.agentPath) : null);
   const generation = conversation?.generations.at(-1) ?? null;
   if (!conversation || !generation) return null;
-  const sessionKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+  const generationKey = { engine: conversation.engine, sessionId: generation.id };
+  /* A newly materialized launch can publish its registry row under the
+     reserved session key while the conversation generation has its own id.
+     Resolve that alias only from the launch's durable receipt and only when
+     both conversation and artifact still match this generation. */
+  const receipt = target.launchId ? registry.spawnReceipt(target.launchId) : null;
+  const key = receipt?.conversationId === conversation.id && receipt.key?.engine === conversation.engine
+    && receipt.artifactPath === generation.path ? receipt.key : generationKey;
+  const sessionKey = sessionKeyId(key);
   return {
     conversationId: conversation.id,
     transcriptPath: generation.path,
-    key: { engine: conversation.engine, sessionId: generation.id },
+    key,
     /* Re-read every call: the registry read cache invalidates on the file
        signature, so a teardown written by the host process is visible here.
        The row's status describes the stream; the recorded process is the
