@@ -5787,12 +5787,12 @@ describe("CodexAppServerHost", () => {
     } finally { await host.release(); }
   });
 
-  test.each([2, 50])("protocol failure retries TERM when identity recovers after one read (%d ms grace)", async (shutdownGraceMs) => {
+  test.each([2, 50])("protocol failure eventually retries TERM after an observed identity refusal (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-transient-identity-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const cleanupFinished = Promise.withResolvers<void>();
-    let failureIdentityReads = 0;
-    let injectIdentityFailure = false;
+    const terminationEvents: string[] = [];
+    let refuseNextIdentity = false;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
       shutdownGraceMs,
@@ -5800,28 +5800,50 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server),
       releaseCleanup: cleanupFinished.resolve,
       processIdentity: () => {
-        if (!injectIdentityFailure) return "4242:owned";
-        failureIdentityReads += 1;
-        return failureIdentityReads === 2 ? null : "4242:owned";
+        if (refuseNextIdentity) {
+          refuseNextIdentity = false;
+          terminationEvents.push("identity-unknown");
+          return null;
+        }
+        return "4242:owned";
       },
       pidAlive: () => true,
       signalProcess: (pid, signal) => {
+        terminationEvents.push(signal);
         signals.push({ pid, signal });
         if (signal === "SIGKILL") queueMicrotask(() => server.emit("close", 0, signal));
       },
     });
+    // EOF arms exactly one unknown read at the ownership gate before TERM.
+    const endStdin = server.stdin.end.bind(server.stdin);
+    const end = spyOn(server.stdin, "end").mockImplementationOnce(() => {
+      refuseNextIdentity = true;
+      return endStdin();
+    });
+    const target = host as unknown as { startTermination(): boolean };
+    const startTermination = target.startTermination.bind(host);
+    const termination = spyOn(target, "startTermination").mockImplementation(() => {
+      const started = startTermination();
+      if (!started) terminationEvents.push("TERM-refused");
+      return started;
+    });
     try {
-      injectIdentityFailure = true;
-
       server.stdout.write("malformed\n");
       await cleanupFinished.promise;
 
+      // Either the immediate or scheduled retry may recover; the first attempt
+      // must have refused termination before either signal was delivered.
+      expect(terminationEvents).toEqual(["identity-unknown", "TERM-refused", "SIGTERM", "SIGKILL"]);
       expect(signals).toEqual([
         { pid: -4242, signal: "SIGTERM" },
         { pid: -4242, signal: "SIGKILL" },
       ]);
       expect(await host.health()).toMatchObject({ status: "dead", pid: null });
-    } finally { await host.release(); }
+    } finally {
+      end.mockRestore();
+      termination.mockRestore();
+      await host.release();
+    }
   });
 
   test("protocol failure keeps retrying fenced cleanup until identity recovers", async () => {
