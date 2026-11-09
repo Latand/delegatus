@@ -12,7 +12,8 @@ import type { RegistryFile } from "@/lib/agent/registry";
 import { internalServiceHeaders, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
-import { handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
+import { handleRuntimeAdmissionQuery, handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
+import { resetIngressStopsForTests } from "./ingressStop";
 
 /* The activity ledger at the structured send ingress: the operator's own send
    is one row, an agent or a Viewer service writes none, and a ledger that
@@ -55,6 +56,7 @@ function dependencies(enqueued: unknown[]): RuntimeHttpDependencies {
 const rows = () => readRequests(0, Date.now() + 60_000, { dir: () => ledgerDir }).rows.map(({ at, project, surface, kind }) => ({ at, project, surface, kind }));
 
 beforeEach(() => {
+  resetIngressStopsForTests(() => {});
   process.env.LLV_STATE_DIR = path.join(sandbox, `state-${Math.random().toString(36).slice(2)}`);
   ledgerDir = path.join(process.env.LLV_STATE_DIR, "activity");
   reports = [];
@@ -132,4 +134,72 @@ test("a ledger that cannot be written still admits the send", async () => {
   expect(response.status).toBe(409);
   expect(reports).toHaveLength(1);
   expect(reports[0]).toStartWith("request_not_stored:");
+});
+
+/* 2026-11-09: one operator send passed this ingress, left its ledger row and
+   its admission marker, and never got a delivery reservation. Nothing said
+   which step stopped it, so a lookup under its key could not tell a refusal
+   from a request that never arrived. The step that stops a message between
+   the bookkeeping and the reservation is now named on the response, and the
+   lookup returns it beside the absence it proves. */
+async function lookup(conversationId: string, clientMessageId: string): Promise<Record<string, unknown>> {
+  const response = await handleRuntimeAdmissionQuery(new NextRequest(
+    `http://127.0.0.1/api/runtime/send?conversationId=${conversationId}&clientMessageId=${clientMessageId}`,
+    { method: "GET", headers: { host: "127.0.0.1" } },
+  ), {
+    enabled: () => true,
+    registry: () => ({ deliveryAdmissionForKey: () => ({ outcome: "not-executed" as const }) }) as never,
+    query: async () => { throw new Error("an absent key has no operation to query"); },
+    sendInFlight: () => false,
+  });
+  return await response.json() as Record<string, unknown>;
+}
+
+test("bookkeeping that fails after the ledger row is a refusal, and the lookup names where it stopped", async () => {
+  const enqueued: unknown[] = [];
+  const failing: RuntimeHttpDependencies = {
+    ...dependencies(enqueued),
+    recordOperatorAdmission: () => { throw new Error("admission marker store is unavailable"); },
+  };
+  const body = { conversationId: "conversation_direct", text: "the words that must not vanish", idempotencyKey: "bookkeeping-stop" };
+  const response = await handleRuntimeCommand(request(body), "send", failing);
+  expect(rows()).toHaveLength(1);
+  expect(enqueued).toEqual([]);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({
+    error: "the send could not be recorded before delivery",
+    retryable: true,
+    delivery: "refused",
+    stop: { boundary: "bookkeeping", reason: "bookkeeping-failed" },
+  });
+  expect(await lookup(body.conversationId, body.idempotencyKey)).toEqual({
+    outcome: "not-executed", conversationId: body.conversationId, clientMessageId: body.idempotencyKey,
+    stop: { boundary: "bookkeeping", reason: "bookkeeping-failed", status: 503, at: expect.any(String) },
+  });
+});
+
+test("an admission that throws after the ledger row stays uncertain, and the lookup still names its stop", async () => {
+  const body = { conversationId: "conversation_direct", text: "go on", idempotencyKey: "admission-throw" };
+  const response = await handleRuntimeCommand(request(body), "send", {
+    ...dependencies([]),
+    enqueue: async () => { throw new Error("registry writer is busy"); },
+  });
+  expect(rows()).toHaveLength(1);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({
+    error: "registry writer is busy",
+    delivery: "uncertain",
+    stop: { boundary: "admission", reason: "outcome-unknown" },
+  });
+  /* The registry decides the verdict; the stop only explains it. */
+  expect(await lookup(body.conversationId, body.idempotencyKey)).toMatchObject({
+    outcome: "not-executed",
+    stop: { boundary: "admission", reason: "outcome-unknown", status: 503 },
+  });
+});
+
+test("a key that never reached the route answers not-executed with no stop: the transport-loss case", async () => {
+  expect(await lookup("conversation_direct", "never-arrived")).toEqual({
+    outcome: "not-executed", conversationId: "conversation_direct", clientMessageId: "never-arrived",
+  });
 });

@@ -1,4 +1,5 @@
 import { scrubOwnerOutput } from "./ownerOutput";
+import { RelayMandatoryPromptTooLargeError } from "./promptBudget";
 
 /** The first observed failure, retained independently of stop-control retries. */
 export type OwnerTurnDiagnostic = {
@@ -13,6 +14,8 @@ export type OwnerTurnDiagnostic = {
   deadlineFallback?: null | "absent" | "unparseable" | "past";
   rawDeadlineAt?: string | null;
   executionLimitMs?: number;
+  promptBudget?: { kind: "mandatory_core_too_large"; mandatoryBytes: number; limitBytes: number;
+    priorAction?: "completed" | "unknown" | "confirmation_pending" | "confirmation_expired" };
 };
 
 export function ownerTurnDiagnostic(source: OwnerTurnDiagnostic["source"], reason: unknown, credentials: readonly string[] = []): OwnerTurnDiagnostic {
@@ -23,5 +26,8 @@ export function ownerTurnDiagnostic(source: OwnerTurnDiagnostic["source"], reaso
     // Scrub before bounding: a cut credential or key must never become readable.
     message = scrubOwnerOutput(message, credentials);
   } catch { message = "Owner turn diagnostic unavailable"; }
-  return { source, message: Array.from(message).slice(0, 1024).join("") };
+  return { source, message: Array.from(message).slice(0, 1024).join(""),
+    ...(reason instanceof RelayMandatoryPromptTooLargeError ? { promptBudget: {
+      kind: "mandatory_core_too_large" as const, mandatoryBytes: reason.mandatoryBytes, limitBytes: 32_000,
+    } } : {}) };
 }

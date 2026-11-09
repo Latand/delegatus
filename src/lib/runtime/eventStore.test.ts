@@ -548,3 +548,26 @@ test("the host turn record exposes an idle checkpoint and its closing sequence w
     state: "read", complete: false, lastSeq: 4, turn: { closed: { status: "error", seq: 3 } },
   });
 });
+
+
+test("Claude result correlation round-trips with legacy rows and repairs a torn tail", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-result-events-"));
+  try {
+    const store = new FileRuntimeEventStore(directory);
+    const legacy: RuntimeEvent = { kind: "turn-ended", turnId: "legacy", status: "completed", seq: 1 };
+    const current: RuntimeEvent = { kind: "turn-ended", turnId: "current", status: "error", claudeResultUuid: "result-one", seq: 2 };
+    store.append("session", legacy);
+    fs.appendFileSync(path.join(directory, "session.jsonl"), "{torn");
+    store.append("session", current);
+    expect(new FileRuntimeEventStore(directory).load("session")).toEqual([legacy, current]);
+    for (const value of [null, 4, "", "r".repeat(129)]) {
+      const malformed = { ...current, seq: 3, claudeResultUuid: value };
+      fs.appendFileSync(path.join(directory, "session.jsonl"), JSON.stringify(malformed) + "\n");
+      expect(() => new FileRuntimeEventStore(directory).load("session")).toThrow("runtime event ledger contains an invalid event");
+      fs.writeFileSync(path.join(directory, "session.jsonl"), [legacy, current].map(e => JSON.stringify(e)).join("\n") + "\n");
+    }
+    const bounded: RuntimeEvent = { ...current, claudeResultUuid: "r".repeat(128), seq: 3 };
+    store.append("session", bounded);
+    expect(new FileRuntimeEventStore(directory).load("session").at(-1)).toEqual(bounded);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
