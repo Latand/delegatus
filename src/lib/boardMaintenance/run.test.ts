@@ -567,7 +567,7 @@ test("audit preparation refuses native seat replacement during its evidence awai
 
 test("a rotated claim after worker completion is reconciled and later maintenance can proceed", async () => {
   const { auditFixture } = await import("./testFixture");
-  const makeAudit = async (run: Parameters<NonNullable<BoardMaintenancePorts["auditInput"]>>[0], state?: Parameters<NonNullable<BoardMaintenancePorts["auditInput"]>>[2]) => {
+  const makeAudit: NonNullable<BoardMaintenancePorts["auditInput"]> = async (run, _sources, state) => {
     const audit = auditFixture(run);
     if (state?.window) audit.window = structuredClone(state.window);
     return { ...audit, revision: state?.revision ?? 0 };

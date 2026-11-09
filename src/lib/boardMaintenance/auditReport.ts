@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { findSeatRound } from "@/lib/prototypeReview/seatRounds";
+import type { PrototypeReviewRound } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { MaintenanceAuditInput, MaintenanceAuditOccurrence, MaintenanceAuditResult, MaintenanceAuditSource } from "./types";
 
@@ -13,8 +14,8 @@ const AUDIT_ROW_LIMIT = 200;
 const AUDIT_BLOCK_BYTES = 32768;
 const artifactIdentity = (file: string) => { const stat = fs.lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink()) throw Error("artifact unavailable"); return { artifact: `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`, size: stat.size }; };
 const sameProject = (a: string, b: string) => canonicalOrchestratorProject(a) === canonicalOrchestratorProject(b);
-function decisionPayload(round: { questions: unknown; variants: Array<{ number: number; name: string; description: string }>; decision?: unknown }) {
-  return JSON.stringify({ questions: round.questions, variants: round.variants.map(v => ({ number: v.number, name: v.name, description: v.description })), decision: { ...(round.decision as Record<string, unknown>), delivery: undefined, telegramUserId: undefined } });
+function decisionPayload(round: PrototypeReviewRound): string {
+  return JSON.stringify({ questions: round.questions, variants: round.variants.map(v => ({ number: v.number, name: v.name, description: v.description })), decision: { ...(round.decision ?? {}), delivery: undefined, telegramUserId: undefined } });
 }
 function currentAuditDecision(source: MaintenanceAuditSource, tasks: readonly BoardTask[]) {
   const reference = source.decision;
