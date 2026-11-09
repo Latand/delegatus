@@ -1330,7 +1330,7 @@ export async function acknowledgePipelineControllerWork(work: import("@/lib/stat
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).acknowledgePipelineTick(work, cursor, dueAt);
 }
 
-export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; state: string; suspended?: true }>;
+export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; agentPath: string | null; sessionId: string | null; state: string; suspended?: true }>;
   survivors: import("@/lib/processIdentity").ProcessIdentity[] };
 type CompactPipelineEvidence = { key: string; ownership?: PipelineStartupOwnership; issue?: RegistryRecordIssue };
 type PreparedPipelineEvidence = { pipelines: Pipeline[]; ownership?: PipelineStartupOwnership[]; issues: RegistryRecordIssue[]; signature: string };
@@ -1338,7 +1338,7 @@ let compactEvidence: CompactEvidenceCache<CompactPipelineEvidence> | undefined;
 function startupOwnership(pipeline: Pipeline): PipelineStartupOwnership {
   const attempts = pipeline.runs.flatMap(run => run.attempts);
   return { id: pipeline.id,
-    attempts: attempts.map(attempt => ({ conversationId: attempt.conversationId ?? null, state: attempt.state, ...(attempt.suspension ? { suspended: true as const } : {}) })),
+    attempts: attempts.map(attempt => ({ conversationId: attempt.conversationId ?? null, agentPath: attempt.agentPath ?? null, sessionId: attempt.sessionId ?? null, state: attempt.state, ...(attempt.suspension ? { suspended: true as const } : {}) })),
     survivors: [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map(host => host.evidence)]
       .flatMap(host => host.unresolvedTermination?.survivors.map(identity => ({ ...identity })) ?? []),
   };
@@ -1488,11 +1488,21 @@ async function prepareRecipientPipelineEvidence(selection: PipelineRecipientSele
   return { pipelines: [], ownership, issues, signature };
 }
 
-export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>): Promise<PipelineStartupOwnership[]> {
+/** Each supported identity independently retains custody, even before membership is recorded. */
+export function pipelineStartupAttemptMatches(attempt: PipelineStartupOwnership["attempts"][number], selection: PipelineRecipientSelection): boolean {
+  return !!(attempt.conversationId && selection.conversationIds.includes(attempt.conversationId)
+    || attempt.agentPath && selection.agentPaths?.includes(attempt.agentPath)
+    || attempt.sessionId && selection.sessionIds?.includes(attempt.sessionId));
+}
+
+export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>,
+  targets: Pick<PipelineRecipientSelection, "agentPaths" | "sessionIds"> = {}): Promise<PipelineStartupOwnership[]> {
+  const selection = { ...targets, ids: ids ?? [], conversationIds: [...conversationIds ?? []] };
   const evidence = admittedEvidence.getStore()?.current ?? await (ids && conversationIds
-    ? prepareRecipientPipelineEvidence({ ids, conversationIds: [...conversationIds] }) : preparePipelineEvidence("ownership"));
+    ? prepareRecipientPipelineEvidence(selection) : preparePipelineEvidence("ownership"));
   const selected = ids && new Set(ids);
-  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id) || row.attempts.some(attempt => attempt.conversationId !== null && conversationIds?.has(attempt.conversationId))).map(row => ({ ...row,
+  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id)
+    || row.attempts.some(attempt => pipelineStartupAttemptMatches(attempt, selection))).map(row => ({ ...row,
     attempts: row.attempts.map(attempt => ({ ...attempt })), survivors: row.survivors.map(identity => ({ ...identity })) }));
 }
 

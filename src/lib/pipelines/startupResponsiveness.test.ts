@@ -771,7 +771,7 @@ test("keyed startup ownership keeps an attempt owner even when membership is abs
   finally { db.close(); }
   const owners = await loadPipelineOwnershipForStartupAsync([], new Set([conversationId]));
   expect(owners.map(owner => owner.id)).toEqual([row.id]);
-  expect(owners[0]!.attempts).toEqual([{ conversationId, state: "passed" }]);
+  expect(owners[0]!.attempts).toEqual([{ conversationId, agentPath: null, sessionId: null, state: "passed" }]);
   expect(await loadPipelineOwnershipForStartupAsync([], new Set(["conversation_unrelated"])) ).toEqual([]);
 });
 
@@ -780,6 +780,57 @@ function recipientOwner(seed: ReturnType<typeof buildPipeline>, id: string, conv
     flowId: null, launchId: null, sessionId: null, agentPath: null, paneId: null, startedAt: "2026-10-22T00:00:00.000Z", completedAt: "2026-10-22T00:00:01.000Z",
     error: null, input: null, output: null, verdict: null, activatedBy: null, effectiveRole: seed.stages[0]!.effectiveRole }] }] };
 }
+
+for (const collection of ["pipelines", "pipelines_archive"] as const)
+for (const identity of ["agentPath", "sessionId"] as const)
+  test(`recipient ${identity} suspension selection and freshness survive cold ${collection} reads and retargets`, async () => {
+    const { root, row } = fixture();
+    const filename = path.join(root, "state.sqlite"), db = new Database(filename);
+    retainedHistory(db, row);
+    const target = identity === "agentPath" ? "target.jsonl" : "target-session";
+    const selection = { ids: [] as string[], conversationIds: ["conversation_target"],
+      agentPaths: identity === "agentPath" ? [target] : [], sessionIds: identity === "sessionId" ? [target] : [] };
+    const owner = recipientOwner(row, "suspended-owner", "conversation_unused");
+    const attempt = owner.runs[0]!.attempts[0]!;
+    Object.assign(attempt, { conversationId: null, [identity]: "unrelated",
+      suspension: { reason: "pause", detail: "retained custody", requestedAt: "2026-11-09T00:00:00.000Z" } });
+    const write = () => db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+      VALUES(?,?,?,1000,1,0) ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json`)
+      .run(collection, owner.id, JSON.stringify(owner));
+    const revision = () => stateStore.recipientPipelineEvidenceRevision(filename, selection);
+    const read = () => loadPipelineOwnershipForStartupAsync([], new Set(selection.conversationIds), selection);
+    try {
+      write();
+      const absent = revision(); expect(absent).not.toBeNull();
+      expect(await read()).toEqual([]);
+      Object.assign(attempt, { [identity]: target }); write();
+      expect(revision()).not.toBe(absent);
+      const present = revision();
+      for (const temperature of ["cold", "warm"]) {
+        const decodes = observeEvidenceDecodes();
+        try {
+          expect(await read()).toMatchObject([{ id: owner.id, attempts: [{ conversationId: null, [identity]: target, suspended: true }] }]);
+          expect(decodes.rows()).toBe(1);
+          decodes.reset(); expect(revision()).toBe(present); expect(decodes.rows()).toBe(0);
+          console.info(JSON.stringify({ case: "recipient-independent-identity", collection, identity, temperature, payloadRows: 1 }));
+        } finally { decodes.stop(); }
+      }
+      // A real new process must recover the same selection without warming the old recipient.
+      const child = Bun.spawn([process.execPath, "--eval", `
+        const {loadPipelineOwnershipForStartupAsync:read}=await import('./src/lib/pipelines/store.ts');
+        const selection=JSON.parse(process.argv[1]);
+        console.log(JSON.stringify(await read([],new Set(selection.conversationIds),selection)));
+      `, JSON.stringify(selection)], { env: process.env, stdout: "pipe", stderr: "pipe" });
+      const output = await new Response(child.stdout).text();
+      expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
+      expect(JSON.parse(output)).toMatchObject([{ id: owner.id, attempts: [{ [identity]: target, suspended: true }] }]);
+      db.exec("BEGIN IMMEDIATE"); Object.assign(attempt, { [identity]: "elsewhere" }); write();
+      expect(revision()).toBe(present); db.exec("ROLLBACK");
+      write(); expect(revision()).not.toBe(present); expect(await read()).toEqual([]);
+      db.query("DELETE FROM state_rows WHERE collection=? AND row_key=?").run(collection, owner.id);
+      expect(revision()).toBe(absent);
+    } finally { if (db.inTransaction) db.exec("ROLLBACK"); db.close(); }
+  });
 
 for (const collection of ["pipelines", "pipelines_archive"] as const)
   test(`canonical ${collection} replacement clears obsolete unknown ownership for warm and cold readers`, async () => {
