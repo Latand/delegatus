@@ -56,7 +56,7 @@ import { useNativeQueue, type NativeQueueMutation } from "@/hooks/useNativeQueue
 import { documentHidden } from "@/lib/client/hiddenTraffic";
 
 import { DormantView } from "./conversation/DormantView";
-import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./ComposerBar";
+import { ComposerBar, composerSlotKind, RECEIPTS_FIRST_ROW_CLOSING, type ComposerSlotKind } from "./ComposerBar";
 import { AgentControlStatus, AgentInterruptButton, AgentMoreMenu, useAgentControlActionsWith } from "./AgentControlStrip";
 import { AttachTerminalDialog } from "./AttachTerminalDialog";
 import { publishComposerStepsSlot } from "./conversation/composerStepsSlot";
@@ -980,7 +980,9 @@ export function RuntimeComposerReceipts({
     const lead = row.querySelector("[data-delivery-check-lead]") ?? row;
     const rowBottom = lead.getBoundingClientRect().bottom - frame.top + stack.scrollTop;
     const cap = parseFloat(window.getComputedStyle(stack).maxHeight);
-    const space = Math.ceil(Math.min(rowBottom + 11, stack.scrollHeight + 2, Number.isFinite(cap) ? cap : Infinity));
+    /* Never more than the list holds (its content plus its 1 px frame on each
+       side) or than its own cap lets it show. */
+    const space = Math.ceil(Math.min(rowBottom + RECEIPTS_FIRST_ROW_CLOSING, stack.scrollHeight + 2, Number.isFinite(cap) ? cap : Infinity));
     reportFirstRowSpace(space > 0 ? space : null);
   }, [reportFirstRowSpace]);
   useLayoutEffect(() => {
@@ -997,10 +999,14 @@ export function RuntimeComposerReceipts({
     return () => observer.disconnect();
   }, [shown, detailsOpen, measureMoreBelow, measureFirstRow, reportFirstRowSpace, attemptGroups.length, textlessRows.length]);
   useEffect(() => () => { onFirstRowSpace?.(null); }, [onFirstRowSpace]);
-  /* Opening brings the first row into view inside the list and the region. */
+  /* Opening brings the first row's status and controls into view inside the
+     list and the region. It is the lead that is asked for, not the whole row:
+     a row taller than the room would otherwise push the region's own scroll
+     past the surfaces above the list and cut their first line. */
   useLayoutEffect(() => {
     if (!detailsOpen) return;
-    stackRef.current?.querySelector<HTMLElement>("[data-runtime-receipt-details] > *")?.scrollIntoView?.({ block: "nearest" });
+    const row = stackRef.current?.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    (row?.querySelector<HTMLElement>("[data-delivery-check-lead]") ?? row)?.scrollIntoView?.({ block: "nearest" });
   }, [detailsOpen, shown]);
   /* Phone focus (the chip's line is hidden while the list is open): into the
      list on opening, back on the chip on closing — unless the operator has

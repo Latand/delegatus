@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 
@@ -120,6 +120,12 @@ export function composerSlotKind({ killed, offline, working, hasDraft }: {
   if (working && !hasDraft) return "stop";
   return "send";
 }
+
+/** Room, in px, that the open receipts list keeps under its first card's
+    controls: the card's own padding and a sliver of what follows it, so the
+    controls do not sit on the list's closing edge. The list reports its first
+    card's space with this added, and the region does not scroll for it. */
+export const RECEIPTS_FIRST_ROW_CLOSING = 11;
 
 export interface ComposerBarProps {
   composer: UseComposerReturn;
@@ -706,13 +712,54 @@ export function ComposerBar({
     </div>
   ) : null;
   const regionShown = Boolean(micHintRow || voicePanel || queuePanel || deliveries || (receipts && !receiptsHidden) || stagedStrip);
+  const receiptsListHoldsRoom = Boolean(receipts && !receiptsHidden && receiptsMinHeight);
+  /* The phone's box is the 38dvh cap, the one place the surfaces beside the
+     open list have no room to spare; the desktop pane keeps the equal shares. */
+  const yieldingFloors = receiptsListHoldsRoom && isMobile;
+  /* What the floors cannot make room for scrolls in the region. While the list
+     holds its room the region is scrolled just far enough that the first card's
+     status and controls are in view (more when the region is shorter than its
+     floors, as when a refusal line takes room below the field), and to the top
+     edge of the next surface when it can reach that, so a surface above is
+     either whole or out of view rather than cut across its first line. The
+     operator's own scrolling further down is left alone. */
+  const accessoriesRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const region = accessoriesRef.current;
+    if (!region || !yieldingFloors || !receiptsMinHeight) return;
+    const keepFirstCard = () => {
+      const holder = region.querySelector<HTMLElement>('[data-testid="composer-receipts"]');
+      if (!holder || holder.hidden) return;
+      const origin = region.getBoundingClientRect().top - region.scrollTop;
+      const needed = Math.ceil(holder.getBoundingClientRect().top - origin + receiptsMinHeight - RECEIPTS_FIRST_ROW_CLOSING - region.clientHeight);
+      const reach = region.scrollHeight - region.clientHeight;
+      if (needed <= region.scrollTop || reach <= 0) return;
+      const edges = Array.from(region.children).filter((kid) => kid.getClientRects().length > 0)
+        .map((kid) => Math.floor(kid.getBoundingClientRect().top - origin));
+      const edge = edges.find((candidate) => candidate >= needed && candidate <= reach);
+      region.scrollTop = edge ?? Math.min(needed, reach);
+    };
+    keepFirstCard();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(keepFirstCard);
+    observer.observe(region);
+    return () => observer.disconnect();
+  }, [yieldingFloors, receiptsMinHeight, regionShown]);
   return (
     <>
       {regionShown || receipts ? (
         <div
+          ref={accessoriesRef}
           data-testid="composer-accessories"
           hidden={!regionShown}
-          className="grid min-h-0 auto-rows-[minmax(auto,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0"
+          className={`grid min-h-0 auto-rows-[minmax(auto,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0 ${
+            /* While the list holds its first card's room, the other surfaces
+               yield to a floor of their own and no further: the queue panel to
+               its header line, the staged strip to its row of tiles. What
+               then exceeds the region scrolls in the region, and nothing is
+               painted over a neighbour. */
+            yieldingFloors ? "[&>[data-testid=native-queue-panel]]:min-h-[1.625rem] [&>[data-testid=attachment-tray]]:min-h-14" : ""
+          }`}
         >
           {deliveries}
           {micHintRow}
@@ -732,7 +779,7 @@ export function ComposerBar({
               region: a run of failed or uncertain deliveries wraps into rows of
               chips, and each chip carries the controls that settle it. */}
           {receipts ? (
-            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsMinHeight && !receiptsHidden ? { minHeight: receiptsMinHeight } : undefined} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
+            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsListHoldsRoom ? { minHeight: receiptsMinHeight! } : undefined} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
           ) : null}
         </div>
       ) : null}

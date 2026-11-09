@@ -7,6 +7,17 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -43,7 +54,8 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": {
-          "operation": "unknown-send",
+          "whyReachable": true,
+          "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
           "whyWhole": true,
@@ -57,6 +69,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 51.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -75,8 +98,8 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
@@ -94,6 +117,17 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -127,6 +161,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -141,6 +176,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 67.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -183,6 +229,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -197,6 +244,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 46.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "button",
         "listOpen": true,
@@ -233,6 +291,17 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -269,6 +338,7 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -283,6 +353,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 51.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -320,6 +401,17 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -353,6 +445,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -367,6 +460,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 67.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -409,6 +513,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -423,6 +528,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 46.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "button",
         "listOpen": true,
@@ -459,6 +575,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -495,6 +622,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -509,6 +637,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 51.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -546,6 +685,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -579,6 +729,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -593,6 +744,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 67.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -635,6 +797,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -649,6 +812,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 46.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "button",
         "listOpen": true,
@@ -685,6 +859,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -721,6 +906,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -735,6 +921,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 51.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -772,6 +969,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -805,6 +1013,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -819,6 +1028,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 67.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -861,6 +1081,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -875,6 +1096,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 46.3,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
         },
         "active": "button",
         "listOpen": true,
@@ -911,6 +1143,17 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -947,6 +1190,7 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -961,6 +1205,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -998,6 +1253,17 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1031,6 +1297,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1045,6 +1312,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -1087,6 +1365,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1101,6 +1380,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 20.9,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": false,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "button",
         "listOpen": true,
@@ -1137,6 +1427,17 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1173,6 +1474,7 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1187,6 +1489,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -1224,6 +1537,17 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1257,6 +1581,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1271,6 +1596,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -1313,6 +1649,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1327,6 +1664,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 20.9,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": false,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "button",
         "listOpen": true,
@@ -1363,6 +1711,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1399,6 +1758,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1413,6 +1773,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -1450,6 +1821,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1483,6 +1865,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1497,6 +1880,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -1539,6 +1933,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1553,6 +1948,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 20.9,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": false,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "button",
         "listOpen": true,
@@ -1589,6 +1995,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 151,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1625,6 +2042,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1639,6 +2057,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -1676,6 +2105,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 82,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1709,6 +2149,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1723,6 +2164,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 31.4,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "chip",
         "listOpen": true,
@@ -1765,6 +2217,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1779,6 +2232,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 20.9,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": false,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": false,
+          "tileHeight": 40,
+          "overlaps": false,
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
         },
         "active": "button",
         "listOpen": true,
@@ -1815,6 +2279,17 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -1851,6 +2326,7 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1865,6 +2341,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -1902,6 +2389,17 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "chip",
         "listOpen": false,
         "listShown": false,
@@ -1935,6 +2433,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1949,6 +2448,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -1991,6 +2501,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2005,6 +2516,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0"
         },
         "active": "button",
         "listOpen": true,
@@ -2041,6 +2563,17 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -2077,6 +2610,7 @@
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2091,6 +2625,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2128,6 +2673,17 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "chip",
         "listOpen": false,
         "listShown": false,
@@ -2161,6 +2717,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2175,6 +2732,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2217,6 +2785,7 @@
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2231,6 +2800,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0"
         },
         "active": "button",
         "listOpen": true,
@@ -2267,6 +2847,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -2284,8 +2875,8 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
@@ -2303,6 +2894,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2317,6 +2909,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2354,6 +2957,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "chip",
         "listOpen": false,
         "listShown": false,
@@ -2387,6 +3001,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2401,6 +3016,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2443,6 +3069,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2457,6 +3084,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": true,
+          "tileWhole": false,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-673.0 scroll 47/58; header 461.0-485.0"
         },
         "active": "button",
         "listOpen": true,
@@ -2493,6 +3131,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "body",
         "listOpen": false,
         "listShown": false,
@@ -2529,6 +3178,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2543,6 +3193,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2580,6 +3241,17 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+        },
         "active": "chip",
         "listOpen": false,
         "listShown": false,
@@ -2613,6 +3285,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2627,6 +3300,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2669,6 +3353,7 @@
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
         "first": {
+          "whyReachable": true,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2683,6 +3368,17 @@
               "whole": true
             }
           ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": true,
+          "tileWhole": false,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "overlaps": false,
+          "geometry": "region 507.0-673.0 scroll 47/58; header 461.0-485.0"
         },
         "active": "button",
         "listOpen": true,

@@ -2963,7 +2963,15 @@ describe("a consumed queued send leaves the composer by its own id", () => {
             const first = firstCard ? (() => {
               const status = firstCard.querySelector('[role="status"]')!;
               const why = firstCard.querySelector("[data-receipt-uncertain-why]")!;
+              /* The sentence below the controls may sit past the list's edge
+                 when the box has no more room; it must then be reachable by
+                 the list's own scroll. Scrolled to, read, and put back. */
+              const saved = [...document.querySelectorAll<HTMLElement>("*")].filter((node) => node.scrollHeight > node.clientHeight).map((node) => [node, node.scrollTop] as const);
+              why.scrollIntoView({ block: "nearest" });
+              const whyReachable = whole(why);
+              for (const [node, top] of saved) node.scrollTop = top;
               return {
+                whyReachable,
                 operation: firstCard.getAttribute("data-operation"),
                 status: status.textContent?.trim() ?? "",
                 statusDrawn: !status.classList.contains("sr-only") && whole(status),
@@ -2971,6 +2979,44 @@ describe("a consumed queued send leaves the composer by its own id", () => {
                 controls: [...firstCard.querySelectorAll("button")].map((button) => ({ label: button.textContent?.trim() ?? "", whole: boxWhole(button) && whole(button) })),
               };
             })() : null;
+            /* The region's other surfaces beside the open list: the queue panel
+               keeps its header line and the staged tile its whole box with its
+               remove button, and no surface is painted over a neighbour. */
+            const queuePanel = document.querySelector<HTMLElement>('[data-testid="native-queue-panel"]');
+            const queueHeader = queuePanel?.querySelector<HTMLElement>(":scope > header") ?? null;
+            const tile = document.querySelector<HTMLElement>('[data-testid="attachment-tile"]');
+            const tileRemove = tile?.querySelector<HTMLElement>("button") ?? null;
+            const regionKids = [...(document.querySelector('[data-testid="composer-accessories"]')?.children ?? [])]
+              .filter((kid) => kid.getClientRects().length > 0).map((kid) => kid.getBoundingClientRect());
+            const overlaps = regionKids.some((a, i) => regionKids.slice(i + 1).some((b) =>
+              Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5));
+            /* Whole where it stands, or whole once the region is scrolled to it
+               (the region is the scroller of what exceeds the box); scrolled
+               to, read, and put back. */
+            const reachable = (element: Element | null) => {
+              if (!element) return null;
+              const saved = [...document.querySelectorAll<HTMLElement>("*")].filter((node) => node.scrollHeight > node.clientHeight).map((node) => [node, node.scrollTop] as const);
+              element.scrollIntoView({ block: "nearest" });
+              const result = boxWhole(element) && whole(element);
+              for (const [node, top] of saved) node.scrollTop = top;
+              return result;
+            };
+            const panels = {
+              queueHeight: queuePanel ? Math.round(queuePanel.getBoundingClientRect().height * 10) / 10 : null,
+              queueHeaderPlaced: queueHeader ? boxWhole(queueHeader) && whole(queueHeader) : null,
+              queueHeaderReachable: reachable(queueHeader),
+              tileWhole: tile ? boxWhole(tile) : null,
+              tileReachable: reachable(tile),
+              tileRemoveReachable: reachable(tileRemove),
+              tileHeight: tile ? Math.round(tile.getBoundingClientRect().height * 10) / 10 : null,
+              overlaps,
+              geometry: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                const rr = region?.getBoundingClientRect();
+                const hr = queueHeader?.getBoundingClientRect();
+                return rr ? `region ${rr.top.toFixed(1)}-${rr.bottom.toFixed(1)} scroll ${region!.scrollTop}/${region!.scrollHeight - region!.clientHeight}; header ${hr ? `${hr.top.toFixed(1)}-${hr.bottom.toFixed(1)}` : "-"}` : "no region";
+              })(),
+            };
             const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
             const cards = [...document.querySelectorAll("[data-delivery-check-card]")];
             const notice = document.querySelector('[data-testid="native-queue-notice"]');
@@ -2981,6 +3027,7 @@ describe("a consumed queued send leaves the composer by its own id", () => {
               chipAria: chip?.getAttribute("aria-label") ?? null,
               chipWhole: !chipShown || whole(chip!),
               first,
+              panels,
               active: document.activeElement?.closest("[data-runtime-receipt-stack]") ? "list" : document.activeElement?.hasAttribute("data-receipts-chip") ? "chip" : document.activeElement?.tagName.toLowerCase() ?? null,
               listOpen: (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open ?? false,
               listShown: (document.querySelector('[data-testid="composer-receipts"]')?.getClientRects().length ?? 0) > 0,
@@ -3096,12 +3143,13 @@ describe("a consumed queued send leaves the composer by its own id", () => {
              control, whole inside the bounded list, at every viewport and in
              both phases; the card leads with them, and its message and "why"
              sentence below scroll inside the list when the box has no more
-             room (recorded on every viewport, gated where the box is not the
-             phone's 38dvh). */
+             room (whole in place on the desktop, and reachable by that scroll
+             at every viewport). */
           for (const state of [before, after]) {
             expect(state.first?.status).toBe(translate(lang, "composer.deliveryCheckEnded"));
             expect(state.first?.statusDrawn).toBe(true);
-            if (!viewport.touch) expect(state.first?.whyWhole).toBe(true);
+            if (!viewport.touch) expect({ key, whyWhole: state.first?.whyWhole }).toEqual({ key, whyWhole: true });
+            expect({ key, whyReachable: state.first?.whyReachable }).toEqual({ key, whyReachable: true });
             expect(state.first?.controls.length).toBeGreaterThanOrEqual(2);
             expect(state.first?.controls.filter((control) => !control.whole)).toEqual([]);
           }
@@ -3123,6 +3171,22 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           expect(refusedList.first?.statusDrawn).toBe(true);
           expect(refusedList.first?.controls.filter((control) => !control.whole)).toEqual([]);
           expect(refusedList.transcriptWhole).toBe(true);
+          /* Beside the open list, in the list-open and refused states alike:
+             the queue panel keeps its header line (a floor, never collapsed
+             to an empty bar), the staged picture's tile and its remove button
+             are whole, and no surface of the region is painted over another. */
+          const panelFaults = ([["before", before], ["after", after], ["refused", refusedList]] as const).flatMap(([phase, state]) =>
+            /* The desktop's remove chip appears on hover only; the phone's is always drawn. */
+            (viewport.touch ? ["queueHeaderReachable", "tileReachable", "tileRemoveReachable"] as const : ["tileReachable"] as const).filter((field) => state.panels[field] !== true)
+              .map((field) => `${key} ${phase}: ${field} ${String(state.panels[field])} (queue ${state.panels.queueHeight} px; ${state.panels.geometry})`)
+              /* Yielding is bounded on the phone, whose box is the 38dvh cap: the
+                 panels keep a box of their own, the header line and the whole
+                 row of tiles, never an empty bar. The desktop pane keeps the
+                 equal shares its card text is gated on. */
+              .concat(viewport.touch && (state.panels.queueHeight ?? 99) < 26 ? [`${key} ${phase}: the queue panel is only ${state.panels.queueHeight} px`] : [])
+              .concat((state.panels.tileHeight ?? 99) < (viewport.touch ? 47.5 : 39.5) ? [`${key} ${phase}: the staged tile is only ${state.panels.tileHeight} px`] : [])
+              .concat(state.panels.overlaps ? [`${key} ${phase}: a surface is painted over a neighbour`] : []));
+          expect(panelFaults).toEqual([]);
           expect(before.images).toBe(1);
           expect(after.images).toBe(1);
           expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);
@@ -3144,7 +3208,7 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           expect(after.overflowX).toBe(0);
           if (!viewport.touch) {
             expect(afterRest.rowsWhole).toBe(true);
-            expect(after.cardsWhole).toBe(true);
+            expect({ key, cardsWhole: after.cardsWhole }).toEqual({ key, cardsWhole: true });
           }
         } finally { await context.close(); }
       }

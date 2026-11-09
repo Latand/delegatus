@@ -555,10 +555,30 @@ test("the open receipts list keeps the height its first row asked for; closed or
   expect(wrapper().style.minHeight).toBe("142px");
   /* Only that surface asks: every other child of the region still yields. */
   expect(host.querySelector('[data-testid="composer-accessories"]')!.className).toContain("[&>*]:min-h-0");
+  const region = () => host.querySelector('[data-testid="composer-accessories"]')!.className;
+  /* The desktop pane keeps the region's equal shares. */
+  expect(region()).not.toContain("native-queue-panel");
   flushSync(() => root.render(<ReceiptsHarness minHeight={null} />));
   expect(wrapper().style.minHeight).toBe("");
   flushSync(() => root.render(<ReceiptsHarness minHeight={142} hidden />));
   expect(wrapper().style.minHeight).toBe("");
+  flushSync(() => root.unmount());
+});
+
+test("on the phone the open list's room is paid for by the queue panel and the staged strip down to a floor, and the floors go with the room", () => {
+  mobileViewport = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const region = () => host.querySelector('[data-testid="composer-accessories"]')!.className;
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} />));
+  /* The queue panel keeps its header line, the strip its row of tiles. */
+  expect(region()).toContain("[&>[data-testid=native-queue-panel]]:min-h-[1.625rem]");
+  expect(region()).toContain("[&>[data-testid=attachment-tray]]:min-h-14");
+  flushSync(() => root.render(<ReceiptsHarness minHeight={null} />));
+  expect(region()).not.toContain("native-queue-panel");
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} hidden />));
+  expect(region()).not.toContain("native-queue-panel");
   flushSync(() => root.unmount());
 });
 
