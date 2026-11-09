@@ -15,7 +15,13 @@ from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("deploy_checkout", pathlib.Path(__file__).with_name("deploy-checkout.py"))
 deploy = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(deploy)
+# Loading the fixture must leave the checked source tree unchanged.
+previous_bytecode_setting = sys.dont_write_bytecode
+try:
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(deploy)
+finally:
+    sys.dont_write_bytecode = previous_bytecode_setting
 
 TARGET = "a" * 40
 OLD = "b" * 40

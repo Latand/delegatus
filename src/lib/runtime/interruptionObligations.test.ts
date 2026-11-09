@@ -429,7 +429,7 @@ test.skipIf(process.platform === "win32")("the checkout interruption inventory r
   const obligations = path.join(directory, "interruption-obligations");
   const cut = interruptionObligationStore(obligations).record(releaseCut).obligation;
   await initializeRecipientInterruptionIndex(obligations);
-  const child = Bun.spawnSync(["python3", "-c", `
+  const child = Bun.spawnSync(["python3", "-B", "-c", `
 import importlib.util,json,pathlib,sys
 spec=importlib.util.spec_from_file_location('checkout_inventory','scripts/deploy-checkout.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
