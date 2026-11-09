@@ -397,12 +397,12 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   return { identity, stdout: result.stdout };
 }
 
-async function removeEmptyNamespaceRoot(directory: string, identity: string, dispatchGuard?: () => boolean) {
+function removeEmptyNamespaceRoot(directory: string, identity: string, postDeleteGuard?: () => boolean) {
   const current = fs.lstatSync(directory, { throwIfNoEntry: false });
   if (!current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== identity)
     throw new Error("attempt identity changed before namespace rmdir");
-  if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before namespace rmdir");
-  await fs.promises.rmdir(directory);
+  if (postDeleteGuard && !postDeleteGuard()) throw new Error("attempt temp deferred: authority changed before namespace rmdir");
+  fs.rmdirSync(directory);
 }
 
 /** Native find streams an arbitrarily large owned tree; the owned worker and
@@ -441,10 +441,10 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 }
 
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
-  dispatchGuard?: () => boolean): Promise<void> {
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard): Promise<void> {
   if (requireNoEvidence) {
     const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
-    await removeEmptyNamespaceRoot(directory, identity, dispatchGuard);
+    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
     return;
   }
   if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
@@ -452,7 +452,7 @@ export async function removeAttemptTree(directory: string, original = directory,
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
     const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
-    await removeEmptyNamespaceRoot(directory, identity, dispatchGuard);
+    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
   }
 }
 

@@ -216,16 +216,20 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       let dispatchAuthority: AttemptTempAuthority | undefined;
       let dispatchState: AttemptTempState | undefined;
       let dispatchEvidence: { current: () => boolean } | undefined;
-      const dispatchEligible = (directory: string) => {
+      const retirementAuthorityCurrent = (directory: string) => {
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
         return !recordedRootHeld(owner.directory)
           && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
-          && dispatchEvidence?.current() === true
           && (dispatchAuthority?.isCurrent() ?? true)
           && (dispatchAuthority?.state ?? dispatchState) === dispatchState
           && (dispatchState !== undefined)
           && inventory.unchangedAll();
       };
+      // The evidence snapshot must match until content deletion dispatches.
+      // Its directory metadata and entries change during our own cleanup;
+      // the final empty-root fence retains the independent authority checks.
+      const dispatchEligible = (directory: string) => retirementAuthorityCurrent(directory)
+        && dispatchEvidence?.current() === true;
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const observeReferences = async (directory: string) => {
         try {
@@ -320,7 +324,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
         dispatchGuard: dispatchEligible,
         remove: directory => removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
-          () => dispatchEligible(directory)),
+          () => dispatchEligible(directory), () => retirementAuthorityCurrent(directory)),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
         // inspection, including the reinspection after quarantine.

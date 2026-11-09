@@ -8,7 +8,7 @@ import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
+import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
 
 const roots: string[] = [];
@@ -36,6 +36,91 @@ test("a settled attempt removes its scratch without waiting for host release", a
   try { expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse(); }
   finally { f.store.close(); }
 });
+
+type NamespacePath = "namespace-only" | "permission-fallback";
+type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control") {
+  const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
+  const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
+  fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
+  f.store.measure(directory, 8192); f.store.release(directory);
+  fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
+import fs from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "ps") process.exit(0);
+if (args[0] !== "run") process.exit(61);
+const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
+if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
+const script = args[args.indexOf("-c") + 1];
+if (script.includes("-delete")) {
+  for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
+  if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
+  if (${JSON.stringify(change)} === "root-replaced") {
+    fs.renameSync(source, source + "-original"); fs.mkdirSync(source);
+    fs.writeFileSync(source + "/payload", "replacement");
+  }
+  fs.writeFileSync(${JSON.stringify(completion)}, "done");
+}
+`, { mode: 0o700 });
+  const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  const nativeOpendir = fs.promises.opendir.bind(fs.promises);
+  const opendir = spyOn(fs.promises, "opendir").mockImplementation(async (target, options) => {
+    if (kind === "namespace-only" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)) === "private")
+      throw Object.assign(new Error("fixture private"), { code: "EACCES" });
+    return nativeOpendir(target, options);
+  });
+  const nativeRm = fs.promises.rm.bind(fs.promises);
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+    if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
+      throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+    return nativeRm(target, options);
+  });
+  try {
+    const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
+      state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
+        await filesystem.repositoryReferencesAttemptTemp(checkout, owner.directory, owner.directory, inventory);
+        return "closed";
+      },
+      authority: async () => ({ state: "closed", revision: "unchanged",
+        isCurrent: () => change !== "producer-changed" || !fs.existsSync(completion) }) });
+    expect(fs.existsSync(completion)).toBeTrue();
+    if (change !== "control") {
+      expect(report.removed).toBe(0);
+      expect(report.errors).toBe(change === "root-replaced" ? 1 : 0);
+      expect(report.outcomes[0].reason).toContain(change === "root-replaced"
+        ? "identity changed before namespace rmdir" : "authority changed before namespace rmdir");
+      expect(fs.existsSync(attemptTempJournalPath(directory))).toBeTrue();
+      expect(f.store.has(directory)).toBeTrue();
+      const trash = fs.readdirSync(f.root).find(name => name.startsWith(".delegatus-trash-") && !name.endsWith("-original"));
+      expect(trash).toBeDefined();
+      if (change === "root-replaced") expect(fs.readFileSync(path.join(f.root, trash!, "payload"), "utf8")).toBe("replacement");
+      else expect(fs.readdirSync(path.join(f.root, trash!))).toEqual([]);
+      return;
+    }
+    expect(report.errors).toBe(0);
+    expect(report.removed).toBe(1);
+    expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.readdirSync(f.root).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
+    expect(f.store.has(directory)).toBeFalse();
+    expect(f.store.bytes()).toBe(0);
+  } finally {
+    opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+  }
+}
+
+test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
+  "an unchanged integrated sweep finishes namespace cleanup in one pass (%s)", kind => integratedNamespaceSweep(kind));
+test.skipIf(process.platform !== "linux").each([
+  ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
+  ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
+] as const)("an integrated sweep refuses post-delete drift (%s, %s)", integratedNamespaceSweep);
 
 test.each(["absent", "unreadable", "restored-with-link"] as const)(
   "the final producer read revalidates a changed consumer checkout (%s)", async change => {
