@@ -288,6 +288,30 @@ test("attempt retirement coalesces through the owned worker", async () => {
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("attempt-temp\n");
 });
 
+test("an attempt tick whose queue budget expired defers, then a fresh tick runs", async () => {
+  const { root, worker } = fixture("--hold-worktree", 10_000);
+  await worker.run("dry-run");
+  const ready = new Promise<void>((resolve, reject) => {
+    const watcher = fs.watch(root, (_event, file) => {
+      if (String(file) === "busy-pid") { clearTimeout(timer); watcher.close(); resolve(); }
+    });
+    const timer = setTimeout(() => { watcher.close(); reject(new Error("fixture did not acknowledge hold")); }, 5_000);
+  });
+  const worktree = worker.run("on");
+  await ready;
+  let now = Date.parse("2026-11-04T12:00:00Z");
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const queued = worker.attemptTemp();
+  now += 10_001;
+  fs.writeFileSync(path.join(root, "release-worktree"), "release");
+  try {
+    await worktree;
+    expect(await queued).toBeNull();
+    expect(fs.existsSync(path.join(root, "requests"))).toBeFalse();
+  } finally { clock.mockRestore(); await queued.catch(() => {}); }
+  expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
+}, 20_000);
+
 for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--hang"]) test(`attempt retirement refuses ${flag} and reaps its helper`, async () => {
   const { worker } = fixture(flag, 2000);
   await worker.run("dry-run");

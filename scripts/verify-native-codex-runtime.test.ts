@@ -9,6 +9,48 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
+test.each(["success", "failure"])("the native verifier uses the project test timeout and retains the %s verdict", outcome => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-runner-timeout-"));
+  roots.push(root);
+  const target = path.join(root, "src/lib/runtime/codexSteerDelivery.integration.test.ts");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `import { expect, test } from "bun:test";
+test("native verifier assertion fixture", () => {
+  expect(${JSON.stringify(outcome)}).toBe("success");
+});`);
+  const capture = path.join(root, "child-launch.jsonl");
+  const preload = path.join(root, "capture-child-launch.ts");
+  // Observe the real CLI's launch, then run its child unchanged. Keep the mock
+  // in this subprocess so it cannot affect other tests or nested admission.
+  fs.writeFileSync(preload, `import { mock } from "bun:test";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+const runChild = spawnSync;
+mock.module("node:child_process", () => ({
+  spawnSync(command, args, options) {
+    fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify({
+      command, args, timeout: options.timeout, killSignal: options.killSignal, stdio: options.stdio,
+    }) + "\\n");
+    return runChild(command, args, options);
+  },
+}));`);
+  const result = spawnSync(process.execPath, ["--preload", preload, path.join(import.meta.dir, "verify-native-codex-runtime.ts"), process.execPath, "--steering-only"], {
+    cwd: root, env: process.env, encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL",
+  });
+  expect(result.error).toBeUndefined();
+  const launches = fs.readFileSync(capture, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(launches).toEqual([{
+    command: process.execPath,
+    args: ["test", "--timeout=60000", "src/lib/runtime/codexSteerDelivery.integration.test.ts"],
+    timeout: 300_000, killSignal: "SIGKILL", stdio: "inherit",
+  }]);
+  const output = result.stdout + result.stderr;
+  expect(output).not.toContain("timed out");
+  expect(result.status).toBe(outcome === "success" ? 0 : 1);
+  expect(output).toContain(outcome === "success" ? "1 pass" : "1 fail");
+  if (outcome === "failure") expect(output).toContain('expect(received).toBe(expected)');
+});
+
 test.skipIf(process.platform !== "linux")("the native verifier's private environment admits its real nested test runner", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-runner-admission-"));
   roots.push(root);
