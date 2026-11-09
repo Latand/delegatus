@@ -1,10 +1,14 @@
 import { afterAll, expect, test, harness, create as fixtureCreate, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs, os } from "./engine.fixture";
 import { reviewSetupRecipe, setProjectSetupRecipe } from "@/lib/projects/setupRecipe";
-import { afterEach } from "bun:test";
+import { afterEach, setSystemTime } from "bun:test";
+import crypto from "node:crypto";
+import { roleMemoryCollection } from "@/lib/memory/roleStore";
+import { runPrivacyWork, shutdownTaskPageWorker, taskPageWorkerDiagnostics } from "@/lib/links/taskPageWorker";
+import { withPrivacyWorkerOwner } from "@/lib/memory/privacyDiagnostics";
 import { normalizeStages } from "./engine";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
-import { codexCloudEnvironmentId, setCodexCloudEnvironmentId, resetProjectSettingsForTests, setPipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
+import { claudeCloudTaskFingerprint, codexCloudEnvironmentId, setCodexCloudEnvironmentId, setClaudeCloudTasks, resetProjectSettingsForTests, setPipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, type CloudStageClient } from "./cloudStage";
 import { HostedCloudError } from "./cloudHostedErrors";
 import { CloudSubmissionNotStartedError, createHostedCloudStageClient } from "./cloudHostedClient";
@@ -38,6 +42,118 @@ const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
 const lane = () => loadPipelines()[0]!;
 const attempt = () => lane().runs[0]!.attempts.at(-1)!;
 
+const privacyRule = "Preserve amber orchard receipts until the owning operation completes";
+const privacyRows = () => taskPageWorkerDiagnostics().privacy?.rows ?? [];
+const privacyDigest = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+function putPrivacyRule(rule = privacyRule) {
+  roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: "r_cloud_owner", scope: "machine",
+    rule, why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "review",
+      attempt: 1, roleId: "reviewer", fixRound: false, conversationId: "conversation_fixture" },
+    createdAt: "2026-11-05T00:00:00Z", changedAt: "2026-11-05T00:00:00Z" }));
+}
+function privacyTestContext(seed: string) {
+  setSystemTime(new Date("2026-11-05T00:00:00Z"));
+  let n = 0;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => {
+    const hex = privacyDigest(`${seed}:${++n}`);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4000-8000-${hex.slice(20, 32)}`;
+  });
+  savePipelines([]);
+  resetProjectSettingsForTests();
+  putPrivacyRule();
+  return async () => {
+    await shutdownTaskPageWorker();
+    roleMemoryCollection(true)!.boundedPatch(1, tx => tx.delete("r:r_cloud_owner"));
+    ids.mockRestore(); setSystemTime();
+  };
+}
+function privacyCloudStage(runtime: "codex-cloud" | "claude-cloud"): PipelineStageInput {
+  return { ...stage, runtime, prompt: privacyRule,
+    ...(runtime === "claude-cloud" ? { engine: "claude", model: "opus", effort: "high" } : {}) };
+}
+const privacyOwner = () => ({ pipeline: privacyDigest(lane().id), stage: privacyDigest("review"), attempt: attempt().n });
+
+test.each(["codex-cloud", "claude-cloud"] as const)("Cloud privacy ownership survives repeated and nested callbacks (%s)", async runtime => {
+  const restore = privacyTestContext(`${runtime}:success`);
+  try {
+    const before = new Set(privacyRows().map(row => row.jobId));
+    const { h, submits, client } = await fixture({ stages: [privacyCloudStage(runtime)] });
+    const submit = client.submit;
+    client.submit = async input => {
+      // Exercise the transport's preparation callback before its simulated effect.
+      const prompt = await input.preparePrompt!("thread_fixture");
+      expect(prompt).not.toContain(privacyRule);
+      const lastJob = new Set(privacyRows().map(row => row.jobId));
+      await withPrivacyWorkerOwner("foreign pipeline", "foreign stage", 9, async () => {
+        expect(await input.preparePrompt!("thread_repeat")).not.toContain(privacyRule);
+        expect(await input.preparePrompt!("thread_repeat")).not.toContain(privacyRule);
+      });
+      const repeated = privacyRows().filter(row => !lastJob.has(row.jobId));
+      const settled = repeated.filter(row => row.phase === "settled");
+      expect(settled).toHaveLength(2);
+      expect(new Set(settled.map(row => row.requestId)).size).toBe(2);
+      expect(repeated.every(row => JSON.stringify(row.owner) === JSON.stringify(privacyOwner()))).toBe(true);
+
+      await withPrivacyWorkerOwner(lane().id, "review", attempt().n, async () => {
+        await runPrivacyWork({ kind: "filter", value: privacyRule });
+        const parentRequest = privacyRows().at(-1)!.requestId;
+        await input.preparePrompt!("thread_nested");
+        expect(privacyRows().at(-1)!.requestId).toBe(parentRequest);
+      });
+      return submit({ ...input, prompt });
+    };
+    await submitted(h);
+    expect(submits).toHaveLength(1);
+    expect(h.spawnInputs).toHaveLength(0);
+    const expected = privacyOwner();
+    const owned = privacyRows().filter(row => !before.has(row.jobId));
+    expect(owned.some(row => row.phase === "started")).toBe(true);
+    expect(owned.filter(row => row.phase === "settled")).toHaveLength(6);
+    expect(owned.every(row => JSON.stringify(row.owner) === JSON.stringify(expected))).toBe(true);
+    // A completed submission's callback still carries its owner, while the
+    // existing dispatch fence refuses its superseded intent.
+    await expect(submits[0]!.preparePrompt!("thread_retired")).rejects.toThrow("operation superseded");
+    expect(privacyRows().at(-1)?.owner).toEqual(expected);
+    await runPrivacyWork({ kind: "filter", value: privacyRule });
+    expect(privacyRows().at(-1)?.owner).toBe("unknown");
+    expect(JSON.stringify(privacyRows())).not.toContain(privacyRule);
+  } finally { await restore(); }
+}, 30_000);
+
+for (const runtime of ["codex-cloud", "claude-cloud"] as const) test.each(["initial", "callback"] as const)(
+  `Cloud privacy ownership retains preparation failures (${runtime}, %s)`, async failureAt => {
+    const restore = privacyTestContext(`${runtime}:${failureAt}`);
+    try {
+      const before = new Set(privacyRows().map(row => row.jobId));
+      const { h, submits, client } = await fixture({ stages: [privacyCloudStage(runtime)] });
+      let callbacks = 0;
+      // A stored text above the matcher's individual source bound makes the
+      // production worker refuse complete filtering, through its real error frame.
+      if (failureAt === "initial") putPrivacyRule("amber".repeat(7_000));
+      client.submit = async input => {
+        callbacks++;
+        putPrivacyRule("amber".repeat(7_000));
+        await input.preparePrompt!("thread_failure");
+        throw new Error("a refused preparation must stop before submission");
+      };
+      for (let i = 0; i < 4 && attempt()?.cloud?.phase !== "failed"; i++) await step(h);
+      expect(callbacks).toBe(failureAt === "callback" ? 1 : 0);
+      expect(submits).toHaveLength(0);
+      expect(h.spawnInputs).toHaveLength(0);
+      expect(attempt().cloud).toMatchObject({ phase: "failed", failures: 1, submissionUnresolved: failureAt === "callback" });
+      expect(attempt().cloud?.error).toContain("worker-unavailable");
+      const observed = privacyRows().filter(row => !before.has(row.jobId));
+      expect(observed.some(row => row.phase === "started")).toBe(true);
+      expect(observed.at(-1)).toMatchObject({ phase: "settled", failure: "worker-unavailable", owner: privacyOwner() });
+      expect(observed.every(row => JSON.stringify(row.owner) === JSON.stringify(privacyOwner()))).toBe(true);
+      expect(JSON.stringify(observed)).not.toContain("amber");
+      // Failure unwinds its async context and does not contaminate unrelated jobs.
+      putPrivacyRule();
+      await runPrivacyWork({ kind: "filter", value: privacyRule });
+      expect(privacyRows().at(-1)?.owner).toBe("unknown");
+    } finally { await restore(); }
+  }, 30_000);
+
 async function fixture(options: { accountId?: string; enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[]; repoDir?: string; deliveryBranch?: string } = {}) {
   await settlePipelineControllerJobs();
   const h = harness();
@@ -58,22 +174,37 @@ async function fixture(options: { accountId?: string; enabled?: boolean; publica
   h.advanceWallClock = milliseconds => { clock += milliseconds; };
   const submits: Parameters<CloudStageClient["submit"]>[0][] = [];
   const reads: Parameters<CloudStageClient["poll"]>[0][] = [];
-  h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: {
-    engine: "codex", accountId: request.requestedId ?? options.accountId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
+  const runtime = options.stages?.[0]?.runtime ?? "codex-cloud";
+  const model = runtime === "claude-cloud" ? "opus" : "gpt-6.1-sol";
+  h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available", account: {
+    engine, accountId: request.requestedId ?? options.accountId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
   } });
-  h.ports.cloudClient = {
-    supportsModel: model => model === "gpt-6.1-sol",
+  const client: CloudStageClient = {
+    supportsModel: candidate => candidate === model,
     hasEnvironment: async () => true,
     submit: async input => { submits.push(input); return { taskId, taskUrl }; },
-    poll: async input => { reads.push(input); return { state: "completed", model: "gpt-6.1-sol" }; },
-    readFinalMessage: async () => ({ message: pass, model: "gpt-6.1-sol" }),
+    poll: async input => { reads.push(input); return { state: "completed", model }; },
+    readFinalMessage: async () => ({ message: pass, model }),
     readDiff: async () => { throw new Error("read-only stages must never read a diff"); },
   };
+  if (runtime === "claude-cloud") {
+    client.prepareEnvironment = async input => ({ state: "ready", environmentId: "task-fixture",
+      selection: claudeCloudTaskFingerprint(input.project, input.account.accountId), revision: 1, principal: privacyDigest("fixture-principal") });
+    h.ports.claudeCloudClient = client;
+  }
+  else h.ports.cloudClient = client;
   await create(h.ports, (options.stages ?? [stage]) as never, { publication: options.publication ?? "remote-branch",
     ...(options.repoDir ? { repoDir: options.repoDir } : {}),
     ...(options.deliveryBranch ? { delivery: { branch: options.deliveryBranch } } : {}) });
-  expect(setCodexCloudEnvironmentId(lane().project, options.enabled === false ? "" : "env-fixture")).toBe(true);
-  return { h, submits, reads };
+  if (runtime === "claude-cloud") {
+    const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git";
+    savePipelines([record]);
+  }
+  expect(runtime === "claude-cloud"
+    ? setClaudeCloudTasks(lane().project, [{ accountId: options.accountId ?? "cloud-account", taskId: "task-fixture" }])
+    : setCodexCloudEnvironmentId(lane().project, options.enabled === false ? "" : "env-fixture")).toBe(true);
+  return { h, submits, reads, client };
 }
 
 async function step(h: ReturnType<typeof harness>) {

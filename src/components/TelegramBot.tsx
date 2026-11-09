@@ -1,22 +1,19 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import type { TelegramBotState } from "@/hooks/useTelegramBot";
 import { type TFunction, useLocale } from "@/lib/i18n";
 import { suggestChatAlias, type TelegramBotChatView, type TelegramBotRefusal, type TelegramBotReceiving, validChatAlias } from "@/lib/telegram/bot/contracts";
 
-import { Trash2 } from "./icons";
-import { ProjectReportsOverview } from "./ProjectReportsOverview";
-import { ActionButton, ConfirmingAction } from "./TelegramControls";
+import { ActionButton } from "./TelegramControls";
 
 /**
- * The Bot section of the Telegram panel
- * (`docs/design/telegram-bot-account.md`, Decision 8): paste a BotFather
- * token, see the bot and whether it is receiving, name the chats agents may
- * post to, and remove it. The token input is uncontrolled and cleared before
- * the request starts, so the secret is never React state and never rendered
- * back.
+ * The bot's forms and its chat row, which the setup guide and the orchestrator's
+ * reports draw as they are; the bot's settings themselves are the Telegram
+ * section of the Settings window (`settings/TelegramSection.tsx`). The token
+ * input is uncontrolled and cleared before the request starts, so the secret is
+ * never React state and never rendered back.
  */
 
 type Key = Parameters<TFunction>[0];
@@ -42,34 +39,28 @@ export const ERROR_KEYS: Record<string, Key> = {
   transport: "telegram.actionUnreachable",
 };
 
-function receivingKey(receiving: TelegramBotReceiving): Key {
+export function receivingKey(receiving: TelegramBotReceiving): Key {
   return `telegram.bot.receiving.${receiving}` as Key;
 }
 
-function receivingColor(receiving: TelegramBotReceiving): string {
-  if (receiving === "polling") return "var(--color-success)";
-  if (receiving === "token_rejected") return "var(--color-danger)";
-  if (receiving === "stopped") return "transparent";
-  return "var(--color-warning)";
-}
-
-function formatTime(iso: string | null): string | null {
+export function formatTime(iso: string | null, locale?: string): string | null {
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+  return date.toLocaleString(locale ?? [], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 const inputClass = "h-11 min-w-0 rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8";
+const roomyField = "min-h-9 min-w-0 rounded-control border border-border bg-well px-2.5 text-body text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55 settings-sheet:min-h-11";
+const roomyButton = "min-h-9 shrink-0 rounded-control border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 settings-sheet:min-h-11 settings-sheet:text-body";
 
 /**
- * One chat: title, type chip and the posting switch on one line. Switching on
- * a chat with no alias adopts the one suggested from its title, so allowing a
- * chat is one tap. The alias field appears once posting is on, to rename, or
- * while off when the title suggests nothing.
+ * A chat's posting switch and alias, shared by every surface that draws a chat.
+ * Switching on a chat with no alias adopts the one suggested from its title, so
+ * allowing a chat is one tap. The field appears once posting is on, to rename,
+ * or while off when the title suggests nothing.
  */
-export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign?: (chatId: string, bot: string | null) => void; chat: TelegramBotChatView; botSeesAll: boolean; busy: boolean; onSave: (chatId: string, alias: string, postAllowed: boolean) => void }) {
-  const { t } = useLocale();
+export function useChatPosting(chat: TelegramBotChatView, onSave: (chatId: string, alias: string, postAllowed: boolean) => void) {
   const saved = chat.alias ?? "";
   const [alias, setAlias] = useState(saved);
   /* A save that came back renames the field (the render-time reset). */
@@ -87,6 +78,35 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
   const posting = chat.postAllowed && saved !== "";
   const adopt = draft || suggestion;
   const showField = (chat.member || posting) && (posting || suggestion === "");
+  const toggle = () => {
+    if (posting) onSave(chat.chatId, validChatAlias(draft) ? draft : saved, false);
+    else if (adopt !== "") onSave(chat.chatId, adopt, true);
+  };
+  const blur = () => {
+    const toSwitch = switching.current;
+    switching.current = false;
+    /* A rename of a chat agents already post to; a chat that is off takes its alias from the switch. */
+    if (!toSwitch && posting && draft !== saved) onSave(chat.chatId, draft, true);
+  };
+  const pressStart = () => { switching.current = true; };
+  const fieldFocus = () => { switching.current = false; };
+  return { alias, setAlias, draft, suggestion, posting, adopt, showField, toggle, blur, pressStart, fieldFocus };
+}
+
+/** Why a bot could not post: the chat row's words for a stored refusal. */
+export function telegramRefusalLabel(t: TFunction, chat: TelegramBotChatView, refusal: TelegramBotRefusal): string {
+  const bot = chat.bots?.find(bot => bot.username === refusal.bot.username);
+  return bot?.status === "kicked" ? t("telegram.bot.removedFromChat")
+    : refusal.code === "bot_not_in_chat" ? t("telegram.bot.notInChat")
+    : refusal.code === "forbidden" || refusal.code === "not_enough_rights" ? t("telegram.bot.mayNotPost")
+    : refusal.code === "token_rejected" ? t("telegram.bot.tokenRejected")
+    : t(ERROR_KEYS[refusal.code] ?? "telegram.actionFailed");
+}
+
+/** One chat: title, type chip and the posting switch on one line. */
+export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign?: (chatId: string, bot: string | null) => void; chat: TelegramBotChatView; botSeesAll: boolean; busy: boolean; onSave: (chatId: string, alias: string, postAllowed: boolean) => void }) {
+  const { t } = useLocale();
+  const { alias, setAlias, draft, suggestion, posting, adopt, showField, toggle, blur, pressStart, fieldFocus } = useChatPosting(chat, onSave);
   const lastPost = formatTime(chat.lastPostAt);
   const lastPostBy = chat.lastPostBy
     ? "unidentified" in chat.lastPostBy ? t("telegram.bot.unidentified") : chat.lastPostBy.title ?? chat.lastPostBy.conversationId
@@ -97,18 +117,7 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
     : chat.readdToApply ? t("telegram.bot.readd")
     : chat.seesAllMessages && !botSeesAll ? t("telegram.bot.seesAllAdmin")
     : null;
-  const refusalLabel = (refusal: TelegramBotRefusal) => {
-    const bot = chat.bots?.find(bot => bot.username === refusal.bot.username);
-    return bot?.status === "kicked" ? t("telegram.bot.removedFromChat")
-      : refusal.code === "bot_not_in_chat" ? t("telegram.bot.notInChat")
-      : refusal.code === "forbidden" || refusal.code === "not_enough_rights" ? t("telegram.bot.mayNotPost")
-      : refusal.code === "token_rejected" ? t("telegram.bot.tokenRejected")
-      : t(ERROR_KEYS[refusal.code] ?? "telegram.actionFailed");
-  };
-  const toggle = () => {
-    if (posting) onSave(chat.chatId, validChatAlias(draft) ? draft : saved, false);
-    else if (adopt !== "") onSave(chat.chatId, adopt, true);
-  };
+  const refusalLabel = (refusal: TelegramBotRefusal) => telegramRefusalLabel(t, chat, refusal);
   return (
     <li className={`flex flex-col gap-1 rounded-[9px] border border-border py-0.5 pl-2 pr-0.5 ${chat.member || posting ? "" : "opacity-60"}`}>
       <div className="flex min-w-0 items-center gap-1">
@@ -124,7 +133,7 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
             aria-checked={posting}
             aria-label={`${t("telegram.bot.mayPost")}: ${chat.title}`}
             disabled={busy || (!posting && adopt === "")}
-            onPointerDown={() => { switching.current = true; }}
+            onPointerDown={pressStart}
             onClick={toggle}
             className="inline-flex h-11 w-12 shrink-0 items-center justify-center rounded-[7px] disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-7 sm:w-11"
           >
@@ -150,17 +159,11 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
             aria-label={`${t("telegram.bot.aliasLabel")}: ${chat.title}`}
             placeholder={suggestion || t("telegram.bot.aliasLabel")}
             onChange={(event) => setAlias(event.target.value)}
-            onFocus={() => { switching.current = false; }}
+            onFocus={fieldFocus}
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();
             }}
-            onBlur={() => {
-              const toSwitch = switching.current;
-              switching.current = false;
-              /* A rename of a chat agents already post to; a chat that is off
-                 takes its alias from the switch. */
-              if (!toSwitch && posting && draft !== saved) onSave(chat.chatId, draft, true);
-            }}
+            onBlur={blur}
             className={`${inputClass} w-full flex-1 font-mono`}
           />
         </label>
@@ -202,7 +205,7 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
       ) : null}
       {chat.reports?.some((entry) => entry.refused) ? (
         <p data-telegram-chat-reports="refused" className="pr-1.5 text-[10px] font-semibold leading-snug text-warning">
-          {t("telegram.bot.reportsRefused", { names: chat.reports.filter((entry) => entry.refused).map((entry) => entry.name).join(", ") })}
+          {t(posting ? "telegram.bot.reportsRefusedPosting" : "telegram.bot.reportsRefused", { names: chat.reports.filter((entry) => entry.refused).map((entry) => entry.name).join(", ") })}
         </p>
       ) : null}
       {lastPost && lastPostBy ? (
@@ -220,7 +223,9 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
  * added, the operator may send one silent test post. `onAdded` hands the alias
  * to a picker that wants the new chat selected.
  */
-export function AddChatForm({ state, onAdded, compact = false }: { state: TelegramBotState; onAdded?: (alias: string) => void; compact?: boolean }) {
+export function AddChatForm({ state, onAdded, compact = false, roomy = false }: { state: TelegramBotState; onAdded?: (alias: string) => void; compact?: boolean;
+  /** At the Settings window's sizes. */
+  roomy?: boolean }) {
   const { t } = useLocale();
   const [value, setValue] = useState("");
   const [added, setAdded] = useState<string | null>(null);
@@ -238,7 +243,7 @@ export function AddChatForm({ state, onAdded, compact = false }: { state: Telegr
   };
   return (
     <div data-telegram-add-chat="" className="flex flex-col gap-1.5">
-      {compact ? null : <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.addHint")}</p>}
+      {compact ? null : <p className={roomy ? "text-ui leading-snug text-muted" : "text-[10.5px] leading-snug text-muted"}>{t("telegram.bot.addHint")}</p>}
       <form
         onSubmit={(event) => { event.preventDefault(); void submit(); }}
         className="flex min-w-0 items-center gap-1.5"
@@ -254,20 +259,20 @@ export function AddChatForm({ state, onAdded, compact = false }: { state: Telegr
           aria-label={t("telegram.bot.addLabel")}
           placeholder={t("telegram.bot.addPlaceholder")}
           onChange={(event) => setValue(event.target.value)}
-          className={`${inputClass} flex-1 font-mono`}
+          className={roomy ? `${roomyField} flex-1 font-mono` : `${inputClass} flex-1 font-mono`}
         />
         <button
           type="submit"
           data-telegram-add-chat-submit=""
           disabled={state.busy || value.trim() === ""}
-          className="h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+          className={roomy ? roomyButton : "h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"}
         >
           {t("telegram.bot.add")}
         </button>
       </form>
       {added ? (
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <p role="status" data-telegram-add-chat-added={added} className="min-w-0 flex-1 text-[10.5px] font-semibold leading-snug text-success">
+          <p role="status" data-telegram-add-chat-added={added} className={`min-w-0 flex-1 font-semibold leading-snug text-success ${roomy ? "text-ui" : "text-[10.5px]"}`}>
             {tested === added ? t("telegram.bot.testSent", { title: title(added) }) : t("telegram.bot.added", { title: title(added), alias: added })}
           </p>
           {tested === added ? null : (
@@ -283,75 +288,10 @@ export function AddChatForm({ state, onAdded, compact = false }: { state: Telegr
   );
 }
 
-/**
- * The folders agents may send documents and photos from, one absolute path
- * per line. The draft follows the server's list until the operator edits it;
- * saving an empty field returns to the default. The field grows to hold every
- * line, wrapped ones included: a long root wraps on a phone, and a fixed two
- * rows then hid the root after it.
- */
-export function DocumentRootsForm({ state }: { state: TelegramBotState }) {
-  const { t } = useLocale();
-  const documents = state.status?.documents;
-  const stored = documents?.custom ? documents.roots.join("\n") : "";
-  const [draft, setDraft] = useState<string | null>(null);
-  const value = draft ?? stored;
-  const roots = value.split("\n").map((line) => line.trim()).filter(Boolean);
-  const field = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const element = field.current;
-    /* No layout (a server render, a DOM without one): the rows stand. */
-    if (!element || element.scrollHeight === 0) return;
-    element.style.height = "auto";
-    element.style.height = `${element.scrollHeight + element.offsetHeight - element.clientHeight}px`;
-  }, [value]);
-  /* The form closes on the press and lists the roots as saved; a refusal
-     reopens it with the typed paths (audit B39). */
-  const submit = async () => {
-    if (state.busy) return;
-    const typed = value;
-    setDraft(null);
-    if (!await state.setDocumentRoots(roots)) setDraft(typed);
-  };
-  return (
-    <form
-      data-telegram-document-roots=""
-      onSubmit={(event) => { event.preventDefault(); void submit(); }}
-      className="flex flex-col gap-1.5"
-    >
-      <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.documentsHint")}</p>
-      <textarea
-        ref={field}
-        value={value}
-        disabled={state.busy}
-        rows={Math.max(2, value.split("\n").length, documents && !documents.custom && value === "" ? documents.roots.length : 0)}
-        autoComplete="off"
-        spellCheck={false}
-        data-telegram-document-roots-input=""
-        aria-label={t("telegram.bot.documentsLabel")}
-        placeholder={documents && !documents.custom ? documents.roots.join("\n") : t("telegram.bot.documentsLabel")}
-        onChange={(event) => setDraft(event.target.value)}
-        className="min-h-[44px] min-w-0 resize-none overflow-hidden break-all rounded-[8px] border border-border bg-canvas px-2 py-1.5 font-mono text-[11px] leading-snug outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      />
-      <div className="flex min-w-0 items-center gap-1.5">
-        {documents && !documents.custom && draft === null ? (
-          <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-muted">{t("telegram.bot.documentsDefault")}</span>
-        ) : <span className="flex-1" />}
-        <button
-          type="submit"
-          data-telegram-document-roots-save=""
-          disabled={state.busy || draft === null || value === stored}
-          className="h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
-        >
-          {t("telegram.bot.documentsSave")}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 /** The token field. Uncontrolled, and emptied before the request starts. */
-export function TokenForm({ busy, onConnect }: { busy: boolean; onConnect: (token: string) => void }) {
+export function TokenForm({ busy, onConnect, roomy = false }: { busy: boolean; onConnect: (token: string) => void;
+  /** At the Settings window's sizes. */
+  roomy?: boolean }) {
   const { t } = useLocale();
   const tokenRef = useRef<HTMLInputElement>(null);
   return (
@@ -374,146 +314,15 @@ export function TokenForm({ busy, onConnect }: { busy: boolean; onConnect: (toke
         spellCheck={false}
         aria-label={t("telegram.bot.tokenLabel")}
         placeholder={t("telegram.bot.tokenLabel")}
-        className={inputClass}
+        className={roomy ? roomyField : inputClass}
       />
       <button
         type="submit"
         disabled={busy}
-        className="h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+        className={roomy ? `${roomyButton} self-start` : "h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"}
       >
         {t("telegram.bot.connect")}
       </button>
     </form>
-  );
-}
-
-export function TelegramBotSection({ state }: { state: TelegramBotState }) {
-  const { t } = useLocale();
-  const { status, busy, failure } = state;
-  const connected = status?.connected === true;
-  const receiving = status?.receiving ?? "stopped";
-  const isActive = (chat: TelegramBotChatView) => chat.member || (chat.postAllowed && chat.lastDelivery?.state === "refused");
-  const active = status?.chats.filter(isActive) ?? [];
-  const inactive = status?.chats.filter(chat => !isActive(chat)) ?? [];
-  const botSeesAll = status?.bot?.canReadAllGroupMessages === true;
-  const save = (chatId: string, alias: string, postAllowed: boolean) => void state.setChat(chatId, alias, postAllowed);
-
-  return (
-    <section aria-label={t("telegram.bot.title")} className="flex flex-col gap-2 border-t border-border pt-2">
-      <div className="flex min-w-0 items-baseline gap-2">
-        <h3 className="text-[11.5px] font-bold text-primary">{t("telegram.bot.title")}</h3>
-        <span className="min-w-0 truncate text-[9.5px] font-medium text-muted">{t("telegram.bot.caption")}</span>
-      </div>
-
-      {failure ? (
-        <p role="alert" className="rounded-[6px] bg-danger-soft px-2 py-1 text-[10.5px] font-semibold leading-snug text-danger">
-          {t(ERROR_KEYS[failure.code] ?? "telegram.actionFailed")}
-        </p>
-      ) : null}
-
-      {!connected ? (
-        <>
-          <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.connectHint")}</p>
-          <TokenForm busy={busy} onConnect={(token) => void state.connect(token)} />
-        </>
-      ) : null}
-
-      {connected ? (
-        <>
-          <div className="flex min-w-0 items-center gap-2">
-            <span
-              aria-hidden
-              className="h-2 w-2 shrink-0 rounded-full"
-              style={{ backgroundColor: receivingColor(receiving), boxShadow: receiving === "stopped" ? "inset 0 0 0 1.5px var(--color-border)" : "none" }}
-            />
-            <span className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{status?.bot?.name}</span>
-            {status?.bot?.username ? <span className="min-w-0 truncate font-mono text-[10px] text-muted">@{status.bot.username}</span> : null}
-          </div>
-          {/* While polling, the green dot says it; anything else is spelled out. */}
-          <p role="status" className={receiving === "polling" ? "sr-only" : `text-[10.5px] font-semibold leading-snug ${receiving === "token_rejected" ? "text-danger" : "text-warning"}`}>
-            {t(receivingKey(receiving))}
-          </p>
-
-          {receiving === "token_rejected" ? (
-            <TokenForm busy={busy} onConnect={(token) => void state.connect(token)} />
-          ) : null}
-
-          {status?.bots?.filter(bot => !bot.receiving).map(bot => (
-            <div key={bot.username ?? bot.name} className="flex min-w-0 flex-col gap-0.5 text-[10.5px] text-primary">
-              <span className="break-words">{bot.name}{bot.username ? ` · @${bot.username}` : ""}</span>
-              {bot.tokenState === "rejected" ? <span className="text-danger">{t("telegram.bot.err.token_rejected")}</span> : null}
-              <ConfirmingAction label={t("telegram.bot.removeSending")} prompt={t("telegram.bot.removeSendingConfirm")} onConfirm={() => { if (bot.username) void state.removeBot?.(bot.username); }} disabled={busy} icon={<Trash2 className="h-3 w-3" aria-hidden />} />
-            </div>
-          ))}
-          {(status?.bots?.length ?? 1) < 9 ? (
-            <details className="text-[10.5px]">
-              <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.addBot")}</summary>
-              <p className="mb-1 text-muted">{t("telegram.bot.sendingHint")}</p>
-              <TokenForm busy={busy} onConnect={token => void state.addBot?.(token)} />
-            </details>
-          ) : null}
-
-          <div className="flex flex-col gap-1.5 border-t border-border pt-2">
-            <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.addTitle")}</h4>
-            <AddChatForm state={state} />
-          </div>
-          <div className="flex flex-col gap-1.5 border-t border-border pt-2">
-            <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.documentsTitle")}</h4>
-            <DocumentRootsForm state={state} />
-          </div>
-          <div className="border-t border-border pt-2">
-            <ProjectReportsOverview bot={state} />
-          </div>
-        </>
-      ) : null}
-
-      <div className="flex min-w-0 items-baseline justify-between gap-2 pr-1">
-        <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.chats")}</h4>
-        {active.length ? <span className="min-w-0 truncate text-[9.5px] font-semibold text-muted">{t("telegram.bot.mayPost")}</span> : null}
-      </div>
-      {active.length === 0 ? (
-        <p className="text-[10.5px] leading-snug text-muted">{connected
-          ? t("telegram.bot.noChats", { username: status?.bot?.username ?? "bot" })
-          : t("telegram.bot.noCloneChats")}</p>
-      ) : (
-        <ul className="flex flex-col gap-1">
-          {active.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} onAssign={(id, bot) => void state.assignBot?.(id, bot)} />)}
-        </ul>
-      )}
-      {inactive.length ? (
-        <details className="text-[10.5px]">
-          <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.inactive", { count: inactive.length })}</summary>
-          <ul className="mt-1 flex flex-col gap-1">
-            {inactive.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} onAssign={(id, bot) => void state.assignBot?.(id, bot)} />)}
-          </ul>
-        </details>
-      ) : null}
-
-      <details className="text-[10.5px]">
-        <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.limitsTitle")}</summary>
-        <ul className="mt-1 flex list-disc flex-col gap-1 pl-4 leading-snug text-muted">
-          {connected ? <li>{botSeesAll ? t("telegram.bot.privacyOff") : t("telegram.bot.privacyOn")}</li> : null}
-          <li>{t("telegram.bot.limit1")}</li>
-          <li>{t("telegram.bot.limit2")}</li>
-          <li>{t("telegram.bot.limit3")}</li>
-        </ul>
-      </details>
-
-      {connected ? (
-        <div className="flex flex-col gap-1 border-t border-border pt-1.5">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <ActionButton label={t("telegram.bot.refresh")} onClick={() => void state.refresh(true)} disabled={busy} />
-            <ConfirmingAction
-              label={t("telegram.bot.remove")}
-              prompt={t("telegram.bot.removeConfirm")}
-              onConfirm={() => void state.remove()}
-              disabled={busy}
-              icon={<Trash2 className="h-3 w-3" aria-hidden />}
-            />
-          </div>
-          <p className="text-[9.5px] leading-snug text-muted">{t("telegram.bot.revokeHint")}</p>
-        </div>
-      ) : null}
-    </section>
   );
 }

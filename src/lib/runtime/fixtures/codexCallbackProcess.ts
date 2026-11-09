@@ -13,7 +13,7 @@ import { FileRuntimeEventStore } from "../eventStore";
 import { projectEngineHostEvent } from "../engineHostEvents";
 import { applyEvent, installSnapshot, openAttentions, type RuntimeSession } from "@/components/runtime/runtimeModel";
 
-const [mode, directory, writeLog, descriptor] = process.argv.slice(2);
+const [mode, directory, writeLog, descriptor, delivery] = process.argv.slice(2);
 if (!directory || !writeLog) throw new Error("callback fixture needs isolated paths");
 let thread = "callback-process-thread";
 const method = "item/commandExecution/requestApproval";
@@ -100,7 +100,10 @@ if (mode === "engine-socket") {
     process.stdout.write(`${JSON.stringify({ endpoint: `codex-unix:${config.socket}`, process: captureProcessIdentity(process.pid) })}\n`);
   });
 } else if (mode === "engine" || mode === "engine-mcp") {
-  const send = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  let batch: unknown[] | null = null;
+  let held: unknown[] = [];
+  const write = (values: unknown[]) => process.stdout.write(values.map(value => `${JSON.stringify(value)}\n`).join(""));
+  const send = (value: unknown) => batch ? batch.push(value) : write([value]);
   process.stdout.on("error", () => process.exit(0));
   let buffer = "";
   process.stdin.on("end", () => process.exit(0));
@@ -120,13 +123,20 @@ if (mode === "engine-socket") {
         case "initialize": reply({ userAgent: "fixture" }); break;
         case "account/read": reply({ account: { type: "chatgpt", planType: "pro" } }); break;
         case "config/read": reply({ config: { mcp_servers: { viewer: { command: "bun", args: ["fixture-viewer"] } } } }); break;
-        case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null }); break;
+        case "mcpServerStatus/list":
+          // Discovery follows ledger restoration and snapshot reconciliation.
+          write(held); held = [];
+          reply({ data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null }); break;
         case "model/list": reply({ data: [] }); break;
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "thread/start":
         case "thread/resume":
           if (message.method === "thread/resume") thread = message.params.threadId;
-          reply({ thread: { id: thread, path: null, turns: [], status: { type: "idle" } } });
+          if (mode === "engine-mcp" && delivery) batch = [];
+          // The same unfinished turn continues across the producer's hard stop.
+          reply({ thread: { id: thread, path: null,
+            turns: mode === "engine-mcp" ? [{ id: "mcp-turn", status: "inProgress", items: [] }] : [],
+            status: { type: mode === "engine-mcp" ? "active" : "idle" } } });
           if (mode === "engine-mcp") {
             const item = (phase: string, fields: Record<string, unknown>) => send({ method: `item/${phase}`,
               params: { threadId: thread, turnId: "mcp-turn", item: { type: "mcpToolCall", server: "viewer", tool: "get_task", ...fields } } });
@@ -174,6 +184,16 @@ if (mode === "engine-socket") {
               item("completed", { id: "before-restart", ...success });
             }
           } else if (message.method === "thread/start") send({ jsonrpc: "2.0", id: "approval", method, params: { threadId: thread, turnId: "turn", itemId: "item", startedAtMs: 1 } });
+          if (batch) {
+            // Buffer one producer item before restore, or deliver all producer
+            // items live. Resume uses the same delivery choice for its full replay.
+            const prefix = delivery === "live" ? 1 : message.method === "thread/start"
+              ? batch.findIndex(frame => (frame as { method?: string }).method?.startsWith("item/")) + 1
+              : batch.length;
+            const frames = batch; batch = null;
+            held = frames.slice(prefix);
+            write(frames.slice(0, prefix));
+          }
           break;
         default: send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "fixture method unavailable" } });
       }
@@ -193,7 +213,7 @@ if (mode === "engine-socket") {
       },
     }, readProtocolVersion: () => "0.162.1", requestTimeoutMs: 10_000,
     spawnProcess: (_binary: string, _args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) => spawn(process.execPath,
-      [import.meta.filename, mode.startsWith("mcp-") ? "engine-mcp" : "engine", directory, writeLog, ...(descriptor ? [descriptor] : [])], { ...options, stdio: ["pipe", "pipe", "pipe"] }),
+      [import.meta.filename, mode.startsWith("mcp-") ? "engine-mcp" : "engine", directory, writeLog, ...(descriptor ? [descriptor] : []), ...(delivery ? [delivery] : [])], { ...options, stdio: ["pipe", "pipe", "pipe"] }),
   };
   const registry = mode.startsWith("socket-") ? new AgentRegistry(path.join(directory, "registry.json")) : null;
   const key = { engine: "codex" as const, sessionId: thread };
@@ -226,7 +246,7 @@ if (mode === "engine-socket") {
     for await (const event of events) {
       if (event.kind !== "item" || (event.item as { id?: string })?.id !== lastItem
         || event.phase !== (mode === "mcp-produce" ? "started" : "completed")) continue;
-      process.stdout.write(`${JSON.stringify({ observation: host.readViewerMcpObservation(), enginePid: (await host.health()).pid })}\n`);
+      process.stdout.write(`${JSON.stringify({ observation: host.readViewerMcpObservation(), enginePid: (await host.health()).pid, activeTurnRef: (await host.health()).activeTurnRef })}\n`);
       break;
     }
     if (mode === "mcp-produce") await new Promise<void>(() => {});
