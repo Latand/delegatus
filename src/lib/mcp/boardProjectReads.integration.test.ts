@@ -404,6 +404,46 @@ for (const tool of TOOLS) for (const workspace of [false, true]) for (const spel
   });
 }
 
+for (const tool of TOOLS) for (const workspace of [false, true]) for (const form of ["fresh", "keyed", "replay"] as const) {
+  test(`${tool}: retained file projectName alias source stays pinned ${form} workspace=${workspace}`, async () => {
+    const h = await harness(workspace);
+    setBoardAliases({ "retained-file-alias": "middle-alias", "middle-alias": OWN });
+    h.domain.lastCompletedCatalog = () => ({ projectCatalog: [], files: [
+      { project: "retained-file-alias", projectName: "Retained Widgets" },
+      { project: FOREIGN, projectName: "Foreign Canary Board" },
+    ] });
+    const args = { project: "Retained Widgets", limit: 1, ...(form === "fresh" ? {} : { clientRequestId: `retained-file-${form}` }) };
+    if (form === "replay") expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1 });
+    const db = new Database(h.filename);
+    try {
+      const receipts = () => JSON.stringify(db.query("SELECT * FROM mcp_receipts ORDER BY receipt_key").all());
+      const reads = h.rowReads();
+      expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1, replayed: form === "replay" });
+      if (form === "replay") expect(h.rowReads()).toBe(reads);
+      const before = receipts();
+      h.atSdkReturn(() => setBoardAliases({ "middle-alias": FOREIGN }));
+      refused(await h.call(tool, args), workspace ? "workspace_forbidden" : "project_scope_refused");
+      expect(receipts()).toBe(before);
+    } finally { db.close(); }
+  });
+}
+
+for (const workspace of [false, true]) for (const changed of [false, true]) {
+  test(`list_pipelines: retained file alias remains pinned after page await changed=${changed} workspace=${workspace}`, async () => {
+    const h = await harness(workspace); h.many();
+    setBoardAliases({ "retained-file-alias": "middle-alias", "middle-alias": OWN });
+    h.domain.lastCompletedCatalog = () => ({ projectCatalog: [], files: [
+      { project: "retained-file-alias", projectName: "Retained Widgets" },
+      { project: FOREIGN, projectName: "Foreign Canary Board" },
+    ] });
+    expect(await h.call("list_pipelines", { project: "Retained Widgets", limit: 1 })).toMatchObject({ ok: true, total: 251, hasMore: true });
+    h.onRows(() => queueMicrotask(() => { if (changed) setBoardAliases({ "middle-alias": FOREIGN }); }));
+    const result = await h.call("list_pipelines", { project: "Retained Widgets", limit: 1 });
+    if (changed) refused(result, workspace ? "workspace_forbidden" : "project_scope_refused");
+    else expect(result).toMatchObject({ ok: true, total: 251, hasMore: true });
+  });
+}
+
 for (const workspace of [false, true]) for (const spelling of ["Catalog Widgets", "WidgetsRepo"]) {
   test(`list_pipelines: catalog alias source remains pinned after page await for ${spelling} workspace=${workspace}`, async () => {
     const h = await harness(workspace); h.many();

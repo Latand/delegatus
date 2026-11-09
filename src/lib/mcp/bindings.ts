@@ -6398,18 +6398,23 @@ export function captureBoardAliasProof(
   // which is itself several aliases away from the selected canonical project.
   // Keep that original source in the proof even though resolution returned
   // only the canonical key.
-  const catalogSourceKeys = (dependencies?.lastCompletedCatalog?.()?.projectCatalog ?? [])
-    .filter(row => {
+  const catalog = dependencies?.lastCompletedCatalog?.();
+  const retainedSourceKeys = [
+    ...(catalog?.projectCatalog ?? []).filter(row => {
       if (canonicalProject(row.project) !== project) return false;
       const folder = row.projectRoot ? path.basename(row.projectRoot) : "";
       return [row.project, row.displayName, row.projectRoot, folder]
         .some(value => typeof value === "string" && normalize(value) === spelling);
-    })
-    .map(row => row.project);
+    }).map(row => row.project),
+    ...(catalog?.files ?? []).filter(row => canonicalProject(row.project) === project
+      && [row.project, row.displayName ?? row.projectName]
+        .some(value => typeof value === "string" && normalize(value) === spelling))
+      .map(row => row.project),
+  ];
   const displayProof = new Map(keys.filter(key => normalize(displayNames[key] ?? "") === spelling)
     .map(key => [key, displayNames[key]]));
   const proof = new Map<string, string | undefined>();
-  for (const start of [project, named, ...keys, ...catalogSourceKeys]) {
+  for (const start of [project, named, ...keys, ...retainedSourceKeys]) {
     let key = start;
     while (key && !proof.has(key)) {
       const target = Object.hasOwn(aliases, key) ? aliases[key] : undefined;
