@@ -1,0 +1,779 @@
+{
+  "baseline": "6e8b65d9b316ff2da95b8c94f4a3ea01a8f1cfb8",
+  "recordedAt": "2026-11-05T16:23:27.379787+00:00",
+  "architecture": "x86_64",
+  "logicalCpus": 24,
+  "sourceSha256": {
+    "src/lib/monitor/seatTickSources.ts": "45f254117684abd7bb1d42d703048cad46a27c300cd35f460044a13e903a54fe",
+    "src/lib/memory/curation/run.ts": "2d1deb3c503328d9f317074fece4e94bc8dfda7d8e67771d34ad9dd514825080",
+    "src/lib/monitor/seatTickController.ts": "111262d88afa243a4d5280e5265f96594171baad3ce0fb2f283ca0e173c9058d",
+    "src/lib/monitor/seatTickWork.ts": "e646ca11001c88147a176861432a262533bb24a75067e12909d6a71f6fe92839",
+    "src/lib/monitor/seatTickTiming.ts": "88e27deafab1bd3bff8d0a2d30d66b4fe728c95b3f53cf378a6bcc62d4015589",
+    "src/lib/monitor/journalStore.ts": "4a686d6e2fb824a0b24a45e7dc85117c0350103f51f4083072f25dda79dc81c4",
+    "src/lib/monitor/types.ts": "b51a9fcd144a901a7849b94b37ba5d4de90e3ef66ead1bd55a2cf800dd7687fe",
+    "src/lib/scanner/filesResponseWorker.ts": "7f54666f585d9fffe03062046fc3d71a4f9c66e35d6a936bc3982ab997fc13a9"
+  },
+  "paired": {
+    "order": [
+      "base",
+      "head",
+      "head",
+      "base",
+      "base",
+      "head"
+    ],
+    "runs": [
+      {
+        "process": "isolated Bun process exercising Viewer source modules; no Viewer or runtime-host listener",
+        "bun": "1.4.0",
+        "fixtureHash": "697c7be1e21e5fd2e4478a53669f680c5c82b00355b3b6603047658d965aefd3",
+        "load": [
+          27.07,
+          45.19,
+          48.21
+        ],
+        "rows": 12000,
+        "payloadBytes": 1024,
+        "projects": 30,
+        "delivery": [
+          {
+            "label": "cold",
+            "wallMs": 551.2323939999997,
+            "cpuMs": 832.765,
+            "threadCpuMs": 543.787,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.303034000000025,
+            "cpuMs": 3.075,
+            "threadCpuMs": 2.37,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.4354220000000169,
+            "cpuMs": 1.476,
+            "threadCpuMs": 1.464,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.4801239999997051,
+            "cpuMs": 1.485,
+            "threadCpuMs": 1.502,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.3978080000001682,
+            "cpuMs": 1.402,
+            "threadCpuMs": 1.418,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.1915509999998903,
+            "cpuMs": 1.197,
+            "threadCpuMs": 1.212,
+            "answer": "too-late"
+          }
+        ],
+        "curators": [
+          {
+            "label": "cold-sweep",
+            "wallMs": 1703.622539,
+            "cpuMs": 2075.361,
+            "threadCpuMs": 1569.707,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 1153.8496029999997,
+            "cpuMs": 1209.849,
+            "threadCpuMs": 1112.398,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 981.4389650000003,
+            "cpuMs": 1084.853,
+            "threadCpuMs": 963.184,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 977.9384279999995,
+            "cpuMs": 1140.981,
+            "threadCpuMs": 952.9,
+            "admissions": 900
+          }
+        ]
+      },
+      {
+        "process": "isolated Bun process exercising Viewer source modules; no Viewer or runtime-host listener",
+        "bun": "1.4.0",
+        "fixtureHash": "697c7be1e21e5fd2e4478a53669f680c5c82b00355b3b6603047658d965aefd3",
+        "load": [
+          26.1,
+          44.69,
+          48.03
+        ],
+        "rows": 12000,
+        "payloadBytes": 1024,
+        "projects": 30,
+        "delivery": [
+          {
+            "label": "cold",
+            "wallMs": 10.076235000000452,
+            "cpuMs": 15.171,
+            "threadCpuMs": 10.576,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.3633059999992838,
+            "cpuMs": 2.994,
+            "threadCpuMs": 1.384,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.1942189999999755,
+            "cpuMs": 1.58,
+            "threadCpuMs": 1.209,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.1057069999997111,
+            "cpuMs": 2.087,
+            "threadCpuMs": 1.117,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.1623959999997169,
+            "cpuMs": 2.32,
+            "threadCpuMs": 1.174,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.2558660000004238,
+            "cpuMs": 2.215,
+            "threadCpuMs": 1.27,
+            "answer": "too-late"
+          }
+        ],
+        "curators": [
+          {
+            "label": "cold-sweep",
+            "wallMs": 113.96383799999967,
+            "cpuMs": 164.578,
+            "threadCpuMs": 112.462,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 58.74054400000023,
+            "cpuMs": 88.063,
+            "threadCpuMs": 58.739,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 48.14135400000032,
+            "cpuMs": 63.487,
+            "threadCpuMs": 47.732,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 41.354113999999754,
+            "cpuMs": 65.832,
+            "threadCpuMs": 41.396,
+            "admissions": 30
+          }
+        ]
+      },
+      {
+        "process": "isolated Bun process exercising Viewer source modules; no Viewer or runtime-host listener",
+        "bun": "1.4.0",
+        "fixtureHash": "697c7be1e21e5fd2e4478a53669f680c5c82b00355b3b6603047658d965aefd3",
+        "load": [
+          28.98,
+          44.7,
+          48
+        ],
+        "rows": 12000,
+        "payloadBytes": 1024,
+        "projects": 30,
+        "delivery": [
+          {
+            "label": "cold",
+            "wallMs": 14.118039999999382,
+            "cpuMs": 19.59,
+            "threadCpuMs": 14.331,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.127195000000029,
+            "cpuMs": 2.492,
+            "threadCpuMs": 2.167,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.0325000000002547,
+            "cpuMs": 2.398,
+            "threadCpuMs": 2.056,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.9056700000001001,
+            "cpuMs": 2.896,
+            "threadCpuMs": 1.926,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.1012579999996888,
+            "cpuMs": 3.413,
+            "threadCpuMs": 2.203,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.247769999999946,
+            "cpuMs": 3.575,
+            "threadCpuMs": 2.273,
+            "answer": "too-late"
+          }
+        ],
+        "curators": [
+          {
+            "label": "cold-sweep",
+            "wallMs": 85.60221600000023,
+            "cpuMs": 125.985,
+            "threadCpuMs": 85.4,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 61.22992599999998,
+            "cpuMs": 95.54,
+            "threadCpuMs": 61.155,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 61.81712100000004,
+            "cpuMs": 75.378,
+            "threadCpuMs": 60.264,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 60.65990799999963,
+            "cpuMs": 91.942,
+            "threadCpuMs": 60.06,
+            "admissions": 30
+          }
+        ]
+      },
+      {
+        "process": "isolated Bun process exercising Viewer source modules; no Viewer or runtime-host listener",
+        "bun": "1.4.0",
+        "fixtureHash": "697c7be1e21e5fd2e4478a53669f680c5c82b00355b3b6603047658d965aefd3",
+        "load": [
+          34.58,
+          45.42,
+          48.2
+        ],
+        "rows": 12000,
+        "payloadBytes": 1024,
+        "projects": 30,
+        "delivery": [
+          {
+            "label": "cold",
+            "wallMs": 664.1437599999999,
+            "cpuMs": 1002.926,
+            "threadCpuMs": 645.806,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.016230000000178,
+            "cpuMs": 2.646,
+            "threadCpuMs": 2.064,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.4304080000001704,
+            "cpuMs": 1.477,
+            "threadCpuMs": 1.455,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.6908579999999347,
+            "cpuMs": 1.695,
+            "threadCpuMs": 1.708,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.9449500000000626,
+            "cpuMs": 2.037,
+            "threadCpuMs": 1.97,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.7374150000005102,
+            "cpuMs": 1.743,
+            "threadCpuMs": 1.767,
+            "answer": "too-late"
+          }
+        ],
+        "curators": [
+          {
+            "label": "cold-sweep",
+            "wallMs": 1578.5214269999997,
+            "cpuMs": 1897.104,
+            "threadCpuMs": 1391.863,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 1414.5398850000001,
+            "cpuMs": 1432.612,
+            "threadCpuMs": 1312.446,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 1220.5969989999994,
+            "cpuMs": 1272.767,
+            "threadCpuMs": 1167.092,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 1370.0319459999992,
+            "cpuMs": 1524.709,
+            "threadCpuMs": 1281.27,
+            "admissions": 900
+          }
+        ]
+      },
+      {
+        "process": "isolated Bun process exercising Viewer source modules; no Viewer or runtime-host listener",
+        "bun": "1.4.0",
+        "fixtureHash": "697c7be1e21e5fd2e4478a53669f680c5c82b00355b3b6603047658d965aefd3",
+        "load": [
+          33.36,
+          44.45,
+          47.82
+        ],
+        "rows": 12000,
+        "payloadBytes": 1024,
+        "projects": 30,
+        "delivery": [
+          {
+            "label": "cold",
+            "wallMs": 781.8972990000002,
+            "cpuMs": 1079.694,
+            "threadCpuMs": 698.134,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.478683999999703,
+            "cpuMs": 3.327,
+            "threadCpuMs": 2.536,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.3273470000003726,
+            "cpuMs": 2.235,
+            "threadCpuMs": 2.235,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.283914999999979,
+            "cpuMs": 2.29,
+            "threadCpuMs": 2.322,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.2234449999996286,
+            "cpuMs": 2.229,
+            "threadCpuMs": 2.261,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.221354999999676,
+            "cpuMs": 2.331,
+            "threadCpuMs": 2.265,
+            "answer": "too-late"
+          }
+        ],
+        "curators": [
+          {
+            "label": "cold-sweep",
+            "wallMs": 1765.3868619999994,
+            "cpuMs": 2147.389,
+            "threadCpuMs": 1645.067,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 1296.1865020000005,
+            "cpuMs": 1363.954,
+            "threadCpuMs": 1246.106,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 1424.6283430000003,
+            "cpuMs": 1463.717,
+            "threadCpuMs": 1340.376,
+            "admissions": 900
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 1069.407787,
+            "cpuMs": 1236.942,
+            "threadCpuMs": 1046.679,
+            "admissions": 900
+          }
+        ]
+      },
+      {
+        "process": "isolated Bun process exercising Viewer source modules; no Viewer or runtime-host listener",
+        "bun": "1.4.0",
+        "fixtureHash": "697c7be1e21e5fd2e4478a53669f680c5c82b00355b3b6603047658d965aefd3",
+        "load": [
+          35.34,
+          44.68,
+          47.88
+        ],
+        "rows": 12000,
+        "payloadBytes": 1024,
+        "projects": 30,
+        "delivery": [
+          {
+            "label": "cold",
+            "wallMs": 13.354207000000315,
+            "cpuMs": 20.013,
+            "threadCpuMs": 14.115,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.239013000000341,
+            "cpuMs": 2.694,
+            "threadCpuMs": 2.283,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 1.7240839999994932,
+            "cpuMs": 2.072,
+            "threadCpuMs": 1.75,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.219079999999849,
+            "cpuMs": 3.12,
+            "threadCpuMs": 2.149,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.1125759999995353,
+            "cpuMs": 3.929,
+            "threadCpuMs": 2.14,
+            "answer": "too-late"
+          },
+          {
+            "label": "warm",
+            "wallMs": 2.2483039999997345,
+            "cpuMs": 3.193,
+            "threadCpuMs": 2.273,
+            "answer": "too-late"
+          }
+        ],
+        "curators": [
+          {
+            "label": "cold-sweep",
+            "wallMs": 120.09564800000044,
+            "cpuMs": 155.055,
+            "threadCpuMs": 116.48,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 104.88604399999986,
+            "cpuMs": 134.189,
+            "threadCpuMs": 99.817,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 75.79341199999999,
+            "cpuMs": 87.941,
+            "threadCpuMs": 72.928,
+            "admissions": 30
+          },
+          {
+            "label": "warm-sweep",
+            "wallMs": 51.68542300000081,
+            "cpuMs": 83.085,
+            "threadCpuMs": 51.749,
+            "admissions": 30
+          }
+        ]
+      }
+    ],
+    "fixtureHash": "697c7be1e21e5fd2e4478a53669f680c5c82b00355b3b6603047658d965aefd3",
+    "finalOwner": "curationForSweep(controller, projects), waiting for all project checks to publish refreshed state"
+  },
+  "journalOverhead": {
+    "process": "isolated Bun process running Viewer timing and journal modules",
+    "results": [
+      {
+        "count": 100,
+        "trace": {
+          "wallMs": 0.11395879999999989,
+          "cpuMs": 0.138716,
+          "threadCpuMs": 0.112383
+        },
+        "bytes": 1979,
+        "pairs": [
+          {
+            "order": [
+              "plain",
+              "rich"
+            ],
+            "plain": {
+              "wallMs": 1.6780385,
+              "cpuMs": 2.11585,
+              "threadCpuMs": 1.39475
+            },
+            "rich": {
+              "wallMs": 10.011538049999999,
+              "cpuMs": 10.157599999999999,
+              "threadCpuMs": 1.8864
+            }
+          },
+          {
+            "order": [
+              "rich",
+              "plain"
+            ],
+            "rich": {
+              "wallMs": 8.667631599999998,
+              "cpuMs": 8.607299999999999,
+              "threadCpuMs": 1.52055
+            },
+            "plain": {
+              "wallMs": 1.7983903499999996,
+              "cpuMs": 1.6611999999999998,
+              "threadCpuMs": 1.42675
+            }
+          },
+          {
+            "order": [
+              "plain",
+              "rich"
+            ],
+            "plain": {
+              "wallMs": 1.908609100000001,
+              "cpuMs": 1.6373000000000002,
+              "threadCpuMs": 1.45435
+            },
+            "rich": {
+              "wallMs": 8.921264000000003,
+              "cpuMs": 8.8357,
+              "threadCpuMs": 1.50185
+            }
+          },
+          {
+            "order": [
+              "rich",
+              "plain"
+            ],
+            "rich": {
+              "wallMs": 9.63052755,
+              "cpuMs": 9.59615,
+              "threadCpuMs": 1.5764
+            },
+            "plain": {
+              "wallMs": 2.1402482500000017,
+              "cpuMs": 1.9608,
+              "threadCpuMs": 1.6707999999999998
+            }
+          },
+          {
+            "order": [
+              "plain",
+              "rich"
+            ],
+            "plain": {
+              "wallMs": 1.8954429500000003,
+              "cpuMs": 1.7881,
+              "threadCpuMs": 1.43075
+            },
+            "rich": {
+              "wallMs": 8.36153465,
+              "cpuMs": 8.19345,
+              "threadCpuMs": 1.4874
+            }
+          },
+          {
+            "order": [
+              "rich",
+              "plain"
+            ],
+            "rich": {
+              "wallMs": 7.854753200000005,
+              "cpuMs": 7.62705,
+              "threadCpuMs": 1.43935
+            },
+            "plain": {
+              "wallMs": 1.2507137499999998,
+              "cpuMs": 0.99975,
+              "threadCpuMs": 0.95615
+            }
+          }
+        ]
+      },
+      {
+        "count": 512,
+        "trace": {
+          "wallMs": 0.4868319529999999,
+          "cpuMs": 0.486147,
+          "threadCpuMs": 0.458963
+        },
+        "bytes": 9298,
+        "pairs": [
+          {
+            "order": [
+              "plain",
+              "rich"
+            ],
+            "plain": {
+              "wallMs": 1.6021986500000025,
+              "cpuMs": 1.5265499999999999,
+              "threadCpuMs": 1.2638
+            },
+            "rich": {
+              "wallMs": 17.38008645000001,
+              "cpuMs": 17.5179,
+              "threadCpuMs": 3.5094499999999997
+            }
+          },
+          {
+            "order": [
+              "rich",
+              "plain"
+            ],
+            "rich": {
+              "wallMs": 17.492903550000005,
+              "cpuMs": 17.01925,
+              "threadCpuMs": 3.4707
+            },
+            "plain": {
+              "wallMs": 2.280687799999987,
+              "cpuMs": 1.7625,
+              "threadCpuMs": 1.4045
+            }
+          },
+          {
+            "order": [
+              "plain",
+              "rich"
+            ],
+            "plain": {
+              "wallMs": 1.7281054499999982,
+              "cpuMs": 1.4535,
+              "threadCpuMs": 1.228
+            },
+            "rich": {
+              "wallMs": 21.587111000000004,
+              "cpuMs": 18.33245,
+              "threadCpuMs": 3.6285499999999997
+            }
+          },
+          {
+            "order": [
+              "rich",
+              "plain"
+            ],
+            "rich": {
+              "wallMs": 19.1234336,
+              "cpuMs": 18.611600000000003,
+              "threadCpuMs": 3.5186
+            },
+            "plain": {
+              "wallMs": 2.4200767499999984,
+              "cpuMs": 1.9469,
+              "threadCpuMs": 1.5666
+            }
+          },
+          {
+            "order": [
+              "plain",
+              "rich"
+            ],
+            "plain": {
+              "wallMs": 2.131992549999995,
+              "cpuMs": 1.6453,
+              "threadCpuMs": 1.41075
+            },
+            "rich": {
+              "wallMs": 21.458414850000008,
+              "cpuMs": 18.5172,
+              "threadCpuMs": 3.6664000000000003
+            }
+          },
+          {
+            "order": [
+              "rich",
+              "plain"
+            ],
+            "rich": {
+              "wallMs": 19.974352350000004,
+              "cpuMs": 18.27235,
+              "threadCpuMs": 3.6491999999999996
+            },
+            "plain": {
+              "wallMs": 2.367654749999997,
+              "cpuMs": 1.8560500000000002,
+              "threadCpuMs": 1.6837
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "conditions": {
+    "process": "isolated Bun 1.4.0 processes exercising Viewer modules; files-response tests also start their private worker",
+    "fixture": "one production-built registry seed, expanded to 12000 delivery rows with 1024-byte retained text and 30 conversations; the same normalized JSON bytes seed every fresh SQLite store",
+    "load": "shared machine, no added concurrent request load; load is end-of-run loadavg and varies between runs",
+    "curation": "30 synthetic seats with fresh delivered wake stamps; real host admission and SQLite status reads; liveness adapter returns this test process only; final owner waits for all 30 checks and performs one scan; quiet choices avoid launch effects",
+    "samples": "five warm delivery reads and three warm sweeps per process; pairs ordered base/head, head/base, base/head; same normalized fixture bytes across every fresh SQLite store; cold means fresh reader, not cold OS page cache",
+    "timing": "full global and project rings of 500 records, 100 or 512 phases; six alternating order trials of 20 appends each; 1000 trace constructions; main-thread CPU uses process.threadCpuUsage; measurements use the final bounded rolling timing buffer"
+  }
+}
