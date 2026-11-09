@@ -436,7 +436,8 @@ test("runtime image storage failures return 503 without issuing a runtime comman
   expect(response.status).toBe(503);
   /* The enqueue threw mid-delivery, which is the one 503 the Viewer cannot
      call: it rides the same `uncertain` classification the attachments do. */
-  expect(await response.json()).toEqual({ error: "runtime image storage is unavailable", delivery: "uncertain" });
+  expect(await response.json()).toEqual({ error: "runtime image storage is unavailable", delivery: "uncertain",
+    stop: { boundary: "admission", reason: "outcome-unknown" } });
   expect(commands).toEqual([]);
 });
 
