@@ -24,7 +24,7 @@ export function normalizeTaskSummary(input: unknown): { value: TaskSummaryConten
     if (field !== "text" && /[\r\n]/.test(raw[field])) return { error: `summary.${field} must be one line of at most ${fields[field]} UTF-16 code units` };
     const text = collapseSpaces(raw[field]);
     if (text.length > fields[field]) return { error: textLengthError(`summary.${field}`, text.length, fields[field], "UTF-16 code units") };
-    if (field !== "left" && !text) return { error: `summary.${field} must be ${field === "left" ? "at most" : "1 to"} ${fields[field]} UTF-16 code units` };
+    if (field !== "left" && !text) return { error: `summary.${field} must be 1 to ${fields[field]} UTF-16 code units` };
     if (field !== "left" || text) value[field] = text;
   }
   return { value };

@@ -11,7 +11,8 @@ import { normalizeStageCompletion } from "@/lib/pipelines/verdict";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { taskRevision } from "@/lib/tasks/revision";
-import type { BoardTask } from "@/lib/tasks/types";
+import type { BoardTask, TaskHold } from "@/lib/tasks/types";
+import type { LessonInput } from "@/lib/memory/roleTypes";
 
 const now = "2026-11-01T10:00:00.000Z";
 const task: BoardTask = { id: "limit-task", project: "fixture", text: "Keep complete context", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now };
@@ -29,7 +30,7 @@ async function protocol(run: (client: Client, dispatched: Array<{ name: string; 
   finally { await client.close(); await server.close(); }
 }
 
-const lesson = { scope: "project", rule: "Before replaying work, verify the current receipt and preserve its original identity.", why: "The earlier request had an uncertain delivery result." };
+const lesson = { scope: "project", rule: "Before replaying work, verify the current receipt and preserve its original identity.", why: "The earlier request had an uncertain delivery result." } satisfies LessonInput;
 const form = { title: "Choose a direction", questions: [{ id: "direction", text: "Which direction should proceed?", options: [{ label: "Proceed", recommended: true }, { label: "Wait" }] }] };
 
 test.each([
@@ -236,7 +237,7 @@ test.each(["note", "ref"] as const)("hold %s survives create, patch, nested step
   // A supplementary scalar straddles the old slice boundary on the refused input.
   const exact = "я".repeat(max - 2) + "🧭";
   const over = "я".repeat(max - 1) + "🧭";
-  const holder = (value: string) => ({ kind: "external", note: "After dependency clears", ref: "dependency", [field]: value });
+  const holder = (value: string) => ({ kind: "external", note: "After dependency clears", ref: "dependency", [field]: value } satisfies Pick<TaskHold, "kind" | "note" | "ref">);
   const writers = [
     (value: string) => createTask([], { project: "fixture", text: "Wait for dependency", placement: "unplaced", hold: holder(value) }, [], { now: () => now, id: () => "created" }),
     (value: string) => patchTask([task], task.id, { hold: holder(value) }, now),
