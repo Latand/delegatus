@@ -4698,6 +4698,7 @@ describe("meaningful background turns", () => {
       }
       f.child.emitJson(assistant());
       const active = (await f.host.health()).activeTurnRef;
+      if (!active) throw new Error("expected an observed active turn");
       expect(active).toBeTruthy();
       expect(active).not.toBe("unknown");
       expect((await f.host.health()).status).toBe("active");
@@ -4784,6 +4785,7 @@ describe("meaningful background turns", () => {
     try {
       f.child.emitJson({ ...assistant("background"), user_message_uuid: "background-user" });
       const background = (await f.host.health()).activeTurnRef;
+      if (!background) throw new Error("expected an observed background turn");
       const receipt = f.host.send({ id: "next-input", text: "next instruction" });
       f.child.emitJson({ ...f.child.inputs.find(frame => frame.type === "user"), uuid: "next-user" });
       expect(await receipt).toEqual({ outcome: "queued-next-turn", turnId: "next-input" });

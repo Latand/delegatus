@@ -342,7 +342,7 @@ for (const outcome of ["boundary", "refused", "timeout"] as const) {
     const response = () => child.emitJson({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "compact summary" }] } });
     const turns = () => store.load(host.identity.sessionId).filter(e => e.kind === "turn-started" || e.kind === "turn-ended");
     try {
-      const pending = host.compact({ operationId: "compact-owner" }).then(value => value, error => error as StructuredCompactError);
+      const pending = host.compact({ operationId: "compact-owner", threadId: host.identity.sessionId }).then(value => value, error => error as StructuredCompactError);
       await waitFor(() => compactFrames(child).length === 1, "compact command missing");
       response();
       child.emitJson({ type: "stream_event", event: { type: "message_start", message: { role: "assistant", id: "compact-message" } } });
@@ -354,7 +354,7 @@ for (const outcome of ["boundary", "refused", "timeout"] as const) {
       } else if (outcome === "timeout") expect(await pending).toBeInstanceOf(StructuredCompactError);
       if (outcome !== "refused") {
         response();
-        await expect(host.compact({ operationId: "second-compact" })).rejects.toThrow("already running");
+        await expect(host.compact({ operationId: "second-compact", threadId: host.identity.sessionId })).rejects.toThrow("already running");
         expect(turns()).toEqual([]);
       }
       announceResult(child, host);
@@ -366,7 +366,7 @@ for (const outcome of ["boundary", "refused", "timeout"] as const) {
       expect((await host.health()).status).toBe("active");
       announceResult(child, host);
       expect(turns().map(e => e.kind)).toEqual(["turn-started", "turn-ended"]);
-      expect(await host.compact({ operationId: "compact-owner" }).then(value => value, error => error)).toBe(settled);
+      expect(await host.compact({ operationId: "compact-owner", threadId: host.identity.sessionId }).then(value => value, error => error)).toBe(settled);
       expect(compactFrames(child)).toHaveLength(1);
     } finally { await host.release(); }
   });
