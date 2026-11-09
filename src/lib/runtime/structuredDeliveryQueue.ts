@@ -1,4 +1,5 @@
 import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
+import { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
 import { withHostStopOrigin } from "./hostExit";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { composeBatch, type InboxMember } from "./inboxBatch";
@@ -693,10 +694,7 @@ export const INJECTION_INTO_HISTORY =
   "injected input was observed in conversation history; no turn was started";
 export const INJECTION_ACKNOWLEDGED_BUT_UNOBSERVED =
   "injection was acknowledged and did not appear in canonical history; whether it reached the thread is unverified";
-export const INJECTION_UNVERIFIED_AFTER_ACTUATION =
-  "injection was issued and the structured host did not answer; whether it reached the thread is unverified";
-export const DELIVERY_UNVERIFIED_AFTER_ACTUATION =
-  "delivery was started and the structured host did not answer; whether it reached the recipient is unverified";
+export { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
 /**
  * Written when the durable delivery record has already ended this send.
  *

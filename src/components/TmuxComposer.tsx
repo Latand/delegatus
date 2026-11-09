@@ -75,6 +75,7 @@ import {
   markOutboxResponded,
   outboxHistory,
   outboxCanAdmit,
+  outboxStored,
   OPERATION_RECONCILE_GRACE_MS,
   operationReadDue,
   operationsToReconcile,
@@ -3646,10 +3647,18 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     };
     if (!options?.idleParallelFallback && !requestedImages.length && !requestedFiles.length
       && !pendingDeliveries.current.some(entry => entry.payloadComplete === false)) {
-      if (reserveSubmission(false)) releaseComposer();
-      return;
-    }
-    if (!reserveSubmission(true)) return;
+      /* A plain message is durable once its row is stored, so it is released
+         at once. Reserved `preparing` first: if the row reached only this
+         page's memory (storage full or refused, 2026-11-09), the dispatcher
+         must not take it, and the words stay here until the durable copy
+         below exists, or come back with the reason if it cannot be made. */
+      if (!reserveSubmission(true)) return;
+      if (outboxStored(cardId)) {
+        updateOutbox(cardId, clientMessageId, { preparing: undefined });
+        releaseComposer();
+        return;
+      }
+    } else if (!reserveSubmission(true)) return;
     // Keep the complete authored generation until both durable phases commit.
     const selectedContext = submittedContext;
     const submittedFile = { path: file.path, project: file.project, pid: file.pid };

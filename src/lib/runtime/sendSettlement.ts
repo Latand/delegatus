@@ -36,6 +36,7 @@ import {
 } from "./contracts";
 import { readDeliveryProgress, deliveryProgressPath, ownedDeliveryProgressStore, type DeliveryProgressRecord, type DeliveryProgressSink } from "./deliveryProgress";
 import { readEvidence, readEvidenceSync, readEvidenceWithin, unreadableEvidence, type Evidence } from "./evidence";
+import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
 
 /**
  * Settlement of accepted sends (#1131).
@@ -484,6 +485,14 @@ export function journalVerdict(
   if (status === null) return null;
   if (DELIVERED_RECEIPT_STATUSES.has(status)) {
     return { state: "delivered", disposition: "delivered", reason: null };
+  }
+  /* The queue writes `failed` with this reason only when the journal refused
+     the absorbing `uncertain` for a send it had handed to the engine
+     (2026-11-09). It is the same fact: actuation began, so the send keeps its
+     duplicate risk and stays open to a late canonical acknowledgement, never
+     reported as fenced and safe to send again. */
+  if (status === "failed" && typeof reason === "string" && reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION)) {
+    return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
   }
   if (status === "failed" || status === "rejected") {
     return {
@@ -975,6 +984,66 @@ export async function resolveSendReceipt(
   }
   if (receipt) mirrorReceiptProgress(receipt, ports.progress === undefined ? ownedDeliveryProgressStore() : ports.progress);
   return receipt;
+}
+
+/** When a live echo looks at its operation again: at once, then while the
+    transcript line and the queue's own terminal write catch up. */
+export const ECHO_SETTLEMENT_DELAYS_MS: readonly number[] = [0, 1_000, 5_000, 15_000];
+
+/**
+ * Settles a send from the engine's own echo of it, after the send had already
+ * ended without proof (2026-11-09).
+ *
+ * A Claude host gives an input 30 seconds to be echoed. A busy turn can absorb
+ * it later than that: the operation ends unverified, and the echo that proves
+ * the engine took it arrives afterwards. The host records that echo, and the
+ * evidence {@link confirmedSend} reads exists from then on, but nothing asked
+ * again: the composer had its terminal answer and the background sweep reads
+ * only open sends. The operation stayed failed while the agent was working on
+ * the message.
+ *
+ * The delivery controller calls this for every echo its hosts report. Only an
+ * ending that kept its duplicate risk is corrected, through the same
+ * {@link resolveSendReceipt} a receipt read runs: canonical evidence, the
+ * journal's own confirmation of the original operation, then the record. It
+ * never writes to the engine and never rearms the queue, so a correction costs
+ * no second delivery. A proven loss, a discard and a delivered send are left as
+ * they are. An operation the queue still holds is looked at again on the next
+ * delay, because the echo can arrive while the queue is writing the ending.
+ */
+export async function settleEchoedSend(
+  operationId: string,
+  ports: SendSettlementPorts & { delaysMs?: readonly number[]; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<SendReceipt | null> {
+  const registry = ports.registry ?? agentRegistry();
+  const client = ports.client === undefined ? runtimeHostClient() : ports.client;
+  const sleep = ports.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  let last: SendReceipt | null = null;
+  let attempt = 0;
+  for (const delay of ports.delaysMs ?? ECHO_SETTLEMENT_DELAYS_MS) {
+    attempt += 1;
+    if (delay > 0) await sleep(delay);
+    ports.assertActive?.();
+    const projected = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
+    if (!projected || projected.state === "delivered") return projected;
+    if (projected.state === "failed" && !projected.duplicateRisk) return projected;
+    if (projected.reason === SEND_DISCARDED_REASON || projected.reason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)) return projected;
+    if (projected.state === "in-flight") {
+      /* Still the queue's, unless the journal already ended it and the record
+         has not heard yet: only an ending is this function's to correct. An
+         echo of a send in progress is settled by the queue itself within the
+         first delay, so the journal is asked only after that. */
+      if (!client || attempt === 1) { last = projected; continue; }
+      const journal = await readEvidenceWithin(() => client.operationStatus(operationId, { currentRetryLeaf: true }),
+        ports.readMs ?? SEND_SETTLEMENT_READ_MS, "runtime host is unavailable");
+      ports.assertActive?.();
+      const status = journal.readable ? journal.value?.receipt.status ?? null : null;
+      if (status !== "failed" && status !== "uncertain") { last = projected; continue; }
+    }
+    last = await resolveSendReceipt(operationId, ports);
+    if (last?.state === "delivered" || (last?.state === "failed" && !last.duplicateRisk)) return last;
+  }
+  return last;
 }
 
 /**

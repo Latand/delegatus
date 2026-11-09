@@ -8,7 +8,7 @@
  * the Viewer saying it cannot tell. Read through the production handler, so
  * what these cases assert is what a browser receives.
  */
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +18,7 @@ import { NextRequest } from "next/server";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
+import { ingressStopFor, resetIngressStopsForTests, type IngressStop } from "./ingressStop";
 
 /** A Viewer page's request: a browser stamps `sec-fetch-site` on every fetch. */
 function request(body: unknown, headers: Record<string, string> = { host: "127.0.0.1", "sec-fetch-site": "same-origin" }): NextRequest {
@@ -47,14 +48,15 @@ const admittingClient = {
 } as unknown as RuntimeHostClient;
 
 /** The route's five pre-enqueue refusals, each reached through the dependency
-    that produces it and nothing else. */
-const refusals: Array<[string, RuntimeHttpDependencies, string]> = [
+    that produces it and nothing else. The two answered before the command is
+    parsed have no key yet, so they carry no stop. */
+const refusals: Array<[string, RuntimeHttpDependencies, string, IngressStop | null]> = [
   ["runtime events disabled",
     { enabled: () => false, structuredEnabled: () => true, client: () => admittingClient },
-    "runtime events are disabled"],
+    "runtime events are disabled", null],
   ["structured hosts disabled",
     { enabled: () => true, structuredEnabled: () => false, client: () => admittingClient },
-    "structured hosts are disabled"],
+    "structured hosts are disabled", null],
   ["no structured delivery ownership",
     {
       enabled: () => true,
@@ -62,17 +64,19 @@ const refusals: Array<[string, RuntimeHttpDependencies, string]> = [
       client: () => admittingClient,
       enqueue: async () => null,
     },
-    "structured delivery ownership is unavailable for this conversation"],
+    "structured delivery ownership is unavailable for this conversation", { boundary: "admission", reason: "ownership-unavailable" }],
   ["no runtime host socket",
     { enabled: () => true, structuredEnabled: () => true, client: () => null },
-    "runtime host socket is unavailable"],
+    "runtime host socket is unavailable", { boundary: "dispatch", reason: "host-unavailable" }],
 ];
 
-test.each(refusals)("a send refused before dispatch answers refused with its reason (%s)", async (_name, dependencies, reason) => {
+beforeEach(() => resetIngressStopsForTests(() => {}));
+
+test.each(refusals)("a send refused before dispatch answers refused with its reason (%s)", async (_name, dependencies, reason, stop) => {
   const response = await handleRuntimeCommand(request(send), "send", dependencies);
   expect(response.status).toBe(503);
   const body = await response.json() as Record<string, unknown>;
-  expect(body).toEqual({ error: reason, delivery: "refused" });
+  expect(body).toEqual({ error: reason, delivery: "refused", ...(stop ? { stop } : {}) });
   /* Nothing was admitted, so nothing may name an identity the caller could
      mistake for one — and the reason is the whole sentence the operator reads,
      so it carries no path, no id and no account. */
@@ -148,6 +152,7 @@ test("a send whose attachments cannot be saved to the inbox is refused, not left
       error: "the attachments could not be saved to the inbox",
       retryable: true,
       delivery: "refused",
+      stop: { boundary: "intake", reason: "inbox-unavailable" },
     });
     expect(body.operationId).toBeUndefined();
     expect(body.receipt).toBeUndefined();
@@ -162,4 +167,82 @@ test("a validation refusal keeps its own status and is not dressed as a delivery
   });
   expect(response.status).toBe(400);
   expect((await response.json() as Record<string, unknown>).delivery).toBeUndefined();
+});
+
+/* 2026-11-09: admission marks the refusals it gives before anything is
+   reserved (#2020), and the route forwarded that mark for an injection only. A
+   send refused the same way answered a bare 503, which the composer has to
+   read as "may have been sent": it parked the message as an unknown instead
+   of handing the words back with the reason. */
+const refusedAdmission = (overrides: Record<string, unknown> = {}): RuntimeHttpDependencies => ({
+  enabled: () => true,
+  structuredEnabled: () => true,
+  client: () => admittingClient,
+  enqueue: async () => ({ ok: false, structured: true, outcome: "failed", status: 503,
+    error: "the conversation is synchronizing; try again shortly", admission: "refused", ...overrides }) as never,
+});
+
+for (const kind of ["send", "steer"] as const) {
+  test(`a ${kind} admission refused before any reservation answers refused, with its stop`, async () => {
+    const response = await handleRuntimeCommand(request({ ...send, idempotencyKey: `refused-${kind}` }), kind, refusedAdmission());
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "the conversation is synchronizing; try again shortly",
+      delivery: "refused",
+      stop: { boundary: "admission", reason: "refused-before-reservation" },
+    });
+    expect(ingressStopFor(send.conversationId, `refused-${kind}`)).toMatchObject({
+      kind, boundary: "admission", reason: "refused-before-reservation", status: 503, delivery: "refused",
+    });
+  });
+}
+
+test("a seat refusal keeps its code and successor beside the refused classification", async () => {
+  const response = await handleRuntimeCommand(request({ ...send, idempotencyKey: "refused-seat" }), "send", refusedAdmission({
+    status: 409, error: "seat was replaced", code: "seat-replaced", successorConversationId: "conversation_successor",
+  }));
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: "seat was replaced", delivery: "refused", code: "seat-replaced", successorConversationId: "conversation_successor",
+    stop: { boundary: "admission", reason: "refused-before-reservation" },
+  });
+});
+
+test("an admission failure after its reservation is never called refused", async () => {
+  const receipt = { operationId: "operation-reserved", idempotencyKey: "reserved-failure", conversationId: send.conversationId,
+    kind: "send" as const, status: "failed" as const, at: "2026-11-09T00:00:00.000Z", revision: 2 };
+  const response = await handleRuntimeCommand(request({ ...send, idempotencyKey: "reserved-failure" }), "send", {
+    enabled: () => true,
+    structuredEnabled: () => true,
+    client: () => admittingClient,
+    enqueue: async () => ({ ok: false, structured: true, outcome: "failed", status: 503,
+      error: "the runtime journal did not acknowledge the admission", operationId: "operation-reserved", receipt }) as never,
+  });
+  const body = await response.json() as Record<string, unknown>;
+  expect(body.delivery).toBeUndefined();
+  expect(body).toMatchObject({ operationId: "operation-reserved", stop: { boundary: "admission", reason: "failed-after-reservation" } });
+});
+
+test("an admitted retry under a stopped key forgets the earlier stop", async () => {
+  await handleRuntimeCommand(request({ ...send, idempotencyKey: "stop-then-admit" }), "send", refusedAdmission());
+  expect(ingressStopFor(send.conversationId, "stop-then-admit")).not.toBeNull();
+  const admitted = await handleRuntimeCommand(request({ ...send, idempotencyKey: "stop-then-admit" }), "send", {
+    enabled: () => true, structuredEnabled: () => true, client: () => admittingClient,
+  });
+  expect(admitted.status).toBe(202);
+  expect(((await admitted.json()) as Record<string, unknown>).stop).toBeUndefined();
+  expect(ingressStopFor(send.conversationId, "stop-then-admit")).toBeNull();
+});
+
+test("the stop log line carries codes and ids, never the message text", async () => {
+  const lines: Array<[string, Record<string, unknown>]> = [];
+  resetIngressStopsForTests((line, fields) => lines.push([line, fields]));
+  await handleRuntimeCommand(request({ ...send, text: "secret words stay out", idempotencyKey: "logged-stop" }), "send", refusedAdmission());
+  expect(lines).toHaveLength(1);
+  expect(lines[0]![1]).toEqual({
+    conversationId: send.conversationId, clientMessageId: "logged-stop", kind: "send",
+    boundary: "admission", reason: "refused-before-reservation", status: 503, delivery: "refused",
+    ingressAt: expect.any(String), at: expect.any(String),
+  });
+  expect(JSON.stringify(lines)).not.toContain("secret words");
 });
