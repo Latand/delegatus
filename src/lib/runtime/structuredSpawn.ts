@@ -1474,6 +1474,9 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
 function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: SpawnReceipt): Promise<() => void> | null {
   const memberships = registry.conversationMemberships(receipt.conversationId).filter(row => row.kind === "pipeline");
   const targets = memberships.flatMap(membership => {
+    // Generic pipeline memberships may identify a container without naming a
+    // stage attempt. They do not authorize or reserve a decision consumer.
+    if (!membership.stageId || !membership.round) return [];
     const original = findPipelineRecord(membership.containerId);
     // Resume-successor receipts recover an already existing session and may
     // retain an old pipeline membership after its lane was archived. They do
@@ -1483,7 +1486,6 @@ function decisionLaunchAuthorityForReceipt(registry: AgentRegistry, receipt: Spa
       if (receipt.purpose === "resume-successor") return [];
       throw new Error("decision launch pipeline target is unavailable");
     }
-    if (!membership.stageId || !membership.round) return [];
     const attempt = membership.stageId ? original?.runs.find(run => run.stageId === membership.stageId)?.attempts
       .find(attempt => attempt.n === membership.round) : undefined;
     const answer = original.decisionAnswers?.find(row => row.stageId === membership.stageId && row.nextAttempt === membership.round);
