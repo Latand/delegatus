@@ -8238,7 +8238,8 @@ async function spawnRunStage(
   ports: PipelinePorts, persist: () => void | Promise<void>,
   prepareInput = false,
 ): Promise<void> {
-  const assertDecisionLaunch = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n);
+  let reservationIdentity: { launchId: string; conversationId: string } | undefined;
+  const assertDecisionLaunch = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n, () => reservationIdentity);
   assertDecisionLaunch?.();
   const recoveringReservation = attempt.activation?.replay === true;
   let roleMemoryWaitReady = false;
@@ -8455,6 +8456,7 @@ async function spawnRunStage(
           if (attempt.activation) attempt.activation.phase = "dispatching";
           attempt.launchId = reservation.launchId;
           attempt.conversationId = reservation.conversationId;
+          reservationIdentity = { launchId: reservation.launchId, conversationId: reservation.conversationId };
           attempt.accountId = reservation.accountId ?? attempt.accountId ?? null;
           /* The reservation committed this stage's membership (#1586); a
              fallback task it minted is the pipeline's task from here on,
@@ -16548,7 +16550,7 @@ function decisionLaunchFence(p: Pipeline): string {
 /** Reconstructed from the accepted answer and current durable successor. No
  * callback is persisted, and recovery keeps the same original answer owner. */
 export function capturePipelineDecisionLaunch(pipelineId: string, stageId: string, attemptNumber: number,
-  receiptIdentity?: { launchId: string; conversationId: string }): (() => void) | undefined {
+  receiptIdentity?: { launchId: string; conversationId: string } | (() => { launchId: string; conversationId: string } | undefined)): (() => void) | undefined {
   const original = findPipelineRecord(pipelineId);
   const attempt = original && currentAttempt(original, stageId);
   if (!original) return;
@@ -16579,10 +16581,11 @@ export function capturePipelineDecisionLaunch(pipelineId: string, stageId: strin
       || successor?.n !== attemptNumber || successor.decisionAnswerId !== answer.clientRequestId
       || successor.completedAt || successor.verdict || successor.report) throw new ActivationSuperseded();
     if (definition && JSON.stringify(successor.definition) !== definition) throw new ActivationSuperseded();
+    const reservedIdentity = typeof receiptIdentity === "function" ? receiptIdentity() : receiptIdentity;
     const launchMatches = successor.launchId === attempt.launchId
-      || (attempt.launchId == null && receiptIdentity?.launchId === successor.launchId);
+      || (attempt.launchId == null && reservedIdentity?.launchId === successor.launchId);
     const conversationMatches = successor.conversationId === attempt.conversationId
-      || (attempt.conversationId == null && receiptIdentity?.conversationId === successor.conversationId);
+      || (attempt.conversationId == null && reservedIdentity?.conversationId === successor.conversationId);
     if (!launchMatches || !conversationMatches || successor.providerFallbackRetries !== attempt.providerFallbackRetries) throw new ActivationSuperseded();
     authority(current);
     if (current.workspace && !workspacePrincipalAllows(current.workspace, current.project)) throw new ActivationSuperseded();
