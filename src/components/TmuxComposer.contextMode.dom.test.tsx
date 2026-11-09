@@ -55,7 +55,6 @@ Object.assign(globalThis, {
   sessionStorage: dom.sessionStorage,
   File: dom.File,
   URL: dom.URL,
-  FileReader: dom.FileReader,
 });
 let mobile = false;
 (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
@@ -71,6 +70,40 @@ afterAll(() => composerStorage.uninstall());
 
 const CARD = "conversation_inject";
 const realFetch = globalThis.fetch;
+
+/* Readiness is signalled by the code under test, never by elapsed time: the
+   queue and send stubs wake whoever waits on them, and the attachment reader is
+   resolved by the test itself, as ComposerBar.attachmentGate.dom.test does. */
+let signalWaiters: Array<() => void> = [];
+const signal = () => {
+  const waiting = signalWaiters;
+  signalWaiters = [];
+  for (const wake of waiting) wake();
+};
+async function until(condition: () => boolean): Promise<void> {
+  while (!condition()) await new Promise<void>((resolve) => { signalWaiters.push(resolve); });
+}
+
+class DeferredReader {
+  static pending: DeferredReader[] = [];
+  result: string | null = null;
+  error: unknown = null;
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+  private file: File | null = null;
+  readAsDataURL(file: File) {
+    this.file = file;
+    DeferredReader.pending.push(this);
+    signal();
+  }
+  async finish() {
+    const bytes = new Uint8Array(await this.file!.arrayBuffer());
+    this.result = `data:${this.file!.type};base64,${Buffer.from(bytes).toString("base64")}`;
+    this.onload?.();
+  }
+}
+Object.assign(globalThis, { FileReader: DeferredReader });
 
 let queueWrites: Record<string, unknown>[] = [];
 let queueEntries: NativeQueueRecord[] = [];
@@ -116,6 +149,7 @@ const queueTransport: NativeQueueDependencies = {
   read: async () => ({ entries: queueEntries, native: { threadId: "thread-1", items: [], stale: false } }),
   write: async (body) => {
     queueWrites.push(body);
+    signal();
     return journalReceipt(body);
   },
 };
@@ -166,6 +200,8 @@ beforeEach(() => {
   queueWrites = [];
   queueEntries = [];
   sends = [];
+  DeferredReader.pending = [];
+  signalWaiters = [];
   steerSupported = true;
   turn = "idle";
   nativeQueueCapable = true;
@@ -188,6 +224,7 @@ beforeEach(() => {
     useRuntimeReceiptsForArtifact: (() => durableReceipts) as never,
     sendRuntimeMessage: (async (options: Record<string, unknown>) => {
       sends.push(options);
+      signal();
       return { ok: true, status: 202, operationId: "send-1", receipt: {
         operationId: "send-1", conversationId: options.conversationId,
         idempotencyKey: options.idempotencyKey, kind: "send", status: "queued",
@@ -464,10 +501,11 @@ async function pasteImage(host: HTMLElement, tag = "shot"): Promise<void> {
     clipboardData: { items: [{ type: "image/png", getAsFile: () => new File([bytes], `${tag}.png`, { type: "image/png" }) }] },
     preventDefault() {},
   }));
-  for (let attempt = 0; attempt < 50 && host.querySelectorAll("img").length < 1; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2));
-  }
+  await until(() => DeferredReader.pending.length > 0);
+  const reader = DeferredReader.pending.shift()!;
+  await act(async () => { await reader.finish(); });
   await settle(() => {});
+  expect(host.querySelectorAll("img").length).toBeGreaterThan(0);
 }
 
 const refusal = (host: HTMLElement) => host.querySelector<HTMLElement>('[data-testid="composer-status"]');
@@ -531,7 +569,7 @@ test("after the refusal, Context off sends the picture as an ordinary message an
   expect(refusal(host)).not.toBeNull();
   /* Alt+Enter keeps its queue path with the picture while Context is on. */
   await settle(() => press(textarea(host), "Enter", { altKey: true }));
-  for (let attempt = 0; attempt < 100 && queueWrites.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await until(() => queueWrites.length > 0);
   await settle(() => {});
   expect(queueWrites).toHaveLength(1);
   expect(JSON.stringify(queueWrites[0])).toContain("png");
@@ -548,7 +586,7 @@ test("after the refusal, turning Context off sends the picture with an ordinary 
   await settle(() => {});
   await settle(() => toggle(host)!.click());
   await settle(() => press(textarea(host), "Enter"));
-  for (let attempt = 0; attempt < 100 && sends.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await until(() => sends.length > 0);
   await settle(() => {});
   expect(sends).toHaveLength(1);
   expect(JSON.stringify(sends[0]?.images ?? [])).toContain("png");
