@@ -1730,8 +1730,41 @@ test("a refused custody admission retains a late real command result without rel
         digest(path.join(`${f.log}.gate`, "result.json")))));
       expect(retained.report?.commandExit).toBe(23);
       expect(result.completed).toBe(1); expect(result.complete).toBeFalse();
+      expect(result.failed).toBe(1);
       await expect(acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
         resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).rejects.toThrow("incomplete");
+
+      // Independent verification actually runs; the refused command's exit 23
+      // remains failed evidence rather than supplying a passing check.
+      const directScript = path.join(f.root, "direct-check.ts");
+      fs.writeFileSync(directScript, `
+        import fs from "node:fs";
+        const directory = process.argv[2];
+        const completion = JSON.parse(fs.readFileSync(directory + "/complete.json", "utf8"));
+        if (completion.completed !== 1 || completion.outcomes[0].exit !== 23
+          || fs.readFileSync(directory + "/executions", "utf8") !== "run\\n"
+          || fs.readFileSync(directory + "/final.patch", "utf8") !== "retained late patch\\n") throw new Error("independent evidence verification failed");
+        console.log("Independent evidence verification passed; original command exited 23");
+      `);
+      const direct = fixtureChild(directScript, [f.tmp], checkEnvironment(process.env));
+      expect((await once(direct.child, "exit"))[0], direct.errors()).toBe(0);
+      const actor = { kind: "agent" as const, role: "builder" as const, conversationId: f.launch.conversationId };
+      const ports = defaultPipelinePorts();
+      const stopTick = registerPipelineTick(async () => {});
+      projections.push(stopTick);
+      const response = await reportStageCompletion({ verdict: "pass",
+        summary: "Independent evidence verification passed; the refused recorded command exited 23 and remains failed evidence." }, actor, ports);
+      expect(response.error).toBeUndefined();
+      expect(response.recordedChecks).toMatchObject([{ id: row.id, complete: false, verified: false }]);
+      expect(response.report?.excludedRecordedChecks).toMatchObject([{ id: row.id, resultRevision: result.revision,
+        custody: "cleanup-confirmed", reason: expect.stringContaining("visited 1/1, completed 1, failed 1") }]);
+      f.finishTurn(); await idle(f.host); await flushStructuredHostPersistence(f.host);
+      await tickPipelines([], ports);
+      const attempt = findPipelineRecord(f.pipeline.id)!.runs[0].attempts[0];
+      expect(attempt.verdict?.status).toBe("pass");
+      expect(attempt.report?.excludedRecordedChecks).toEqual(response.report?.excludedRecordedChecks);
+      expect(attempt.excludedRecordedChecks).toEqual(response.report?.excludedRecordedChecks);
+      expect(store.get(row.id)).toEqual(current);
       expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
       expect(recordedRootHeld(f.work)).toBeTrue();
     } finally { store.close(); }

@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { pipelineDecisionRevision } from "@/lib/pipelines/decisionRevision";
 import { redactMonitorText } from "@/lib/monitor/redact";
@@ -48,7 +49,7 @@ import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMai
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { curatorCallerOf } from "@/lib/memory/curation/guard";
-import { applyCuration, type CurationApply } from "@/lib/memory/curation/apply";
+import { applyCuration, readCurationOperation, curationOperationResult, completeCurationMaintenance, type CurationOperationContext, type CurationApply } from "@/lib/memory/curation/apply";
 import { readCuration } from "@/lib/memory/curation/read";
 import { isMutatingMcpTool } from "./server";
 import { permitIssueReporterTool, permitMaintainerTool, permitCuratorTool } from "./toolAllowlist";
@@ -8634,6 +8635,47 @@ export function viewerReadTools(
   };
 }
 
+/** Pin the original pass before awaited work; a later pass cannot substitute
+ * for it at commit or disclosure. The operation context never comes from args. */
+async function curatorApplyAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies) {
+  const translate = (error: unknown): never => {
+    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409, retryable: false });
+    if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409, retryable: false });
+    throw error;
+  };
+  try {
+    const conversationId = attributionOf(dependencies).conversationId;
+    const initial = dependencies.attentionAuthority();
+    if (initial.kind === "unidentified") throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller is unavailable");
+    const snapshot = () => dependencies.curatorSnapshot && conversationId ? dependencies.curatorSnapshot(conversationId) : dependencies.registrySnapshot();
+    const pass = curatorCallerOf(conversationId, snapshot());
+    const project = canonicalProject(pass.project);
+    const admission = await dependencies.curatorAdmission?.(conversationId);
+    const assertCurrent = AsyncResource.bind(() => {
+      try {
+        if (typeof admission === "function") admission();
+        const current = dependencies.attentionAuthority();
+        if (!conversationId || current.kind === "unidentified" || current.conversationId !== initial.conversationId
+          || current.conversationId !== conversationId || current.nativeProof !== initial.nativeProof) {
+          throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller changed during this operation");
+        }
+        const owner = curatorCallerOf(conversationId, snapshot());
+        if (owner.id !== pass.id || owner.conversationId !== conversationId || canonicalProject(owner.project) !== project) {
+          throw new RoleMemoryRefusal("CURATE_CALLER", "the original curator pass no longer authorizes this operation");
+        }
+        assertWorkspaceMcpCall(project);
+      } catch (error) { translate(error); }
+    });
+    assertCurrent();
+    const operation: CurationOperationContext = { pass: pass.id, conversationId: conversationId!, project,
+      requestId: requestId(args), digest: requestDigest("curate_rules", args), assertCurrent };
+    return { pass, operation, assertCurrent, recoverCommitted: () => {
+      try { const row = readCurationOperation(operation); return row ? curationOperationResult(row) : null; }
+      catch (error) { return translate(error); }
+    } };
+  } catch (error) { return translate(error); }
+}
+
 export function viewerMcpBindings(
   linkTaskDependencies: LinkTaskToPipelineDependencies = productionLinkTaskDependencies,
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
@@ -8774,33 +8816,43 @@ export function viewerMcpBindings(
       return capability;
     } }),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
-    curate_rules: Object.assign(async (args: McpToolArgs) => {
+    curate_rules: Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
       try {
-        const conversationId = attributionOf(domainDependencies).conversationId;
-        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
-        if (typeof assertAdmission === "function") assertAdmission();
-        const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        const authority = await curatorApplyAuthority(args, domainDependencies);
+        const pass = authority.pass;
+        if (context?.curatorResponse) context.curatorResponse.assertCurrent = authority.assertCurrent;
+        context?.assertCaller?.();
         if (args.action !== "read") {
-          const result = await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
-            if (typeof assertAdmission === "function") assertAdmission();
-            const fresh = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-            return applyCuration(fresh, args as unknown as CurationApply, undefined, { refreshKnownValues: !fresh.importBatch });
+          const assertCurrent = () => { context?.assertCaller?.(); authority.assertCurrent(); };
+          const operation = { ...authority.operation, assertCurrent };
+          assertCurrent();
+          const saved = readCurationOperation(operation);
+          if (saved) return curationOperationResult(saved);
+          await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
+            assertCurrent();
+            return applyCuration(authority.pass, args as unknown as CurationApply, undefined, { refreshKnownValues: false, operation });
           }));
-          if (pass.importBatch) await refreshCurationKnownValuesAsync();
-          if (typeof assertAdmission === "function") assertAdmission();
-          curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-          return result;
+          assertCurrent();
+          // Ancillary maintenance is attempted once, outside the apply retry.
+          // Its failure never turns a committed editorial write into a refusal.
+          try {
+            await refreshCurationKnownValuesAsync();
+            assertCurrent();
+            completeCurationMaintenance(operation, { knownValues: "complete" });
+          } catch { /* The witness retains pending until completion is recorded. */ }
+          assertCurrent();
+          return curationOperationResult(readCurationOperation(operation)!);
         }
         const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
-        if (typeof assertAdmission === "function") assertAdmission();
-        curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        context?.assertCaller?.();
+        authority.assertCurrent();
         return result;
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
         if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
         throw error;
       }
-    }, { authorizeReceipt: async () => {
+    }, { curatorApplyRecovery: (args: McpToolArgs) => curatorApplyAuthority(args, domainDependencies), authorizeReceipt: async () => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);

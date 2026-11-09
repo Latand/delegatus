@@ -32,7 +32,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
@@ -2431,6 +2431,21 @@ export function pipelineRecordReader(pipelineId: string) {
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
+}
+
+/** Task-local history, including archived lanes, without materializing every
+    unrelated stage and attempt in the installation. */
+export function loadPipelinesForTask(taskId: string): Pipeline[] {
+  const filename = stateDatabaseFile();
+  // Preserve the store's migration and schema admission for legacy installs.
+  const rows = stateCollectionsInitialized(filename, pipelineStateCollectionSeeds())
+    ? readPipelineRowsForTask(filename, taskId) : null;
+  if (rows === null) return [...loadPipelinesForList(), ...loadArchivedPipelinesForList()]
+    .filter(pipeline => pipeline.taskIds.includes(taskId));
+  return rows.flatMap(row => {
+    const pipeline = decodePipeline(row);
+    return pipeline?.taskIds.includes(taskId) ? [pipeline] : [];
+  });
 }
 
 /** Bounded feed for consumers that need task membership changes without loading

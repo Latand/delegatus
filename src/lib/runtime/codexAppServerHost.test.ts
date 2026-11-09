@@ -272,16 +272,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.167.0": { pin: "0.166.0", schema: "0.166.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.168.0": { pin: "0.167.0", schema: "0.167.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.167.0") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.168.0") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.167.0") return raw;
+    if (version !== "0.168.0") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -309,7 +309,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0"])("compatible CLI %s reach
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.167.0") {
+    if (version === "0.168.0") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -324,7 +324,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -5787,12 +5787,12 @@ describe("CodexAppServerHost", () => {
     } finally { await host.release(); }
   });
 
-  test.each([2, 50])("protocol failure retries TERM when identity recovers after one read (%d ms grace)", async (shutdownGraceMs) => {
+  test.each([2, 50])("protocol failure eventually retries TERM after an observed identity refusal (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-transient-identity-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const cleanupFinished = Promise.withResolvers<void>();
-    let failureIdentityReads = 0;
-    let injectIdentityFailure = false;
+    const terminationEvents: string[] = [];
+    let refuseNextIdentity = false;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
       shutdownGraceMs,
@@ -5800,28 +5800,50 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server),
       releaseCleanup: cleanupFinished.resolve,
       processIdentity: () => {
-        if (!injectIdentityFailure) return "4242:owned";
-        failureIdentityReads += 1;
-        return failureIdentityReads === 2 ? null : "4242:owned";
+        if (refuseNextIdentity) {
+          refuseNextIdentity = false;
+          terminationEvents.push("identity-unknown");
+          return null;
+        }
+        return "4242:owned";
       },
       pidAlive: () => true,
       signalProcess: (pid, signal) => {
+        terminationEvents.push(signal);
         signals.push({ pid, signal });
         if (signal === "SIGKILL") queueMicrotask(() => server.emit("close", 0, signal));
       },
     });
+    // EOF arms exactly one unknown read at the ownership gate before TERM.
+    const endStdin = server.stdin.end.bind(server.stdin);
+    const end = spyOn(server.stdin, "end").mockImplementationOnce(() => {
+      refuseNextIdentity = true;
+      return endStdin();
+    });
+    const target = host as unknown as { startTermination(): boolean };
+    const startTermination = target.startTermination.bind(host);
+    const termination = spyOn(target, "startTermination").mockImplementation(() => {
+      const started = startTermination();
+      if (!started) terminationEvents.push("TERM-refused");
+      return started;
+    });
     try {
-      injectIdentityFailure = true;
-
       server.stdout.write("malformed\n");
       await cleanupFinished.promise;
 
+      // Either the immediate or scheduled retry may recover; the first attempt
+      // must have refused termination before either signal was delivered.
+      expect(terminationEvents).toEqual(["identity-unknown", "TERM-refused", "SIGTERM", "SIGKILL"]);
       expect(signals).toEqual([
         { pid: -4242, signal: "SIGTERM" },
         { pid: -4242, signal: "SIGKILL" },
       ]);
       expect(await host.health()).toMatchObject({ status: "dead", pid: null });
-    } finally { await host.release(); }
+    } finally {
+      end.mockRestore();
+      termination.mockRestore();
+      await host.release();
+    }
   });
 
   test("protocol failure keeps retrying fenced cleanup until identity recovers", async () => {

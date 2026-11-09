@@ -310,6 +310,8 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
 export interface McpToolCallContext {
+  /** Call-local curator disclosure fence, retained through SDK serialization. */
+  curatorResponse?: { assertCurrent?: () => void };
   /** Trusted read projection; never accepted from serialized tool arguments. */
   redactText?: (text: string) => string;
   signal?: AbortSignal;
@@ -405,7 +407,16 @@ export function nativeWorkFromRequestMeta(meta: unknown): McpNativeWork | null {
 export interface McpDispatchTracker {
   attempted: boolean;
 }
+function curatorDisclosureResult(tool: string, args: McpToolArgs, authority: McpToolCallContext["curatorResponse"], result: McpToolResult): McpToolResult {
+  try { authority?.assertCurrent?.(); return result; }
+  catch (error) {
+    return failure(tool, clientRequestId(args), "CURATE_CALLER", error instanceof Error ? error.message : "curator authority changed", false, false, { code: "CURATE_CALLER" });
+  }
+}
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
+  /** Curator apply only: pin current disclosure authority and read its atomic
+   * domain acknowledgement. This hook must never dispatch an apply. */
+  curatorApplyRecovery?: (args: McpToolArgs) => Promise<{ assertCurrent: () => void; recoverCommitted: () => McpToolPayload | null }>;
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
   authorizeReceipt?: (args: McpToolArgs) => void | ((result?: McpToolPayload) => void) | Promise<void | ((result?: McpToolPayload) => void)>;
   /** Fresh admission checks, after authority and existing-receipt lookup,
@@ -2827,7 +2838,7 @@ export function createMcpToolService(
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
-        if (effectiveArgs.full !== true && typedTool !== "recorded_check") result = shortIdsInAnswer(result);
+        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
@@ -2862,7 +2873,8 @@ export function createMcpToolService(
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
-      if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+      if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "curate_rules" && effectiveArgs.action === "read")
+        || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
         || (typedTool === "codex_cloud_environment" && effectiveArgs.action === "read" && effectiveArgs.clientRequestId === undefined)
         || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
@@ -2934,10 +2946,19 @@ export function createMcpToolService(
           error instanceof McpToolRefusal && error.details.retryable === true, false,
           error instanceof McpToolRefusal ? error.details : undefined), "failure");
       }
+      let curatorApply: Awaited<ReturnType<NonNullable<McpToolBinding["curatorApplyRecovery"]>>> | undefined;
       let scope: string | null;
       try {
+        if (typedTool === "curate_rules" && effectiveArgs.action === "apply") {
+          curatorApply = await bindings[typedTool].curatorApplyRecovery?.(effectiveArgs);
+          curatorApply?.assertCurrent();
+          if (context.curatorResponse && curatorApply) context.curatorResponse.assertCurrent = curatorApply.assertCurrent;
+          const assertCaller = context.assertCaller;
+          if (curatorApply) context = { ...context, assertCaller: () => { assertCaller?.(); curatorApply!.assertCurrent(); } };
+        }
         scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
         assertAction?.();
+        curatorApply?.assertCurrent();
       } catch (error) {
         // Nothing is claimed yet, so the same key may be tried again as it is.
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
@@ -2972,7 +2993,7 @@ export function createMcpToolService(
       /* A recoverable mutation never joins an in-process duplicate: who is
          calling is decided first, and every later call under the key — in
          this process or another — is answered from the durable record. */
-      const active = recoverable ? undefined : inFlight.get(key);
+      const active = recoverable || curatorApply ? undefined : inFlight.get(key);
       if (active) {
         if (active.digest !== digest) {
           return finish(failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true), "conflict");
@@ -3558,6 +3579,7 @@ export function createMcpToolService(
         }
         const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, assertAction));
         assertAction?.(claim.kind === "replay" ? claim.result : undefined);
+        curatorApply?.assertCurrent();
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -3568,6 +3590,14 @@ export function createMcpToolService(
             `The previous call has no committed operation receipt; execution is uncertain. Read ${read} to resolve its outcome and retain the original clientRequestId.`,
             false, true, { outcome: "unknown", nextAction: read, evidence: "mcp-receipt" });
         };
+        if (curatorApply && claim.kind !== "fresh") {
+          // This reader cannot resend. Missing or legacy evidence stays
+          // UNKNOWN, even when a generic receipt happens to contain success.
+          const saved = curatorApply.recoverCommitted();
+          curatorApply.assertCurrent();
+          outcome = saved ? "replay" : "pending";
+          return saved ? { ...saved, ok: true, toolName: typedTool, clientRequestId: requestId, replayed: true } : interruptedAnswer();
+        }
         if (claim.kind === "pending" && !interruptedCallIsRecoverable(typedTool, effectiveArgs)) {
           outcome = "pending";
           unfinishedAgeMs = claim.unfinishedAgeMs;
@@ -3653,6 +3683,7 @@ export function createMcpToolService(
             }, true);
           }
         }
+        curatorApply?.assertCurrent();
         let settled: McpToolResult;
         let unadmitted = false;
         const bindingStartedAt = performance.now();
@@ -3772,23 +3803,37 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
+        // Authority is a disclosure verdict. Preserve the committed witness
+        // and the unsettled claim when the owner is no longer authorized.
+        curatorApply?.assertCurrent();
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         const beforeComplete = assertAction ? () => assertAction?.(settled) : undefined;
         await measure("completion", () => receipts.complete(key, digest, settled, retention, beforeComplete));
         assertAction?.(settled);
+        curatorApply?.assertCurrent();
         return settled;
       })();
       inFlight.set(key, { digest, result });
       try {
         const answered = await result;
         assertAction?.(answered);
+        curatorApply?.assertCurrent();
         return finish(revalidateNative() ?? answered, outcome, unfinishedAgeMs);
       } catch (error) {
-        if (!actionAuthorityFailed) throw error;
-        return finish(failure(typedTool, requestId,
+        if (actionAuthorityFailed) return finish(failure(typedTool, requestId,
           error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
           error instanceof Error ? error.message : String(error), false, false,
           error instanceof McpToolRefusal ? error.details : undefined), "failure");
+        if (!curatorApply) throw error;
+        try {
+          curatorApply.assertCurrent();
+          const saved = curatorApply.recoverCommitted();
+          if (saved) return finish({ ...saved, ok: true, toolName: typedTool, clientRequestId: requestId, replayed: false }, "success");
+        } catch (cause) { error = cause; }
+        return finish(failure(typedTool, requestId,
+          error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "outcome_unknown",
+          error instanceof Error ? error.message : String(error), false, false,
+          error instanceof McpToolRefusal ? error.details : { outcome: "unknown", nextAction: "original-key-lookup" }), "failure");
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
       }
@@ -3806,12 +3851,18 @@ export function createMcpToolService(
       }
     },
   };
-  return withMcpPageCursors({ callTool: async (tool, args, context) => {
+  const paged = withMcpPageCursors({ callTool: async (tool, args, context) => {
     const finish = (MCP_TOOL_NAMES as readonly string[]).includes(tool)
       ? trackMcpClaim(`${tool}:${clientRequestId(args) ?? "unkeyed"}`) : () => {};
-    try { return await runWithMcpCallerResolution(() => service.callTool(tool, args, context)); }
-    finally { finish(); }
+    try {
+      return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
+    } finally { finish(); }
   } });
+  return { async callTool(tool, args, context) {
+    const curatorResponse = context?.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
+    const result = await paged.callTool(tool, args, { ...context, curatorResponse });
+    return curatorDisclosureResult(tool, args, curatorResponse, result);
+  } };
 }
 
 /**
@@ -3905,7 +3956,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
-  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes, import batch and any one-time machine budgetSweep candidate counts; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, unexplained sweep archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
+  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes, import batch and any one-time machine budgetSweep candidate counts; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, unexplained sweep archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Read always returns a fresh authorized observation. A committed apply returns its operation identity, revisions, placeholders, counts and maintenance status; exact-key replay returns that historical disposition. Changed arguments conflict. Pending maintenance grants no publication permission. For new work after CURATE_STALE, read again. An authority refusal can withhold a committed result. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
     "When an operator corrects a result or reveals a misunderstood task, call in that same turn with correction:true and lesson, naming the misread in why and the preventing practice in rule at the narrowest true level. This includes seat-relayed corrections. Any recorded stage conversation, including a clean or review role, may leave corrections before stage_report or after settlement; each call is independent of the closing request. A registered role conversation outside a pipeline may also leave corrections, using its server-attributed role and project. Correction calls carry no applied/misled measurements. New work alone needs no correction lesson.",
     "Any stage answer may include applied and misled, each up to five distinct exact ids of rules this attempt received: applied changed what you did; misled was wrong or stale. An id may appear in only one field. These measurements are optional and may accompany none, lesson, rewrite or problem.",
@@ -5243,7 +5294,9 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
+        const curatorResponse: McpToolCallContext["curatorResponse"] = toolName === "curate_rules" ? {} : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
+          curatorResponse,
           signal: deadline.signal,
           deadlineAt: Date.now() + timeoutMs,
           /* #1629: the SDK hands the request's own `_meta` through on `extra`,
@@ -5255,7 +5308,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
         const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
-        return response(result);
+        return response(curatorDisclosureResult(toolName, args as McpToolArgs, curatorResponse, result));
       } finally {
         finishClaim();
         deadline.release();
