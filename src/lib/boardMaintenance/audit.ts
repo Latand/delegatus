@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import { z } from "zod";
 import { readMessageAuthorContext, type ConversationMessage } from "@/lib/session/messagesPage";
 import { heldDeliveryOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import { assignDeliveredOccurrences } from "@/components/feed/deliveredOccurrences";
@@ -99,7 +98,34 @@ export async function buildMaintenanceAuditInput(run: MaintenanceRun, sources: S
   const ids = new Set([run.seat.conversationId, ...(prior?.window?.sources.filter(source => source.kind === "transcript").map(source => source.conversationId) ?? [])]);
   const lower = prior?.window?.lower ?? prior?.through ?? "1970-01-01T00:00:00.000Z";
   const upper = prior?.window?.upper ?? run.claimedAt;
-  if (prior?.window) { roster = structuredClone(prior.window.sources); gaps.push(...prior.window.gaps); }
+  if (prior?.window) {
+    roster = structuredClone(prior.window.sources);
+    const recoverable = (gap: string) => gap === "operator-anchor-unverified" || gap === "seat-lineage-unavailable" || gap.startsWith("seat-source-unverified:") || gap === "read-budget-exhausted";
+    gaps.push(...prior.window.gaps.filter(gap => !recoverable(gap)));
+    if (prior.window.gaps.includes("seat-lineage-unavailable") || prior.window.gaps.some(gap => gap.startsWith("seat-source-unverified:"))) {
+      const seats = readOrchestratorSeatFileOrNull();
+      if (!seats) gaps.push("seat-lineage-unavailable");
+      for (const seat of seats?.seatLineage ?? []) if (sameProject(seat.project, run.project)) ids.add(seat.conversationId);
+      for (const gap of prior.window.gaps.filter(g => g.startsWith("seat-source-unverified:"))) {
+        const id = gap.slice("seat-source-unverified:".length);
+        if (!ids.has(id)) ids.add(id);
+      }
+      for (const id of ids) {
+        if (roster.some(source => source.conversationId === id && source.kind === "transcript")) continue;
+        const conversation = registry.conversations[id as `conversation_${string}`];
+        if (!conversation || !conversation.projectOwnership?.project || !sameProject(conversation.projectOwnership.project, run.project) || !permitted(id) || !conversation.generations.length) { if (prior.window.gaps.some(g => g === `seat-source-unverified:${id}`)) gaps.push(`seat-source-unverified:${id}`); continue; }
+        for (const generation of conversation.generations) {
+          let file: { artifact: string | null; size: number } = { artifact: null, size: 0 };
+          try { file = ports.artifact(generation.path); } catch { /* explicit source gap below */ }
+          const key = JSON.stringify([id, generation.id, generation.path, file.artifact]);
+          const audience = generation.launchProfile.workspace;
+          const wrongProject = generation.launchProfile.project && !sameProject(generation.launchProfile.project, run.project);
+          roster.push({ key, kind: "transcript", conversationId: id, generation: generation.id, path: generation.path, ...file, from: null, scanThrough: null, complete: false, gap: wrongProject || audience && !workspacePrincipalAllows(audience, run.project) ? "generation-audience-unverified" : file.artifact ? null : "artifact-unavailable" });
+        }
+      }
+    }
+    for (const source of roster) if (source.gap === "read-budget-exhausted" || source.gap === "artifact-unavailable") source.gap = null;
+  }
   else {
     const seats = readOrchestratorSeatFileOrNull();
     if (!seats) gaps.push("seat-lineage-unavailable");
@@ -113,7 +139,7 @@ export async function buildMaintenanceAuditInput(run: MaintenanceRun, sources: S
         const key = JSON.stringify([id, generation.id, generation.path, file.artifact]);
         const audience = generation.launchProfile.workspace;
         const wrongProject = generation.launchProfile.project && !sameProject(generation.launchProfile.project, run.project);
-        roster.push({ key, kind: "transcript", conversationId: id, generation: generation.id, path: generation.path, ...file, from: null, complete: false, gap: wrongProject || audience && !workspacePrincipalAllows(audience, run.project) ? "generation-audience-unverified" : file.artifact ? null : "artifact-unavailable" });
+        roster.push({ key, kind: "transcript", conversationId: id, generation: generation.id, path: generation.path, ...file, from: null, scanThrough: null, complete: false, gap: wrongProject || audience && !workspacePrincipalAllows(audience, run.project) ? "generation-audience-unverified" : file.artifact ? null : "artifact-unavailable" });
       }
     }
   }
@@ -190,10 +216,14 @@ export async function buildMaintenanceAuditInput(run: MaintenanceRun, sources: S
       let cursor: string | undefined;
       let found = source.from === null;
       let exhausted = false;
+      let readBudgetReached = false;
+      let physicalBoundary = source.scanThrough ?? null;
       for (let page = 0; page < 16; page++) {
-        const result = await ports.read(source.path!, lower, cursor);
+        const result = await ports.read(source.path!, source.scanThrough?.at ?? lower, cursor);
         if (result.cursorReset) { source.gap = "cursor-reset"; break; }
         for (const record of result.records) {
+          if (!physicalBoundary || record.seq > physicalBoundary.seq) physicalBoundary = { seq: record.seq, at: record.ts ?? physicalBoundary?.at ?? lower };
+          if (source.scanThrough && record.seq <= source.scanThrough.seq) continue;
           if (source.from?.seq === record.seq) found = true;
           if (!record.ts || !Number.isFinite(Date.parse(record.ts))) { source.gap = "occurrence-time-unverified"; continue; }
           if (record.seq >= source.size || !inWindow(record.ts, lower, upper) || source.from && record.seq > source.from.seq) continue;
@@ -218,7 +248,9 @@ export async function buildMaintenanceAuditInput(run: MaintenanceRun, sources: S
         }
         if (!result.cursor) { source.gap = "page-continuation-missing"; break; }
         cursor = result.cursor;
+        if (page === 15) readBudgetReached = true;
       }
+      if (readBudgetReached && physicalBoundary) source.scanThrough = physicalBoundary;
       if (!exhausted && !source.gap) {
         const last = occurrences.filter(o => o.source === source.key).at(-1);
         if (last) unread[source.key] = { seq: last.seq, ...(last.part ? { part: last.part } : {}), requestIndex: 0 };
@@ -258,91 +290,6 @@ export function auditSourceStillCurrent(input: MaintenanceAuditInput, occurrence
   return !!round?.decision && (round.decision.revision ?? 0) === source.decision?.revision && hash(decisionPayload(round)) === source.artifact && sameProject(round.project, input.project);
 }
 
-const instant = z.string().datetime({ offset: true });
-const preview = z.string().max(300);
-const rowSchema = z.object({ key: z.string().min(1), occurrence: z.string().min(1), requestIndex: z.number().int().nonnegative(), at: instant, request: preview,
-  outcome: z.enum(["done", "running", "filed", "updated", "cancelled", "unverified"]), taskId: z.string().min(1).nullable(), code: preview, merge: preview, install: preview, acceptance: preview, checkedAt: instant, next: preview,
-  dueAt: instant.nullable(), dueTz: z.string().max(100).nullable(), mutation: z.object({ key: z.string().min(1), state: z.enum(["readback", "uncertain"]) }).strict().nullable() }).strict();
-const manifestSchema = z.object({ version: z.literal(1), runId: z.string(), revision: z.number().int().nonnegative(), lower: instant, upper: instant, rows: z.number().int().min(0).max(AUDIT_ROW_LIMIT), occurrences: z.array(z.object({ key: z.string(), requests: z.number().int().min(0).max(100000), nextIndex: z.number().int().min(0).max(100000) }).strict()).max(AUDIT_ROW_LIMIT) }).strict();
-
-export function parseMaintenanceAudit(text: string, input: MaintenanceAuditInput, tasks: readonly BoardTask[]): MaintenanceAuditResult {
-  const result: MaintenanceAuditResult = { version: 1, rows: [], manifest: null, complete: false, error: null, window: structuredClone(input.window) };
-  const refuse = (reason: string) => ({ ...result, error: reason });
-  if (Buffer.byteLength(text) > 100 * 1024 || Buffer.byteLength(JSON.stringify(text)) > 112 * 1024) return refuse("final-transport-budget");
-  const lines = (text.match(/.*(?:\n|$)/g) ?? []).filter(l => /^audit-/i.test(l.trimStart()));
-  if (Buffer.byteLength(lines.join("")) > AUDIT_BLOCK_BYTES) {
-    let bytes = 0;
-    for (const line of lines) { bytes += Buffer.byteLength(line); if (bytes > AUDIT_BLOCK_BYTES) {
-      try { const locator = JSON.parse(line.slice(line.indexOf(":") + 1)).occurrence; result.refusedOccurrence = input.occurrences.find(o => o.key === locator)?.key ?? input.occurrences[0]?.key ?? null; } catch { result.refusedOccurrence = input.occurrences[0]?.key ?? null; }
-      break;
-    } }
-    return refuse("audit-byte-budget");
-  }
-  try {
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line.startsWith("audit-row:") && !line.startsWith("audit-manifest:")) return refuse("unknown-audit-record");
-      const payload = JSON.parse(line.slice(line.indexOf(":") + 1));
-      if (line.startsWith("audit-row:")) {
-        if (result.manifest || result.rows.length >= AUDIT_ROW_LIMIT) return refuse("row-order-or-limit");
-        result.rows.push(rowSchema.parse(payload));
-      } else {
-        if (result.manifest) return refuse("duplicate-manifest");
-        result.manifest = manifestSchema.parse(payload);
-      }
-    }
-  } catch { return refuse("malformed-audit-record"); }
-  const m = result.manifest;
-  if (!m || m.runId !== input.runId || m.revision !== input.revision || m.lower !== input.window.lower || m.upper !== input.window.upper || m.rows !== result.rows.length) return refuse("manifest-identity-or-count");
-  if (m.occurrences.length !== input.occurrences.length || new Set(m.occurrences.map(o => o.key)).size !== m.occurrences.length) return refuse("occurrence-manifest-incomplete");
-  const keys = new Set<string>();
-  for (const row of result.rows) {
-    const occurrence = input.occurrences.find(o => o.key === row.occurrence);
-    if (!occurrence || row.key !== auditRequestKey(occurrence.key, row.requestIndex) || row.at !== occurrence.at || Date.parse(row.checkedAt) < Date.parse(input.snapshotAt) || keys.has(row.key)) return refuse("row-identity-conflict");
-    keys.add(row.key);
-    if (!occurrence.verified && row.outcome !== "unverified") return refuse("row-author-unverified");
-    if (row.mutation && row.mutation.key !== row.key) return refuse("mutation-identity-conflict");
-    if (row.outcome === "filed" || row.outcome === "updated" || row.mutation?.state === "readback") {
-      const task = tasks.find(t => t.id === row.taskId);
-      if (!task || !sameProject(task.project, input.project) || !task.details?.split("\n").includes(auditSourceMarker(row.key)) || row.mutation?.key !== row.key || row.mutation.state !== "readback" || row.dueAt !== (task.dueAt ?? null) || row.dueTz !== (task.dueTz ?? null)) return refuse("task-effect-unverified");
-    }
-    if (row.dueTz) { try { new Intl.DateTimeFormat("en", { timeZone: row.dueTz }); } catch { return refuse("invalid-due-zone"); } }
-  }
-  for (const occurrence of input.occurrences) {
-    const entry = m.occurrences.find(o => o.key === occurrence.key);
-    if (!entry || entry.nextIndex < occurrence.requestIndex || entry.nextIndex > entry.requests) return refuse("occurrence-prefix-invalid");
-    const rows = result.rows.filter(r => r.occurrence === occurrence.key).sort((a, b) => a.requestIndex - b.requestIndex);
-    if (rows.length !== entry.nextIndex - occurrence.requestIndex || rows.some((r, i) => r.requestIndex !== occurrence.requestIndex + i)) return refuse("request-prefix-gap");
-  }
-  for (const source of result.window.sources) {
-    if (source.complete || source.gap) continue;
-    if (source.kind === "transcript") {
-      try {
-        const current = artifactIdentity(source.path!);
-        if (current.artifact !== source.artifact || current.size < source.size) { source.gap = "artifact-replaced"; continue; }
-      } catch { source.gap = "artifact-unavailable"; continue; }
-    }
-    if (source.kind === "decision") {
-      const current = currentAuditDecision(source, tasks);
-      if (!current?.decision || (current.decision.revision ?? 0) !== source.decision?.revision || hash(decisionPayload(current)) !== source.artifact) { source.gap = "decision-replaced"; continue; }
-    }
-    const occurrences = input.occurrences.filter(o => o.source === source.key);
-    let blocked = false;
-    for (const o of occurrences) {
-      const entry = m.occurrences.find(e => e.key === o.key)!;
-      const unverified = result.rows.find(r => r.occurrence === o.key && (r.outcome === "unverified" || r.mutation?.state === "uncertain"));
-      if (o.gap || !o.verified || unverified || entry.nextIndex < entry.requests) {
-        source.from = { seq: o.seq, ...(o.part ? { part: o.part } : {}), requestIndex: unverified?.requestIndex ?? (o.gap || !o.verified ? o.requestIndex : entry.nextIndex) }; blocked = true; break;
-      }
-    }
-    if (!blocked) { source.from = structuredClone(input.unread[source.key] ?? null);
-      const last = occurrences.at(-1);
-      if (source.from && last?.seq === source.from.seq && (source.from.part ?? 0) === last.part) source.from.requestIndex = m.occurrences.find(e => e.key === last.key)!.requests;
-      source.complete = source.from === null; }
-  }
-  result.complete = result.window.decisionScanComplete !== false && !result.window.gaps.length && result.window.sources.every(s => s.complete && !s.gap);
-  return result;
-}
 
 /** Ordinary writes keep their existing authority. Only explicit audit evidence is checked here. */
 export function auditTaskWriteRefusal(input: MaintenanceAuditInput | undefined, args: Record<string, unknown>, tasks: readonly BoardTask[], task?: BoardTask, registry?: RegistryFile): string | null {

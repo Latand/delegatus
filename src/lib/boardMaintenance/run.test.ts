@@ -528,6 +528,8 @@ test("request audit pins payload and refuses the replaced owner after the last n
   release();
   await expect(launched).rejects.toThrow("authority changed");
   expect(effects).toBe(0); expect(readMaintenanceRun(run.runId)?.launchBody).toEqual(body);
+  expect(readMaintenanceRun(run.runId)?.state).toBe("failed");
+  expect(readMaintenanceProject(PROJECT)?.currentRunId).toBeNull();
   expect(readMaintenanceProject(PROJECT)?.audit?.window?.upper).toBe(run.claimedAt);
 });
 
@@ -558,7 +560,37 @@ test("audit preparation refuses native seat replacement during its evidence awai
   });
   expect(await controller.launchIfDue(input())).toContain("claim replaced");
   expect(dispatches).toBe(0);
-  expect(h.run().launchBody).toBeUndefined();
+  const stale = maintenanceRuns(PROJECT).at(-1)!;
+  expect(stale.launchBody).toBeUndefined(); expect(stale.state).toBe("failed");
+  expect(readMaintenanceProject(PROJECT)?.currentRunId).toBeNull();
+});
+
+test("a rotated claim after worker completion is reconciled and later maintenance can proceed", async () => {
+  const { auditFixture } = await import("./testFixture");
+  const makeAudit = async (run: Parameters<NonNullable<BoardMaintenancePorts["auditInput"]>>[0], state?: Parameters<NonNullable<BoardMaintenancePorts["auditInput"]>>[2]) => {
+    const audit = auditFixture(run);
+    if (state?.window) audit.window = structuredClone(state.window);
+    return { ...audit, revision: state?.revision ?? 0 };
+  };
+  const h = harness(true, { auditInput: makeAudit });
+  h.sources.seatFor = () => ({ active: input().seat!, pending: null, history: [] }) as never;
+  const controller = productionBoardMaintenanceController(h.sources, {
+    auditInput: makeAudit, evidence: async () => [],
+    launch: async () => ({ status: 202, body: { state: "starting", conversationId: "conversation_fixture_worker", launchId: "fixture-worker" } }),
+    observe: async () => ({ state: "ended", finalText: "Verdict: pass" }),
+  });
+  await controller.launchIfDue(input());
+  const previous = maintenanceRuns(PROJECT).at(-1)!;
+  expect(previous).toMatchObject({ state: "launching", launchedAt: expect.any(String), audit: { revision: 1 } });
+  h.sources.seatFor = () => ({ active: { ...input().seat!, seatEpoch: 2 }, pending: null, history: [] }) as never;
+  expect(await controller.reconcile(PROJECT)).toBe("maintenance: claim replaced");
+  expect(readMaintenanceRun(previous.runId)?.state).toBe("failed");
+  expect(readMaintenanceProject(PROJECT)?.currentRunId).toBeNull();
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: null, window: { upper: previous.claimedAt, gaps: ["claim-replaced"] } });
+  const { claimMaintenanceRun } = await import("./store");
+  const next = claimMaintenanceRun({ project: PROJECT, now: NOW + 4 * 3600000, intervalHours: 3, seat: { seatEpoch: 2, conversationId: input().seat!.conversationId }, repoDir: "/fixtures/repository" });
+  expect(next.claimed).toBe(true);
+  expect(next.claimed && next.run.runId).not.toBe(previous.runId);
 });
 
 
@@ -599,6 +631,11 @@ test("production audit input covers rotated seats, exact window and revised oper
     expect(audit.window.sources).toHaveLength(3); expect(audit.operator).toEqual({ kind: "member", memberId: owner.id });
     expect(audit.occurrences.map(o => o.at).sort()).toEqual([new Date(NOW - 3600000).toISOString(), new Date(NOW - 1000).toISOString(), new Date(NOW - 500).toISOString()]);
     expect(audit.occurrences.every(o => o.verified)).toBe(true);
+    const missingRoster = { ...audit.window, sources: audit.window.sources.filter(source => source.conversationId !== ids[1]), gaps: ["operator-anchor-unverified", "seat-lineage-unavailable", `seat-source-unverified:${ids[1]}`] };
+    const recovered = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: missingRoster }, ports);
+    expect(recovered.operator).toEqual({ kind: "member", memberId: owner.id });
+    expect(recovered.window.gaps).toEqual([]);
+    expect(recovered.window.sources.some(source => source.conversationId === ids[1])).toBe(true);
     const frozen = structuredClone(audit);
     fs.appendFileSync(snapshot.conversations[ids[0]].generations[0].path, JSON.stringify({ type: "response_item", timestamp: new Date(NOW + 1000).toISOString(), payload: { type: "message", role: "user", content: [{ type: "input_text", text: "later request" }] } }) + "\n");
     const next = await buildMaintenanceAuditInput({ ...run, claimedAt: new Date(NOW + 3600000).toISOString() }, h.sources, { version: 1, revision: 1, through: null, window: frozen.window }, ports);
@@ -696,6 +733,28 @@ test("production audit input retains partial pages, cursor resets and unverified
   expect(capped.window.sources[0].gap).toBe("page-continuation-missing");
   const missing = await buildMaintenanceAuditInput(run, h.sources, { ...prior, window: { ...prior.window, sources: [{ ...source, from: { seq: 3, requestIndex: 1 } }] } }, { artifact, read: async () => ({ records: [record], hasMore: false }) });
   expect(missing.window.sources[0].gap).toBe("occurrence-unavailable");
+});
+
+test("bounded transcript batches resume past pages without operator occurrences after restart", async () => {
+  const h = harness(); const run = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { buildMaintenanceAuditInput } = await import("./audit");
+  const fixture = auditFixture(run); const source = fixture.window.sources[0];
+  const boundaryAt = new Date(NOW - 85000).toISOString();
+  const ports = {
+    artifact: () => ({ artifact: source.artifact!, size: 1000 }),
+    read: async (_path: string, since: string, cursor?: string) => {
+      if (since === boundaryAt) return { records: [{ seq: 16, ts: new Date(Date.parse(boundaryAt) + 1000).toISOString(), text: "request after agent pages", author: { kind: "operator" } }], hasMore: false };
+      const page = cursor ? Number(cursor.slice(1)) : 0;
+      return { records: [{ seq: page, ts: new Date(NOW - 100000 + page * 1000).toISOString(), text: "agent message", author: { kind: "agent" } }], hasMore: true, cursor: `p${page + 1}` };
+    },
+  };
+  const first = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 0, through: null, window: fixture.window }, ports);
+  expect(first.occurrences).toHaveLength(0);
+  expect(first.window.sources[0]).toMatchObject({ gap: "read-budget-exhausted", scanThrough: { seq: 15, at: boundaryAt } });
+  const restarted = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: first.window }, ports);
+  expect(restarted.occurrences.map(o => o.seq)).toEqual([16]);
+  expect(restarted.window.sources[0].gap).toBeNull();
 });
 
 

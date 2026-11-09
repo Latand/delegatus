@@ -21,7 +21,7 @@ import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
-import { claimMaintenanceRun, readMaintenanceProject, readMaintenanceRun, maintenanceRuns, previousMaintenanceRun, patchMaintenanceRun, saveMaintenanceAuditLaunch, settleMaintenanceAudit } from "./store";
+import { claimMaintenanceRun, readMaintenanceProject, readMaintenanceRun, maintenanceRuns, previousMaintenanceRun, patchMaintenanceRun, saveMaintenanceAuditLaunch, settleMaintenanceAudit, reconcileLostMaintenanceAuditClaim } from "./store";
 import { buildMaintenanceAuditInput, maintenanceAuditAuthority, auditOperatorCurrent, auditAudienceCurrent } from "./audit";
 import { maintenanceRunIsLive, MAINTENANCE_LAUNCH_TIMEOUT_MS, MAINTENANCE_LAUNCH_GRACE_MS, MAINTENANCE_RUN_TIMEOUT_MS, type MaintenanceRun, type MaintenanceAuditInput, type MaintenanceAuditState } from "./types";
 import { maintenanceBrief, maintenanceCardText, maintenanceCardDetails, parseMaintenanceReport } from "./text";
@@ -183,14 +183,18 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     const tasks = ports.sources.tasks();
     const previous = previousMaintenanceRun(run.project, run.runId);
     const evidence = await (ports.evidence ?? ((project, now, cwd) => maintenanceWorkEvidence(project, now, ports.sources, cwd)))(run.project, ports.sources.now(), run.repoDir);
-    if (!preparationCurrent()) return "maintenance: claim replaced";
+    if (!preparationCurrent()) { reconcileLostMaintenanceAuditClaim(run, "claim replaced during preparation", undefined, ports.sources.now()); return "maintenance: claim replaced"; }
     const audit = await (ports.auditInput ?? buildMaintenanceAuditInput)(run, ports.sources, readMaintenanceProject(run.project)?.audit);
-    if (!preparationCurrent()) return "maintenance: claim replaced";
+    const candidateAudit = audit;
+    if (!preparationCurrent()) { reconcileLostMaintenanceAuditClaim(run, "claim replaced during audit preparation", candidateAudit, ports.sources.now()); return "maintenance: claim replaced"; }
     if (audit) {
       audit.revision++;
       run = { ...run, audit };
       const seat = ports.sources.seatFor(run.project).active;
-      if (!seat || seat.conversationId !== run.seat.conversationId || seat.seatEpoch !== run.seat.seatEpoch) return "maintenance: seat replaced";
+      if (!seat || seat.conversationId !== run.seat.conversationId || seat.seatEpoch !== run.seat.seatEpoch) {
+        reconcileLostMaintenanceAuditClaim(originalRun, "seat replaced during audit preparation", candidateAudit, ports.sources.now());
+        return "maintenance: seat replaced";
+      }
     }
     if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
     const holding = taskSeatHoldingSnapshot();
@@ -206,7 +210,7 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
         && (!run.audit?.authority || auditAudienceCurrent(run.audit, ports.sources))
         && seat?.conversationId === originalRun.seat.conversationId && seat.seatEpoch === originalRun.seat.seatEpoch;
     }) : patchMaintenanceRun(run.runId, { state: "launching", launchBody: body });
-    if (!saved) return "maintenance: claim replaced";
+    if (!saved) { reconcileLostMaintenanceAuditClaim(run, "claim replaced before dispatch", audit, ports.sources.now()); return "maintenance: claim replaced"; }
     run = saved;
   }
   if (!maintenanceRunIsLive(run)) return "maintenance: already settled";
@@ -220,11 +224,17 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
   let timer: ReturnType<typeof setTimeout> | undefined;
   const authorize = () => { if (!maintenanceClaimCurrent(run, ports) || !wakesEnabled() || maintenanceScheduleHold(run, ports)) throw Error("maintenance authority changed"); };
   authorize();
-  const response = await Promise.race([
-    (ports.launch ?? launchMaintenanceConversation)(run.launchBody!, authorize),
-    new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ports.launchTimeoutMs ?? MAINTENANCE_LAUNCH_TIMEOUT_MS); }),
-  ]).finally(() => { if (timer) clearTimeout(timer); });
-  if (!maintenanceClaimCurrent(run, ports)) return "maintenance: claim replaced";
+  let response: ReportSpawnResult | null;
+  try {
+    response = await Promise.race([
+      (ports.launch ?? launchMaintenanceConversation)(run.launchBody!, authorize),
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ports.launchTimeoutMs ?? MAINTENANCE_LAUNCH_TIMEOUT_MS); }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+  } catch (error) {
+    if (!maintenanceClaimCurrent(run, ports)) reconcileLostMaintenanceAuditClaim(run, "claim replaced during dispatch", undefined, ports.sources.now());
+    throw error;
+  }
+  if (!maintenanceClaimCurrent(run, ports)) { reconcileLostMaintenanceAuditClaim(run, "claim replaced after worker observation", undefined, ports.sources.now()); return "maintenance: claim replaced"; }
   if (!response) return "maintenance: launch pending";
   if (response.body.code === "AUTO_UPDATE_DRAIN") {
     patchMaintenanceRun(run.runId, { admissionDeferred: true });
@@ -250,7 +260,7 @@ export async function reconcileBoardMaintenance(project: string, ports: BoardMai
   }
   if (run.state === "launching" && (!run.launchedAt || run.admissionDeferred)) return launchRun(run, ports);
   const observed = await (ports.observe ?? (r => observeMaintenanceRun(r, ports.sources)))(run);
-  if (!maintenanceClaimCurrent(run, ports)) return "maintenance: claim replaced";
+  if (!maintenanceClaimCurrent(run, ports)) { reconcileLostMaintenanceAuditClaim(run, "claim replaced after worker observation", undefined, ports.sources.now()); return "maintenance: claim replaced"; }
   if (observed.conversationId) run = patchMaintenanceRun(run.runId, { conversationId: observed.conversationId, launchId: observed.launchId ?? run.launchId, transcriptPath: observed.path ?? run.transcriptPath })!;
   if (observed.state === "failed") settle(run, { state: "failed", failure: observed.failure ?? { kind: "launch-failed", detail: "launch failed" } }, ports);
   else if (observed.state === "ended") {

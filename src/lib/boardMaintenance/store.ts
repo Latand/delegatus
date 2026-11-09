@@ -146,6 +146,24 @@ export function settleMaintenanceAudit(run: MaintenanceRun, patch: Partial<Maint
     return next;
   });
 }
+/** Release a stale audit slot while retaining its frozen input as an explicit gap. Never adopts or replays the worker. */
+export function reconcileLostMaintenanceAuditClaim(run: MaintenanceRun, reason = "maintenance authority changed", candidate?: MaintenanceAuditInput, now = Date.now()): MaintenanceRun | null {
+  const auditInput = run.audit ?? candidate;
+  return collection(true)!.boundedPatch(8, tx => {
+    const held = tx.get(`r:${run.runId}`) as MaintenanceRun | null;
+    const project = tx.get(`p:${run.project}`) as MaintenanceProject | null;
+    if (!held || !project || project.currentRunId !== run.runId || !maintenanceRunIsLive(held)) return null;
+    const source = held.audit ?? auditInput;
+    if (source && ((project.audit?.revision ?? 0) !== source.revision && (project.audit?.revision ?? 0) + 1 !== source.revision)) return null;
+    if (held.audit && source && held.audit.revision !== source.revision) return null;
+    const audit = source ? { ...source, revision: project.audit?.revision ?? source.revision, window: { ...source.window, gaps: [...new Set([...source.window.gaps, "claim-replaced"]) ] } } : undefined;
+    const endedAt = new Date(now).toISOString();
+    const next = { ...held, ...(audit ? { audit, log: { ...held.log, audit: { version: 1 as const, rows: [], manifest: null, complete: false, error: "claim-replaced", window: audit.window } } } : {}), state: "failed" as const, endedAt, failure: { kind: "launch-failed" as const, detail: reason } };
+    tx.put(next);
+    tx.put({ ...project, currentRunId: null, ...(audit ? { audit: { version: 1, revision: (project.audit?.revision ?? 0) + 1, through: project.audit?.through ?? null, window: audit.window } } : {}) });
+    return next;
+  });
+}
 export function recordMaintenanceChange(runId: string, change: MaintenanceChange): void {
   collection(true)!.boundedPatch(2, tx => {
     const run = tx.get(`r:${runId}`) as MaintenanceRun | null;

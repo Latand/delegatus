@@ -3,7 +3,7 @@ import { detectedVerdict } from "@/lib/spawnNotice/sweep";
 import type { MaintenanceRun, MaintenanceRunLog, MaintenanceAttention, MaintenanceLeftAlone, MaintenanceFailureKind } from "./types";
 import { workEvidenceLines, type TaskWorkEvidence } from "./evidence";
 import { maintenanceDecision } from "./decision";
-import { parseMaintenanceAudit } from "./audit";
+import { parseMaintenanceAudit } from "./auditReport";
 import type { MaintenanceAuditInput } from "./types";
 import type { BoardTask } from "@/lib/tasks/types";
 export { maintenanceDecision } from "./decision";

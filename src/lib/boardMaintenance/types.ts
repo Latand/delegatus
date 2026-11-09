@@ -94,6 +94,8 @@ export interface MaintenanceAuditSource {
   artifact: string | null;
   size: number;
   from: { seq: number; part?: number; requestIndex: number } | null;
+  /** Physical transcript scan boundary; rebuilt from the same artifact after restart. */
+  scanThrough?: { seq: number; part?: number; at: string } | null;
   complete: boolean;
   gap: string | null;
   decision?: { roundId: string; revision: number; taskId: string | null; deliveryKey?: string; operationId?: string };
