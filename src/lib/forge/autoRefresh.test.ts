@@ -173,6 +173,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (!refreshed) {
         refreshed = lane(`refresh-${byKey.size + 1}`);
         refreshed.state = "running";
+        refreshed.repoDir = request.repoDir;
         refreshed.stages = request.stages.map(stage => ({ ...stage,
           effectiveRole: stage.id === "review" ? REVIEWER : BUILDER })) as Pipeline["stages"];
         refreshed.runs = refreshed.stages.map(stage => ({ stageId: stage.id, attempts: stage.id === "fix" ? []
@@ -2647,6 +2648,7 @@ test("a merged head releases the next refresh", async () => {
   await h.sweep();
   h.pipeline("refresh-1").state = "completed";
   h.pipeline("refresh-1").merge = { ...h.merge("queued-0")!, state: "merged" };
+  delete h.pipeline("refresh-1").merge!.refresh;
   await h.sweep();
   expect(h.creates).toHaveLength(2);
   expect(h.merge("queued-1")?.state).toBe("refreshing");
@@ -2728,7 +2730,7 @@ for (const change of ["visible", "running", "different base"] as const) test(`a 
   await h.sweep();
   expect(raced).toBe(true);
   expect(h.merge("queued-0")).toMatchObject({ state: "refreshing", reason: null });
-  expect(h.creates).toHaveLength(change === "running" ? 1 : 2);
+  expect(h.creates).toHaveLength(change === "visible" ? 2 : 1);
   expect(h.writes).toHaveLength(0);
 });
 
@@ -2978,7 +2980,7 @@ test("a green conflicting PR keeps waiting with its conflict and capacity holder
   expect(h.pipeline("refresh-1")).toEqual(owner);
 });
 
-test("an out-of-window refresh defers an unattached reservation until capacity returns", async () => {
+test("an out-of-window UNKNOWN create reconciles its original place without admitting another PR", async () => {
   const h = queuedRefreshes(undefined, 4);
   h.setCreateMode("throw");
   await h.sweep();
@@ -2992,7 +2994,7 @@ test("an out-of-window refresh defers an unattached reservation until capacity r
   h.pipeline("queued-0").merge!.requestedAt = iso(T0 - 1);
   await h.run(5 * MERGE_POLL_MS);
   expect(h.creates).toHaveLength(2);
-  expect(h.merge("queued-0")!.refresh).toEqual(reservation);
+  expect(h.merge("queued-0")!.refresh).toEqual({ ...reservation, pipelineId: "refresh-1" });
   expect(h.pipeline("refresh-1")).toEqual(owner);
   expect(h.writes).toEqual([]);
   expect(h.merges()).toEqual([]);
@@ -3001,7 +3003,8 @@ test("an out-of-window refresh defers an unattached reservation until capacity r
   h.pipeline("refresh-1").delivery!.active = false;
   await h.sweep();
   expect(h.creates).toHaveLength(3);
-  expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-2");
+  expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-1");
+  expect(h.merge("queued-1")!.refresh!.pipelineId).toBe("refresh-2");
 });
 
 test("out-of-window refresh capacity is reconstructed after a process restart", async () => {
@@ -3083,7 +3086,7 @@ test("a second ready slot merges while refresh slots remain full", async () => {
   expect(h.merge("queued-2")?.state).toBe("refreshing");
 });
 
-test("persisted refresh reservations replay only within the head limit", async () => {
+test("conflicting persisted UNKNOWN reservations retain capacity without another dispatch", async () => {
   const h = queuedRefreshes();
   h.setCreateMode("throw");
   await h.sweep();
@@ -3095,8 +3098,10 @@ test("persisted refresh reservations replay only within the head limit", async (
   }
   h.setCreateMode("ok");
   await h.run(5 * MERGE_POLL_MS);
-  expect(h.creates).toHaveLength(2); // First failed call, then the head replay.
-  expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-1");
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-0")!.refresh!.pipelineId).toBeNull();
+  expect(h.merge("queued-0")!.refresh!.requestedAt).toBe(reservation.requestedAt);
+  expect(h.merge("queued-0")!.refresh!.capacityDeadline).toBe(reservation.capacityDeadline);
   expect(h.merge("queued-1")!.refresh!.pipelineId).toBeNull();
 });
 
@@ -3224,4 +3229,77 @@ test("refresh stages defer tier and account selection to live launch capacity", 
     expect(stage.serviceTier).toBeUndefined();
   }
   expect(request.stages.map(stage => stage.role?.roleId)).toEqual(["merger", "reviewer", "merger"]);
+});
+
+
+test.each(["paused", "needs_decision"] as const)("an unresolved capacity yield retains the slot in %s until positive settlement", async state => {
+  const h = queuedRefreshes(undefined, 2);
+  await h.sweep();
+  const child = h.pipeline("refresh-1");
+  child.state = state;
+  const reservation = h.merge("queued-0")!.refresh!;
+  child.runs[0]!.attempts[0]!.suspension = { reason: "pause", detail: "capacity stop pending", requestedAt: iso(T0),
+    capacityYield: { reservationKey: reservation.key, deadline: reservation.capacityDeadline!, headBefore: HEAD_A,
+      authority: "0".repeat(64), target: { stageId: "refresh", attempt: 1, launchId: child.runs[0]!.attempts[0]!.launchId,
+        conversationId: child.runs[0]!.attempts[0]!.conversationId, agentPath: child.runs[0]!.attempts[0]!.agentPath,
+        paneId: child.runs[0]!.attempts[0]!.paneId } } };
+  h.advance(60 * 60_000);
+  await h.sweep();
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")!.reason).toContain("refresh-1");
+  child.refreshOf!.capacity = { key: reservation.key, digest: reservation.digest, head: reservation.head,
+    requestedAt: reservation.requestedAt, deadline: reservation.capacityDeadline! };
+  child.runs[0]!.attempts[0]!.suspension!.stoppedAt = iso(h.now());
+  child.runs[0]!.attempts[0]!.suspension!.capacityYield!.headAfter = HEAD_A;
+  child.runs[0]!.attempts[0]!.suspension!.capacityYield!.settledAt = iso(h.now());
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  expect(h.pipeline("refresh-1").delivery!.active).toBe(true);
+});
+
+test("an expired UNKNOWN create keeps its single place and immutable origin without replay", async () => {
+  const h = queuedRefreshes(undefined, 2);
+  h.setCreateMode("throw");
+  await h.sweep();
+  const reservation = structuredClone(h.merge("queued-0")!.refresh!);
+  h.advance(60 * 60_000);
+  h.setCreateMode("ok");
+  await h.sweep();
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-0")!.refresh).toEqual(reservation);
+  expect(h.merge("queued-0")!.reason).toContain("UNKNOWN");
+  expect(h.merge("queued-1")!.reason).toContain("repository capacity");
+});
+
+test.each(["target", "time"] as const)("a keyed child with conflicting %s cannot release its original reservation", async change => {
+  const h = queuedRefreshes(undefined, 2);
+  await h.sweep();
+  const child = h.pipeline("refresh-1");
+  child.state = "paused";
+  if (change === "target") child.delivery!.target.branch = "refs/heads/replacement";
+  else h.merge("queued-0")!.refresh!.requestedAt = "unreadable-origin";
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")!.reason).toContain("repository capacity");
+});
+
+test.each(["control", "requirements", "tasks", "policy"] as const)("refresh creation refuses %s replaced during its last lineage await", async change => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  let observed = false;
+  h.ports.activeSeat = async () => {
+    await Promise.resolve(); observed = true;
+    const parent = h.pipeline("finished");
+    if (change === "control") parent.controlGeneration = "replacement-control";
+    if (change === "requirements") parent.spec = "replacement requirements";
+    if (change === "tasks") parent.taskIds = ["replacement-task"];
+    if (change === "policy") h.setSetting({ changedAt: iso(T0 + 1) });
+    return { srcPath: null, srcConversationId: "seat-one" };
+  };
+  await h.sweep();
+  expect(observed).toBe(true);
+  expect(h.creates).toHaveLength(0);
+  expect(h.merge("finished")!.refresh!.pipelineId).toBeNull();
+  expect(h.writes).toHaveLength(0);
 });

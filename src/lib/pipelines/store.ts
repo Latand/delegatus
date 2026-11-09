@@ -1,3 +1,4 @@
+import { refreshCapacityOrigin } from "./refreshCapacity";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
@@ -13,6 +14,7 @@ import { controllerPipelineKeys, controllerReferences, inheritControllerGuards }
 import { StateLockDeferredError, outsideStateLockWait, stateLockAttempt, stateLockProcessKind, waitForStateLock } from "@/lib/state/lockWait";
 import { withWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
+import { Database } from "bun:sqlite";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -257,6 +259,30 @@ function isRuntimeSwitches(value: unknown): boolean {
       && item.handoff.bytes === Buffer.byteLength(item.handoff.prompt) && item.handoff.bytes <= 32000));
 }
 
+function isCapacityYield(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const marker = value as Record<string, unknown>;
+  const target = marker.target as Record<string, unknown> | undefined;
+  const date = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value));
+  const sha = (value: unknown) => typeof value === "string" && /^[a-f0-9]{40}$/i.test(value);
+  return typeof marker.reservationKey === "string" && !!marker.reservationKey && date(marker.deadline)
+    && (marker.headBefore === undefined || marker.headBefore === null || sha(marker.headBefore)) && (marker.headAfter === undefined || sha(marker.headAfter))
+    && (marker.settledAt === undefined || date(marker.settledAt))
+    && (marker.continuationWithdrawnAt === undefined || date(marker.continuationWithdrawnAt))
+    && (marker.stopRequestedAt === undefined || date(marker.stopRequestedAt))
+    && typeof marker.authority === "string" && /^[a-f0-9]{64}$/.test(marker.authority)
+    && !!target && typeof target.stageId === "string" && Number.isSafeInteger(target.attempt) && Number(target.attempt) > 0
+    && [target.launchId, target.conversationId, target.agentPath, target.paneId].every(isNullableString);
+}
+
+function isRefreshCapacity(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const capacity = value as Record<string, unknown>;
+  return typeof capacity.key === "string" && !!capacity.key && typeof capacity.digest === "string" && /^[a-f0-9]{64}$/i.test(capacity.digest)
+    && typeof capacity.head === "string" && /^[a-f0-9]{40}$/i.test(capacity.head)
+    && [capacity.requestedAt, capacity.deadline].every(value => typeof value === "string" && Number.isFinite(Date.parse(value)));
+}
+
 function isStageSuspension(value: unknown): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -268,7 +294,8 @@ function isStageSuspension(value: unknown): boolean {
     && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
     && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt))
     && (suspension.retryRequestedAt === undefined || dated(suspension.retryRequestedAt))
-    && (suspension.hold === undefined || isSuspensionHold(suspension.hold));
+    && (suspension.hold === undefined || isSuspensionHold(suspension.hold))
+    && (suspension.capacityYield === undefined || isCapacityYield(suspension.capacityYield));
 }
 
 function isSuspensionHold(value: unknown): boolean {
@@ -940,13 +967,16 @@ const isStringList = (value: unknown): value is string[] => Array.isArray(value)
 function isRefreshOf(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const refresh = value as Record<string, unknown>;
-  return typeof refresh.pipelineId === "string" && !!refresh.pipelineId && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base);
+  return (refresh.capacity === undefined || isRefreshCapacity(refresh.capacity))
+    && (refresh.capacityRefusal === undefined || typeof refresh.capacityRefusal === "string")
+    && typeof refresh.pipelineId === "string" && !!refresh.pipelineId && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base);
 }
 
 function isMergeRefresh(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const refresh = value as Record<string, unknown>;
-  return (refresh.baseBranch === undefined || typeof refresh.baseBranch === "string" && !!refresh.baseBranch)
+  return (refresh.capacityDeadline === undefined || typeof refresh.capacityDeadline === "string" && Number.isFinite(Date.parse(refresh.capacityDeadline)))
+    && (refresh.baseBranch === undefined || typeof refresh.baseBranch === "string" && !!refresh.baseBranch)
     && Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
     && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base)
     && typeof refresh.head === "string" && /^[0-9a-f]{40}$/i.test(refresh.head)
@@ -1595,6 +1625,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       : []);
   const revived: Pipeline = {
     ...pipeline,
+    refreshOf: pipeline.refreshOf ? structuredClone(pipeline.refreshOf) : undefined,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
@@ -1640,7 +1671,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
             ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
             ...(attempt.roleMemoryDelivery ? { roleMemoryDelivery: { ...attempt.roleMemoryDelivery } } : {}),
-            ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
+            ...(attempt.suspension ? { suspension: structuredClone(attempt.suspension) } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
@@ -2123,6 +2154,43 @@ export function pipelineDeliveryLookup(query: { requestKey: string } | { reposit
   return pipelineStore().pipelineLookup(query);
 }
 
+/** Same repository only, through the existing delivery index. Refuse a
+ * truncated candidate set rather than granting capacity from a partial read. */
+export function pipelineRefreshCapacityCandidates(repository: string): Pipeline[] {
+  pipelineStore();
+  const db = new Database(stateDatabaseFile(), { readonly: true });
+  try {
+    const rows = db.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY pipeline_delivery_history
+      WHERE collection IN ('pipelines', 'pipelines_archive') AND collection = 'pipelines' AND json_valid(value_json)
+        AND json_extract(value_json, '$.delivery.target.repository') = ?
+        AND (json_extract(value_json, '$.refreshOf') IS NOT NULL
+          AND (json_extract(value_json, '$.state') NOT IN ('closed','completed')
+            OR json_extract(value_json, '$.refreshOf.capacityRefusal') IS NOT NULL
+            OR EXISTS (SELECT 1 FROM json_each(value_json, '$.runs') run, json_each(run.value, '$.attempts') attempt
+              WHERE json_extract(attempt.value, '$.suspension.capacityYield') IS NOT NULL
+              ))
+          OR json_extract(value_json, '$.merge.refresh.key') IS NOT NULL
+            AND (json_extract(value_json, '$.merge.refresh.pipelineId') IS NULL OR json_extract(value_json, '$.merge.state') = 'refreshing'))
+      LIMIT 257`).all(repository);
+    if (rows.length > 256) throw new PipelineStoreError("refresh capacity candidates exceed the bounded read");
+    const result = rows.map(row => findPipelineRecord(row.row_key));
+    if (result.some(row => !row)) throw new PipelineStoreError("refresh capacity candidate disappeared during admission");
+    const pipelines = result as Pipeline[];
+    for (const row of [...pipelines]) {
+      if (row.refreshOf && !pipelines.some(parent => parent.id === row.refreshOf!.pipelineId)) {
+        const parent = findPipelineRecord(row.refreshOf.pipelineId);
+        if (parent) pipelines.push(parent);
+      }
+      const reservation = row.merge?.refresh;
+      if (!reservation) continue;
+      const child = pipelineDeliveryLookup({ requestKey: reservation.key });
+      if (child && !pipelines.some(row => row.id === child.id)) pipelines.push(child);
+    }
+    return pipelines;
+  } finally { db.close(); }
+}
+
 export function unclaimedPipelinePublications(): Pipeline[] {
   return pipelineStore().unclaimedPipelinePublications();
 }
@@ -2179,11 +2247,21 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   admitReplay?: (pipeline: Pipeline) => void;
   onReplay?: () => void;
 } = {}): Promise<Pipeline> {
+  const validateRefresh = (candidate: Pipeline, tx: StateBoundedTransaction<Pipeline>) => {
+    if (!candidate.refreshOf?.capacity) return;
+    const origin = refreshCapacityOrigin({ ...candidate, delivery: { ...candidate.delivery!, target } },
+      tx.get(candidate.refreshOf.pipelineId) ?? findPipelineRecord(candidate.refreshOf.pipelineId));
+    if ("reason" in origin) throw new Error(origin.reason);
+  };
   const replay = (tx: StateBoundedTransaction<Pipeline>) => {
     options.assertAuthority?.();
     if (pipeline.creationRequest) {
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {
+        validateRefresh(existing, tx);
+        if (pipeline.refreshOf?.capacity && JSON.stringify(pipeline.refreshOf.capacity) !== JSON.stringify(existing.refreshOf?.capacity)) {
+          throw new Error("idempotency_conflict: refresh capacity capsule changed");
+        }
         options.admitReplay?.(existing);
         if (existing.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
         options.onReplay?.();
@@ -2197,6 +2275,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     if (existing) return existing;
     if (preparationFailure) throw preparationFailure.error;
     options.admit?.();
+    validateRefresh(pipeline, tx);
     const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
