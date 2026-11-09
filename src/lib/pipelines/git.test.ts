@@ -3725,7 +3725,7 @@ test("the approval's remote head read is time-bounded and tells transport failur
   expect((await answer({ code: 0, stdout: "" })).result).toEqual({ ok: false, transient: false, error: "the remote pipeline branch has no exact commit SHA" });
 });
 
-test.each(["deadline", "cancellation", "denied", "transport"] as const)("portable real remote transport preserves outcome and owned cleanup: %s", async mode => {
+test.each(["deadline", "deadline-delayed-marker", "ready-child-expiry", "cancellation", "denied", "transport"] as const)("portable real remote transport preserves outcome and owned cleanup: %s", async mode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-remote-"));
   const abort = new AbortController();
   const sentinel = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
@@ -3735,7 +3735,7 @@ test.each(["deadline", "cancellation", "denied", "transport"] as const)("portabl
     const bin = path.join(root, "bin"); fs.mkdirSync(bin);
     fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
     const marker = path.join(root, "transport-pids"), helper = path.join(root, "transport");
-    fs.writeFileSync(helper, `#!/bin/sh\necho "$PPID $$" > "$TRANSPORT_PIDS"\n` +
+    fs.writeFileSync(helper, `#!/bin/sh\n${mode === "deadline-delayed-marker" ? '"' + Bun.which("sleep")! + '" 6\n' : ""}echo "$PPID $$" > "$TRANSPORT_PIDS"\n` +
       (mode === "denied" ? "echo 'Permission denied (publickey).' >&2\nexit 255\n"
         : mode === "transport" ? "echo 'Connection refused' >&2\nexit 255\n"
         : `exec "${Bun.which("sleep")!}" 30\n`), { mode: 0o700 });
@@ -3744,31 +3744,42 @@ test.each(["deadline", "cancellation", "denied", "transport"] as const)("portabl
     let actual: Awaited<ReturnType<typeof realExec>> | undefined;
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       expect(options?.timeoutMs).toBe(5_000);
-      actual = await realExec(command, args, cwd, { ...env, PATH: bin, GIT_SSH_COMMAND: helper, GIT_SSH_VARIANT: "ssh", TRANSPORT_PIDS: marker }, { ...options, signal: abort.signal });
+      actual = await realExec(command, args, cwd, { ...env, PATH: bin, GIT_SSH_COMMAND: helper, GIT_SSH_VARIANT: "ssh", TRANSPORT_PIDS: marker }, { ...options, timeoutMs: mode === "ready-child-expiry" ? 500 : options?.timeoutMs, signal: abort.signal });
       return actual;
     };
     expect(Bun.which("timeout", { PATH: bin })).toBeNull();
     expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
     pending = currentPipelineRemoteBranchHead(subject, exec);
-    if (mode === "cancellation") {
+    if (mode === "cancellation" || mode === "ready-child-expiry") {
       for (let n = 0; n < 500 && !fs.existsSync(marker); n++) await Bun.sleep(10);
       expect(fs.existsSync(marker)).toBe(true);
-      abort.abort();
+      if (mode === "cancellation") abort.abort();
     }
     const result = await pending;
-    if (mode === "deadline" || mode === "cancellation") {
-      expect(actual).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "deadline" ? "command timed out after 5000ms" : "command cancelled" });
+    if (mode === "deadline" || mode === "deadline-delayed-marker" || mode === "ready-child-expiry" || mode === "cancellation") {
+      expect(actual).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "cancellation" ? "command cancelled" : `command timed out after ${mode === "ready-child-expiry" ? 500 : 5_000}ms` });
       expect(result).toEqual({ ok: false, transient: true, error: "checking the remote pipeline branch: git remote read timed out after 5s" });
     } else {
       expect(actual?.code).toBe(128);
       expect(actual?.signal).toBeNull();
       expect(result).toMatchObject({ ok: false, transient: mode === "transport", error: expect.stringContaining(mode === "denied" ? "Permission denied" : "Connection refused") });
     }
-    const pids = fs.readFileSync(marker, "utf8").trim().split(/\s+/).map(Number);
-    expect(pids).toHaveLength(2);
     const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-    for (let n = 0; n < 200 && pids.some(alive); n++) await Bun.sleep(10);
-    expect(pids.map(alive)).toEqual([false, false]);
+    if (mode === "ready-child-expiry" || mode === "cancellation" || mode === "denied" || mode === "transport") {
+      expect(fs.existsSync(marker)).toBe(true);
+      const pids = fs.readFileSync(marker, "utf8").trim().split(/\s+/).map(Number);
+      expect(pids).toHaveLength(2);
+      for (let n = 0; n < 200 && pids.some(alive); n++) await Bun.sleep(10);
+      expect(pids.map(alive)).toEqual([false, false]);
+    } else if (fs.existsSync(marker)) {
+      const recorded = fs.readFileSync(marker, "utf8").trim();
+      if (recorded) {
+        const pids = recorded.split(/\s+/).map(Number);
+        expect(pids).toHaveLength(2);
+        for (let n = 0; n < 200 && pids.some(alive); n++) await Bun.sleep(10);
+        expect(pids.map(alive)).toEqual([false, false]);
+      }
+    }
     expect(sentinel.exitCode).toBeNull();
     expect(alive(sentinel.pid)).toBe(true);
   } finally {
