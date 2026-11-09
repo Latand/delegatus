@@ -139,7 +139,12 @@ test("a reply below a long bot answer resumes the same owner conversation with o
     continue: async (turn, prompt) => {
       continuations++; expect(turn.conversationId).toBe("conversation_bounded_chain");
       assertStructuredTextEnvelope(prompt);
-      expect(JSON.parse(prompt.match(/<conversation>\n([\s\S]*?)\n<\/conversation>/)![1]!)).toEqual([next]);
+      expect(JSON.parse(prompt.match(/<conversation>\n([\s\S]*?)\n<\/conversation>/)![1]!))
+        .toEqual([{ ...next, text: undefined, text_reference: "owner_request.text" }]);
+      expect(JSON.parse(prompt.match(/<owner_request>\n([\s\S]*?)\n<\/owner_request>/)![1]!))
+        .toEqual({ message_id: next.id, text: next.text, request_text: followup.input.request_text });
+      expect(JSON.parse(prompt.match(/<owner_instructions>\n([\s\S]*?)\n<\/owner_instructions>/)![1]!))
+        .toBe(followup.input.owner_instructions);
       return { ok: true, structured: true, target: turn.conversationId!, outcome: "delivered", operationId: "bounded-chain-reply",
         receipt: { operationId: "bounded-chain-reply", idempotencyKey: "bounded-chain-reply", conversationId: turn.conversationId!,
           kind: "send", status: "delivered", at: "2026-11-04T00:00:00Z", revision: 1 } };
@@ -157,6 +162,9 @@ test("a reply below a long bot answer resumes the same owner conversation with o
       .toMatchObject({ outcome: "answered", answer: { text: "Висновок пояснено" } });
     expect({ launches, continuations }).toEqual({ launches: 1, continuations: 1 });
     expect(delivered).toEqual([parent.text, "Висновок пояснено"]);
+    expect(readConversations().find(row => row.chatKey === "bounded-chain-fixture")).toMatchObject({
+      conversationId: "conversation_bounded_chain", state: "idle", seen: [root.id, parent.id, next.id],
+    });
   } finally { selected.mockRestore(); setSystemTime(); await service.close(); }
 });
 
@@ -182,8 +190,9 @@ for (const language of ["en", "uk"] as const) test(`an oversized mandatory ${lan
       launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_must_not_launch" } }; },
       observe: async () => ({ state: "ended", finalText: "must not run" }), stop: async () => {},
     } });
-    const human = language === "uk" ? "Не вдалося завершити запит. Спробуйте ще раз." : "Your request could not be completed. Please try again.";
-    expect(result).toMatchObject({ outcome: "answered", answer: { text: human } });
+    const human = language === "uk" ? "Обов’язковий контекст запиту завеликий. Скоротіть або розділіть запит і потрібні цитати."
+      : "The required request context is too large. Shorten or split the request and its required quotations.";
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: human, reply_to: request.input.respond_to } });
     expect(launches).toBe(0); expect(delivered).toEqual([human]);
     expect(Buffer.byteLength(human)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES);
   } finally { selected.mockRestore(); await service.close(); }

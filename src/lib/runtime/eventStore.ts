@@ -170,6 +170,7 @@ function validEvent(value: unknown): value is RuntimeEvent {
     }
     case "turn-ended":
       return nonEmptyString(event.turnId)
+        && (event.claudeResultUuid === undefined || (nonEmptyString(event.claudeResultUuid) && event.claudeResultUuid.length <= 128))
         && (event.status === "completed" || event.status === "interrupted" || event.status === "error");
     case "attention":
       return nonEmptyString(event.id) && nonEmptyString(event.method) && Object.hasOwn(event, "attention")
