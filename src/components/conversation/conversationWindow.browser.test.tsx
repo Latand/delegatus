@@ -7296,7 +7296,10 @@ describe("message document links", () => {
             if (phone) {
               expect(await close.evaluate(element => {
                 const rect = element.getBoundingClientRect();
-                return rect.width >= 44 && rect.height >= 44 && [[rect.left + 1, rect.top + 1], [rect.right - 1, rect.bottom - 1]]
+                return rect.width >= 44 && rect.height >= 44 && [
+                  [rect.left + 1, rect.top + rect.height / 2], [rect.right - 1, rect.top + rect.height / 2],
+                  [rect.left + rect.width / 2, rect.top + 1], [rect.left + rect.width / 2, rect.bottom - 1],
+                ]
                   .every(([x, y]) => element.contains(document.elementFromPoint(x!, y!)));
               })).toBe(true);
             }
