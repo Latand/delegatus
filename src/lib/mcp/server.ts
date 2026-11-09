@@ -24,7 +24,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { z } from "zod";
 import { textLengthError } from "@/lib/textLimits";
-import { normalizedUtf16Text, utf16Text } from "@/lib/textLimitSchema";
+import { normalizedUtf16Text, storedUtf16Text, utf16Text } from "@/lib/textLimitSchema";
 import { recordedCheckInput } from "@/lib/recordedChecks/input";
 import { pipelineResumeConditionSchema } from "@/lib/pipelines/pauseMetadata";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
@@ -62,6 +62,7 @@ import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/limits";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
+import { collapseSpaces } from "@/lib/tasks/summary";
 import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
 import { TASK_NOTE_LIMIT, TASK_DETAILS_LIMIT, TASK_SUMMARY_HEADLINE_LIMIT, TASK_SUMMARY_TEXT_LIMIT, TASK_SUMMARY_LEFT_LIMIT, TASK_COLORS, TASK_HOLD_KINDS, TASK_PRIORITIES } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
@@ -3899,7 +3900,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   stage_report: [
     "Add result for the task timeline; a stage that can finish its lane also supplies taskSummary for its tasks.",
     "Report the completion of the pipeline run stage THIS conversation is running.",
-    `Limits in UTF-16 code units: result ${MAX_STAGE_RESULT_CHARS}, summary/blockedReason ${MAX_STAGE_REPORT_SUMMARY_CHARS}, finding text ${MAX_STAGE_FINDING_CHARS - 5} (rendered finding ${MAX_STAGE_FINDING_CHARS}); at most ${MAX_STAGE_REPORT_FINDINGS} findings. Recommended summary target 1500. On length refusal, preserve complete findings in retained evidence and shorten the summary; retry the corrected payload with a new key after proved no effect.`,
+    `Limits in UTF-16 code units: result ${MAX_STAGE_RESULT_CHARS}, summary/blockedReason ${MAX_STAGE_REPORT_SUMMARY_CHARS}, finding text ${MAX_STAGE_FINDING_CHARS - 5} (rendered finding ${MAX_STAGE_FINDING_CHARS}); at most ${MAX_STAGE_REPORT_FINDINGS} findings. Summary, result and finding text also retain raw Unicode-code-point maxima of 2000, 160 and 1995 respectively. Recommended summary target 1500 normalized units. On length refusal, preserve complete findings in retained evidence and shorten the summary; retry the corrected payload with a new key after proved no effect.`,
     "Completion fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], a short summary, and optional blocked/blockedReason. Set blocked:true only when a fixer cannot proceed (cannot build, cannot run required checks, or a handed finding is impossible within the specification); it requires fail and a non-empty blockedReason. Prose never classifies blocked state.",
     "A successful acknowledgement carries the completion metadata and a bounded severity count; use get_pipeline with pipelineId and stageId to read the stored findings and summary. Pass cannot carry findings. Notes that block nothing go in the summary. A needs_decision puts its question, options and recommendation in the summary and carries no findings: a needs_decision that carries findings on a stage with a fail edge is routed to that stage as a fail.",
     "A fixable defect is fail, however partial your confidence in the call is; needs_decision is for what only the operator can unblock.",
@@ -3955,7 +3956,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
   ].join(" "),
-  publish_prototype_review: "Trimmed question text: 1–300 UTF-16 code units, recommended target 240; option label: 1–120, recommended target 90. Hard maxima remain 300/120. Preserve complete decision scope and option identity. Other text bounds in UTF-16 code units: clientRequestId 1–160, title 1–120 trimmed, variant name 1–60 trimmed, variant description 1–300 trimmed, caption 0–200, path 1–4096. Byte bounds: image 4194304, video 67108864, image set 50331648, total set 201326592; retained store 2147483648, at most 200 rounds, and task history at most 30 rounds/1048576 metadata bytes. For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (the durable evidence folder and legacy /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "Trimmed question text: 1–300 Unicode code points, recommended target 240; option label: 1–120, recommended target 90. Hard maxima remain 300/120. Preserve complete decision scope and option identity. Other text bounds in Unicode code points: clientRequestId 1–160, title 1–120 trimmed, variant name 1–60 trimmed, variant description 1–300 trimmed, caption 0–200, path 1–4096. Byte bounds: image 4194304, video 67108864, image set 50331648, total set 201326592; retained store 2147483648, at most 200 rounds, and task history at most 30 rounds/1048576 metadata bytes. For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (the durable evidence folder and legacy /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id; decision.skipped:true means the operator took the recommendations, and an answer's skipped:true (no options) means the operator set that question aside as already decided or no longer relevant: do not ask it again. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
@@ -4251,9 +4252,9 @@ const taskStepsInputSchema = z.array(z.object({
 })).max(TASK_STEPS_LIMIT, { error: issue => `steps must contain at most ${TASK_STEPS_LIMIT} items; actual count is ${Array.isArray(issue.input) ? issue.input.length : 0}` }).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
 const taskSummaryInputSchema = z.object({
-  headline: utf16Text(TASK_SUMMARY_HEADLINE_LIMIT, 1),
-  text: utf16Text(TASK_SUMMARY_TEXT_LIMIT, 1),
-  left: utf16Text(TASK_SUMMARY_LEFT_LIMIT).optional(),
+  headline: storedUtf16Text(TASK_SUMMARY_HEADLINE_LIMIT, 1, collapseSpaces, "whitespace collapse and trimming"),
+  text: storedUtf16Text(TASK_SUMMARY_TEXT_LIMIT, 1, collapseSpaces, "whitespace collapse and trimming"),
+  left: storedUtf16Text(TASK_SUMMARY_LEFT_LIMIT, 0, collapseSpaces, "whitespace collapse and trimming").optional(),
 });
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
@@ -4506,15 +4507,15 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).meta({ allOf: [{ if: { properties: { action: { const: "resolve-decision" } }, required: ["action"] }, then: { required: ["answer", "expectedStageId", "expectedAttempt", "expectedRevision"], properties: { expectedAttempt: { minimum: 1 }, clientRequestId: { maxLength: 200, "x-length-unit": "UTF-16 code units" } } } }] }),
   recorded_check: recordedCheckInput.extend({ clientRequestId: clientRequestIdSchema }).strict(),
   stage_report: z.object({
-    result: utf16Text(MAX_STAGE_RESULT_CHARS).optional().describe("One line for the task's timeline: what this stage concluded, in the operator's language. Hard maximum 160 UTF-16 code units; recommended target 120."),
+    result: storedUtf16Text(MAX_STAGE_RESULT_CHARS, 0, collapseSpaces, "whitespace collapse and trimming").optional().describe("One line for the task's timeline: what this stage concluded, in the operator's language. Raw maximum 160 Unicode code points; after whitespace collapse and trimming, hard maximum 160 UTF-16 code units. Recommended target 120 normalized units."),
     taskSummary: taskSummaryInputSchema.optional().describe("For a stage that can finish its lane: the task as it now stands, for the person returning to it. Applied to the lane's tasks when the lane completes on this pass."),
     clientRequestId: clientRequestIdSchema,
     verdict: z.enum(["pass", "fail", "needs_decision"])
       .describe("pass when the stage's contract is complete, notes that block nothing going in the summary. fail when the work is not done: for a review, the findings that stand; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage, with the question in the summary and no findings."),
     findings: z.array(z.object({
       severity: z.enum(STAGE_FINDING_SEVERITIES).describe("P0 highest, P3 lowest. Findings are ranked by it."),
-      text: utf16Text(MAX_STAGE_FINDING_CHARS - 5, 1).describe(
-        `What is wrong and where (file:line, or the surface and viewport), how to show it fails, the fix intent and its acceptance. Claim no head, pull request or declared output: the server reads that provenance itself. A finding is recorded in its rendered form "P1 — text", so text is limited to ${MAX_STAGE_FINDING_CHARS - 5} UTF-16 code units to preserve it in the ${MAX_STAGE_FINDING_CHARS}-unit record. Recommended target 1500.`,
+      text: storedUtf16Text(MAX_STAGE_FINDING_CHARS - 5, 1, value => value.trim(), "trimming").describe(
+        `What is wrong and where (file:line, or the surface and viewport), how to show it fails, the fix intent and its acceptance. Claim no head, pull request or declared output: the server reads that provenance itself. A finding is recorded in its rendered form "P1 — text", so raw text is limited to ${MAX_STAGE_FINDING_CHARS - 5} Unicode code points and trimmed text to ${MAX_STAGE_FINDING_CHARS - 5} UTF-16 code units to preserve it in the ${MAX_STAGE_FINDING_CHARS}-unit record. Recommended target 1500.`,
       ),
     })).max(MAX_STAGE_REPORT_FINDINGS).optional()
       .describe("Unresolved work, ranked. Empty or omitted for pass, which cannot carry findings, and for needs_decision, whose findings would send a stage with a fail edge to its fix stage."),
@@ -4522,8 +4523,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Set true only when the fixer cannot proceed: cannot build, cannot run required checks, or a handed finding is impossible within the specification. Requires verdict fail and blockedReason; parks the fix stage even with a new committed head."),
     blockedReason: utf16Text(MAX_STAGE_REPORT_SUMMARY_CHARS, 1, true).optional()
       .describe("Hard maximum 2000 UTF-16 code units after trimming; recommended target 1500. Required reason when blocked:true. Retained independently of prose and output truncation; requires blocked:true."),
-    summary: utf16Text(MAX_STAGE_REPORT_SUMMARY_CHARS).optional()
-      .describe("Hard maximum 2000 UTF-16 code units; recommended target 1500. What was done, in a few sentences, with any notes that block nothing; for needs_decision, the question, the options and your recommendation. Shown on the card and relayed to the next stage."),
+    summary: storedUtf16Text(MAX_STAGE_REPORT_SUMMARY_CHARS, 0, value => value.trim(), "trimming").optional()
+      .describe("Raw maximum 2000 Unicode code points; trimmed hard maximum 2000 UTF-16 code units. Recommended target 1500 normalized units. What was done, in a few sentences, with any notes that block nothing; for needs_decision, the question, the options and your recommendation. Shown on the card and relayed to the next stage."),
     stageId: z.string().min(1).optional()
       .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
@@ -4555,7 +4556,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       why: lessonTextSchema(1, WHY_MAX_CHARS).describe("One line of provenance, kept out of startup instructions: 1–160 normalized Unicode code points, at least 16 letters or digits after NFKC matching normalization. Recommended target 120; hard maximum 160."),
     }).strict().optional(),
     rewrite: z.object({
-      id: z.string().trim().min(1).max(128).describe("An active rule this stage reads; its id and scope stay. 1–128 UTF-16 code units after trimming. Copy the exact id; never shorten it."),
+      id: z.string().trim().min(1).max(128).describe("An active rule this stage reads; its id and scope stay. 1–128 Unicode code points after trimming. Copy the exact id; never shorten it."),
       rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS),
       why: lessonTextSchema(1, WHY_MAX_CHARS),
     }).strict().optional(),
@@ -5168,7 +5169,7 @@ function shortenSchemaDescriptions<T extends z.ZodType>(schema: T): T {
 
 // The hook supplies this transport proof automatically. It is never part of
 // the logical arguments, their digest, downstream payload or durable answer.
-for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].safeExtend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") });
+for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].safeExtend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") }).meta(TOOL_INPUT_SCHEMAS[name].meta() ?? {});
 
 // Build fixed protocol schemas once beside the tool definitions.
 // Invalid optional task fields still reach the strict
@@ -5183,11 +5184,11 @@ export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(tool
     proposal: schema.shape.proposal.catch(() => null),
   })];
   if (toolName !== "create_task" && toolName !== "update_task") return [toolName, schema];
-  const transport = schema.safeExtend(Object.fromEntries(
+  const transport = z.object(schema.shape).passthrough().meta(schema.meta() ?? {}).safeExtend(Object.fromEntries(
     Object.entries(schema.shape).filter(([field, fieldSchema]) => fieldSchema.isOptional() || toolName === "create_task" && field === "dueAt")
       .map(([field, fieldSchema]) => [field, (field === "dueAt" && toolName === "create_task" ? fieldSchema.optional() : fieldSchema)
         .catch((context: { input: unknown } | undefined) => context?.input)]),
-  ));
+  )).meta(schema.meta() ?? {});
   // Advertise the strict requirement while missing/invalid dates reach our
   // callback for TASK_DUE_REQUIRED, before any receipt is acquired.
   return [toolName, toolName === "create_task" ? transport.meta({

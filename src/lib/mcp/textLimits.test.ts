@@ -44,8 +44,8 @@ test.each([
   ["stage_report", "result", 160, (value: string) => ({ verdict: "pass", result: value }), unitText],
   ["stage_report", "blockedReason", 2000, (value: string) => ({ verdict: "fail", blocked: true, blockedReason: value }), unitText],
   ["stage_report", "findings.0.text", 1995, (value: string) => ({ verdict: "fail", findings: [{ severity: "P1", text: value }] }), unitText],
-  ["publish_prototype_review", "questions.0.text", 300, (value: string) => ({ ...form, questions: [{ ...form.questions[0], text: value }] }), unitText],
-  ["publish_prototype_review", "questions.0.options.0.label", 120, (value: string) => ({ ...form, questions: [{ ...form.questions[0], options: [{ label: value, recommended: true }, { label: "Wait" }] }] }), unitText],
+  ["publish_prototype_review", "questions.0.text", 300, (value: string) => ({ ...form, questions: [{ ...form.questions[0], text: value }] }), scalarText],
+  ["publish_prototype_review", "questions.0.options.0.label", 120, (value: string) => ({ ...form, questions: [{ ...form.questions[0], options: [{ label: value, recommended: true }, { label: "Wait" }] }] }), scalarText],
   ["pipeline_action", "answer", 12000, (value: string) => ({ pipelineId: "fixture", action: "resolve-decision", answer: value, expectedStageId: "build", expectedAttempt: 1, expectedRevision: "a".repeat(64) }), unitText],
   ["update_task", "note", 280, (value: string) => ({ taskId: task.id, note: value }), unitText],
   ["update_task", "details", 20000, (value: string) => ({ taskId: task.id, details: value }), unitText],
@@ -81,9 +81,9 @@ test("discovery exposes normalized bounds, existing UTF-16 units and guard depen
     const lessonField = schema("leave_lesson").properties!.lesson as { properties: Record<string, Record<string, unknown>> };
     expect(lessonField.properties.rule).toMatchObject({ "x-length-unit": "Unicode code points", "x-normalized-minLength": 20, "x-normalized-maxLength": 300 });
     const stageSummary = schema("stage_report").properties!.summary;
-    expect(stageSummary).toMatchObject({ maxLength: 2000, "x-length-unit": "UTF-16 code units" });
+    expect(stageSummary).toMatchObject({ maxLength: 2000, "x-length-unit": "Unicode code points", "x-normalized-length-unit": "UTF-16 code units", "x-normalized-maxLength": 2000 });
     expect(schema("update_task").dependentRequired).toMatchObject({ expectedProject: ["expectedRevision"], expectedRevision: ["expectedProject"] });
-    expect(schema("pipeline_action").allOf).toEqual(expect.arrayContaining([expect.objectContaining({ then: expect.objectContaining({ required: ["answer", "expectedStageId", "expectedAttempt", "expectedRevision"] }) })]));
+    expect(schema("pipeline_action").allOf).toMatchObject([{ then: { required: ["answer", "expectedStageId", "expectedAttempt", "expectedRevision"] } }]);
   });
 });
 
@@ -217,7 +217,9 @@ test("checklist count at twenty is preserved and twenty-one is refused with its 
   const steps = Array.from({ length: 21 }, (_, index) => ({ id: `check-${index}`, text: "Verify", state: "open" }));
   expect(patchTask([task], task.id, { steps: steps.slice(0, 20) }, now)).toMatchObject({ ok: true, task: { steps: steps.slice(0, 20) } });
   const refused = patchTask([task], task.id, { steps }, now);
-  expect(refused).toMatchObject({ ok: false, field: "steps", error: expect.stringContaining("actual count is 21") });
+  expect(refused).toMatchObject({ ok: false, field: "steps" });
+  if (refused.ok) throw Error("accepted an overage");
+  expect(refused.error).toContain("actual count is 21");
   await protocol(async (client, dispatched) => {
     const over = await client.callTool({ name: "update_task", arguments: { clientRequestId: "too-many-steps", taskId: task.id, steps } });
     expect(over.isError).toBe(true);
@@ -251,10 +253,11 @@ test.each(["note", "ref"] as const)("hold %s survives create, patch, nested step
       const stored = loadTasks(file)[0]!;
       expect((stored.hold ?? stored.steps?.[0]?.hold)?.[field]).toBe(exact);
       const refused = writer(over);
-      expect(refused).toMatchObject({ ok: false, error: expect.stringContaining(`actual length is ${max + 1}`) });
+      expect(refused).toMatchObject({ ok: false });
       if (refused.ok) throw Error("accepted an overage");
       expect(refused.error).toContain(`hold.${field}`);
       expect(refused.error).toContain(String(max));
+      expect(refused.error).toContain(`actual length is ${max + 1}`);
       expect(loadTasks(file)).toEqual([stored]);
     }
     const file = path.join(directory, "legacy.json");
@@ -289,10 +292,11 @@ test.each([["summary", 2000], ["result", 160], ["blockedReason", 2000]] as const
   const base = field === "blockedReason" ? { verdict: "fail", blocked: true } : { verdict: "pass" };
   expect(normalizeStageCompletion({ ...base, [field]: unitText(max) })).not.toHaveProperty("error");
   const refused = normalizeStageCompletion({ ...base, [field]: unitText(max + 1) });
-  expect(refused).toMatchObject({ code: "STAGE_REPORT_INVALID", error: expect.stringContaining(`actual length is ${max + 1}`) });
+  expect(refused).toMatchObject({ code: "STAGE_REPORT_INVALID" });
   if (!("error" in refused)) throw Error("accepted an overage");
   expect(refused.error).toContain(field);
   expect(refused.error).toContain(String(max));
+  expect(refused.error).toContain(`actual length is ${max + 1}`);
 });
 
 test.each([undefined, "receipt-query"])("wrong send receipt family is diagnostic and non-retryable with key %s", async clientRequestId => {
@@ -311,7 +315,7 @@ test.each([
 ])("pipeline adapter preserves deterministic $code refusal and original-key replay", async refusal => {
   const seen: unknown[] = [];
   const bindings = viewerMcpBindings(undefined, undefined, {
-    getPipelines: () => ({ pipelines: [] }),
+    attentionAuthority: () => ({ kind: "root", conversationId: "conversation_fixture" }),
     patchPipeline: async (_id: string, request: unknown) => { seen.push(request); return refusal; },
   } as never);
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());

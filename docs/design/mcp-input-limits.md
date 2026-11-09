@@ -20,15 +20,15 @@ receipt or provenance.
 | Task details, including the result of line edits | 20000 | 15000 | UTF-16 code units; replacements trim, line edits preserve indentation |
 | Task step id / reference | 40 / 200 | exact identity | ASCII bytes for ids; UTF-16 code units after trimming references |
 | Task step text | 120 | 90 | UTF-16 code units after trimming; at most 20 steps |
-| Task summary headline / text / left | 120 / 600 / 200 | 90 / 450 / 150 | UTF-16 code units; domain writer collapses whitespace |
+| Task summary headline / text / left | 120 / 600 / 200 | 90 / 450 / 150 | Raw Unicode code points and normalized UTF-16 code units; whitespace collapses |
 | Hold note / reference | 200 / 500 | 150 / exact reference | Note collapses whitespace; reference is preserved exactly, in UTF-16 code units |
 | Monitor authored instructions (combined) | 500 | 375 | UTF-16 code units of the merged instruction text |
 | Monitor prompt | 16000 | 12000 | Both raw and trimmed/redacted UTF-16 code units must fit |
-| Decision question / option label | 300 / 120 | 240 / 90 | UTF-16 code units after trimming |
+| Decision question / option label | 300 / 120 | 240 / 90 | Unicode code points after trimming |
 | Decision answer (`resolve-decision`) | 12000 | 9000 | UTF-16 code units; key at most 200 units |
-| Stage summary / blocked reason | 2000 | 1500 | UTF-16 code units; domain normalizer trims |
-| Stage result | 160 | 120 | UTF-16 code units; domain normalizer collapses whitespace |
-| Stage finding text | 1995 | 1500 | UTF-16 code units; severity prefix makes the stored bound 2000; at most 50 findings |
+| Stage summary / blocked reason | 2000 | 1500 | Trimmed UTF-16 code units; summary also keeps its raw 2000-code-point bound |
+| Stage result | 160 | 120 | Raw Unicode code points and normalized UTF-16 code units; whitespace collapses |
+| Stage finding text | 1995 | 1500 | Raw Unicode code points and trimmed UTF-16 code units; severity prefix makes the stored bound 2000 units; at most 50 findings |
 | Complete bridge report | 8192 | 6000 | UTF-8 bytes of summary, headings and items joined by newlines |
 
 The recognisability counter applies NFKC to its matching view; stored rule and
@@ -36,13 +36,15 @@ provenance text retain their Unicode spelling.
 
 An astral scalar occupies one Unicode code point, two UTF-16 code units and
 four UTF-8 bytes. Combining marks are separate code points. These limits count
-neither grapheme clusters nor the escaped JSON representation. Existing
-UTF-16 bounds remain unchanged. The affected schemas publish their unit explicitly;
-normalized lesson bounds use `x-normalized-minLength` and
+neither grapheme clusters nor the escaped JSON representation. Zod string bounds in this dependency version count Unicode code points.
+The form store and replica reader use that metric. Domain fields that use
+JavaScript string length retain their explicit UTF-16 bounds. The affected schemas publish their unit explicitly;
+normalized bounds use `x-normalized-minLength` and
 `x-normalized-maxLength`, because a raw JSON Schema `maxLength` would reject
-valid padded input before normalization. UTF-16 schemas retain their Zod
-bound and expose `x-length-unit` alongside it; JSON Schema's scalar-counting
-`maxLength` alone cannot describe that existing validator.
+valid padded input before normalization. A field with both a raw code-point
+bound and a normalized UTF-16 bound publishes both metrics. UTF-16 schemas check code units explicitly and expose `x-length-unit`.
+Their raw JSON Schema bounds are necessary scalar bounds; the explicit
+validator enforces the declared code-unit maximum.
 
 The protocol can check a raw field before a domain writer normalizes it.
 Draft within the raw bound as well as the normalized one. Task details line

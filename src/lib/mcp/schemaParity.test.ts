@@ -1099,7 +1099,7 @@ test("the published update_task schema advertises replaceable notes without auth
   await withProtocolClient(inertBindings(), async client => {
     const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
     const properties = tool.inputSchema.properties!;
-    expect(properties.note).toMatchObject({ type: ["string", "null"] });
+    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
     expect(properties.author).toBeUndefined();
     expect(properties.noteAuthor).toBeUndefined();
   });

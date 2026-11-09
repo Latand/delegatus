@@ -214,7 +214,7 @@ test("operator instructions over the storage limit are refused without dropping 
   const current = { ...defaultSeatTickSettings(PROJECT), reason: "Keep these instructions." };
   const result = change(current, { reason: "x".repeat(501) });
   /* Named as the total that would be stored: the unattributed line, a newline and the 501 sent. */
-  expect(result).toEqual({ ok: false, error: "instructions (reason) are 526 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+  expect(result).toEqual({ ok: false, error: "instructions (reason) must be at most 500 UTF-16 code units; actual length is 526. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance." });
   expect(current.reason).toBe("Keep these instructions.");
 });
 
@@ -364,8 +364,9 @@ test("monitor raw UTF-16 boundary refuses one over and retains the prior record"
   expect(kept.monitorPrompt).toBe(exact);
   for (const over of [exact + "я", " " + exact]) {
     const refused = change(kept, { monitorPrompt: over });
-    expect(refused).toMatchObject({ ok: false, error: expect.stringContaining("actual length is 16001") });
+    expect(refused).toMatchObject({ ok: false });
     if (refused.ok) throw Error("accepted an overage");
+    expect(refused.error).toContain("actual length is 16001");
     expect(refused.error).toContain("monitorPrompt");
     expect(refused.error).toContain("16000 UTF-16 code units");
     expect(kept.monitorPrompt).toBe(exact);
@@ -657,7 +658,7 @@ test("the panel's preview of an edit is what the server stores, and the limit co
 
 test("a field alone over the limit is refused with the total the panel previews, seat notes included", async () => {
   const { previewSeatTickInstructions } = await import("./seatTickInstructions");
-  const refusal = (count: number) => ({ ok: false as const, error: `instructions (reason) are ${count} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` });
+  const refusal = (count: number) => ({ ok: false as const, error: `instructions (reason) must be at most 500 UTF-16 code units; actual length is ${count}. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance.` });
   const previewed = (current: SeatTickSettings, text: string, claimUnknown = false) => {
     const preview = previewSeatTickInstructions(current, { text, claimUnknown }, OPERATOR, NEXT_AT);
     return preview.ok ? preview.lines.map(line => line.text).join("\n").length : null;
