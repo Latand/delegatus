@@ -1750,6 +1750,8 @@ const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
   /* A Fable stage whose transcript names the release the alias resolved to. */
   fable: { engine: "claude", fmt: "claude", root: "claude-projects", model: "fable-5-1", launchModel: "fable" },
+  /* A Fable stage launched on the pinned Fable 5.2 row, as the picker offers it. */
+  fable52: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-fable-5-2", launchModel: "claude-fable-5-2" },
   /* Saved on a Codex model fresh menus retired: it stays listed and checked. */
   "legacy-sol": { engine: "codex", model: "gpt-5.6-sol", launchModel: "gpt-5.6-sol" },
   /* The new Terra at its top effort tier. */

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { CLAUDE_ALIAS_RELEASES } from "@/lib/agent/models";
+
 import { MODEL_REGISTRY_VERSION, normalizeModelKey, registryWindow, resolveRegistryKey } from "./modelRegistry";
 
 describe("normalizeModelKey", () => {
@@ -27,11 +29,10 @@ describe("registryWindow", () => {
     expect(registryWindow("haiku-4-5", "standard")).toBe(200_000);
   });
 
-  test("Fable 5.2 is known, and the launch alias resolves to it", () => {
+  test("Fable 5.2 is known by its own id, and the launch alias resolves to what the installed CLI runs", () => {
     /* Claude Code 2.1.321 lists claude-fable-5-2 with a native 1M window and
-       resolves the `fable` launch alias to it on first-party auth, so a
-       session reports that exact id. Without its own entry the window would
-       read as unknown. */
+       its alias table resolves `fable` to it; a session reports that exact id,
+       which would read as unknown without its own entry. */
     expect(registryWindow("fable-5-2", "standard")).toBe(1_000_000);
     expect(normalizeModelKey("claude-fable-5-2")).toEqual({ key: "fable-5-2", mode: "standard" });
     expect(normalizeModelKey("us.anthropic.claude-fable-5-2")).toEqual({ key: "fable-5-2", mode: "standard" });
@@ -39,6 +40,13 @@ describe("registryWindow", () => {
     expect(normalizeModelKey("claude-fable-5-2[1m]")).toEqual({ key: "fable-5-2", mode: "1m" });
     expect(registryWindow("fable-5-2", "1m")).toBe(1_000_000);
     expect(resolveRegistryKey("fable")).toBe("fable-5-2");
+    expect(resolveRegistryKey("fable")).toBe(normalizeModelKey(CLAUDE_ALIAS_RELEASES.fable)?.key);
+  });
+
+  test("the 2.1.318 catalogue's fable alias target keeps the same window", () => {
+    /* 2.1.318 resolves `fable` to claude-fable-5-1: a session on it reports that id. */
+    const older = normalizeModelKey("claude-fable-5-1")!;
+    expect(registryWindow(older.key, older.mode)).toBe(registryWindow(resolveRegistryKey("fable"), "standard"));
   });
 
   test("Fable 5.1 and Fable 5 stay registered for older transcripts", () => {

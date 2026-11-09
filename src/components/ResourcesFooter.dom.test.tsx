@@ -123,12 +123,26 @@ test("structured hosts get a row each, with role, stage, model and ownership", (
   expect(lane).toContain("Structured lane");
   expect(lane).toContain("builder");
   expect(lane).toContain("implement");
-  expect(lane).toContain("opus");
+  expect(lane).toContain("Opus 5.5");
   expect(lane).toContain("owned");
   expect(rows[1]!.textContent).toContain("released");
   expect(rows[2]!.textContent).toContain("orphaned");
   /* The empty state used to name tmux; the list is transport-neutral now. */
   expect(view.textContent).not.toContain("tmux");
+});
+
+test("a host row names its model as the catalogue does, Fable 5.2 and Fable 5.1 apart", () => {
+  const view = mount([
+    host({ target: "structured:claude:new", model: "claude-fable-5-2" }),
+    host({ target: "structured:claude:old", model: "claude-fable-5-1" }),
+    host({ target: "structured:codex:other", engine: "codex", model: "gpt-6.1-sol" }),
+  ]);
+  const rows = [...view.querySelectorAll('[data-testid="resource-host-row"]')].map((row) => row.textContent ?? "");
+  expect(rows[0]).toContain("Fable 5.2");
+  expect(rows[0]).not.toContain("claude-fable-5-2");
+  expect(rows[1]).toContain("Fable 5.1");
+  expect(rows[1]).not.toContain("Fable 5.2");
+  expect(rows[2]).toContain("gpt-6.1-sol");
 });
 
 test("the header counts hosts, idle hosts and the memory they hold", () => {

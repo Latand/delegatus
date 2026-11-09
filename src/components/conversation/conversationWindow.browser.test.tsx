@@ -3328,6 +3328,7 @@ describe("the runtime pill names the model the conversation runs on", () => {
     "opus-old": { face: "Opus 4.1", never: ["Opus 5.5"] },
     /* The transcript's `fable-5-1` is the catalogue's Fable 5.1 row: named, and its tiers stay open. */
     fable: { face: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { face: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
   } as const;
 
   browserTest("the face names the observed or requested model, or none, and never the engine default", async () => {
@@ -3561,7 +3562,8 @@ describe("the headers name the model the conversation runs on", () => {
     unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
     unlisted: { shown: "gpt-5.5", never: ["Sol"] },
     sonnet: { shown: "Sonnet 5.5", never: ["Opus"] },
-    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { shown: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
   } as const;
   const VIEWPORTS = [{ name: "desktop-1440", width: 1440, height: 900 }, { name: "desktop-900", width: 900, height: 800 }] as const;
   const PHONE = { name: "phone-390", width: 390, height: 844 } as const;

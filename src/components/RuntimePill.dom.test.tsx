@@ -1230,7 +1230,7 @@ test("a model the catalogue does not list is named as the transcript reports it,
   await act(async () => claude.root.unmount());
 });
 
-test("a Fable 5.2 conversation keeps its catalogue model: it reads Fable 5.2, tiers stay enabled and an effort pick is sent on fable", async () => {
+test("a Fable 5.2 conversation keeps its catalogue model: it reads Fable 5.2, tiers stay enabled and an effort pick keeps it on claude-fable-5-2", async () => {
   for (const launchModel of ["fable", null] as const) {
     requests.length = 0;
     const fable: FileEntry = { ...claudeFile, model: "fable-5-2", launchModel, effort: "high" };
@@ -1243,7 +1243,7 @@ test("a Fable 5.2 conversation keeps its catalogue model: it reads Fable 5.2, ti
     expect(tiers.length).toBeGreaterThan(0);
     expect(tiers.some((row) => row.hasAttribute("aria-disabled"))).toBe(false);
     await click(tiers.find((row) => row.getAttribute("aria-checked") !== "true")!);
-    expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "fable" });
+    expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "claude-fable-5-2" });
     await act(async () => root.unmount());
   }
 });
@@ -1270,7 +1270,7 @@ test("a live Fable conversation settles its reconfigure once the transcript's re
   const { host, root } = await renderPill(<RuntimePill file={fable} surface="live-root" runtimeSettings={CLAUDE_STRUCTURED} />);
   await click(host.querySelector("[data-runtime-pill]")!);
   await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!);
-  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "fable", effort: "medium" });
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "claude-fable-5-2", effort: "medium" });
   const phase = "llvAgentRuntime:conversation_claude:phase";
   expect(localStorage.getItem(phase)).toBe("confirming");
   /* A poll that has not moved the effort yet leaves the change confirming. */

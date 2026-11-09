@@ -9,7 +9,7 @@ import type { OrchestratorDraftLaunch } from "@/components/orchestrator/draftPre
 import { runsOnValue } from "@/components/orchestrator/RunsOnRow";
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
 import { tokenRate } from "@/lib/activity/tokenPrices";
-import { CODEX_GPT61_SOL_MODEL, defaultModelFor, ENGINE_MODELS, modelDisplayName } from "@/lib/agent/models";
+import { CLAUDE_ALIAS_RELEASES, CODEX_GPT61_SOL_MODEL, defaultModelFor, ENGINE_MODELS, modelDisplayName } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { RoleConfig } from "@/lib/roles/types";
 
@@ -123,7 +123,7 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
   const signedOut = readiness.kind === "signed-out" ? readiness : null;
   // Compare a stated workload at the existing standard API rates, not a
   // subscription bill. This draft never writes the installation's role defaults.
-  const aliases: Record<string, string> = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5", fable: "claude-fable-5-2" };
+  const aliases: Record<string, string> = CLAUDE_ALIAS_RELEASES;
   const estimate = (model: string, priceEngine = engine) => {
     const rate = tokenRate(priceEngine === "claude" ? aliases[model] ?? model : model, "standard");
     return rate ? rate.input * 0.1 + rate.output * 0.01 : null;

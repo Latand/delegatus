@@ -265,7 +265,7 @@ test("a switch that rolled back says so by display names and returns the face to
   await choose("Opus 5.5");
   await publish(pipeline({ record: { phase: "rolled-back", outcome: "runtime switch failed; continued on previous runtime" } }));
 
-  const words = "Switch to Opus 5.5 did not complete. The stage continues on Fable 5.2. The new runtime could not continue the attempt.";
+  const words = "Switch to Opus 5.5 did not complete. The stage continues on Fable. The new runtime could not continue the attempt.";
   expect(host.querySelector("[data-runtime-pill-error]")?.textContent).toBe(words);
   expect(pill(host).getAttribute("title")).toBe(words);
   expect(accountLine()).toBe(words);
@@ -276,7 +276,7 @@ test("a switch that rolled back says so by display names and returns the face to
   setLocale("uk");
   await publish(pipeline({ record: { phase: "failed", outcome: "stage stopped by kill during runtime switch" } }));
   expect(host.querySelector("[data-runtime-pill-error]")?.textContent)
-    .toBe("Перехід на Opus 5.5 не вдався. Агент зупинився на Fable 5.2. Етап зупинили під час переходу.");
+    .toBe("Перехід на Opus 5.5 не вдався. Агент зупинився на Fable. Етап зупинили під час переходу.");
   await act(async () => root.unmount());
 });
 
@@ -293,7 +293,7 @@ test("an account picked on a running stage moves the attempt now, and a rollback
   expect(accountLine()).toBe("runs on Account A · moving to Account B");
 
   await publish(pipeline({ record: { ...toB, phase: "rolled-back", outcome: "target account is no longer allowed" } }));
-  expect(accountLine()).toBe("Switch to Fable 5.2 · Account B did not complete. The stage continues on Fable 5.2 · Account A. The selected account is no longer allowed for this project.");
+  expect(accountLine()).toBe("Switch to Fable · Account B did not complete. The stage continues on Fable · Account A. The selected account is no longer allowed for this project.");
   expect(document.querySelector('[data-runtime-sheet-account="acct-b"]')?.getAttribute("data-runtime-account-next")).toBeNull();
   await act(async () => root.unmount());
 });
@@ -306,7 +306,7 @@ test("a switch refused before the turn was cut says the stage stays, and only a 
   const shown = () => host.querySelector("[data-runtime-pill-error]")?.textContent;
 
   await publish(pipeline({ record: { phase: "failed", outcome: "target engine is unavailable; stage stays on its runtime" } }));
-  expect(shown()).toBe("Did not switch to Opus 5.5. The stage stays on Fable 5.2. The selected engine is unavailable.");
+  expect(shown()).toBe("Did not switch to Opus 5.5. The stage stays on Fable. The selected engine is unavailable.");
   expect(shown()).not.toContain("stopped");
   await act(async () => root.unmount());
 
@@ -316,11 +316,11 @@ test("a switch refused before the turn was cut says the stage stays, and only a 
     return switchFailureText((key, params) => translate(locale, key, params), stageRunOf(file, record)!, { account: (id) => id, effort: (tier) => tier });
   };
   expect(words("uk", { record: { phase: "failed", outcome: "runtime switch was not started: another delivery is pending" } }))
-    .toBe("Перехід на Opus 5.5 не відбувся. Етап лишається на Fable 5.2. Попередній хід ще завершується.");
+    .toBe("Перехід на Opus 5.5 не відбувся. Етап лишається на Fable. Попередній хід ще завершується.");
   expect(words("uk", { record: { phase: "failed", outcome: "target account is no longer allowed; stage stays on its runtime" } }))
-    .toBe("Перехід на Opus 5.5 не відбувся. Етап лишається на Fable 5.2. Цей акаунт більше не дозволений для проєкту.");
+    .toBe("Перехід на Opus 5.5 не відбувся. Етап лишається на Fable. Цей акаунт більше не дозволений для проєкту.");
   expect(words("en", { record: { phase: "failed", outcome: "could not stop the running agent: host busy" } }))
-    .toBe("Did not switch to Opus 5.5. The stage stays on Fable 5.2. The running agent could not be stopped.");
+    .toBe("Did not switch to Opus 5.5. The stage stays on Fable. The running agent could not be stopped.");
   expect(words("en", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "cutting", outcome: "runtime switch stop remains unconfirmed: host busy" } }))
     .toBe("Switch to Opus 5.5 is waiting for your decision. The agent has not been confirmed stopped yet.");
   expect(words("uk", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "cutting", outcome: "runtime switch stop remains unconfirmed: host busy" } }))
@@ -328,11 +328,11 @@ test("a switch refused before the turn was cut says the stage stays, and only a 
   expect(words("en", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "switching", outcome: "runtime switch rollback refused: source account is no longer allowed" } }))
     .toBe("Switch to Opus 5.5 is waiting for your decision. The previous account is no longer allowed for this project.");
   expect(words("en", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "failed", outcome: "stage stopped by kill during runtime switch" } }))
-    .toBe("Switch to Opus 5.5 failed. The agent stopped on Fable 5.2. The stage was stopped during the switch.");
+    .toBe("Switch to Opus 5.5 failed. The agent stopped on Fable. The stage was stopped during the switch.");
   expect(words("en", { record: { phase: "rolled-back", outcome: "provider said something of its own" } }))
-    .toBe("Switch to Opus 5.5 did not complete. The stage continues on Fable 5.2.");
+    .toBe("Switch to Opus 5.5 did not complete. The stage continues on Fable.");
   expect(words("uk", { record: { phase: "rolled-back", outcome: "target account is no longer allowed on this project; the stage stays on its runtime" } }))
-    .toBe("Перехід на Opus 5.5 не завершився. Етап продовжує на Fable 5.2. Цей акаунт більше не дозволений для проєкту.");
+    .toBe("Перехід на Opus 5.5 не завершився. Етап продовжує на Fable. Цей акаунт більше не дозволений для проєкту.");
 });
 
 test("the sheet of a running stage says the change applies now, in both languages", async () => {

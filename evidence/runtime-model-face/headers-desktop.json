@@ -4921,6 +4921,534 @@
         }
       ],
       "overflowX": 0
+    },
+    "fable52-branch-desktop-1440-en-light": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-branch-desktop-1440-en-dark": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-branch-desktop-1440-uk-light": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-branch-desktop-1440-uk-dark": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-branch-desktop-900-en-light": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-branch-desktop-900-en-dark": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-branch-desktop-900-uk-light": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-branch-desktop-900-uk-dark": {
+      "text": "Fable 5.2",
+      "chips": [
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-1440-en-light": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-1440-en-dark": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-1440-uk-light": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-1440-uk-dark": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-900-en-light": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-900-en-dark": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-900-uk-light": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-reader-desktop-900-uk-dark": {
+      "text": "Claude | Fable 5.2high",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2high",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-1440-en-light": {
+      "text": "Claude | Fable 5.2 | Read only",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Read only",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-1440-en-dark": {
+      "text": "Claude | Fable 5.2 | Read only",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Read only",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-1440-uk-light": {
+      "text": "Claude | Fable 5.2 | Лише читання",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Лише читання",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-1440-uk-dark": {
+      "text": "Claude | Fable 5.2 | Лише читання",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Лише читання",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-900-en-light": {
+      "text": "Claude | Fable 5.2 | Read only",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Read only",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-900-en-dark": {
+      "text": "Claude | Fable 5.2 | Read only",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Read only",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-900-uk-light": {
+      "text": "Claude | Fable 5.2 | Лише читання",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Лише читання",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-desktop-900-uk-dark": {
+      "text": "Claude | Fable 5.2 | Лише читання",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Лише читання",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-phone-390-en-light": {
+      "text": "Claude | Fable 5.2 | Read only",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Read only",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-phone-390-en-dark": {
+      "text": "Claude | Fable 5.2 | Read only",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Read only",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-phone-390-uk-light": {
+      "text": "Claude | Fable 5.2 | Лише читання",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Лише читання",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
+    },
+    "fable52-relay-phone-390-uk-dark": {
+      "text": "Claude | Fable 5.2 | Лише читання",
+      "chips": [
+        {
+          "text": "Claude",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Fable 5.2",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        },
+        {
+          "text": "Лише читання",
+          "whole": true,
+          "drawnInBox": true,
+          "inView": true
+        }
+      ],
+      "overflowX": 0
     }
   }
 }

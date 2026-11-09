@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { costByKind, costByModel, estimateCost, priceTier, PRICE_TABLE_DATE, tokenCost, tokenRate } from "./tokenPrices";
+import { CLAUDE_ALIAS_RELEASES } from "@/lib/agent/models";
 import type { TokenCounts } from "./tokenUsage";
 
 const million = (counts: Partial<TokenCounts>): TokenCounts => ({ input: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, reasoning: 0, requests: 1, ...counts });
@@ -29,6 +30,13 @@ test("Fable 5.2 carries its own standard and fast rates", () => {
   // Fable 5.1 keeps its own, higher rates.
   expect(tokenRate("claude-fable-5-1", "standard")?.input).toBe(10);
   expect(tokenRate("claude-fable-5-1", "fast")).toBeNull();
+});
+
+test("every launch alias is priced as the release the installed CLI runs for it", () => {
+  /* Claude Code 2.1.321 resolves `fable` to Fable 5.2; 2.1.318 resolved it to Fable 5.1, which keeps its own higher rates. */
+  expect(tokenRate(CLAUDE_ALIAS_RELEASES.fable, "standard")?.input).toBe(8);
+  expect(tokenRate("claude-fable-5-1", "standard")?.input).toBe(10);
+  for (const release of Object.values(CLAUDE_ALIAS_RELEASES)) expect(tokenRate(release, "standard")).not.toBeNull();
 });
 
 test("reasoning is part of output and never priced twice", () => {

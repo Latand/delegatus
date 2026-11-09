@@ -60,10 +60,13 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // Claude Code 2.1.280 resolves the `opus` alias to claude-opus-5-5 on
     // first-party auth, so the alias row names what it launches.
     { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
-    // Claude Code 2.1.321 resolves `fable` to claude-fable-5-2 on first-party
-    // auth; 2.1.318 and earlier still run claude-fable-5-1 for it. Fable 5.1 is
-    // retired: its conversations keep reading and relaunching as Fable 5.1.
-    { id: "fable", label: "Fable 5.2", shortLabel: "Fable 5.2", use: "general" },
+    // What `fable` runs depends on the installed Claude Code: 2.1.318 resolves
+    // it to claude-fable-5-1, 2.1.321 to claude-fable-5-2. Its label names no
+    // version, and fresh menus offer the pinned Fable 5.2 row instead, which
+    // both releases launch as itself (2.1.318 accepts the id with a warning).
+    // Fable 5.1 is retired: its conversations keep reading and relaunching as 5.1.
+    { id: "fable", label: "Fable", shortLabel: "Fable", use: "general", retired: true },
+    { id: "claude-fable-5-2", label: "Fable 5.2", shortLabel: "Fable 5.2", use: "general" },
     { id: "claude-fable-5-1", label: "Fable 5.1", shortLabel: "Fable 5.1", use: "general", retired: true },
     { id: "sonnet", label: "Sonnet", shortLabel: "Sonnet", use: "implement" },
     // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
@@ -151,6 +154,20 @@ export function defaultModelFor(engine: "claude" | "codex" | "copilot"): string 
 const CLAUDE_MODEL_FAMILIES = ["fable", "opus", "sonnet", "haiku"] as const;
 export type ClaudeLaunchModel = (typeof CLAUDE_MODEL_FAMILIES)[number];
 
+/** The release each launch alias runs on the installed Claude Code (2.1.321),
+    as its bundled catalogue's `aliases.<family>.default` names it for
+    first-party auth. The context-window registry and the onboarding cost
+    estimate read an alias through this table, so they price and size what the
+    alias launches. Claude Code 2.1.318 and earlier resolve `fable` to
+    claude-fable-5-1 instead; the picker therefore launches Fable 5.2 by its
+    pinned id, which does not depend on the installed alias table. */
+export const CLAUDE_ALIAS_RELEASES: Readonly<Record<ClaudeLaunchModel, string>> = {
+  fable: "claude-fable-5-2",
+  opus: "claude-opus-5-5",
+  sonnet: "claude-sonnet-5-5",
+  haiku: "claude-haiku-5-5",
+};
+
 /**
  * Claude transcripts preserve provider model provenance, including dated ids
  * that the installed CLI may reject as launch arguments. Resume and migration
@@ -173,10 +190,18 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
     id falls back to its family alias (`sonnet`), as normalizeClaudeLaunchModel
     does. */
 export function claudeCatalogModelId(value: string | null | undefined): string | null {
+  return claudePinnedModelId(value) ?? normalizeClaudeLaunchModel(value);
+}
+
+/** The pinned catalogue id a Claude model id names (`claude-fable-5-2`, with or
+    without a dated suffix), or null for an alias or an id the catalogue does
+    not pin. Resume keeps such an id, so a conversation goes on with the release
+    it ran on instead of whatever the family alias names in the installed CLI. */
+export function claudePinnedModelId(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const model = value.trim().toLowerCase().replace(/-20\d{6}$/, "");
-  const pinned = ENGINE_MODELS.claude.find((option) => option.id === model);
-  return pinned ? pinned.id : normalizeClaudeLaunchModel(value);
+  const pinned = ENGINE_MODELS.claude.find((option) => option.id === model && /\d/.test(option.id));
+  return pinned ? pinned.id : null;
 }
 
 /* A versioned Claude id as the scanner keeps it (`opus-5-5`, `claude-opus-5`,

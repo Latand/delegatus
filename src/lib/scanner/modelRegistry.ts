@@ -33,6 +33,10 @@ const MODEL_REGISTRY: Readonly<Record<string, RegistryEntry>> = {
 };
 
 const MODEL_REGISTRY_ALIASES: Readonly<Record<string, string>> = {
+  /* The installed Claude Code (2.1.321) resolves `fable` to claude-fable-5-2;
+     2.1.318 and earlier run claude-fable-5-1 for it. A session reports the
+     exact id it ran, so only an unresolved launch alias reads through this
+     row, and both releases have the same window. */
   fable: "fable-5-2",
   opus: "opus-5-5",
   sonnet: "sonnet-5-5",
