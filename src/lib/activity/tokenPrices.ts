@@ -14,7 +14,7 @@ import { addTokens, emptyTokens, tokenTotal, type TokenCounts } from "./tokenUsa
  * fall short there.
  */
 
-export const PRICE_TABLE_DATE = "2026-10-18";
+export const PRICE_TABLE_DATE = "2026-11-09";
 export const PRICE_SOURCES = [
   "https://platform.claude.com/docs/en/about-claude/pricing",
   "https://developers.openai.com/api/docs/pricing",
@@ -32,6 +32,7 @@ const claude = (input: number, output: number, read = input / 10): TokenRate => 
 const openai = (input: number, cached: number, output: number): TokenRate => ({ input, cacheRead: cached, cacheWrite: input, cacheWrite1h: input, output });
 
 const RATES: Readonly<Record<string, Partial<Record<PriceTier, TokenRate>>>> = {
+  "claude-fable-5-2": { standard: claude(8, 40, 0.2), fast: claude(16, 80, 0.4) },
   "claude-fable-5-1": { standard: claude(10, 50, 0.25) },
   "claude-mythos-5-1": { standard: claude(10, 50, 0.25) },
   "claude-fable-5": { standard: claude(10, 50, 1) },

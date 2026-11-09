@@ -18,6 +18,19 @@ test("Claude rates split five-minute and one-hour cache writes and use the model
   expect(tokenRate("claude-haiku-4-5", "standard")?.cacheRead).toBeCloseTo(0.1, 9);
 });
 
+test("Fable 5.2 carries its own standard and fast rates", () => {
+  // $8 input, $10 5-minute write, $16 1-hour write, $0.20 read, $40 output.
+  expect(tokenRate("claude-fable-5-2", "standard")).toEqual({ input: 8, cacheRead: 0.2, cacheWrite: 10, cacheWrite1h: 16, output: 40 });
+  // Fast mode: $16 input, $80 output, with the cache multipliers on top.
+  expect(tokenRate("claude-fable-5-2", "fast")).toEqual({ input: 16, cacheRead: 0.4, cacheWrite: 20, cacheWrite1h: 32, output: 80 });
+  // cacheWrite counts every write; cacheWrite1h is the one-hour share of it.
+  const counts = million({ input: 1e6, cacheRead: 1e6, cacheWrite: 2e6, cacheWrite1h: 1e6, output: 1e6 });
+  expect(tokenCost("claude-fable-5-2", "standard", counts)).toBeCloseTo(8 + 0.2 + 10 + 16 + 40, 6);
+  // Fable 5.1 keeps its own, higher rates.
+  expect(tokenRate("claude-fable-5-1", "standard")?.input).toBe(10);
+  expect(tokenRate("claude-fable-5-1", "fast")).toBeNull();
+});
+
 test("reasoning is part of output and never priced twice", () => {
   const plain = tokenCost("gpt-6.1-sol", null, million({ output: 1e6 }));
   const reasoned = tokenCost("gpt-6.1-sol", null, million({ output: 1e6, reasoning: 1e6 }));

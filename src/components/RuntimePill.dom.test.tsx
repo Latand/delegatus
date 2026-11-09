@@ -1230,12 +1230,13 @@ test("a model the catalogue does not list is named as the transcript reports it,
   await act(async () => claude.root.unmount());
 });
 
-test("a Fable conversation keeps its catalogue model: tiers stay enabled and an effort pick is sent on fable", async () => {
+test("a Fable 5.2 conversation keeps its catalogue model: it reads Fable 5.2, tiers stay enabled and an effort pick is sent on fable", async () => {
   for (const launchModel of ["fable", null] as const) {
     requests.length = 0;
-    const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel, effort: "high" };
+    const fable: FileEntry = { ...claudeFile, model: "fable-5-2", launchModel, effort: "high" };
     const { host, root } = await renderPill(<RuntimePill file={fable} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
-    expect(faceOf(host)).toContain("Fable");
+    expect(faceOf(host)).toContain("Fable 5.2");
+    expect(faceOf(host)).not.toContain("Fable 5.1");
     await click(host.querySelector("[data-runtime-pill]")!);
     expect(host.ownerDocument.querySelector("[data-runtime-hold]")).toBeNull();
     const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
@@ -1247,8 +1248,25 @@ test("a Fable conversation keeps its catalogue model: tiers stay enabled and an 
   }
 });
 
+test("a Fable 5.1 conversation still reads Fable 5.1 and an effort pick keeps it on Fable 5.1", async () => {
+  for (const launchModel of ["fable", null] as const) {
+    requests.length = 0;
+    const fable: FileEntry = { ...claudeFile, model: "claude-fable-5-1", launchModel, effort: "high" };
+    const { host, root } = await renderPill(<RuntimePill file={fable} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+    expect(faceOf(host)).toContain("Fable 5.1");
+    expect(faceOf(host)).not.toContain("Fable 5.2");
+    await click(host.querySelector("[data-runtime-pill]")!);
+    expect(host.ownerDocument.querySelector("[data-runtime-hold]")).toBeNull();
+    const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
+    expect(tiers.some((row) => row.hasAttribute("aria-disabled"))).toBe(false);
+    await click(tiers.find((row) => row.getAttribute("aria-checked") !== "true")!);
+    expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "claude-fable-5-1" });
+    await act(async () => root.unmount());
+  }
+});
+
 test("a live Fable conversation settles its reconfigure once the transcript's release reports the effort picked", async () => {
-  const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel: "fable", effort: "high" };
+  const fable: FileEntry = { ...claudeFile, model: "fable-5-2", launchModel: "fable", effort: "high" };
   const { host, root } = await renderPill(<RuntimePill file={fable} surface="live-root" runtimeSettings={CLAUDE_STRUCTURED} />);
   await click(host.querySelector("[data-runtime-pill]")!);
   await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!);

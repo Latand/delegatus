@@ -100,6 +100,8 @@ test("a card names a Claude model by its CLI display name and leaves other ids a
   // An Opus 5 conversation keeps reading as Opus 5.
   expect(modelDisplayName("claude", "opus-5")).toBe("Opus 5");
   expect(modelDisplayName("claude", "fable-5-1")).toBe("Fable 5.1");
+  expect(modelDisplayName("claude", "fable-5-2")).toBe("Fable 5.2");
+  expect(modelDisplayName("claude", "claude-fable-5-2")).toBe("Fable 5.2");
   expect(modelDisplayName("claude", "haiku-4-5")).toBe("Haiku 4.5");
   // The CLI names the `-0` releases without a minor version.
   expect(modelDisplayName("claude", "sonnet-4-0")).toBe("Sonnet 4");
@@ -113,7 +115,28 @@ test("a live conversation's launch alias reads like the resolved id its transcri
   expect(modelDisplayName("claude", "haiku")).toBe(modelDisplayName("claude", "haiku-5-5"));
   expect(modelDisplayName("claude", "haiku")).toBe("Haiku 5.5");
   expect(modelDisplayName("claude", "opus")).toBe("Opus 5.5");
+  expect(modelDisplayName("claude", "fable")).toBe(modelDisplayName("claude", "fable-5-2"));
+  expect(modelDisplayName("claude", "fable")).toBe("Fable 5.2");
   expect(modelDisplayName("codex", "haiku")).toBe("haiku");
+});
+
+test("the fable alias names Fable 5.2, and a Fable 5.1 conversation keeps reading and launching as Fable 5.1", () => {
+  /* Claude Code 2.1.321 resolves `fable` to claude-fable-5-2. A transcript
+     that recorded claude-fable-5-1 is its own retired row, so it is never
+     relabelled or relaunched as the release the alias names now. */
+  expect(ENGINE_MODELS.claude.find((option) => option.id === "fable")).toEqual({ id: "fable", label: "Fable 5.2", shortLabel: "Fable 5.2", use: "general" });
+  expect(ENGINE_MODELS.claude.find((option) => option.id === "claude-fable-5-1")).toEqual({
+    id: "claude-fable-5-1", label: "Fable 5.1", shortLabel: "Fable 5.1", use: "general", retired: true,
+  });
+  expect(claudeCatalogModelId("claude-fable-5-1")).toBe("claude-fable-5-1");
+  expect(claudeCatalogModelId("claude-fable-5-2")).toBe("fable");
+  expect(claudeCatalogModelId("fable")).toBe("fable");
+  expect(validateLaunchModel("claude", "claude-fable-5-1")).toEqual({ model: "claude-fable-5-1" });
+  expect(normalizeClaudeLaunchModel("claude-fable-5-2")).toBe("fable");
+  expect(claudeSpawnTier("claude-fable-5-2")).toBe("fable");
+  // Fresh menus offer the alias; the retired row is listed only while it is the current choice.
+  expect(listedModels("claude").map((option) => option.id)).not.toContain("claude-fable-5-1");
+  expect(listedModels("claude", "claude-fable-5-1").map((option) => option.id)).toEqual(["opus", "fable", "claude-fable-5-1", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"]);
 });
 
 test("unknown or unsafe Claude transcript model ids omit the launch override", () => {
@@ -157,7 +180,7 @@ test("the provider's own label names the row, and a codenamed bucket is never sh
 
 test("Claude Sonnet 5.5 is a pinned catalog row that launches and displays as Sonnet 5.5", () => {
   const ids = ENGINE_MODELS.claude.map((option) => option.id);
-  expect(ids).toEqual(["opus", "fable", "sonnet", "claude-sonnet-5-5", "haiku", "claude-haiku-5-5", "claude-haiku-4-5"]);
+  expect(ids).toEqual(["opus", "fable", "claude-fable-5-1", "sonnet", "claude-sonnet-5-5", "haiku", "claude-haiku-5-5", "claude-haiku-4-5"]);
   expect(ENGINE_MODELS.claude.find((option) => option.id === "claude-sonnet-5-5")).toEqual({
     id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement",
   });

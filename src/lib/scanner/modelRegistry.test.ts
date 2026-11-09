@@ -19,7 +19,7 @@ describe("normalizeModelKey", () => {
 
 describe("registryWindow", () => {
   test("contains the frozen documented registry seed", () => {
-    expect(MODEL_REGISTRY_VERSION).toBe("2026-10-11");
+    expect(MODEL_REGISTRY_VERSION).toBe("2026-11-09");
     expect(registryWindow("fable-5", "standard")).toBe(1_000_000);
     expect(registryWindow("opus-4-8", "standard")).toBe(1_000_000);
     expect(registryWindow("sonnet-4-5", "standard")).toBe(200_000);
@@ -27,16 +27,28 @@ describe("registryWindow", () => {
     expect(registryWindow("haiku-4-5", "standard")).toBe(200_000);
   });
 
-  test("Fable 5.1 is known, and the launch alias resolves to it", () => {
-    /* Claude Code resolves the `fable` launch alias to claude-fable-5-1, so a
+  test("Fable 5.2 is known, and the launch alias resolves to it", () => {
+    /* Claude Code 2.1.321 lists claude-fable-5-2 with a native 1M window and
+       resolves the `fable` launch alias to it on first-party auth, so a
        session reports that exact id. Without its own entry the window would
-       read as unknown, and the alias would keep pointing at the superseded
-       Fable 5 entry. Fable 5 stays registered — it is still selectable and
-       still what the gateway provider resolves `fable` to. */
+       read as unknown. */
+    expect(registryWindow("fable-5-2", "standard")).toBe(1_000_000);
+    expect(normalizeModelKey("claude-fable-5-2")).toEqual({ key: "fable-5-2", mode: "standard" });
+    expect(normalizeModelKey("us.anthropic.claude-fable-5-2")).toEqual({ key: "fable-5-2", mode: "standard" });
+    expect(normalizeModelKey("anthropic.claude-fable-5-2")).toEqual({ key: "fable-5-2", mode: "standard" });
+    expect(normalizeModelKey("claude-fable-5-2[1m]")).toEqual({ key: "fable-5-2", mode: "1m" });
+    expect(registryWindow("fable-5-2", "1m")).toBe(1_000_000);
+    expect(resolveRegistryKey("fable")).toBe("fable-5-2");
+  });
+
+  test("Fable 5.1 and Fable 5 stay registered for older transcripts", () => {
+    /* Claude Code 2.1.318 and earlier still run claude-fable-5-1 for `fable`,
+       and Fable 5 is still what the gateway provider resolves it to. */
     expect(registryWindow("fable-5-1", "standard")).toBe(1_000_000);
     expect(normalizeModelKey("claude-fable-5-1")).toEqual({ key: "fable-5-1", mode: "standard" });
-    expect(resolveRegistryKey("fable")).toBe("fable-5-1");
     expect(registryWindow("fable-5", "standard")).toBe(1_000_000);
+    // A later revision stays unknown until it is registered on purpose.
+    expect(registryWindow("fable-5-3", "standard")).toBeNull();
   });
 
   test("Opus 5.5 is known, the opus alias resolves to it, and Opus 5 stays registered", () => {

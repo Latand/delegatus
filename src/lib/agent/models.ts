@@ -60,7 +60,11 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // Claude Code 2.1.280 resolves the `opus` alias to claude-opus-5-5 on
     // first-party auth, so the alias row names what it launches.
     { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
-    { id: "fable", label: "Fable", shortLabel: "Fable", use: "general" },
+    // Claude Code 2.1.321 resolves `fable` to claude-fable-5-2 on first-party
+    // auth; 2.1.318 and earlier still run claude-fable-5-1 for it. Fable 5.1 is
+    // retired: its conversations keep reading and relaunching as Fable 5.1.
+    { id: "fable", label: "Fable 5.2", shortLabel: "Fable 5.2", use: "general" },
+    { id: "claude-fable-5-1", label: "Fable 5.1", shortLabel: "Fable 5.1", use: "general", retired: true },
     { id: "sonnet", label: "Sonnet", shortLabel: "Sonnet", use: "implement" },
     // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
     // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
