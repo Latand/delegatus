@@ -1146,9 +1146,11 @@ async function settleSendReceipt(
         "canonical delivery acknowledgement is unavailable");
       ports.assertActive?.();
       if (!decision.readable || !decision.value) return projected;
-      const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal");
+      const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal",
+        null, ports.assertActive);
       const durable = sendReceiptFor(registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId);
       if (durable && durable.state !== "in-flight" && durable.state === settled.state && durable.reason === settled.reason) {
+        ports.assertActive?.();
         try { await client.acknowledgeTerminalProjection?.([decision.value.operationId]); }
         catch { /* The retained receipt remains owed for the controller's repair. */ }
       }
@@ -1156,7 +1158,7 @@ async function settleSendReceipt(
     }
     return settleProjection(registry, operationId, projected, {
       state: "delivered", disposition: "delivered", reason: null,
-    }, "delivery-record");
+    }, "delivery-record", null, ports.assertActive);
   }
   if (projected.state !== "in-flight") return projected;
   /* The journal read, keeping whether it happened at all. A socket that is not
@@ -1173,7 +1175,7 @@ async function settleSendReceipt(
   const receipt = journal.readable ? journal.value?.receipt ?? null : null;
   const status = receipt?.status ?? null;
   const verdict = journalVerdict(status, receipt?.reason);
-  if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt));
+  if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt), ports.assertActive);
 
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
   const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
@@ -1200,14 +1202,14 @@ async function settleSendReceipt(
     /* Nothing was asked and nothing answered: the durable record is the whole
        evidence, and the receipt says so rather than crediting a journal this
        query never reached. */
-    return settleProjection(registry, operationId, projected, unsettleable, "delivery-record");
+    return settleProjection(registry, operationId, projected, unsettleable, "delivery-record", null, ports.assertActive);
   }
   if (journal.value === null || status === null) {
     return settleProjection(registry, operationId, projected, {
       state: "failed",
       disposition: "unverified",
       reason: SEND_UNRECORDED_REASON,
-    });
+    }, "delivery-journal", null, ports.assertActive);
   }
   /* The one path that can prove non-execution: the journal still holds the
      operation, so terminalizing it now is what makes "never executed" true
@@ -1219,6 +1221,7 @@ async function settleSendReceipt(
      it ends the same way an outage does, on the durable record the delivery
      queue reads before it actuates anything. */
   const journalOperationId = journal.value.operationId;
+  ports.assertActive?.();
   const fenced = await readEvidenceWithin(
     () => fenceOperation(client, journalOperationId, status),
     readMs,
@@ -1230,6 +1233,8 @@ async function settleSendReceipt(
     projected,
     fenced.readable ? fenced.value : unsettleable,
     fenced.readable ? "delivery-journal" : "delivery-record",
+    null,
+    ports.assertActive,
   );
 }
 
@@ -1255,22 +1260,30 @@ async function settleProjection(
   verdict: JournalVerdict,
   evidence: SendReceipt["evidence"] = "delivery-journal",
   route: DeliveryRoute | null = null,
+  assertActive?: () => void,
 ): Promise<SendReceipt> {
+  /* A background owner's lifetime is checked inside the admitted writer,
+     after the lock wait and before the commit: an owner retired while the
+     write waited for the lock writes nothing. */
+  const write = async (label: string, mutation: () => unknown): Promise<boolean> => (await registry.deliveryWrite(
+    { label, operationId }, () => { assertActive?.(); return mutation(); })).acquired;
+  assertActive?.();
   const file = registry.deliverySnapshotForOperation(operationId);
   /* A retry attempt settles on its OWN row. Its reservation belongs to the
      attempt it replaces and is already terminal from it, so writing this
      verdict there would overwrite what that earlier attempt proved with what
      this one did. */
   if (retryAttemptOwner(file, operationId)) {
-    if (!await registry.settleDeliveryRetryAttemptOffLoop(operationId, verdict.state, verdict.reason, verdict.disposition, route)) {
+    if (!await write("delivery.settle-retry",
+      () => registry.settleDeliveryRetryAttempt(operationId, verdict.state, verdict.reason, verdict.disposition, route))) {
       return projected;
     }
     const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.reason === SEND_DISCARDED_REASON && projected.conversationId?.startsWith("conversation_")) {
-    const written = await registry.recordDeliveryOutcomeForOperationOffLoop(
-      projected.conversationId as ViewerConversationId, operationId, "failed", SEND_DISCARDED_REASON, "unverified");
+    const written = await write("delivery.outcome", () => registry.recordDeliveryOutcomeForOperation(
+      projected.conversationId as ViewerConversationId, operationId, "failed", SEND_DISCARDED_REASON, "unverified"));
     if (!written) return projected;
     return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId) ?? projected;
   }
@@ -1278,17 +1291,18 @@ async function settleProjection(
   if (delivery && (SETTLEABLE_DELIVERY_STATES.has(delivery.state)
     || (delivery.state === "failed" && verdict.state === "delivered"))) {
     const written = delivery.state === "failed"
-      ? await registry.recordDeliveryOutcomeForOperationOffLoop(delivery.conversationId, operationId,
-        verdict.state, verdict.reason, verdict.disposition, route)
-      : await registry.recordDeliveryOutcomeOffLoop(operationId, delivery.id, verdict.state, verdict.reason, verdict.disposition, route);
+      ? await write("delivery.outcome", () => registry.recordDeliveryOutcomeForOperation(delivery.conversationId, operationId,
+        verdict.state, verdict.reason, verdict.disposition, route))
+      : await write("delivery.settle",
+        () => registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition, route));
     if (!written) return projected;
     const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.state === "delivered") {
     if (projected.conversationId?.startsWith("conversation_")) {
-      if (!await registry.recordDeliveryOutcomeForOperationOffLoop(projected.conversationId as ViewerConversationId,
-        operationId, "delivered", null, "delivered", route)) return projected;
+      if (!await write("delivery.outcome", () => registry.recordDeliveryOutcomeForOperation(projected.conversationId as ViewerConversationId,
+        operationId, "delivered", null, "delivered", route))) return projected;
       const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
       if (reconciled) return { ...reconciled, evidence };
     }

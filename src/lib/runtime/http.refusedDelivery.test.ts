@@ -17,7 +17,9 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
-import { handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
+import { handleRuntimeAdmissionQuery, handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
+import { MAX_STRUCTURED_IMAGES } from "./runtimeImageStore";
+import type { AgentRegistry } from "@/lib/agent/registry";
 import { ingressStopFor, resetIngressStopsForTests, type IngressStop } from "./ingressStop";
 
 /** A Viewer page's request: a browser stamps `sec-fetch-site` on every fetch. */
@@ -166,7 +168,64 @@ test("a validation refusal keeps its own status and is not dressed as a delivery
     enabled: () => true, structuredEnabled: () => true, client: () => admittingClient,
   });
   expect(response.status).toBe(400);
-  expect((await response.json() as Record<string, unknown>).delivery).toBeUndefined();
+  const body = await response.json() as Record<string, unknown>;
+  expect(body.delivery).toBeUndefined();
+  expect(body.stop).toEqual({ boundary: "intake", reason: "command-invalid" });
+});
+
+/* 2026-11-09: a keyed send whose image or file was refused answered before the
+   route knew its key, so it left no stop and no diagnostic line, and a lost
+   refusal read the same as a request that never arrived. */
+const PNG = "iVBORw0KGgo=";
+const intakeRefusals: Array<[string, Record<string, unknown>, number, IngressStop["reason"]]> = [
+  ["an unsupported image type", { images: [{ mime: "image/tiff", base64: "aGVsbG8=" }] }, 415, "image-refused"],
+  ["too many images", { images: Array.from({ length: MAX_STRUCTURED_IMAGES + 1 }, () => ({ mime: "image/png", base64: PNG })) }, 413, "image-refused"],
+  ["an unreadable image", { images: [{ mime: "image/png", base64: "not base64!" }] }, 400, "image-refused"],
+  ["a malformed file", { files: [{ name: "fixture-notes.txt", base64: 7 }] }, 400, "file-refused"],
+  ["an empty message", { text: "" }, 400, "command-invalid"],
+];
+
+test.each(intakeRefusals)("a keyed send refused at intake for %s keeps its status, logs one stop and is found by the lookup", async (_name, overrides, status, reason) => {
+  const lines: Array<[string, Record<string, unknown>]> = [];
+  resetIngressStopsForTests((line, fields) => lines.push([line, fields]));
+  const key = `intake-${reason}-${status}`;
+  const response = await handleRuntimeCommand(request({ ...send, text: "secret intake words", idempotencyKey: key, ...overrides }), "send", {
+    enabled: () => true, structuredEnabled: () => true, client: () => admittingClient,
+    enqueue: async () => { throw new Error("intake refusals never reach admission"); },
+  });
+  expect(response.status).toBe(status);
+  const body = await response.json() as Record<string, unknown>;
+  expect(body.stop).toEqual({ boundary: "intake", reason });
+  expect(body.delivery).toBeUndefined();
+  expect(lines).toHaveLength(1);
+  expect(lines[0]![1]).toEqual({
+    conversationId: send.conversationId, clientMessageId: key, kind: "send",
+    boundary: "intake", reason, status, delivery: null, ingressAt: expect.any(String), at: expect.any(String),
+  });
+  expect(JSON.stringify(lines)).not.toContain("secret intake words");
+  expect(JSON.stringify(lines)).not.toContain("fixture-notes");
+  const lookup = await handleRuntimeAdmissionQuery(new NextRequest(
+    `http://127.0.0.1/api/runtime/send?conversationId=${send.conversationId}&clientMessageId=${key}`, { headers: { host: "127.0.0.1" } }), {
+    enabled: () => true,
+    registry: () => ({ deliveryAdmissionForKey: () => ({ outcome: "not-executed" }) }) as unknown as AgentRegistry,
+    query: async () => { throw new Error("nothing was admitted"); },
+    sendInFlight: () => false,
+  });
+  expect(await lookup.json()).toEqual({ outcome: "not-executed", conversationId: send.conversationId, clientMessageId: key,
+    stop: { boundary: "intake", reason, status, at: expect.any(String) } });
+});
+
+test("an intake refusal without a valid key records no stop", async () => {
+  const lines: unknown[] = [];
+  resetIngressStopsForTests((...args) => lines.push(args));
+  const response = await handleRuntimeCommand(request({ conversationId: send.conversationId, text: "continue", idempotencyKey: "has space",
+    images: [{ mime: "image/tiff", base64: "aGVsbG8=" }] }), "send", {
+    enabled: () => true, structuredEnabled: () => true, client: () => admittingClient,
+  });
+  expect(response.status).toBe(415);
+  expect((await response.json() as Record<string, unknown>).stop).toBeUndefined();
+  expect(lines).toEqual([]);
+  expect(ingressStopFor(send.conversationId, "has space")).toBeNull();
 });
 
 /* 2026-11-09: admission marks the refusals it gives before anything is

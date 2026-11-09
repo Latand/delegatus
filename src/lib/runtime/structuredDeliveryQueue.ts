@@ -1187,14 +1187,24 @@ export class StructuredDeliveryQueue {
           // and configuration changes still wait for startup completion.
           const admitted: DeliveryEffect[] = [];
           // Never send past a configuration change or another held effect
-          // that the ordinary per-conversation drain would process first.
+          // that the ordinary per-conversation drain would process first. An
+          // explicit interrupt rides with the sends: the ordinary drain gives
+          // it its settlement ceiling, so it cannot hold them indefinitely.
           const recoverSends = this.port.canRecoverDeferredTarget?.(conversationId)
             && deferred.every(effect => (effect.kind === "send" && !effect.onlyIfIdle)
-              || (effect.kind === "kill" && !effect.onlyIfIdle));
+              || (effect.kind === "kill" && !effect.onlyIfIdle) || effect.kind === "interrupt");
+          const heldControls: ControlEffect[] = [];
           for (const effect of deferred) {
             if ((effect.kind === "kill" && !effect.onlyIfIdle)
-              || (effect.kind === "send" && !effect.onlyIfIdle && recoverSends)) admitted.push(effect);
+              || (((effect.kind === "send" && !effect.onlyIfIdle) || effect.kind === "interrupt") && recoverSends)) admitted.push(effect);
+            else if (effect.kind === "interrupt" || effect.kind === "answer") heldControls.push(effect);
             else this.noteWait(effect, "startup", { wake: "event" });
+          }
+          // A held interrupt or answer still has the ceiling every accepted
+          // control has: past it, it settles with its reason during startup.
+          let settledControls = 0;
+          for (const control of heldControls) {
+            if (await this.settleExpiredDeferredControl(control)) settledControls += 1;
           }
           const settleKilledReconfigures = async () => {
             if (this.port.handoffHeld?.()) return;
@@ -1204,7 +1214,10 @@ export class StructuredDeliveryQueue {
               }
             }
           };
-          if (admitted.length === 0) { await settleKilledReconfigures(); return true; }
+          if (admitted.length === 0) {
+            await settleKilledReconfigures();
+            return settledControls < deferred.length;
+          }
           const killedGenerations = new Set<string>();
           let blocked: boolean;
           try {
@@ -1217,7 +1230,7 @@ export class StructuredDeliveryQueue {
             }
           }
           await settleKilledReconfigures();
-          return blocked || admitted.length < deferred.length;
+          return blocked || admitted.length + settledControls < deferred.length;
         }
         for (const prepare of targetPreparations.get(conversationId) ?? []) await prepare();
         return this.drainTarget(grouped.get(conversationId) ?? [], lane);
@@ -3107,6 +3120,30 @@ export class StructuredDeliveryQueue {
       a control settled in this pass never reaches this helper. */
   private scheduleControlSettlementCheck(receipt: StructuredOperationStatus | null): void {
     if (controlSettlementDeadlineAt(receipt) !== null) this.retrySoon();
+  }
+
+  /** A control held by startup deferral keeps its settlement ceiling. Answers
+      whether the control is settled; one that is still open waits for startup
+      with a bounded wake toward its deadline. */
+  private async settleExpiredDeferredControl(effect: ControlEffect): Promise<boolean> {
+    const durable = await this.readStatus(effect.operationId);
+    if (!durable.readable) {
+      this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "delivery journal status is unavailable" });
+      this.retrySoon();
+      return false;
+    }
+    if (durable.value && TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) {
+      this.settleProgress(effect.operationId, durable.value.status, durable.value.reason);
+      return true;
+    }
+    const expired = expiredControlSettlement(effect, durable.value);
+    if (expired) {
+      await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason });
+      return true;
+    }
+    this.scheduleControlSettlementCheck(durable.value);
+    this.noteWait(effect, "startup", { wake: "event" });
+    return false;
   }
 
   /**

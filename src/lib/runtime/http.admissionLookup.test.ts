@@ -23,6 +23,7 @@ import { admissionInFlight, handleRuntimeAdmissionQuery, handleRuntimeCommand, t
 import { resetIngressStopsForTests } from "./ingressStop";
 import { AgentRegistry, type DeliveryAdmissionEvidence } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { lookupRuntimeAdmission } from "@/hooks/useRuntime";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-admission-lookup-"));
 let registryNumber = 0;
@@ -520,4 +521,39 @@ test("a recorded stop never rides on an `admitted` answer: the reservation outra
   )).json() as Record<string, unknown>;
   expect(body.outcome).toBe("admitted");
   expect(body.stop).toBeUndefined();
+});
+
+/* 2026-11-09: the browser's lookup read `not-executed` and dropped the stop
+   beside it, so a lost refusal answer still read as a request that never
+   arrived. The client half now keeps a well-formed stop and only that. */
+test("the browser lookup keeps the stop the route recorded, and drops one it cannot read", async () => {
+  resetIngressStopsForTests(() => {});
+  const { registry, conversationId: liveConversationId } = conversationRegistry();
+  const refused = await handleRuntimeCommand(sendRequest({
+    conversationId: liveConversationId, text: "turned away at admission", idempotencyKey: "browser-stop-key",
+  }), "send", {
+    enabled: () => true, structuredEnabled: () => true, client: () => null,
+    enqueue: async () => ({ ok: false, structured: true, outcome: "failed", status: 503,
+      error: "the conversation is synchronizing; try again shortly", admission: "refused" }) as never,
+  });
+  expect(refused.status).toBe(503);
+  const original = globalThis.fetch;
+  let reply: ((url: string) => Promise<Response>) = async url => await handleRuntimeAdmissionQuery(
+    new NextRequest(`http://127.0.0.1${url}`, { headers: { host: "127.0.0.1" } }), liveDependencies(registry)) as unknown as Response;
+  globalThis.fetch = (async (input: string | URL | Request) => reply(String(input))) as typeof fetch;
+  try {
+    expect(await lookupRuntimeAdmission(liveConversationId, "browser-stop-key")).toEqual({ outcome: "not-executed",
+      stop: { boundary: "admission", reason: "refused-before-reservation", status: 503, at: expect.any(String) } });
+    /* A key nothing stopped is the transport-loss answer: no stop at all. */
+    expect(await lookupRuntimeAdmission(liveConversationId, "never-arrived-key")).toEqual({ outcome: "not-executed" });
+    for (const stop of [{ boundary: "admission", reason: "invented", status: 503, at: "x" },
+      { boundary: "elsewhere", reason: "command-invalid", status: 400, at: "x" },
+      { boundary: "intake", reason: "command-invalid", status: "400", at: "x" }, "refused"]) {
+      reply = async () => Response.json({ outcome: "not-executed", stop });
+      expect(await lookupRuntimeAdmission(liveConversationId, "malformed-stop-key")).toEqual({ outcome: "not-executed" });
+    }
+  } finally {
+    globalThis.fetch = original;
+    registry.close();
+  }
 });

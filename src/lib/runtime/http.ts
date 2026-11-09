@@ -21,7 +21,7 @@ import { admitConversationMember } from "@/lib/team/authorship";
 import { agentMessageOrigin } from "./agentMessageAuthor";
 
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { parseRuntimeCommand } from "./commands";
+import { parseRuntimeCommand, parseRuntimeCommandSubject } from "./commands";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { runtimePresentationReceipt, terminalRetryOperationId, type RuntimeOperationCommand, type RuntimeOperationKind } from "./contracts";
 import { runtimeEventsEnabled, runtimeEventsRolledBack, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "./flags";
@@ -228,6 +228,18 @@ async function dispatchRuntimeCommand(
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
+  const stopped = (response: NextResponse, boundary: IngressStop["boundary"], reason: IngressStop["reason"]): NextResponse => {
+    attachments.stop = { boundary, reason };
+    return response;
+  };
+  /* A refused image, file or command still names its stop under the key it
+     carried, so a lost refusal answer stays distinguishable from a request
+     that never arrived (2026-11-09). Ids only: the text and the attachments
+     never enter the stop. */
+  if (kind === "send" || kind === "steer" || kind === "inject") {
+    const keyed = parseRuntimeCommandSubject(value);
+    if (keyed) attachments.subject = { conversationId: keyed.conversationId, clientMessageId: keyed.idempotencyKey, kind };
+  }
   let command: RuntimeOperationCommand;
   let rawImages: RuntimeImageUpload[] | null = null;
   try {
@@ -242,7 +254,9 @@ async function dispatchRuntimeCommand(
       const body = value as Record<string, unknown>;
       if (kind !== "inject" && Array.isArray(body.images) && body.images.some((image) => image && typeof image === "object" && "base64" in image)) {
         const admitted = admitRuntimeImagePayload({ images: body.images });
-        if (admitted.error) return NextResponse.json({ error: admitted.error.error }, { status: admitted.error.status });
+        if (admitted.error) {
+          return stopped(NextResponse.json({ error: admitted.error.error }, { status: admitted.error.status }), "intake", "image-refused");
+        }
         rawImages = admitted.images;
         const admissionRefs: StructuredImageRef[] = rawImages.map((image) => {
           const data = Buffer.from(image.base64, "base64");
@@ -262,7 +276,7 @@ async function dispatchRuntimeCommand(
       const { admitInboxFilePayloadAsync, inboxFileBatchToken, inboxFileText, inboxFilePaths } = await import("@/lib/inboxFiles");
       const admittedFiles = await admitInboxFilePayloadAsync({ files: body.files }, person);
       if (admittedFiles.error) {
-        return NextResponse.json({ error: admittedFiles.error.error }, { status: admittedFiles.error.status });
+        return stopped(NextResponse.json({ error: admittedFiles.error.error }, { status: admittedFiles.error.status }), "intake", "file-refused");
       }
       const parsed: Record<string, unknown> = { ...(parseValue as Record<string, unknown>) };
       delete parsed.files;
@@ -279,7 +293,8 @@ async function dispatchRuntimeCommand(
     }
     command = parseRuntimeCommand(kind, parseValue);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "runtime command is invalid" }, { status: 400 });
+    return stopped(NextResponse.json({ error: error instanceof Error ? error.message : "runtime command is invalid" }, { status: 400 }),
+      "intake", "command-invalid");
   }
   /* The key is claimed the moment a message-bearing command is known to be
      well formed — before the inbox write, before admission, before anything
@@ -290,10 +305,6 @@ async function dispatchRuntimeCommand(
     attachments.releaseAdmission = claimAdmissionInFlight(command.conversationId, command.idempotencyKey);
     attachments.subject = { conversationId: command.conversationId, clientMessageId: command.idempotencyKey, kind: command.kind };
   }
-  const stopped = (response: NextResponse, boundary: IngressStop["boundary"], reason: IngressStop["reason"]): NextResponse => {
-    attachments.stop = { boundary, reason };
-    return response;
-  };
   /* Nothing has been handed to admission or to the host until this moves:
      an exit before it is a refusal whatever threw (2026-11-09). */
   let handOff: "none" | "admission" | "dispatch" = "none";

@@ -36,6 +36,12 @@ export type IngressBoundary =
   | "dispatch";
 
 export type IngressStopReason =
+  /** The command itself was malformed (text, size, fields). */
+  | "command-invalid"
+  /** An image was refused: its type, its size or its count. */
+  | "image-refused"
+  /** A file attachment was refused: its type, its size or its count. */
+  | "file-refused"
   | "inbox-unavailable"
   | "authority-unrecorded"
   | "bookkeeping-failed"
@@ -48,6 +54,15 @@ export type IngressStopReason =
   /** The call threw while the message may have been on its way. */
   | "outcome-unknown"
   | "idempotency-conflict";
+
+/** Every reason a stop can carry, for readers that check a reply. */
+export const INGRESS_STOP_REASONS: readonly IngressStopReason[] = [
+  "command-invalid", "image-refused", "file-refused", "inbox-unavailable", "authority-unrecorded",
+  "bookkeeping-failed", "refused-before-reservation", "failed-after-reservation", "ownership-unavailable",
+  "host-unavailable", "outcome-unknown", "idempotency-conflict",
+];
+
+export const INGRESS_BOUNDARIES: readonly IngressBoundary[] = ["intake", "authority", "bookkeeping", "admission", "dispatch"];
 
 export interface IngressStop {
   boundary: IngressBoundary;
