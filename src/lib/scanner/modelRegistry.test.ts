@@ -40,7 +40,7 @@ describe("registryWindow", () => {
     expect(normalizeModelKey("claude-fable-5-2[1m]")).toEqual({ key: "fable-5-2", mode: "1m" });
     expect(registryWindow("fable-5-2", "1m")).toBe(1_000_000);
     expect(resolveRegistryKey("fable")).toBe("fable-5-2");
-    expect(resolveRegistryKey("fable")).toBe(normalizeModelKey(CLAUDE_ALIAS_RELEASES.fable)?.key);
+    expect(resolveRegistryKey("fable")).toBe(normalizeModelKey(CLAUDE_ALIAS_RELEASES.fable)!.key);
   });
 
   test("the 2.1.318 catalogue's fable alias target keeps the same window", () => {
