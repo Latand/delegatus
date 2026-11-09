@@ -45,7 +45,7 @@ for (const { scope, boundary } of [
         ? pipelineRequiresDispatchGuard(f.conversation.id, f.registry)
         : assertPipelineTurnAllowed(f.conversation.id, f.registry, { operationId: command.operationId });
       const calls: string[] = [];
-      const notes: Array<{ reason: string; detail: string | undefined }> = [];
+      const notes: Array<{ reason: string; detail: string | null | undefined }> = [];
       const host = {
         health: async () => ({ status: "active", activeTurnRef: "fixture-turn" }),
         nativeQueue: {
