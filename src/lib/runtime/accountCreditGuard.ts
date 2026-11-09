@@ -1,4 +1,5 @@
 import { integrationAuthorityRefusal } from "@/lib/pipelines/integrationAuthority";
+import { redactBounded } from "@/lib/monitor/redact";
 import { INTEGRATION_STAGES } from "@/lib/pipelines/integration";
 import { isRepositoryResolver, holdsRepositoryResolverCapacity } from "@/lib/forge/autoRefresh";
 import type { MessageOrigin } from "./messageOrigin";
@@ -65,6 +66,13 @@ export interface PipelineDispatchContext {
   now?: number;
 }
 
+function authorityReadDeferred(scope: "queue" | "execution", cause: unknown): StructuredDispatchDeferredError {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return new StructuredDispatchDeferredError(redactBounded(
+    `pipeline ${scope} authority is temporarily unreadable: ${detail}`, 240,
+  ), { cause });
+}
+
 /** Keep revocable integration input in our journal, outside the provider's
  * automatic queue. Membership and candidate-owner reads are keyed. */
 export function pipelineRequiresDispatchGuard(conversationId: string, registry: AgentRegistry): boolean {
@@ -76,8 +84,8 @@ export function pipelineRequiresDispatchGuard(conversationId: string, registry: 
       // use this stage name without ever having an integration reservation.
       return !pipeline || !!pipeline.merge?.integration || !!pipeline.merge?.refresh;
     });
-  } catch {
-    throw new StructuredDispatchDeferredError("pipeline queue authority is temporarily unreadable");
+  } catch (error) {
+    throw authorityReadDeferred("queue", error);
   }
 }
 
@@ -91,7 +99,7 @@ export function assertPipelineTurnAllowed(conversationId: string, registry?: Age
   try { assertCurrentPipelineTurn(conversationId, registry, dispatch); }
   catch (error) {
     if (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError) throw error;
-    throw new StructuredDispatchDeferredError("pipeline execution authority is temporarily unreadable");
+    throw authorityReadDeferred("execution", error);
   }
 }
 
