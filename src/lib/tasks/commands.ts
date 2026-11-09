@@ -333,10 +333,10 @@ export function taskDuePatch(task: BoardTask, input: PatchTaskInput, now: string
       const reason = typeof input.dueReason === "string" ? input.dueReason.trim() : undefined;
       const slip = !!task.dueAt && Date.parse(task.dueAt) <= Date.parse(now) && next > Date.parse(task.dueAt);
       if (slip && options.actor === "agent" && (!reason || reason.length > 200)) {
-        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: "A slip needs a dueReason of 1 to 200 characters" };
+        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: typeof input.dueReason === "string" ? textLengthError("dueReason", reason?.length ?? 0, 200, "UTF-16 code units", 1) : "A slip needs a dueReason string of 1–200 UTF-16 code units after trimming" };
       }
       if (input.dueReason !== undefined && (typeof input.dueReason !== "string" || (reason?.length ?? 0) > 200)) {
-        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: "dueReason must be at most 200 characters" };
+        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: typeof input.dueReason === "string" ? textLengthError("dueReason", reason?.length ?? 0, 200, "UTF-16 code units") : "dueReason must be a string" };
       }
       const history = storedDueHistory(task.dueHistory) ?? { firstAt: task.dueAt ?? patch.dueAt, slips: 0 };
       patch.dueHistory = slip ? { ...history, slips: history.slips + 1, last: {

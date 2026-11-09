@@ -367,7 +367,7 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   const findings: StageFinding[] = [];
   if (input.findings !== undefined && input.findings !== null) {
     if (!Array.isArray(input.findings)) return refusal("findings must be an array of { severity, text }");
-    if (input.findings.length > MAX_FINDINGS) return refusal(`findings must hold at most ${MAX_FINDINGS} entries`);
+    if (input.findings.length > MAX_FINDINGS) return refusal(`findings must hold at most ${MAX_FINDINGS} entries; actual count is ${input.findings.length}`);
     for (const raw of input.findings) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return refusal("each finding must be an object { severity, text }");
       const finding = raw as Record<string, unknown>;

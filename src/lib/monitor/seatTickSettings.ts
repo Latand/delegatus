@@ -287,9 +287,8 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
     enabled: raw.enabled !== false,
     wakeIntervalMinutes: normalizeInterval(raw.wakeIntervalMinutes),
     reason: typeof raw.reason === "string" && raw.reason.trim() ? raw.reason.slice(0, REASON_LIMIT) : null,
-    /* A stored value over the limit is clamped here, not refused: a file
-       written under a wider or older rule still has to load. Refusing is the
-       writer's job, above, where the caller is there to hear it. */
+    /* Preserve stored notes written under an older or wider limit.
+       The writer refuses new overages while the caller can correct them. */
     monitorPrompt: typeof raw.monitorPrompt === "string" && raw.monitorPrompt.trim()
       ? raw.monitorPrompt
       : null,

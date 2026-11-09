@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, MCP_TOOL_NAMES, type McpToolBindings } from "./server";
+import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolBindings } from "./server";
 import { viewerMcpBindings } from "./bindings";
 import { parseLessons } from "@/lib/memory/roleStage";
 import { normalizeStageCompletion } from "@/lib/pipelines/verdict";
@@ -48,6 +48,20 @@ test.each([
   ["publish_prototype_review", "questions.0.text", 300, (value: string) => ({ ...form, questions: [{ ...form.questions[0], text: value }] }), scalarText],
   ["publish_prototype_review", "questions.0.options.0.label", 120, (value: string) => ({ ...form, questions: [{ ...form.questions[0], options: [{ label: value, recommended: true }, { label: "Wait" }] }] }), scalarText],
   ["pipeline_action", "answer", 12000, (value: string) => ({ pipelineId: "fixture", action: "resolve-decision", answer: value, expectedStageId: "build", expectedAttempt: 1, expectedRevision: "a".repeat(64) }), unitText],
+  ["pipeline_action", "clientRequestId", 200, (value: string) => ({ clientRequestId: value, pipelineId: "fixture", action: "resolve-decision", answer: "Continue", expectedStageId: "build", expectedAttempt: 1, expectedRevision: "a".repeat(64) }), unitText],
+  ["publish_prototype_review", "clientRequestId", 160, (value: string) => ({ ...form, clientRequestId: value }), scalarText],
+  ["publish_prototype_review", "title", 120, (value: string) => ({ ...form, title: value }), scalarText],
+  ["publish_prototype_review", "variants.0.name", 60, (value: string) => ({ ...form, variants: [{ number: 1, name: value, description: "Variant" }] }), scalarText],
+  ["publish_prototype_review", "variants.0.description", 300, (value: string) => ({ ...form, variants: [{ number: 1, name: "First", description: value }] }), scalarText],
+  ["publish_prototype_review", "variants.0.frames.0.caption", 200, (value: string) => ({ ...form, variants: [{ number: 1, name: "First", description: "Variant", frames: [{ path: "frame.png", caption: value }] }] }), scalarText],
+  ["publish_prototype_review", "variants.0.videos.0.caption", 200, (value: string) => ({ ...form, variants: [{ number: 1, name: "First", description: "Variant", videos: [{ path: "video.mp4", caption: value }] }] }), scalarText],
+  ["publish_prototype_review", "dir", 4096, (value: string) => ({ ...form, dir: value }), scalarText],
+  ["publish_prototype_review", "variants.0.frames.0.path", 4096, (value: string) => ({ ...form, variants: [{ number: 1, name: "First", description: "Variant", frames: [{ path: value, caption: "Frame" }] }] }), scalarText],
+  ["publish_prototype_review", "variants.0.frames.0.originalPath", 4096, (value: string) => ({ ...form, variants: [{ number: 1, name: "First", description: "Variant", frames: [{ path: "frame.png", originalPath: value, caption: "Frame" }] }] }), scalarText],
+  ["publish_prototype_review", "variants.0.videos.0.path", 4096, (value: string) => ({ ...form, variants: [{ number: 1, name: "First", description: "Variant", videos: [{ path: value, caption: "Video" }] }] }), scalarText],
+  ["update_task", "dueReason", 200, (value: string) => ({ taskId: task.id, dueReason: value }), unitText],
+  ["update_task", "findingKey", 200, (value: string) => ({ taskId: task.id, findingKey: value }), scalarText],
+  ["create_task", "findingKey", 200, (value: string) => ({ project: "fixture", text: "Track a finding", dueAt: "2026-12-01T10:00:00.000Z", dueTz: "UTC", findingKey: value }), scalarText],
   ["update_task", "note", 280, (value: string) => ({ taskId: task.id, note: value }), unitText],
   ["update_task", "details", 20000, (value: string) => ({ taskId: task.id, details: value }), unitText],
   ["update_task", "hold.note", 200, (value: string) => ({ taskId: task.id, hold: { kind: "external", note: value } }), unitText],
@@ -66,12 +80,13 @@ test.each([
     const refused = await client.callTool({ name, arguments: { clientRequestId: "over", ...argsFor(text(max + 1)) } });
     expect(refused.isError).toBe(true);
     const error = JSON.stringify(refused.content);
-    for (const part of [...field.split("."), String(max), `actual length is ${max + 1}`]) expect(error).toContain(part);
+    for (const part of [...field.split("."), String(max), text === scalarText ? "Unicode code points" : "UTF-16 code units", `actual length is ${max + 1}`]) expect(error).toContain(part);
     expect(dispatched).toHaveLength(1);
-    const corrected = await client.callTool({ name, arguments: { clientRequestId: "corrected", ...argsFor(text(max)) } });
+    const correctedArgs = argsFor(field === "clientRequestId" ? "a".repeat(max) : text(max));
+    const corrected = await client.callTool({ name, arguments: { clientRequestId: "corrected", ...correctedArgs } });
     expect(corrected.isError).not.toBe(true);
     expect(dispatched).toHaveLength(2);
-    expect(dispatched[1]!.args).toEqual({ clientRequestId: "corrected", ...argsFor(text(max)) });
+    expect(dispatched[1]!.args).toEqual({ clientRequestId: "corrected", ...correctedArgs });
   });
 });
 
@@ -307,7 +322,7 @@ test.each([undefined, "receipt-query"])("wrong send receipt family is diagnostic
   expect(result).toMatchObject({ ok: false, code: "OPERATION_UNKNOWN", retryable: false });
   if (result.ok) throw Error("unknown receipt was accepted");
   expect(result.error).toContain("operationId");
-  expect(result.error).toContain("absence here does not prove no effect");
+  expect(result.error).toContain("a missing receipt does not prove that the send had no effect");
 });
 
 test.each([
@@ -327,4 +342,72 @@ test.each([
   expect(seen[0]).toMatchObject({ action: args.action, expectedRevision: args.expectedRevision });
   expect(await service.callTool("pipeline_action", { ...args, expectedRevision: "b".repeat(64) })).toMatchObject({ ok: false, code: "idempotency_conflict" });
   expect(seen).toHaveLength(1);
+});
+
+
+test.each([
+  ["update_task", "note", 280, { taskId: task.id }, (value: string) => ({ note: value }), "UTF-16 code units", unitText, 0],
+  ["update_task", "hold.note", 200, { taskId: task.id }, (value: string) => ({ hold: { kind: "external", note: value } }), "UTF-16 code units", unitText, 0],
+  ["leave_lesson", "lesson.why", 160, {}, (value: string) => ({ lesson: { ...lesson, why: value } }), "normalized Unicode code points", scalarText, 1],
+  ["publish_prototype_review", "title", 120, { ...form }, (value: string) => ({ title: value }), "Unicode code points", scalarText, 1],
+] as const)("schema refusal for %s %s identifies its path without a foreign field name", (name, field, max, base, argsFor, unit, text, min) => {
+  const parsed = TOOL_INPUT_SCHEMAS[name].safeParse({ clientRequestId: "field-name", ...base, ...argsFor(text(max + 1)) });
+  if (parsed.success) throw Error("accepted an overage");
+  expect(parsed.error.issues.map(issue => ({ path: issue.path.join("."), message: issue.message }))).toEqual([{
+    path: field,
+    message: `must be ${min ? `${min}–${max}` : `at most ${max}`} ${unit}; actual length is ${max + 1}. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance.`,
+  }]);
+});
+
+test.each(["agent", "operator"] as const)("dueReason domain uses trimmed UTF-16 units for %s", actor => {
+  const row = { ...task, dueAt: "2026-10-01T10:00:00.000Z", dueTz: "UTC" };
+  const before = structuredClone(row);
+  const input = { dueAt: "2026-12-01T10:00:00.000Z", dueReason: `  ${unitText(200)}  ` };
+  expect(patchTask([row], row.id, input, now, { actor })).toMatchObject({ ok: true, task: { dueHistory: { last: { reason: unitText(200) } } } });
+  const refused = patchTask([row], row.id, { ...input, dueReason: `  ${unitText(201)}  ` }, now, { actor });
+  expect(refused).toMatchObject({ ok: false, field: "dueReason" });
+  if (refused.ok) throw Error("accepted an overage");
+  for (const part of ["dueReason", "200", "UTF-16 code units", "actual length is 201"]) expect(refused.error).toContain(part);
+  expect(row).toEqual(before);
+});
+
+test("findingKey create and update preserve exact code points and refuse overages atomically", () => {
+  const input = { project: "fixture", text: "Track a finding", placement: "unplaced", dueAt: "2026-12-01T10:00:00.000Z", dueTz: "UTC" };
+  const before = structuredClone(task);
+  const writers = [
+    (findingKey: string) => createTask([], { ...input, findingKey }, [], { now: () => now, id: () => "finding-limit" }),
+    (findingKey: string) => patchTask([task], task.id, { findingKey }, now),
+  ];
+  for (const write of writers) {
+    expect(write(scalarText(200))).toMatchObject({ ok: true, task: { findingKey: scalarText(200) } });
+    const refused = write(scalarText(201));
+    expect(refused).toMatchObject({ ok: false, field: "findingKey" });
+    if (refused.ok) throw Error("accepted an overage");
+    expect(refused.error).toContain("findingKey must be at most 200 Unicode code points; actual length is 201");
+  }
+  expect(task).toEqual(before);
+});
+
+test("findings count accepts fifty and refuses fifty-one in both protocol and domain", async () => {
+  const findings = Array.from({ length: 51 }, (_, i) => ({ severity: "P1", text: `Defect ${i}` }));
+  expect(normalizeStageCompletion({ verdict: "fail", findings: findings.slice(0, 50) })).not.toHaveProperty("error");
+  expect(normalizeStageCompletion({ verdict: "fail", findings })).toMatchObject({ error: "findings must hold at most 50 entries; actual count is 51" });
+  await protocol(async (client, dispatched) => {
+    expect((await client.callTool({ name: "stage_report", arguments: { clientRequestId: "fifty", verdict: "fail", findings: findings.slice(0, 50) } })).isError).not.toBe(true);
+    const refused = await client.callTool({ name: "stage_report", arguments: { clientRequestId: "fifty-one", verdict: "fail", findings } });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("findings must hold at most 50 entries; actual count is 51");
+    expect(dispatched).toHaveLength(1);
+  });
+});
+
+test("details appendLine measures preserved whitespace at the whole-field boundary", () => {
+  const row = { ...task, details: "a".repeat(19990) };
+  const before = structuredClone(row);
+  expect(patchTask([row], row.id, { appendLine: "bbbbbbb  " }, now)).toMatchObject({ ok: true, task: { details: `${row.details}\nbbbbbbb  ` } });
+  const refused = patchTask([row], row.id, { appendLine: "bbbbbbbb  " }, now);
+  expect(refused).toMatchObject({ ok: false, field: "details" });
+  if (refused.ok) throw Error("accepted an overage");
+  expect(refused.error).toContain("details must be at most 20000 UTF-16 code units; actual length is 20001");
+  expect(row).toEqual(before);
 });

@@ -1992,7 +1992,7 @@ async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
   const receipt = operationId.startsWith("seatmsg_") ? seatMessageReceipt(operationId) : await resolveSendReceipt(operationId);
   if (!receipt) {
     throw new McpToolRefusal(
-      "No accepted send is recorded under that operationId. Copy operationId from the send acknowledgement; launchId, pipelineId and clientRequestId belong to other receipt families. For uncertain sends recover with the original send tool, key and arguments; absence here does not prove no effect.",
+      "No accepted send is recorded under that operationId. Copy operationId from the send acknowledgement; launchId, pipelineId and clientRequestId belong to other receipt families. For uncertain sends recover with the original send tool, key and arguments; a missing receipt does not prove that the send had no effect.",
       { code: "OPERATION_UNKNOWN", retryable: false },
     );
   }

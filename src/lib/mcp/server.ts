@@ -24,7 +24,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { z } from "zod";
 import { textLengthError } from "@/lib/textLimits";
-import { normalizedUtf16Text, storedUtf16Text, utf16Text } from "@/lib/textLimitSchema";
+import { codePointText, normalizedUtf16Text, storedUtf16Text, utf16Text } from "@/lib/textLimitSchema";
 import { recordedCheckInput } from "@/lib/recordedChecks/input";
 import { pipelineResumeConditionSchema } from "@/lib/pipelines/pauseMetadata";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
@@ -3849,7 +3849,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   message_receipt: [
-    "Answer what became of one accepted send, by the `operationId` `send_message` returned. Copy that exact id; pipelineId, launchId and clientRequestId are different families. OPERATION_UNKNOWN is a non-retryable lookup refusal: check the send acknowledgement and original-key recovery; absence here proves no absence of an effect.",
+    "Answer what became of one accepted send, by the `operationId` `send_message` returned. Copy that exact id; pipelineId, launchId and clientRequestId are different families. OPERATION_UNKNOWN is a non-retryable lookup refusal: check the send acknowledgement and original-key recovery; a missing receipt does not prove that the send had no effect.",
     "`state` is `delivered`, `failed` or `in-flight`, read from the durable delivery record and reconciled against the delivery journal's current answer rather than from what the send call reported at the time. Asking is also what ENDS an accepted send that was dropped: `in-flight` means it is still progressing — the recipient may be mid-turn — and asking again later reaches `delivered` or `failed`.",
     "`resend` says what is safe to do next: `not-needed` (it arrived), `safe` (the record proves it never executed and it is fenced, so the same instruction may be sent again), or `verify-first` (`duplicateRisk` is true — delivery began, or nothing proves it did not, so check the recipient before sending again).",
     "A resend is a NEW `send_message` under a NEW `clientRequestId`: the settled operation is fenced, so repeating the original `clientRequestId` replays that settled answer instead of delivering anything.",
@@ -4072,7 +4072,7 @@ const clientRequestIdSchema = z.string().min(1).describe("Stable idempotency key
 const lessonTextSchema = (min: number, max: number) => z.string()
   .superRefine((value, ctx) => {
     const length = lessonTextLength(value);
-    if (length < min || length > max) ctx.addIssue({ code: "custom", message: textLengthError("text", length, max, "normalized Unicode code points", min) });
+    if (length < min || length > max) ctx.addIssue({ code: "custom", message: textLengthError("", length, max, "normalized Unicode code points", min) });
   })
   .describe(`${min}–${max} Unicode code points after trimming and collapsing whitespace. Recommended target: ${max === RULE_MAX_CHARS ? 240 : max === WHY_MAX_CHARS ? 120 : Math.floor(max * 0.75)}. The hard maximum remains ${max}.`)
   .meta({ "x-length-unit": "Unicode code points", "x-normalization": "trim and collapse whitespace", "x-normalized-minLength": min, "x-normalized-maxLength": max });
@@ -4327,7 +4327,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
-    findingKey: z.string().max(400).refine(value => [...value].length <= 200).optional()
+    findingKey: codePointText(200, 0, false, null).optional()
       .describe("Opaque finding identity, at most 200 Unicode code points (raw schema input), unique among this project's open tasks. A recurring create increments count and lastSeenAt, replaces note (omitted clears it), preserves text, and answers the existing id with matched:true. After Done a new task links through finding.previousTaskId. Local to this install; never synced."),
     note: normalizedUtf16Text(TASK_NOTE_LIMIT, value => value.replace(/\s+/g, " ").trim()).nullable().optional().describe("Current situation for a keyed finding, at most 280 UTF-16 code units after whitespace collapse; recommended target 220. Author and time are server-derived; omitted clears the previous note on a match."),
     project: z.string().min(1).describe("Known project key, display name or repository name; case and surrounding whitespace are ignored. Unknown or ambiguous names refuse immediately without waiting for a catalog scan."),
@@ -4362,7 +4362,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Task progress estimate from 0 to 100; null clears it, omitted preserves it. Use taskId; cannot combine with refine. Time and reporter are server-derived. Maintain it whenever you update the task."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
-    findingKey: z.string().max(400).refine(value => [...value].length <= 200).nullable().optional()
+    findingKey: codePointText(200, 0, false, null).nullable().optional()
       .describe("Set an opaque finding identity of at most 200 Unicode code points (raw schema input); null clears it and its occurrence metadata. Another open task holding it in this project refuses the update, including a reopen. Setting a new key starts count at one. Local to this install; never synced."),
     note: normalizedUtf16Text(TASK_NOTE_LIMIT, value => value.replace(/\s+/g, " ").trim()).nullable().optional().describe("Current situation for the operator, at most 280 UTF-16 code units after whitespace collapse; recommended target 220; replaces the note, null clears it. Author and updatedAt are server-derived."),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
@@ -4386,13 +4386,13 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
     }).optional().describe("Remove one line of the stored details."),
     appendLine: z.string().min(1).optional()
-      .describe("Append one line to the stored details. The resulting whole field must fit 20000 UTF-16 code units after trimming; recommended target 15000. Edits apply in the order replaceLine, removeLine, appendLine, atomically against the details stored at the write and under the details limit; not combined with details."),
+      .describe("Append one line to the stored details. The resulting whole field must fit 20000 UTF-16 code units, including preserved indentation and trailing whitespace; recommended target 15000. Edits apply in the order replaceLine, removeLine, appendLine, atomically against the details stored at the write and under the details limit; not combined with details."),
     status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned requires pos {x, y} when no position is stored; otherwise pos may be omitted and the stored position is kept. Unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional().describe("Required for a first pin when no position is stored; omit to keep an existing position when pinning."),
     dueAt: z.string().nullable().optional(),
     dueTz: z.string().nullable().optional(),
-    dueReason: z.string().optional().describe("Reason for moving a passed due date to a later instant: 1 to 200 UTF-16 code units after trimming. Validated against the current task before admission."),
+    dueReason: utf16Text(200, 0, true).optional().describe("Reason for moving a passed due date to a later instant: 1 to 200 UTF-16 code units after trimming. Validated against the current task before admission."),
     board: z.enum(["shown", "hidden"]).optional()
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
@@ -4517,7 +4517,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       text: storedUtf16Text(MAX_STAGE_FINDING_CHARS - 5, 1, value => value.trim(), "trimming").describe(
         `What is wrong and where (file:line, or the surface and viewport), how to show it fails, the fix intent and its acceptance. Claim no head, pull request or declared output: the server reads that provenance itself. A finding is recorded in its rendered form "P1 — text", so raw text is limited to ${MAX_STAGE_FINDING_CHARS - 5} Unicode code points and trimmed text to ${MAX_STAGE_FINDING_CHARS - 5} UTF-16 code units to preserve it in the ${MAX_STAGE_FINDING_CHARS}-unit record. Recommended target 1500.`,
       ),
-    })).max(MAX_STAGE_REPORT_FINDINGS).optional()
+    })).max(MAX_STAGE_REPORT_FINDINGS, { error: issue => `findings must hold at most ${MAX_STAGE_REPORT_FINDINGS} entries; actual count is ${Array.isArray(issue.input) ? issue.input.length : 0}` }).optional()
       .describe("Unresolved work, ranked. Empty or omitted for pass, which cannot carry findings, and for needs_decision, whose findings would send a stage with a fail edge to its fix stage."),
     blocked: z.boolean().optional()
       .describe("Set true only when the fixer cannot proceed: cannot build, cannot run required checks, or a handed finding is impossible within the specification. Requires verdict fail and blockedReason; parks the fix stage even with a new committed head."),

@@ -21468,6 +21468,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 900_000);
 
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");
     fs.mkdirSync(out, { recursive: true });
@@ -21491,7 +21492,11 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           putRequests += 1;
           const body = await request.json() as { reason?: string; enabled?: boolean };
           if ((body.reason?.length ?? 0) > 500) {
-            return Response.json({ error: `instructions (reason) are ${body.reason!.length} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` }, { status: 400 });
+            const refusal = applySeatTickSettingsChange(defaultSeatTickSettings("atlas"), { reason: body.reason }, {
+              at: "2026-11-01T10:00:00.000Z", actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+            });
+            if (refusal.ok) throw new Error("Expected the production instructions limit to refuse the overage");
+            return Response.json({ error: refusal.error }, { status: 400 });
           }
           if (body.enabled === false && !body.reason?.trim()) {
             return Response.json({ error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" }, { status: 400 });
