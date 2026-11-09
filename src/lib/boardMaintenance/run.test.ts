@@ -565,11 +565,25 @@ test("audit preparation refuses native seat replacement during its evidence awai
   expect(readMaintenanceProject(PROJECT)?.currentRunId).toBeNull();
 });
 
-test("a rotated claim after worker completion is reconciled and later maintenance can proceed", async () => {
+test("rotated audit claim is reconciled, reverified, settled, and then starts the next window", async () => {
   const { auditFixture } = await import("./testFixture");
   const makeAudit: NonNullable<BoardMaintenancePorts["auditInput"]> = async (run, _sources, state) => {
     const audit = auditFixture(run);
-    if (state?.window) audit.window = structuredClone(state.window);
+    audit.occurrences = [];
+    if (state?.window) {
+      audit.window = structuredClone(state.window);
+      audit.window.sources = [{ ...auditFixture(run).window.sources[0], complete: true, gap: null }];
+      audit.window.gaps = audit.window.gaps.filter(gap => gap !== "claim-replaced" && gap !== "seat-lineage-unavailable" && !gap.startsWith("seat-source-unverified:"));
+      audit.unread = { [audit.window.sources[0].key]: null };
+    } else if (state?.through) {
+      audit.window = { ...audit.window, lower: state.through, upper: run.claimedAt, sources: [], gaps: [], decisionScanComplete: true };
+      audit.unread = {};
+    } else {
+      audit.window.sources = [];
+      audit.window.gaps = ["seat-lineage-unavailable", `seat-source-unverified:${run.seat.conversationId}`];
+      audit.window.decisionScanComplete = true;
+      audit.unread = {};
+    }
     return { ...audit, revision: state?.revision ?? 0 };
   };
   const h = harness(true, { auditInput: makeAudit });
@@ -577,7 +591,7 @@ test("a rotated claim after worker completion is reconciled and later maintenanc
   const controller = productionBoardMaintenanceController(h.sources, {
     auditInput: makeAudit, evidence: async () => [],
     launch: async () => ({ status: 202, body: { state: "starting", conversationId: "conversation_fixture_worker", launchId: "fixture-worker" } }),
-    observe: async () => ({ state: "ended", finalText: "Verdict: pass" }),
+    observe: async run => ({ state: "ended", finalText: `audit-manifest: ${JSON.stringify({ version: 1, runId: run.runId, revision: run.audit!.revision, lower: run.audit!.window.lower, upper: run.audit!.window.upper, rows: 0, occurrences: [] })}\nVerdict: pass` }),
   });
   await controller.launchIfDue(input());
   const previous = maintenanceRuns(PROJECT).at(-1)!;
@@ -586,11 +600,26 @@ test("a rotated claim after worker completion is reconciled and later maintenanc
   expect(await controller.reconcile(PROJECT)).toBe("maintenance: claim replaced");
   expect(readMaintenanceRun(previous.runId)?.state).toBe("failed");
   expect(readMaintenanceProject(PROJECT)?.currentRunId).toBeNull();
-  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: null, window: { upper: previous.claimedAt, gaps: ["claim-replaced"] } });
-  const { claimMaintenanceRun } = await import("./store");
-  const next = claimMaintenanceRun({ project: PROJECT, now: NOW + 4 * 3600000, intervalHours: 3, seat: { seatEpoch: 2, conversationId: input().seat!.conversationId }, repoDir: "/fixtures/repository" });
-  expect(next.claimed).toBe(true);
-  expect(next.claimed && next.run.runId).not.toBe(previous.runId);
+  expect(readMaintenanceRun(previous.runId)?.log.audit?.window.gaps).toContain("claim-replaced");
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: null, window: { upper: previous.claimedAt, gaps: expect.arrayContaining(["claim-replaced", "seat-lineage-unavailable"]) } });
+  h.now(NOW + 4 * 3600000);
+  const resumedRequest = input(); resumedRequest.now = NOW + 4 * 3600000; resumedRequest.seat = { ...resumedRequest.seat!, seatEpoch: 2 };
+  expect(await controller.launchIfDue(resumedRequest)).toContain("launched");
+  const resumed = maintenanceRuns(PROJECT).at(-1)!;
+  expect(resumed.runId).not.toBe(previous.runId);
+  expect(resumed.launchBody).toBeDefined();
+  expect(resumed.audit?.window).toMatchObject({ lower: readMaintenanceProject(PROJECT)?.audit?.window?.lower, upper: previous.claimedAt, gaps: [] });
+  await controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(resumed.runId)?.state).toBe("succeeded");
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: previous.claimedAt, window: null });
+  h.now(NOW + 7 * 3600000);
+  const nextRequest = input(); nextRequest.now = NOW + 7 * 3600000; nextRequest.seat = { ...nextRequest.seat!, seatEpoch: 2 };
+  expect(await controller.launchIfDue(nextRequest)).toContain("launched");
+  const nextWindow = maintenanceRuns(PROJECT).at(-1)!;
+  expect(nextWindow.runId).not.toBe(resumed.runId);
+  await controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(nextWindow.runId)?.state).toBe("succeeded");
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: nextWindow.claimedAt, window: null });
 });
 
 
@@ -631,7 +660,7 @@ test("production audit input covers rotated seats, exact window and revised oper
     expect(audit.window.sources).toHaveLength(3); expect(audit.operator).toEqual({ kind: "member", memberId: owner.id });
     expect(audit.occurrences.map(o => o.at).sort()).toEqual([new Date(NOW - 3600000).toISOString(), new Date(NOW - 1000).toISOString(), new Date(NOW - 500).toISOString()]);
     expect(audit.occurrences.every(o => o.verified)).toBe(true);
-    const missingRoster = { ...audit.window, sources: audit.window.sources.filter(source => source.conversationId !== ids[1]), gaps: ["operator-anchor-unverified", "seat-lineage-unavailable", `seat-source-unverified:${ids[1]}`] };
+    const missingRoster = { ...audit.window, sources: audit.window.sources.filter(source => source.conversationId !== ids[1]), gaps: ["operator-anchor-unverified", "seat-lineage-unavailable", `seat-source-unverified:${ids[1]}`, "claim-replaced"] };
     const recovered = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: missingRoster }, ports);
     expect(recovered.operator).toEqual({ kind: "member", memberId: owner.id });
     expect(recovered.window.gaps).toEqual([]);
@@ -735,26 +764,41 @@ test("production audit input retains partial pages, cursor resets and unverified
   expect(missing.window.sources[0].gap).toBe("occurrence-unavailable");
 });
 
-test("bounded transcript batches resume past pages without operator occurrences after restart", async () => {
+test("real newest-first transcript pages resume at their durable unread byte cursor after restart", async () => {
   const h = harness(); const run = claim();
   const { auditFixture } = await import("./testFixture");
   const { buildMaintenanceAuditInput } = await import("./audit");
+  const { readMessagesPage } = await import("@/lib/session/messagesPage");
   const fixture = auditFixture(run); const source = fixture.window.sources[0];
-  const boundaryAt = new Date(NOW - 85000).toISOString();
+  const transcript = path.join(held.dir, "newest-first-large.jsonl");
+  const records = Array.from({ length: 3201 }, (_, index) => {
+    const at = new Date(NOW - (3201 - index) * 1000).toISOString();
+    const text = index === 0 ? "older operator request" : `agent insertion ${index}`;
+    return JSON.stringify({ type: "response_item", timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+  });
+  fs.writeFileSync(transcript, `${records.join("\n")}\n`);
+  const descriptor = fs.openSync(transcript, "r");
+  const stat = fs.statSync(transcript);
+  const sourceWithArtifact = { ...source, path: transcript, artifact: `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`, size: stat.size };
+  fixture.window.sources[0] = sourceWithArtifact;
   const ports = {
-    artifact: () => ({ artifact: source.artifact!, size: 1000 }),
-    read: async (_path: string, since: string, cursor?: string) => {
-      if (since === boundaryAt) return { records: [{ seq: 16, ts: new Date(Date.parse(boundaryAt) + 1000).toISOString(), text: "request after agent pages", author: { kind: "operator" } }], hasMore: false };
-      const page = cursor ? Number(cursor.slice(1)) : 0;
-      return { records: [{ seq: page, ts: new Date(NOW - 100000 + page * 1000).toISOString(), text: "agent message", author: { kind: "agent" } }], hasMore: true, cursor: `p${page + 1}` };
+    artifact: (file: string) => { const current = fs.statSync(file); return { artifact: `${current.dev}:${current.ino}:${current.birthtimeMs}`, size: current.size }; },
+    read: async (_path: string, since: string, cursor?: string | import("@/lib/session/messagesPage").MessagesPageCursor, durableCursor?: import("@/lib/session/messagesPage").MessagesPageCursor | null) => {
+      let nativeCursor = durableCursor ?? cursor ?? null;
+      if (nativeCursor && !Array.isArray(nativeCursor.r)) nativeCursor = { ...nativeCursor, r: [] };
+      const page = readMessagesPage({ descriptor, size: stat.size, engine: "codex" }, { kinds: new Set(["message"]), roles: new Set(["user"]), since, limit: 200, maxChars: 16000, cursor: nativeCursor });
+      return { ...page, records: page.records.map(record => ({ seq: record.seq, ts: record.ts, text: record.text, author: record.text.startsWith("agent insertion") ? { kind: "agent" } : { kind: "operator" } })) };
     },
   };
-  const first = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 0, through: null, window: fixture.window }, ports);
-  expect(first.occurrences).toHaveLength(0);
-  expect(first.window.sources[0]).toMatchObject({ gap: "read-budget-exhausted", scanThrough: { seq: 15, at: boundaryAt } });
-  const restarted = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: first.window }, ports);
-  expect(restarted.occurrences.map(o => o.seq)).toEqual([16]);
-  expect(restarted.window.sources[0].gap).toBeNull();
+  try {
+    const first = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 0, through: null, window: fixture.window }, ports);
+    expect(first.occurrences).toHaveLength(0);
+    const restarted = await buildMaintenanceAuditInput(run, h.sources, { version: 1, revision: 1, through: null, window: first.window }, ports);
+    expect(first.window.sources[0]).toMatchObject({ gap: "read-budget-exhausted", scanThrough: { seq: expect.any(Number), at: expect.any(String) } });
+    expect(restarted.occurrences.map(o => o.text)).toEqual(["older operator request"]);
+    expect(restarted.window.sources[0].gap).toBeNull();
+    expect(restarted.window.sources[0].scanThrough).toBeNull();
+  } finally { fs.closeSync(descriptor); }
 });
 
 

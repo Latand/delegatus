@@ -115,8 +115,14 @@ export function saveMaintenanceAuditLaunch(runId: string, audit: MaintenanceAudi
     if (!run || !project || project.currentRunId !== runId || !maintenanceRunIsLive(run) || run.launchBody || (project.audit?.revision ?? 0) !== audit.revision - 1 || audit.runId !== runId || audit.project !== run.project) return null;
     if (audit.version !== 1 || !Number.isSafeInteger(audit.revision) || JSON.stringify(audit.seat) !== JSON.stringify(run.seat) || !(Date.parse(audit.window.lower) < Date.parse(audit.window.upper)) || Date.parse(audit.window.upper) > Date.parse(run.claimedAt)) return null;
     const frozen = project.audit?.window;
-    if (frozen && (frozen.lower !== audit.window.lower || frozen.upper !== audit.window.upper || frozen.sources.some((source, i) => source.key !== audit.window.sources[i]?.key)
-      || frozen.decisionScanComplete !== false && frozen.sources.length !== audit.window.sources.length)) return null;
+    if (frozen) {
+      if (frozen.lower !== audit.window.lower || frozen.upper !== audit.window.upper
+        || frozen.sources.some((source, i) => source.key !== audit.window.sources[i]?.key)) return null;
+      const additions = audit.window.sources.slice(frozen.sources.length);
+      if (additions.some(source => source.kind !== "transcript" || !source.path || !source.artifact || !source.generation
+        || !frozen.gaps.includes(`seat-source-unverified:${source.conversationId}`))) return null;
+      if (frozen.decisionScanComplete !== false && additions.length && !frozen.gaps.some(gap => gap.startsWith("seat-source-unverified:"))) return null;
+    }
     if (!frozen && project.audit?.through && audit.window.lower !== project.audit.through) return null;
     if (!authorize()) return null;
     const next = { ...run, audit, launchBody: body, state: "launching" as const };

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import { readMessageAuthorContext, type ConversationMessage } from "@/lib/session/messagesPage";
+import { readMessageAuthorContext, readMessagesPage, type ConversationMessage, type MessagesPageCursor, type MessagesPageSource } from "@/lib/session/messagesPage";
 import { heldDeliveryOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import { assignDeliveredOccurrences } from "@/components/feed/deliveredOccurrences";
 import type { Item } from "@/components/feed/parse";
@@ -36,21 +36,60 @@ interface MessageRecord {
   parts?: Array<{ operationId?: string; textStart: number; textEnd: number; author: { kind: string; memberId?: string } }>;
 }
 export interface AuditSourcePorts {
-  read(path: string, since: string, cursor?: string): Promise<{ records: MessageRecord[]; hasMore: boolean; cursor?: string | null; cursorReset?: boolean; scanned?: { capped: boolean } }>;
+  read(path: string, since: string, cursor?: string | MessagesPageCursor, durableCursor?: MessagesPageCursor | null): Promise<{ records: MessageRecord[]; hasMore: boolean; cursor?: string | MessagesPageCursor | null; cursorReset?: boolean; scanned?: { capped: boolean } }>;
   artifact(path: string): { artifact: string; size: number };
 }
 /** Same normalized records, provenance joins, pinned descriptors and audience as MCP. */
 async function productionSourcePorts(sources: SeatTickSources): Promise<AuditSourcePorts> {
   const { viewerReadTools, openPinnedTranscript } = await import("@/lib/mcp/bindings");
   const reader = viewerReadTools();
-  return { artifact: artifactIdentity, read: async (transcriptPath, since, cursor) => {
-    const page = await reader.conversation_messages({ transcriptPath, since, cursor, kinds: ["message"], roles: ["user"], full: true, limit: 200, maxChars: 16000 }) as unknown as Awaited<ReturnType<AuditSourcePorts["read"]>>;
+  return { artifact: artifactIdentity, read: async (transcriptPath, since, cursor, durableCursor) => {
     const pinned = openPinnedTranscript(transcriptPath);
-    if (!pinned) return page;
+    if (!pinned) {
+      if (durableCursor) return { records: [], hasMore: false, cursorReset: true };
+      return await reader.conversation_messages({ transcriptPath, since, cursor, kinds: ["message"], roles: ["user"], full: true, limit: 200, maxChars: 16000 }) as unknown as Awaited<ReturnType<AuditSourcePorts["read"]>>;
+    }
     try {
       const engine = pinned.rootName === "codex-sessions" ? "codex" : pinned.rootName === "claude-projects" ? "claude" : "copilot";
-      const context = readMessageAuthorContext({ descriptor: pinned.descriptor, size: pinned.stat.size, engine }, page.records as unknown as ConversationMessage[]);
-      if (!context || !pinned.sameIdentity()) return page;
+      const source: MessagesPageSource = { descriptor: pinned.descriptor, size: pinned.stat.size, engine };
+      if (!durableCursor && !cursor) {
+        const page = await reader.conversation_messages({ transcriptPath, since, kinds: ["message"], roles: ["user"], full: true, limit: 200, maxChars: 16000 }) as unknown as Awaited<ReturnType<AuditSourcePorts["read"]>>;
+        const nativePage = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["user"]), since, limit: 200, maxChars: 16000 });
+        if (page.records.map(record => record.seq).join(",") !== nativePage.records.map(record => record.seq).join(",")) return page;
+        const context = readMessageAuthorContext(source, page.records as unknown as ConversationMessage[]);
+        if (!context || !pinned.sameIdentity()) return { ...page, cursor: nativePage.cursor };
+        const deliveries = heldDeliveryOccurrences(transcriptPath, sources.registry().readOnlySnapshot());
+        const digests = new Set(deliveries.map(d => d.textDigest));
+        const candidates = new Map<Item, number>();
+        for (const record of context) {
+          if (record.role !== "user" || !record.ts) continue;
+          let text = record.sourceText ?? record.text;
+          if (engine === "codex" && !digests.has(messageTextDigest(text))) {
+            try { const decoded = decodeCodexStructuredUserText(text); if (decoded.structured) text = decoded.text; } catch { /* no positive origin is inferred */ }
+          }
+          candidates.set({ kind: "user", ts: record.ts, text }, record.seq);
+        }
+        const anchors = new Map<number, { kind: string; deliveryKey?: string }>();
+        for (const delivery of deliveries.sort((a, b) => a.deliveredAt.localeCompare(b.deliveredAt))) {
+          for (const [item] of assignDeliveredOccurrences(candidates.keys(), [delivery])) {
+            anchors.set(candidates.get(item)!, { kind: delivery.origin, deliveryKey: delivery.clientMessageId });
+            candidates.delete(item);
+          }
+        }
+        return { records: page.records.map(record => {
+          const anchor = anchors.get(record.seq);
+          return anchor ? { ...record, deliveryKey: anchor.deliveryKey, ...(!record.author && !record.parts && anchor.kind === "operator" ? { author: { kind: "operator" } } : {}) } : record;
+        }), hasMore: page.hasMore, cursor: nativePage.cursor, scanned: page.scanned };
+      }
+      let nativeCursor: MessagesPageCursor | null = null;
+      try {
+        const encodedCursor = durableCursor ?? cursor;
+        nativeCursor = (typeof encodedCursor === "string" ? JSON.parse(encodedCursor) : encodedCursor ?? null) as MessagesPageCursor | null;
+        if (nativeCursor && !Array.isArray(nativeCursor.r)) nativeCursor = { ...nativeCursor, r: [] };
+      } catch { return { records: [], hasMore: false, cursorReset: true }; }
+      const page = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["user"]), since, limit: 200, maxChars: 16000, cursor: nativeCursor });
+      const context = readMessageAuthorContext(source, page.records as unknown as ConversationMessage[]);
+      if (!context || !pinned.sameIdentity()) return { records: page.records, hasMore: page.hasMore, cursor: page.cursor ? JSON.stringify(page.cursor) : null, scanned: { capped: page.scanned.capped } };
       const deliveries = heldDeliveryOccurrences(transcriptPath, sources.registry().readOnlySnapshot());
       const digests = new Set(deliveries.map(d => d.textDigest));
       const candidates = new Map<Item, number>();
@@ -70,10 +109,10 @@ async function productionSourcePorts(sources: SeatTickSources): Promise<AuditSou
           candidates.delete(item);
         }
       }
-      return { ...page, records: page.records.map(record => {
+      return { records: page.records.map(record => {
         const anchor = anchors.get(record.seq);
         return anchor ? { ...record, deliveryKey: anchor.deliveryKey, ...(!record.author && !record.parts && anchor.kind === "operator" ? { author: { kind: "operator" } } : {}) } : record;
-      }) };
+      }), hasMore: page.hasMore, cursor: page.cursor, scanned: { capped: page.scanned.capped } };
     } finally { fs.closeSync(pinned.descriptor); }
   } };
 }
@@ -99,8 +138,8 @@ export async function buildMaintenanceAuditInput(run: MaintenanceRun, sources: S
   const lower = prior?.window?.lower ?? prior?.through ?? "1970-01-01T00:00:00.000Z";
   const upper = prior?.window?.upper ?? run.claimedAt;
   if (prior?.window) {
-    roster = structuredClone(prior.window.sources);
-    const recoverable = (gap: string) => gap === "operator-anchor-unverified" || gap === "seat-lineage-unavailable" || gap.startsWith("seat-source-unverified:") || gap === "read-budget-exhausted";
+    roster = prior.window.sources.map(source => ({ ...source, from: source.from ? { ...source.from } : null, ...(source.scanThrough ? { scanThrough: { ...source.scanThrough } } : {}), ...(source.decision ? { decision: { ...source.decision } } : {}) }));
+    const recoverable = (gap: string) => gap === "operator-anchor-unverified" || gap === "seat-lineage-unavailable" || gap.startsWith("seat-source-unverified:") || gap === "read-budget-exhausted" || gap === "claim-replaced";
     gaps.push(...prior.window.gaps.filter(gap => !recoverable(gap)));
     if (prior.window.gaps.includes("seat-lineage-unavailable") || prior.window.gaps.some(gap => gap.startsWith("seat-source-unverified:"))) {
       const seats = readOrchestratorSeatFileOrNull();
@@ -213,17 +252,18 @@ export async function buildMaintenanceAuditInput(run: MaintenanceRun, sources: S
       const file = ports.artifact(source.path!);
       if (file.artifact !== source.artifact || file.size < source.size) { source.gap = "artifact-replaced"; continue; }
       source.gap = null;
-      let cursor: string | undefined;
+      let cursor: string | MessagesPageCursor | undefined;
       let found = source.from === null;
       let exhausted = false;
       let readBudgetReached = false;
       let physicalBoundary = source.scanThrough ?? null;
       for (let page = 0; page < 16; page++) {
-        const result = await ports.read(source.path!, source.scanThrough?.at ?? lower, cursor);
+        const durableCursor = page === 0 && source.scanThrough ? { o: source.scanThrough.seq, p: 0, r: [] } : null;
+        const result = await ports.read(source.path!, lower, cursor, durableCursor);
         if (result.cursorReset) { source.gap = "cursor-reset"; break; }
         for (const record of result.records) {
-          if (!physicalBoundary || record.seq > physicalBoundary.seq) physicalBoundary = { seq: record.seq, at: record.ts ?? physicalBoundary?.at ?? lower };
-          if (source.scanThrough && record.seq <= source.scanThrough.seq) continue;
+          if (!physicalBoundary || record.seq < physicalBoundary.seq) physicalBoundary = { seq: record.seq, at: record.ts ?? physicalBoundary?.at ?? lower };
+          if (source.scanThrough && page === 0 && record.seq >= source.scanThrough.seq) continue;
           if (source.from?.seq === record.seq) found = true;
           if (!record.ts || !Number.isFinite(Date.parse(record.ts))) { source.gap = "occurrence-time-unverified"; continue; }
           if (record.seq >= source.size || !inWindow(record.ts, lower, upper) || source.from && record.seq > source.from.seq) continue;
@@ -250,7 +290,12 @@ export async function buildMaintenanceAuditInput(run: MaintenanceRun, sources: S
         cursor = result.cursor;
         if (page === 15) readBudgetReached = true;
       }
-      if (readBudgetReached && physicalBoundary) source.scanThrough = physicalBoundary;
+      if (readBudgetReached && physicalBoundary) {
+        // Persist the byte position, not the reader's process cursor. Re-reading
+        // the boundary line is safe because occurrence keys and task markers are stable.
+        source.scanThrough = physicalBoundary;
+      }
+      else if (exhausted && !source.gap) source.scanThrough = null;
       if (!exhausted && !source.gap) {
         const last = occurrences.filter(o => o.source === source.key).at(-1);
         if (last) unread[source.key] = { seq: last.seq, ...(last.part ? { part: last.part } : {}), requestIndex: 0 };

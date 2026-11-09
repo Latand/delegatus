@@ -74,6 +74,55 @@ test("audit checkpoint survives pruning and rejects a stale controller revision 
   const output = await new Response(child.stdout).text(); expect(await child.exited).toBe(0); expect(JSON.parse(output)).toEqual(state);
 });
 
+test("CAS accepts only lineage-proven recovered transcript sources after a completed form scan", async () => {
+  held = sandbox();
+  const { auditFixture } = await import("./testFixture");
+  const { saveMaintenanceAuditLaunch, reconcileLostMaintenanceAuditClaim, readMaintenanceProject, settleMaintenanceAudit } = await import("./store");
+  const first = claim();
+  const original = auditFixture(first);
+  const missingId = original.seat.conversationId;
+  original.window.sources = [];
+  original.occurrences = [];
+  original.unread = {};
+  original.window.gaps = ["seat-lineage-unavailable", `seat-source-unverified:${missingId}`];
+  original.window.decisionScanComplete = true;
+  const saved = saveMaintenanceAuditLaunch(first.runId, original, { prompt: JSON.stringify(original) })!;
+  expect(reconcileLostMaintenanceAuditClaim(saved, "rotated claim", undefined, NOW + 1000)).not.toBeNull();
+  const rotated = attempt(NOW + 3 * 3600000);
+  expect(rotated.claimed).toBe(true);
+  if (!rotated.claimed) return;
+  const prior = readMaintenanceProject(PROJECT)!.audit!;
+  const recovered = auditFixture(rotated.run);
+  recovered.revision = prior.revision + 1;
+  recovered.window = structuredClone(prior.window!);
+  recovered.window.sources.push({ ...auditFixture(rotated.run).window.sources[0], conversationId: missingId, complete: true, gap: null });
+  recovered.window.gaps = [];
+  recovered.window.decisionScanComplete = true;
+  recovered.occurrences = [];
+  recovered.unread = { [recovered.window.sources[0].key]: null };
+  const launched = saveMaintenanceAuditLaunch(rotated.run.runId, recovered, { prompt: JSON.stringify(recovered) });
+  expect(launched?.launchBody).toEqual({ prompt: JSON.stringify(recovered) });
+  const report = { version: 1 as const, rows: [], manifest: { version: 1 as const, runId: rotated.run.runId, revision: recovered.revision, lower: recovered.window.lower, upper: recovered.window.upper, rows: 0, occurrences: [] }, complete: true, error: null, window: recovered.window };
+  expect(settleMaintenanceAudit(launched!, { state: "succeeded", log: { ...launched!.log, audit: report } })).not.toBeNull();
+  expect(readMaintenanceProject(PROJECT)?.audit).toMatchObject({ through: recovered.window.upper, window: null });
+});
+
+test("CAS rejects recovered sources absent from the frozen unverified roster gaps", async () => {
+  held = sandbox(); const first = claim();
+  const { auditFixture } = await import("./testFixture");
+  const { saveMaintenanceAuditLaunch, reconcileLostMaintenanceAuditClaim, readMaintenanceProject } = await import("./store");
+  const audit = auditFixture(first); audit.window.sources = []; audit.occurrences = []; audit.unread = {};
+  audit.window.decisionScanComplete = true;
+  const saved = saveMaintenanceAuditLaunch(first.runId, audit, { prompt: "frozen" })!;
+  expect(reconcileLostMaintenanceAuditClaim(saved, "rotated claim", undefined, NOW + 1000)).not.toBeNull();
+  const next = claim(NOW + 3 * 3600000);
+  const candidate = auditFixture(next); candidate.revision = readMaintenanceProject(PROJECT)!.audit!.revision + 1;
+  candidate.window = structuredClone(readMaintenanceProject(PROJECT)!.audit!.window!);
+  candidate.window.sources.push({ ...auditFixture(next).window.sources[0], complete: true, gap: null });
+  candidate.window.gaps = [];
+  expect(saveMaintenanceAuditLaunch(next.runId, candidate, { prompt: "unauthorized roster growth" })).toBeNull();
+});
+
 
 test("two real controller processes commit one audit revision and terminal result", async () => {
   held = sandbox(); const run = claim();
