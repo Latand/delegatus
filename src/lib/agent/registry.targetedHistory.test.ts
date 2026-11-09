@@ -151,3 +151,38 @@ test("keyed session resolution keeps staged paths private by id, alias and raw p
     }
   } finally { peer.close(); f.close(); }
 });
+
+
+test("cold album sources read one conversation, retain aliases and observe appended transcript generations", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "targeted-album-sources-"));
+  const data = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.02), { sessionsRoot: path.join(directory, "transcripts") });
+  let snapshots = 0, payloads = 0;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: data.filename, deferColdKeyInitialization: true,
+    onSqliteSnapshotLoad: () => { snapshots++; },
+    onSqliteRowPayloadRead: (_collection, count) => { payloads += count; },
+  });
+  const peer = new SqliteAgentRegistryStore(data.filename, {
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }), normalize: normalizeRegistry,
+  });
+  try {
+    const selected = data.conversations[0]!;
+    const id = selected.conversationId as `conversation_${string}`;
+    expect(registry.conversationTranscriptPaths(id)).toContain(selected.path);
+    expect(snapshots).toBe(0);
+    expect(payloads).toBeLessThan(10);
+    const alias = "conversation_album_alias";
+    peer.mutate(file => {
+      file.conversationAliases[alias] = id;
+      file.conversations[id]!.continuityPaths.push("/sessions/earlier.jsonl", selected.path);
+    }, false);
+    payloads = 0;
+    const paths = registry.conversationTranscriptPaths(alias);
+    expect(paths).toEqual(registry.conversationTranscriptPaths(id));
+    expect(paths).toContain("/sessions/earlier.jsonl");
+    expect(paths.filter(p => p === selected.path)).toHaveLength(1);
+    expect(payloads).toBeLessThan(10);
+    expect(snapshots).toBe(0);
+    expect(registry.conversationTranscriptPaths("conversation_missing_album")).toEqual([]);
+  } finally { peer.close(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});

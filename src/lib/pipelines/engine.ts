@@ -7704,6 +7704,7 @@ async function requestStageVerdictOnce(
   messageTs: number,
   structuredActive: boolean | null,
   persist: () => void | Promise<void>,
+  refreshAuthority: string | null,
 ): Promise<"asked" | "park"> {
   const conversationId = attempt.conversationId;
   /* A pane-hosted stage has no structured delivery seam, and neither has a
@@ -7712,6 +7713,20 @@ async function requestStageVerdictOnce(
   /* The turn evidence says the turn ended; the runtime ledger saying a turn is
      running is the one reading that may not be talked over. */
   if (structuredActive === true) return "park";
+  // Retain the authority captured before reading the transcript. Admission
+  // may await runtime preflight, so it must check this same origin again.
+  const currentRefreshAllows = () => {
+    if (refreshAuthority === null) return true;
+    const live = findPipelineRecord(pipeline.id);
+    const current = live && currentAttempt(live, stage.id);
+    const liveStage = live && currentStage(live);
+    return !!live && !!current && !!liveStage && live.state === "running" && !live.closedAt && !live.hiddenAt
+      && !current.report && !current.verdict && !current.suspension
+      && refreshYieldAuthority(live, liveStage, current, ports) === refreshAuthority
+      && !refreshExecutionRefusal(live, ports);
+  };
+  const held = () => { ports.scheduleTick?.(0); return "asked" as const; };
+  if (!currentRefreshAllows()) return held();
   const now = ports.now();
   const existing = attempt.verdictRequest;
   /* The agent answered and its answer still carries no readable verdict. That
@@ -7729,11 +7744,13 @@ async function requestStageVerdictOnce(
   if (ports.conversationDeliveryOutstanding?.(conversationId) === true) return "asked";
   /* Stable across ticks and processes, so a replay cannot mint a second ask. */
   const clientMessageId = `stage-verdict-request-${pipeline.id}-${stage.id}-${attempt.n}-${messageTs}`;
+  if (!currentRefreshAllows()) return held();
   const delivered = await ports.resumeSeveredTurn({
     conversationId,
     transcriptPath: attempt.agentPath,
     clientMessageId,
     text: VERDICT_REQUEST_TEXT,
+    ...(refreshAuthority !== null ? { continuationAllowed: async () => currentRefreshAllows() } : {}),
     project: pipeline.project,
     cwd: pipeline.repoDir,
     /* The request continues this attempt; a recovered activation replays its
@@ -7742,6 +7759,7 @@ async function requestStageVerdictOnce(
   });
   /* A refused admission leaves the request owed; the next tick asks again under
      the same identity, until the bound above runs out. */
+  if (!currentRefreshAllows()) return held();
   if (delivered !== true) return "asked";
   request.requestedAt = now;
   request.clientMessageId = clientMessageId;
@@ -10907,6 +10925,8 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
+  const verdictRefreshAuthority = pipeline.refreshOf && stage.id === "refresh"
+    ? refreshYieldAuthority(pipeline, stage, attempt, ports) : null;
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attemptEvidenceFloor(attempt), undefined,
     attempt.providerWait?.turnTs ?? attempt.controllerWait?.providerCutAt);
   const unregisteredHostDeath = structuredActive === true
@@ -11061,7 +11081,7 @@ async function tickRunStage(
       /* The turn ended and its verdict cannot be read. Before the recovery
          checks start spending, ask the agent that is still holding the context
          for the one thing only it can produce (#1756). */
-      if (await requestStageVerdictOnce(pipeline, stage, attempt, ports, durable.message!.ts, structuredActive, persist) === "asked") return;
+      if (await requestStageVerdictOnce(pipeline, stage, attempt, ports, durable.message!.ts, structuredActive, persist, verdictRefreshAuthority) === "asked") return;
       if (!canSpendRecoveryCheck()) return;
       await recordVerdictRecoveryMiss(
         pipeline,

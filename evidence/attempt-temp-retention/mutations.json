@@ -1,0 +1,103 @@
+{
+  "qualification": "Intermediate source snapshot; parent recorded check returned unknown after a log-root refusal. Individual mutation outcomes were preserved.",
+  "mutations": [
+    {
+      "mutation": "shared-inventory",
+      "test": "src/lib/runtime/attemptTempProduction.test.ts",
+      "pattern": "real sweep shares",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "absent-allocation",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "absent root with",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "mixed-failure",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "budget deferral cannot hide",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "run-budget",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "loaded 727",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "inventory-budget",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "incomplete real checkout inventory",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "largest-first",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "pressure retires",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "current-lane-priority",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "current finished-lane authority",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "reserved-fair-visits",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "pressure fairness",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "hold-accounting",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "report separates",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "find-recovery",
+      "test": "src/lib/runtime/attemptTempFilesystem.test.ts",
+      "pattern": "failed find names",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "vanished-checkout",
+      "test": "src/lib/runtime/attemptTempFilesystem.test.ts",
+      "pattern": "checkout gone",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "queue-deferral",
+      "test": "src/lib/pipelines/worktreeSweepWorker.test.ts",
+      "pattern": "queue budget expired",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "dry-run-accounting",
+      "test": "src/lib/runtime/attemptTempRetention.test.ts",
+      "pattern": "dry run records",
+      "code": 1,
+      "killed": true
+    },
+    {
+      "mutation": "scheduler-cause",
+      "test": "src/lib/tempSweep.test.ts",
+      "pattern": "real minute scheduler logs",
+      "code": 1,
+      "killed": true
+    }
+  ]
+}

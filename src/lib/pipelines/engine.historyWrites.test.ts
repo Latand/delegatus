@@ -294,35 +294,124 @@ test.each(["failed", "deferred", "unconfirmed", "unresolved"] as const)("capacit
   }
 });
 
-test("runtime-switch continuation refuses when the refresh budget expires during reconfigure", async () => {
+async function structuredCapacityLane() {
   const f = await capacityLane();
   const lane = f.lane();
-  const attempt = lane.runs[0]!.attempts[0]!;
-  Object.assign(attempt, { sessionId: "capacity-session", conversationId: "conversation_capacity",
+  Object.assign(lane.runs[0]!.attempts[0]!, { sessionId: "capacity-session", conversationId: "conversation_capacity",
     agentPath: path.join(lane.worktreeDir, "transcript.jsonl"), launchId: "capacity-launch", paneId: null,
     historical: false, state: "running" });
   lane.state = "running";
   savePipelines([lane, ...loadPipelines().filter(row => row.id !== lane.id)]);
-  f.h.ports.conversationGeneration = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: null,
-    accountId: "default", sessionId: "capacity-session", agentPath: attempt.agentPath! });
-  let continuations = 0;
+  f.h.setConversationActive(false);
+  return f;
+}
+
+test.each(["transcript", "admission", "unexpired"] as const)("refresh verdict continuation respects its budget at %s", async boundary => {
+  const f = await structuredCapacityLane();
+  const sends: string[] = [];
+  let admissions = 0, reads = 0;
+  f.advance(60 * 60_000 - 1);
+  f.h.ports.durableTurnEvidence = async () => {
+    reads++;
+    if (boundary === "transcript") f.advance(1);
+    return { turn: "terminal", message: { text: "Stage work is complete.", ts: Date.parse("2026-11-01T12:00:01.000Z") }, backgroundTasks: [] };
+  };
+  f.h.ports.resumeSeveredTurn = async input => {
+    admissions++;
+    if (boundary === "admission") f.advance(1);
+    if (input.continuationAllowed && !await input.continuationAllowed()) return false;
+    sends.push(input.clientMessageId);
+    return true;
+  };
+  await tickPipelines([], f.h.ports);
+  expect(reads).toBeGreaterThan(0);
+  if (boundary === "unexpired") {
+    expect(admissions).toBe(1);
+    expect(sends).toEqual([`stage-verdict-request-${f.id}-refresh-1-${Date.parse("2026-11-01T12:00:01.000Z")}`]);
+    expect(yieldedAttempt(f).verdictRequest?.requestedAt).toBe(f.h.ports.now());
+    return;
+  }
+  expect(sends).toEqual([]);
+  expect(admissions).toBe(boundary === "transcript" ? 0 : 1);
+  expect(yieldedAttempt(f).verdictRequest?.requestedAt).toBeUndefined();
+  await tickPipelines([], f.h.ports);
+  expect(sends).toEqual([]);
+  expect(yieldedAttempt(f).suspension?.capacityYield?.settledAt).toBeDefined();
+  expect(yieldedAttempt(f).verdict).toBeNull();
+});
+
+const verdictAuthorityChanges = ["owner", "epoch", "control", "launch", "target", "input", "requirements", "policy", "merge-policy", "reservation"] as const;
+test.each(["transcript", "admission"].flatMap(boundary => verdictAuthorityChanges.map(change => [boundary, change] as const)))(
+  "refresh verdict continuation refuses changed authority at %s: %s", async (boundary, change) => {
+    const f = await structuredCapacityLane();
+    const settings = await import("@/lib/projects/settings");
+    let mergePolicy = settings.mergeOnReviewSetting(f.lane().project);
+    const setting = spyOn(settings, "mergeOnReviewSetting").mockImplementation(() => mergePolicy);
+    let pool: string[] | null = null;
+    f.h.ports.allowedAccountIds = () => pool;
+    let changed = false, sends = 0, admissions = 0;
+    const replaceAuthority = () => {
+      if (changed) return;
+      changed = true;
+      if (change === "policy") { pool = ["replacement-account"]; return; }
+      if (change === "merge-policy") { mergePolicy = { ...mergePolicy, enabled: !mergePolicy.enabled }; return; }
+      const rows = loadPipelines(), lane = rows.find(row => row.id === f.id)!;
+      const attempt = lane.runs[0]!.attempts[0]!;
+      if (change === "owner") { lane.delivery!.active = false; lane.delivery!.ownerId = "replacement"; }
+      if (change === "epoch") lane.delivery!.epoch++;
+      if (change === "control") lane.controlGeneration = "replacement-control";
+      if (change === "launch") attempt.launchId = "replacement-launch";
+      if (change === "target") lane.delivery!.target.branch = "refs/heads/replacement";
+      if (change === "input") attempt.input = "replacement input";
+      if (change === "requirements") lane.spec = "replacement requirements";
+      if (change === "reservation") lane.refreshOf!.capacity!.deadline = "2026-11-02T13:00:00.000Z";
+      savePipelines(rows);
+    };
+    f.h.ports.durableTurnEvidence = async () => {
+      await Promise.resolve();
+      if (boundary === "transcript") replaceAuthority();
+      return { turn: "terminal", message: { text: "Stage work is complete.", ts: Date.parse("2026-11-01T12:00:01.000Z") }, backgroundTasks: [] };
+    };
+    f.h.ports.resumeSeveredTurn = async input => {
+      admissions++;
+      await Promise.resolve();
+      if (boundary === "admission") replaceAuthority();
+      if (input.continuationAllowed && !await input.continuationAllowed()) return false;
+      sends++;
+      return true;
+    };
+    try {
+      await tickPipelines([], f.h.ports);
+      expect(changed).toBe(true);
+      expect(sends).toBe(0);
+      expect(admissions).toBe(boundary === "transcript" ? 0 : 1);
+      expect(yieldedAttempt(f).verdictRequest?.requestedAt).toBeUndefined();
+    } finally { setting.mockRestore(); }
+  });
+
+test.each(["expired", "unexpired", "replay"] as const)("runtime-switch refresh continuation uses a fresh admission: %s", async outcome => {
+  const f = await structuredCapacityLane();
+  const attempt = yieldedAttempt(f);
+  let continuations = 0, receiptReads = 0;
   let reconfigured = false;
   f.h.ports.runtimeSwitchControl = async (_conversationId, _path, action) => {
-    if (action === "reconfigure") { reconfigured = true; f.advance(60 * 60_000); }
+    if (action === "reconfigure") { reconfigured = true; if (outcome === "expired") f.advance(60 * 60_000); }
   };
   f.h.ports.runtimeSwitchOutcome = async () => ({ state: "applied" });
-  f.h.ports.runtimeSwitchDelivery = () => ({ state: "delivered", at: f.h.ports.now() });
+  f.h.ports.runtimeSwitchDelivery = () => {
+    receiptReads++;
+    return outcome === "replay" || continuations > 0 ? { state: "delivered", at: f.h.ports.now() } : null;
+  };
   f.h.ports.conversationGeneration = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null,
     accountId: "default", sessionId: "session-new", agentPath: attempt.agentPath! });
   f.h.ports.resumeSeveredTurn = async () => { continuations++; return true; };
   const result = await patchPipeline(f.id, { action: "override-stage", stageId: "refresh", model: "gpt-6.1-sol", applyNow: true }, f.h.ports);
   expect(result.error).toBeUndefined();
-
   await tickPipelines([], f.h.ports);
-
   expect(reconfigured).toBe(true);
-  expect(f.h.ports.now()).toBe("2026-11-01T13:00:00.000Z");
-  expect(continuations).toBe(0);
+  expect(receiptReads).toBeGreaterThan(0);
+  expect(continuations).toBe(outcome === "unexpired" ? 1 : 0);
+  if (outcome === "expired") expect(f.h.ports.now()).toBe("2026-11-01T13:00:00.000Z");
 });
 
 test.each(["background", "unreadable", "tree", "delivery", "withdrawal"] as const)("capacity waits for positive owned-work proof: %s", async kind => {

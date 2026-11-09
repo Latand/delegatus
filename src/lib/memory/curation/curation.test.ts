@@ -20,10 +20,11 @@ import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, readPassAuthority, currentPassAuthority, machinePassAuthority, passForConversationAuthority, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
-import { productionCurationController } from "./run";
+import { curationForSweep, productionCurationController } from "./run";
 import { permitCuratorTool } from "@/lib/mcp/toolAllowlist";
 import { reconcileSeatTick, runSeatTickCheck } from "@/lib/monitor/seatTickController";
 import { emptySeatTickState } from "@/lib/monitor/types";
+import { SeatTickWork, seatTickWorkSignal } from "@/lib/monitor/seatTickWork";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
@@ -394,6 +395,260 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+
+test("one sweep shares in-flight and settled machine choices, with N host admissions", async () => {
+  const f = hostingFixture();
+  const projects = Array.from({ length: 8 }, (_, i) => `quiet-seat-${i}`);
+  for (const project of projects) f.seat(project);
+  const liveness = spyOn(f.sources, "liveness");
+  const sweep = curationForSweep(f.controller);
+  const inputs = projects.map(project => ({ ...f.tick, project }));
+  await Promise.all(inputs.map(input => sweep.launchIfDue(input)));
+  expect(liveness).toHaveBeenCalledTimes(projects.length);
+  await sweep.launchIfDue(inputs[0]);
+  expect(liveness).toHaveBeenCalledTimes(projects.length);
+  // New sweeps own a new choice; no durable eligibility cache can outlive it.
+  await curationForSweep(f.controller).launchIfDue(inputs[0]);
+  expect(liveness).toHaveBeenCalledTimes(2 * projects.length);
+  expect(f.bodies).toHaveLength(0);
+});
+
+test("review: a due project whose wake lands later in the sweep still launches", async () => {
+  let dueProject: string | null = null, choices = 0;
+  const controller = {
+    reconcile: async () => null,
+    launchIfDue: async () => { choices++; return dueProject ? `launched ${dueProject}` : null; },
+  };
+  const sweep = curationForSweep(controller, ["quiet-seat", PROJECT]);
+  const early = sweep.launchIfDue({ ...tickInput(), project: "quiet-seat" });
+  await Promise.resolve();
+  expect(choices).toBe(0);
+  // Eligibility changes after the early project requested the sweep's choice.
+  dueProject = PROJECT;
+  const due = sweep.launchIfDue({ ...tickInput(), project: PROJECT });
+  expect(await Promise.all([early, due])).toEqual([`launched ${PROJECT}`, `launched ${PROJECT}`]);
+  expect(choices).toBe(1);
+});
+
+test("review: a canceled first check cannot cancel the shared due curator admission", async () => {
+  fixture(); const f = hostingFixture();
+  f.seat("quiet-seat", at(86_400_000));
+  f.seat(PROJECT, at(-1_000));
+  const observedSignals: (AbortSignal | undefined)[] = [];
+  const liveness = f.sources.liveness;
+  f.sources.liveness = async (...args) => {
+    observedSignals.push(seatTickWorkSignal());
+    return liveness(...args);
+  };
+  const sweep = curationForSweep(f.controller, ["quiet-seat", PROJECT]);
+  const quietWork = new SeatTickWork("quiet-seat", 1_000);
+  let quietChoice!: Promise<string | null>;
+  await quietWork.run(async () => {
+    quietChoice = sweep.launchIfDue({ ...f.tick, project: "quiet-seat" });
+    quietWork.close();
+  });
+  const dueWork = new SeatTickWork(PROJECT, 1_000);
+  const dueChoice = await dueWork.run(() => sweep.launchIfDue(f.tick));
+  await quietChoice;
+  dueWork.close();
+  expect(dueChoice).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0]!.project).toBe(PROJECT);
+  expect(observedSignals).toEqual([undefined]);
+});
+
+test.each([false, true])("shared incumbent recovery survives first-check cancellation: %s", async cancelFirst => {
+  fixture(); const f = hostingFixture(); f.seat();
+  const incumbent = pass();
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve: () => resolve() };
+  };
+  const entered = deferred(), unblock = deferred();
+  const rawLiveness = f.sources.liveness;
+  let reads = 0;
+  f.sources.liveness = async request => {
+    const signal = seatTickWorkSignal();
+    if (++reads === 1) {
+      entered.resolve();
+      await unblock.promise;
+    }
+    signal?.throwIfAborted();
+    return rawLiveness(request);
+  };
+  const controller = productionCurationController(f.sources, {
+    ...f.ports,
+    launch: async (body, authorize) => { authorize(); return f.ports.launch(body); },
+  });
+  const sweep = curationForSweep(controller, ["quiet-seat", PROJECT]);
+  const firstWork = new SeatTickWork("quiet-seat", 60_000);
+  const secondWork = new SeatTickWork(PROJECT, 60_000);
+  const first = firstWork.run(() => sweep.reconcile("quiet-seat"));
+  let second: Promise<string | null> | undefined;
+  try {
+    await entered.promise;
+    expect(f.bodies).toHaveLength(0);
+    expect(readPass(incumbent.id)?.state).toBe("claimed");
+    if (cancelFirst) firstWork.close();
+    second = secondWork.run(() => sweep.reconcile(PROJECT));
+    expect(second).toBe(first);
+    unblock.resolve();
+    const results = await Promise.all([first, second]);
+    expect(f.bodies).toHaveLength(1);
+    expect(results[0]).toContain("launched");
+    expect(results[1]).toBe(results[0]);
+    expect(readPass(incumbent.id)).toMatchObject({ state: "running", failure: null });
+    expect(machinePass()?.id).toBe(incumbent.id);
+    expect(await sweep.reconcile(PROJECT)).toBe(results[0]);
+    expect(f.bodies).toHaveLength(1);
+  } finally {
+    unblock.resolve();
+    await Promise.allSettled([first, ...(second ? [second] : [])]);
+    firstWork.close(); secondWork.close();
+  }
+});
+
+for (const boundary of ["liveness", "observation", "dispatch"] as const) {
+  test.each(["demotion", "replacement"] as const)(`shared incumbent recovery refuses %s during ${boundary}`, async change => {
+    fixture(); const f = hostingFixture(); f.seat();
+    const incumbent = pass();
+    if (boundary === "observation") patchPass(incumbent.id, { state: "launching", launchedAt: at(-1_000) });
+    const deferred = () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>(done => { resolve = done; });
+      return { promise, resolve: () => resolve() };
+    };
+    const entered = deferred(), unblock = deferred();
+    const hold = async () => { entered.resolve(); await unblock.promise; };
+    const rawLiveness = f.sources.liveness;
+    let reads = 0, current = true;
+    f.sources.liveness = async request => {
+      if (++reads === 1 && boundary === "liveness") await hold();
+      return rawLiveness(request);
+    };
+    const controller = productionCurationController(f.sources, {
+      ...f.ports,
+      observe: async () => {
+        if (boundary === "observation") await hold();
+        return { state: "ended", conversationId: "conversation_recovered_curator", finalText: "Checked the fixture scopes." };
+      },
+      launch: async (body, authorize) => {
+        if (boundary === "dispatch") await hold();
+        authorize();
+        return f.ports.launch(body);
+      },
+    });
+    const sweep = curationForSweep(controller, [PROJECT], () => current);
+    const work = new SeatTickWork(PROJECT, 60_000);
+    const recovery = work.run(() => sweep.reconcile(PROJECT));
+    try {
+      await entered.promise;
+      expect(f.bodies).toHaveLength(0);
+      const held = readPass(incumbent.id);
+      work.close();
+      if (change === "demotion") current = false; else f.seat(PROJECT);
+      unblock.resolve();
+      if (boundary === "dispatch") {
+        await expect(recovery).rejects.toThrow(change === "demotion" ? "curation sweep ended" : "curation admission held");
+      } else if (change === "demotion") {
+        expect(await recovery).toBeNull();
+      } else {
+        expect(await recovery).toContain("abandoned");
+      }
+      expect(f.bodies).toHaveLength(0);
+      if (change === "demotion") {
+        expect(readPass(incumbent.id)).toEqual(held);
+        // The promoted sweep may recover the pass the old release left intact.
+        expect(await curationForSweep(f.controller).reconcile(PROJECT)).toContain("launched");
+        expect(f.bodies).toHaveLength(1);
+      } else {
+        expect(readPass(incumbent.id)?.failure).toContain("abandoned");
+      }
+    } finally {
+      unblock.resolve();
+      await Promise.allSettled([recovery]);
+      work.close();
+    }
+  });
+}
+
+test("release demotion fences the shared curator launch after project checks stop", async () => {
+  const { seatTickWorkSignal } = await import("@/lib/monitor/seatTickWork");
+  fixture(); const f = hostingFixture(); f.seat();
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve: () => resolve() };
+  };
+  const launchEntered = deferred(), unblockLaunch = deferred();
+  const controller = productionCurationController(f.sources, {
+    ...f.ports,
+    launch: async (body, authorize) => {
+      launchEntered.resolve();
+      await unblockLaunch.promise;
+      authorize();
+      return f.ports.launch(body);
+    },
+  });
+  const entered = deferred(), unblock = deferred(), completed = deferred();
+  const rawLiveness = f.sources.liveness;
+  f.sources.liveness = async request => {
+    const signal = seatTickWorkSignal();
+    entered.resolve();
+    await unblock.promise;
+    signal?.throwIfAborted();
+    return rawLiveness(request);
+  };
+  let state = emptySeatTickState();
+  const sources = {
+    ...f.sources,
+    prepareRead: async () => {},
+    seatFor: () => ({ active: null, pending: null, history: [] }),
+    activeSeats: () => [PROJECT], pipelines: () => [], archivedPipelines: () => [], tasks: () => [],
+    liveness: async () => [], lifecycleJournal: () => ({ version: 1 as const, lastSeq: 0, events: [], retired: [] }),
+    retirementReport: () => null, reports: undefined, maintenanceRuns: () => [], recordRuleReports: undefined,
+    recordDeploySnapshots: undefined, workerCounts: undefined,
+  };
+  const dependencies = {
+    sources, policy: tickInput().policy, reconcileSeat: () => null,
+    readState: () => state, writeState: (_project: string, next: typeof state) => { state = next; },
+    appendRecord: () => {}, readRecords: () => [], ensureCard: () => true,
+    curation: {
+      reconcile: controller.reconcile,
+      launchIfDue: async (input: Parameters<typeof controller.launchIfDue>[0]) => {
+        try { return await controller.launchIfDue(input); }
+        finally { completed.resolve(); }
+      },
+    },
+    release: null, maintenance: null, turbo: () => {}, recordSuccessions: () => [],
+  };
+  const running = reconcileSeatTick({ ...dependencies, ownsTraffic: () => true });
+  try {
+    await entered.promise;
+    unblock.resolve();
+    await launchEntered.promise;
+    await reconcileSeatTick({ ...dependencies, ownsTraffic: () => false });
+    unblockLaunch.resolve();
+    await running;
+    await completed.promise;
+    expect(f.bodies).toHaveLength(0);
+    expect(machinePass()?.state).not.toBe("running");
+  } finally {
+    unblock.resolve();
+    unblockLaunch.resolve();
+    await running;
+  }
+});
+
+test("a sweep starting at a disabled project still launches a due eligible project", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  const sweep = curationForSweep(f.controller);
+  await sweep.launchIfDue({ ...f.tick, project: "disabled-seat", settings: { ...f.tick.settings, enabled: false } });
+  expect(await sweep.launchIfDue(f.tick)).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0].project).toBe(PROJECT);
+});
 // Helper lease records carry kernel identities on Linux.
 test.skipIf(process.platform !== "linux")("curation fixture cleanup stops its recorded disk-pressure helper", async () => {
   const f = hostingFixture();
@@ -1883,4 +2138,78 @@ test("emergency succession ranks duplicate guidance by the tasks being combined 
   expect(row(ids[1])).toMatchObject({ state: "archived", reason: "budget" });
   const view = projectView(PROJECT).scopes.find(row => row.scope === scope)!;
   expect(view.active.find(row => row.id === ids[0])?.tasks).toBe(2);
+});
+
+
+function keyedOperation(p: CuratorPass, key = "editorial-request", digest = "a".repeat(64)) {
+  const owned = patchPass(p.id, { conversationId: "conversation_curator-fixture" })!;
+  return { owned, operation: { pass: owned.id, conversationId: owned.conversationId!, project: owned.project,
+    requestId: key, digest, assertCurrent: () => {} } };
+}
+
+test("keyed apply returns its historical revisions after later writes and Undo without effects", async () => {
+  const { readCurationOperation, curationOperationResult } = await import("./apply");
+  const scope = roleScope(PROJECT, "builder"), id = fixture(scope, { id: "r_keyed-source" });
+  const { owned, operation } = keyedOperation(pass());
+  const plan = input({ [scope]: [id] }, { rewrite: [{ id, rule: "Verify the current owner before every stored guidance edit.", note: "Keep the ownership check at the edit boundary." }] });
+  const first = applyCuration(owned, plan, at(1), { operation });
+  expect(first).toMatchObject({ disposition: "committed", revisions: [{ scope, input: 1, result: 2 }], counts: { calls: 1, rewritten: 1 } });
+  expect(curationOperationResult(readCurationOperation(operation)!)).toEqual(first);
+  const before = roleMemoryCollection()!.snapshot();
+  expect(applyCuration(owned, plan, at(2), { operation })).toEqual(first);
+  expect(roleMemoryCollection()!.snapshot()).toEqual(before);
+  applyCuration(owned, input({ [scope]: [id] }, { rewrite: [{ id, rule: "Recheck the target scope before committing any stored guidance edit.", note: "Retain the later writer's scope check." }] }), at(3));
+  expect(() => applyCuration(owned, plan, at(4), { operation: { ...operation, requestId: "unrelated-stale" } })).toThrow(/now revision/);
+  expect(applyCuration(owned, plan, at(4), { operation })).toEqual(first);
+  patchPass(owned.id, { state: "succeeded", endedAt: at(5) });
+  revertCuratorPass(owned.id, at(6));
+  const undone = roleMemoryCollection()!.snapshot();
+  // The trusted history reader can observe the saved disposition; ended-pass
+  // admission stays closed and never re-enters the editorial apply path.
+  expect(curationOperationResult(readCurationOperation(operation)!)).toEqual(first);
+  expect(() => applyCuration(owned, plan, at(7), { operation })).toThrow(/pass has ended/);
+  expect(roleMemoryCollection()!.snapshot()).toEqual(undone);
+});
+
+test.each(["role_memory", "role_memory_curation"])("%s write failure rolls editorial rows and witness back together", async collection => {
+  const { readCurationOperation } = await import("./apply");
+  const scope = roleScope(PROJECT, "builder"), id = fixture(scope, { id: "r_rollback-source" });
+  const { owned, operation } = keyedOperation(pass());
+  const plan = input({ [scope]: [id] }, { rewrite: [{ id, rule: "Check current scope ownership before committing stored guidance.", note: "Retain this scope check before writes." }] });
+  const held = roleMemoryCollection()!, before = held.snapshot();
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    db.exec(`CREATE TRIGGER refuse_editorial BEFORE INSERT ON state_rows WHEN NEW.collection='${collection}' BEGIN SELECT RAISE(ABORT, 'fixture transaction refusal'); END`);
+    expect(() => applyCuration(owned, plan, at(1), { operation })).toThrow(/fixture transaction refusal/);
+    expect(held.snapshot()).toEqual(before);
+    expect(readCurationOperation(operation)).toBeNull();
+    db.exec("DROP TRIGGER refuse_editorial");
+    expect(applyCuration(owned, plan, at(2), { operation })).toMatchObject({ disposition: "committed", counts: { calls: 1 } });
+    expect(readPass(owned.id)!.counts.calls).toBe(1);
+  } finally { db.close(); }
+});
+
+test("keyed acknowledgement bound is checked before every collection effect", async () => {
+  const hugeScope = `project:${"x".repeat(140_000)}`;
+  fixture();
+  const { owned, operation } = keyedOperation(pass());
+  const { curationCollection } = await import("./store");
+  const withScope = { ...owned, scopes: [...owned.scopes, hugeScope] };
+  curationCollection()!.boundedPatch(2, tx => tx.put(withScope));
+  const held = roleMemoryCollection(true)!, before = held.snapshot();
+  expect(() => applyCuration(withScope, { scopes: [{ scope: hugeScope, revision: 0, order: [] }] }, at(1), { operation })).toThrow(/bound/);
+  expect(held.snapshot()).toEqual(before);
+});
+
+test.each(["a", "ї", "😀"])("rendered %s code points accept the exact scope bound and refuse overflow", char => {
+  const scope = roleScope(PROJECT, "builder"), id = "r_boundary";
+  // One rendered line includes bullet, brackets, identifier and spacing.
+  const overhead = Array.from(`- [${id}] `).length;
+  fixture(scope, { id, rule: char.repeat(ROLE_MEMORY_BOUND - overhead) });
+  const p = pass();
+  expect(scopeChars([row(id)])).toBe(ROLE_MEMORY_BOUND);
+  expect(applyCuration(p, input({ [scope]: [id] }), at(1)).counts.calls).toBe(1);
+  roleMemoryCollection()!.boundedPatch(2, tx => tx.put({ ...row(id), rule: row(id).rule + char }));
+  expect(scopeChars([row(id)])).toBe(ROLE_MEMORY_BOUND + 1);
+  expect(() => applyCuration(p, input({ [scope]: [id] }), at(2))).toThrow(/bound/);
 });

@@ -1056,15 +1056,16 @@ export function lessonKnownValuesFile(): string {
   return path.join(statePath("role-memory"), "known-values.txt");
 }
 
-/** Rewrites the known-values file from the store, again when a lesson landed
-    while it was written. When the store cannot be read the file is removed,
-    and the gate refuses a push whose known-values file is missing. */
+/** Publish under the same collection lease and database transaction as rule
+    writers. In particular, a reader of the old committed rows cannot restore
+    this file after a curator invalidates it but before that apply commits.
+    Contention yields immediately; failure leaves publication closed. */
 export function refreshLessonKnownValues(): string {
   const file = lessonKnownValuesFile();
   const directory = path.dirname(file);
   try {
-    for (let pass = 0; pass < 4; pass += 1) {
-      const { rows: all, signature } = readableRows();
+    roleMemoryCollection(true)!.patchSync(() => {
+      const { rows: all } = readableRows();
       const texts = lessonTextsOf(all);
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       const temporary = path.join(directory, `.${crypto.randomUUID()}.tmp`);
@@ -1074,8 +1075,8 @@ export function refreshLessonKnownValues(): string {
       } finally {
         fs.rmSync(temporary, { force: true });
       }
-      if (readableRows().signature === signature) return file;
-    }
+      return { records: [] };
+    });
     return file;
   } catch (error) {
     fs.rmSync(file, { force: true });

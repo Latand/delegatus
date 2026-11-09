@@ -45,8 +45,8 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 64, and a v63 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(64);
+test("the default mandate is at version 65, and a v64 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(65);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -129,7 +129,8 @@ test("the default mandate is at version 64, and a v63 seat reads as stale", () =
   expect(orchestratorMandateStale(61)).toBe(true);
   expect(orchestratorMandateStale(62)).toBe(true);
   expect(orchestratorMandateStale(63)).toBe(true);
-  expect(orchestratorMandateStale(64)).toBe(false);
+  expect(orchestratorMandateStale(64)).toBe(true);
+  expect(orchestratorMandateStale(65)).toBe(false);
 });
 
 /**
@@ -220,6 +221,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   63: "e1c2645372dd85556af496aadbdcc4827259d3ce9619bb92b7a121e78146f539",
   // v64 adds progress estimates to the combined terminal-review mandate.
   64: "3149b6fc1101016b4a00dab1bdb0088a2b6ef56d342b087e1f95cea5096a9735",
+  // v65 checks a vague ask's scope first and leaves forms to what stays materially ambiguous.
+  65: "1b7344d356b834edcb0271c666b477672024e236169ea2e810dbf08e17f0486d",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -742,6 +745,50 @@ test("the decision-form mandate upgrades every shipped pointer once and preserve
   }
   for (const previous of shipped) expect(orchestratorMandateForDelivery(previous)).not.toContain(previous);
   expect(orchestratorMandateForDelivery("Prototype review: our own wording.")).toContain("Prototype review: our own wording.");
+});
+
+/* v65: a vague ask gets a quick scope check, the seat picks its own route, and a
+   form is kept for what stays materially ambiguous. These tests prove how the
+   text is composed and delivered; no model reads it here. */
+const v64Mandate = () => fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v64.txt"), "utf8");
+
+test("the v64 fixture is the text v64 shipped, and v65 changes only three lines", () => {
+  const v64 = v64Mandate();
+  expect(createHash("sha256").update(v64).digest("hex")).toBe(PROMPT_FINGERPRINTS[64]);
+  const before = new Set(v64.split("\n"));
+  const after = new Set(ORCHESTRATOR_SYSTEM_PROMPT.split("\n"));
+  const removed = [...before].filter((line) => !after.has(line));
+  const added = [...after].filter((line) => !before.has(line));
+  /* v65 rewrites three lines and leaves every other line, so every fence,
+     limit and gate, byte for byte v64. The bound is a count of changed lines. */
+  expect(removed).toHaveLength(3);
+  expect(added).toHaveLength(3);
+});
+
+test("delivery brings a stored v64 default to the v65 policy once and never twice", () => {
+  const v64 = v64Mandate();
+  const upgraded = orchestratorMandateUpgraded(v64);
+  const delivered = orchestratorMandateForDelivery(v64);
+  expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(upgraded).toBe(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(orchestratorMandateUpgraded(upgraded)).toBe(upgraded);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  expect(delivered.split(ORCHESTRATOR_PROTOTYPE_DIRECTIVE)).toHaveLength(2);
+});
+
+test("a custom mandate keeps its own routing wording and gains only the decision paragraph delivery always adds", () => {
+  const custom = [
+    "Run the widgets project.",
+    "Every piece of accepted work runs as a pipeline; ask nothing first.",
+    "- Start by default, whatever the ask.",
+    "Prototype review: our own wording.",
+  ].join("\n");
+  const upgraded = orchestratorMandateUpgraded(custom);
+  expect(upgraded.startsWith(custom)).toBe(true);
+  const delivered = orchestratorMandateForDelivery(custom);
+  expect(delivered.startsWith(custom)).toBe(true);
+  expect(delivered.split(ORCHESTRATOR_PROTOTYPE_DIRECTIVE)).toHaveLength(2);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
 });
 
 test("the board walk clears only rows that ask nothing and replaces the shipped paragraph exactly", () => {
