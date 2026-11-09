@@ -1,3 +1,5 @@
+import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceReadProject, WorkspaceRefusal, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -14,7 +16,7 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { readPipelineCreationReceipt } from "@/lib/pipelines/creationQueue";
 import { getPipeline, patchPipeline, type PipelineCloseReport, type PipelinePatchResult } from "@/lib/pipelines/engine";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
-import { loadPipelines, pipelineRevision } from "@/lib/pipelines/store";
+import { loadPipelines, pipelineRevision, pipelineDecisionRevision } from "@/lib/pipelines/store";
 import { loadTasks } from "@/lib/tasks/store";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGraphEdit, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
@@ -69,7 +71,7 @@ function pipelineControlAdmission(req: NextRequest): { actor: PauseResumeActor }
 async function workspaceGET(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; decisionRevision?: string; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
   const { id } = await ctx.params;
   try {
     let pipeline = getPipeline(id);
@@ -90,16 +92,52 @@ async function workspaceGET(
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */
     assertWorkspaceReadProject(req, pipeline.project);
-    return NextResponse.json({ ok: true, pipeline, revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
+    const decisionRevision = pipelineDecisionRevision(pipeline);
+    return NextResponse.json({ ok: true, pipeline, ...(decisionRevision ? { decisionRevision } : {}), revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
   } catch (error) {
     if (error instanceof WorkspaceRefusal) throw error;
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
 }
 
+function captureDecisionRequestAuthority(req: NextRequest): () => void {
+  const admission = pipelineControlAdmission(req);
+  const human = teamActor(req);
+  if ("refusal" in admission) return () => { throw new WorkspaceRefusal("decision caller authority is unavailable"); };
+  const credentials = () => JSON.stringify([req.headers.get("cookie"), req.headers.get("authorization"), req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)]);
+  const originalCredentials = credentials();
+  const memberRoute = () => {
+    if (human.kind !== "member") return null;
+    const member = existingTeamStore()?.member(human.memberId);
+    return member && JSON.stringify([member.id, member.role, member.status, member.revokedAt]);
+  };
+  const agentGeneration = () => {
+    if (admission.actor.kind !== "agent" || !admission.actor.conversationId) return null;
+    const snapshot = agentRegistry().readOnlySnapshot();
+    const conversation = snapshot.conversations[admission.actor.conversationId];
+    const generation = conversation?.generations.at(-1);
+    const entry = conversation && generation && snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+    return JSON.stringify([generation && [generation.id, generation.path, generation.accountId, generation.createdAt,
+      generation.archivedAt, generation.launchProfile], entry && [entry.claimOwner, entry.claimEpoch,
+        entry.artifactPath, entry.structuredHost?.endpoint, entry.structuredHost?.process]]);
+  };
+  const originalGeneration = agentGeneration();
+  const originalMemberRoute = memberRoute();
+  const originalHuman = JSON.stringify(human);
+  const originalActor = JSON.stringify(admission.actor);
+  const originalOperator = human.kind === "operator" ? requireOperatorAuthority(req) : null;
+  return () => {
+    if (human.kind === "member" && !existingTeamStore()) throw new TeamError("team_store_unavailable", "member authority is unavailable", 503);
+    const current = pipelineControlAdmission(req);
+    if (credentials() !== originalCredentials || agentGeneration() !== originalGeneration || memberRoute() !== originalMemberRoute || JSON.stringify(teamActor(req)) !== originalHuman || "refusal" in current || JSON.stringify(current.actor) !== originalActor
+      || originalOperator && (!originalOperator.ok || !requireOperatorAuthority(req).ok)) throw new WorkspaceRefusal("decision caller authority changed");
+  };
+}
+
 async function workspacePATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
+  assertAtEntry?: () => void,
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit; convertedStages?: PipelinePatchResult["convertedStages"]; legacyReview?: PipelinePatchResult["legacyReview"]; workLinks?: ResolvedWorkLinks; taskWorkLinks?: Record<string, ResolvedWorkLinks> } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
@@ -108,6 +146,7 @@ async function workspacePATCH(
   const human = teamActor(req);
   const anonymous = refuseAnonymous(human);
   if (anonymous) return anonymous;
+  const assertDecisionCaller = assertAtEntry ?? captureDecisionRequestAuthority(req);
   let body: PatchPipelineRequest;
   try {
     const raw = await req.json();
@@ -130,7 +169,7 @@ async function workspacePATCH(
       || body.action === "publish"
       ? admission.actor
       : undefined;
-    const result = await patchPipeline(id, body, undefined, actor, undefined, human.kind === "member" ? human.memberId : undefined);
+    const result = await patchPipeline(id, body, undefined, actor, body.action === "resolve-decision" ? assertDecisionCaller : undefined, human.kind === "member" ? human.memberId : undefined);
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not update pipeline",
       /* A malformed guard names its field without a code: each travels on its own. */
@@ -160,6 +199,7 @@ async function workspacePATCH(
       taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),
     } : {}) });
   } catch (error) {
+    if (error instanceof WorkspaceRefusal) return NextResponse.json({ error: error.message, code: "workspace_forbidden" }, { status: 403 });
     if (error instanceof TeamError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     /* #1766: nothing was admitted, so the same action may be repeated. */
     if (error instanceof StoreBusyBeforeAdmissionError) {
@@ -189,6 +229,12 @@ async function workspaceDELETE(
 
 export const GET = workspaceRoute("/api/pipelines/[id]", workspaceGET);
 
-export const PATCH = workspaceRoute("/api/pipelines/[id]", workspacePATCH);
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  // The workspace gate awaits target resolution too. Capture before it yields.
+  let assertAtEntry: () => void;
+  try { assertAtEntry = captureDecisionRequestAuthority(req); }
+  catch (error) { assertAtEntry = () => { throw error; }; }
+  return workspaceRoute("/api/pipelines/[id]", (request: NextRequest, context: { params: Promise<{ id: string }> }) => workspacePATCH(request, context, assertAtEntry))(req, ctx);
+}
 
 export const DELETE = workspaceRoute("/api/pipelines/[id]", workspaceDELETE);

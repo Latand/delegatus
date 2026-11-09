@@ -98,7 +98,7 @@ function laneLine(pipeline: Pipeline): string {
     case "lane-review":
       return `${kind}${title} —${stage} review budget spent, the last fix was not re-reviewed; pipeline_action accept-head once it holds; ${escalate}`;
     default:
-      return `${kind}${title} —${stage} asks ${laneQuestion(pipeline)}; answer with pipeline_action resolve-decision (expectedRevision from get_pipeline), or retry-stage for a mechanical stop; ${escalate}`;
+      return `${kind}${title} —${stage} asks ${laneQuestion(pipeline)}; answer with pipeline_action resolve-decision (expectedRevision from get_pipeline: decisionRevision or the conservative full revision), or retry-stage for a mechanical stop; ${escalate}`;
   }
 }
 

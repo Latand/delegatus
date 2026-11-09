@@ -7042,8 +7042,12 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
     ["no drain", "none"],
     ["a drain running before staging", "before-staging"],
     ["a drain committed after staging", "after-staging"],
+    ["current decision authority", "authority-current"],
+    ["decision authority replaced at message reservation", "authority-replaced"],
   ] as const)("starts its first turn on that account and materializes its transcript (%s)", async (_label, drainMode) => {
-    const drain = drainMode !== "none";
+    const drain = drainMode === "before-staging" || drainMode === "after-staging";
+    const decision = drainMode === "authority-current" || drainMode === "authority-replaced";
+    let decisionOwned = true, admissionReached = false;
     const id = crypto.randomUUID();
     const root = path.join(sandbox, `non-routed-first-turn-${transport}-${drainMode}-${id}`);
     const cwd = path.join(root, "project");
@@ -7084,6 +7088,12 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
     const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
     const client = runtimeClient(journal);
+    const hold = registry.holdDeliveryOffLoop;
+    const reservation = decision ? spyOn(registry, "holdDeliveryOffLoop").mockImplementation(async (...args) => {
+      await Promise.resolve(); admissionReached = true;
+      if (drainMode === "authority-replaced") decisionOwned = false;
+      return hold.apply(registry, args);
+    }) : null;
     await bindStructuredDeliveryQueue([], { registry, client });
     try {
       /* Account A is routed; the pool placed this launch on account B. */
@@ -7127,6 +7137,7 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
         "prompt": "start on the account the pool chose",
         registry,
         client,
+        ...(decision ? { assertCurrent: () => { if (!decisionOwned) throw new Error("decision delivery authority replaced"); } } : {}),
       }, {
         // This executable is a protocol fixture. The signal suite separately
         // qualifies the default native boundary without an inherited gate lease.
@@ -7140,7 +7151,17 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
           if (drainMode === "after-staging") commitDrain();
           return publishStructuredDeliveryHost({ key, host }, ownsOperation);
         },
-      });
+      }).catch(error => { if (drainMode === "authority-replaced") return error as Error; throw error; });
+
+      if (decision) expect(admissionReached).toBe(true);
+      if (drainMode === "authority-replaced") {
+        const seen = JSON.parse(fs.readFileSync(path.join(cwd, ".claude-fixture.json"), "utf8")) as { turns: string[] };
+        expect(seen.turns).toEqual([]);
+        expect(await client.operationStatus(`spawn_message_${begun.receipt.launchId}`)).toBeNull();
+        expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+        expect(response).toBeInstanceOf(Error);
+        return;
+      }
 
       const receipt = registry.snapshot().receipts[begun.receipt.launchId]!;
       const sessionId = receipt.key!.sessionId;
@@ -7174,6 +7195,7 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
         .filter((delivery) => delivery.clientMessageId === `spawn_${begun.receipt.launchId}`))
         .toMatchObject([{ state: "delivered" }]);
     } finally {
+      reservation?.mockRestore();
       /* The published host owns the child; releasing it reaps the process. */
       const key = Object.values(registry.snapshot().receipts)[0]?.key;
       if (key) await releaseStructuredDeliveryHost(key);
@@ -7998,4 +8020,147 @@ test("a capability write interruption before startHost retains prepublication re
     expect(await ports.unpublishedLaunchRetrySafe!(begun.receipt.launchId)).toBe(false);
     expect(starts).toBe(0);
   } finally { interrupted.mockRestore(); setAgentRegistryForTests(null); registry.close(); journal.close(); }
+});
+
+
+test.each((["codex", "claude"] as const).flatMap(engine =>
+  (["allowed", "binding", "membership", "import", "owner", "preparation", "definition", "answer-removed", "target-removed", "workspace-allowed", "workspace-revoked", "launch-replaced", "conversation-replaced", "budget-replaced", "recovery-budget-replaced", "termination-custody", "pipeline-removed", "session-replaced", "account-replaced", "remote-action"] as const).map(boundary => [engine, boundary] as const),
+))("default %s host carries decision authority through native preparation: %s", async (engine, boundary) => {
+  const { defaultStartHost } = await import("./structuredSpawn");
+  const { stageDigest } = await import("@/lib/pipelines/stageDigest");
+  const { buildPipeline, pipelineIdentity, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+  const cwd = fs.mkdtempSync(path.join(sandbox, `decision-native-${engine}-`));
+  const marker = path.join(cwd, "native-effect");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const launchProfile = emptyLaunchProfile({ cwd, cleanMemory: true, allowSubagents: true, mcpServers: [] });
+  const prior = loadPipelines();
+  const role: import("@/lib/pipelines/types").EffectivePipelineRole = { roleId: "builder", engine, model: null, effort: null, access: "read-write", promptScaffold: "Build the requested output." };
+  const at = "2026-11-03T10:00:00.000Z", id = `native-decision-${engine}-${boundary}`;
+  const pipeline = buildPipeline({ id, project: "native-decision", task: "Continue the settled decision", repoDir: cwd,
+    publication: "internal", srcPath: null, srcConversationId: null, now: at,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, effectiveRole: role, prompt: "Build", next: null }] });
+  let workspaceStore: import("@/lib/team/store").TeamStore | undefined;
+  let workspaceId: string | undefined;
+  if (boundary === "workspace-allowed" || boundary === "workspace-revoked") {
+    const { teamStore } = await import("@/lib/team/store");
+    const { createWorkspace } = await import("@/lib/team/workspaces");
+    workspaceStore = teamStore(); workspaceId = `w_${crypto.randomUUID().replaceAll("-", "")}`;
+    const owner = { id: `owner_${workspaceId}`, name: "Owner", role: "owner" as const, status: "active" as const,
+      color: "teal" as const, telegram: null, createdAt: at, createdBy: "fixture", revokedAt: null };
+    const member = { ...owner, id: `member_${workspaceId}`, name: "Member", role: "member" as const };
+    workspaceStore.insertMember(owner); workspaceStore.insertMember(member);
+    createWorkspace(workspaceStore, owner, { id: workspaceId, name: `Workspace ${workspaceId.slice(-8)}`, projects: [pipeline.project] });
+    workspaceStore.putWorkspaceMember(workspaceId, member.id, "member", owner.id, at);
+    pipeline.workspace = { memberId: member.id, workspaceId };
+  }
+  pipeline.state = "running";
+  pipeline.cursor = { stageId: "build", state: "spawning", input: null, activatedBy: null };
+  const attempt = { n: 1, state: "needs_decision" as const, effectiveRole: role, input: null, activatedBy: null, output: "Choose a format?",
+    verdict: { status: "needs_decision" as const, findings: [] }, error: null, startedAt: at, completedAt: at,
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null };
+  pipeline.runs[0]!.attempts.push(attempt, { ...attempt, n: 2, state: "pending", output: null, verdict: null,
+    startedAt: null, completedAt: null, decisionAnswerId: "native-answer", definition: {
+      boundAt: at, stageDigest: stageDigest(pipeline.stages[0]!), ["prompt"]: pipeline.stages[0]!.prompt,
+      account: null, role: { roleId: "builder" }, sandbox: null, outputs: null,
+    } });
+  pipeline.decisionAnswers = [{ clientRequestId: "native-answer", expectedRevision: "a".repeat(64),
+    stageId: "build", attempt: 1, nextAttempt: 2, question: "Choose a format?", answer: "Use Markdown.", actor: { kind: "operator" }, at }];
+  savePipelines([pipeline]);
+  const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile,
+    memberships: [{ kind: "pipeline", containerId: id, role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null }] });
+  if (begun.kind !== "created") throw new Error("native decision receipt missing");
+  const bound = loadPipelines();
+  bound[0]!.runs[0]!.attempts[1]!.launchId = boundary === "binding" ? `replaced-${begun.receipt.launchId}` : begun.receipt.launchId;
+  bound[0]!.runs[0]!.attempts[1]!.conversationId = begun.receipt.conversationId;
+  if (boundary === "answer-removed") delete bound[0]!.runs[0]!.attempts[1]!.decisionAnswerId;
+  if (boundary === "target-removed") bound[0]!.runs[0]!.attempts.pop();
+  if (boundary === "membership") {
+    const otherId = `${id}-other`, other = { ...structuredClone(bound[0]!), id: otherId, ...pipelineIdentity(otherId, pipeline.task, cwd) };
+    bound.push(other);
+    registry.rememberMembership(begun.receipt.conversationId, { kind: "pipeline", containerId: otherId,
+      role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null });
+  }
+  savePipelines(bound);
+  let replacement: import("@/lib/pipelines/types").Pipeline | undefined;
+  const replace = () => {
+    if (boundary === "pipeline-removed") { savePipelines([]); return; }
+    const rows = loadPipelines();
+    if (boundary === "launch-replaced") rows[0]!.runs[0]!.attempts[1]!.launchId = `replacement-${begun.receipt.launchId}`;
+    else if (boundary === "conversation-replaced") rows[0]!.runs[0]!.attempts[1]!.conversationId = `replacement-${begun.receipt.conversationId}`;
+    else if (boundary === "budget-replaced") rows[0]!.runs[0]!.attempts[1]!.providerFallbackRetries = 1;
+    else if (boundary === "recovery-budget-replaced") rows[0]!.runs[0]!.attempts[1]!.providerRecoveryBudget = { tries: 99, startedAt: at, engine };
+    else if (boundary === "session-replaced") rows[0]!.runs[0]!.attempts[1]!.sessionId = "replacement-session";
+    else if (boundary === "account-replaced") rows[0]!.runs[0]!.attempts[1]!.accountId = "replacement-account";
+    else if (boundary === "remote-action") {
+      const p = rows[0]!, a = p.runs[0]!.attempts[1]!;
+      // Same durable control fence as the takeover writer; no delivery
+      // generation has changed yet when the pending operation is admitted.
+      const fence = crypto.createHash("sha256").update(JSON.stringify({
+        state: p.state, cursor: p.cursor, stages: p.stages, control: p.controlGeneration,
+        attempt: { n: a.n, launchId: a.launchId, conversationId: a.conversationId, state: a.state, flowId: a.flowId,
+          activatedBy: a.activatedBy, verdict: a.verdict, report: a.report, completedAt: a.completedAt,
+          reviewHeadSha: a.reviewHeadSha, expectedReviewHeadSha: a.expectedReviewHeadSha },
+        reviewPending: p.reviewPending, head: p.lastPassedCommit, branch: p.branch, worktree: p.worktreeDir,
+        hidden: p.hiddenAt, closed: p.closedAt,
+        delivery: p.delivery ? { target: p.delivery.target, epoch: p.delivery.epoch, owner: p.delivery.ownerId, active: p.delivery.active, operation: p.delivery.operation?.id } : null,
+      })).digest("hex");
+      p.remoteAction = { id: "pending-takeover", action: "takeover", state: "pending", at, actor: { kind: "operator" }, fence,
+        takeover: { expectedOwner: p.id, expectedEpoch: 1, reason: "Replace delivery control" } };
+    }
+    else if (boundary === "termination-custody") rows[0]!.runs[0]!.attempts[1]!.unresolvedTermination = {
+      survivors: [{ pid: process.pid, startIdentity: null }], error: "termination identity unavailable", recordedAt: at,
+    };
+    else if (boundary === "workspace-revoked") workspaceStore!.removeWorkspaceMember(workspaceId!, `member_${workspaceId}`);
+    else if (boundary === "owner") rows[0]!.srcConversationId = "conversation_replacement";
+    else if (boundary === "definition") rows[0]!.runs[0]!.attempts[1]!.definition!.prompt += " Changed instruction.";
+    else if (!["workspace-revoked"].includes(boundary)) rows[0]!.spec = "Changed requirements";
+    if (boundary !== "workspace-revoked") savePipelines(rows);
+    replacement = loadPipelines()[0];
+  };
+  let effects = 0;
+  const children: ReturnType<typeof spawn>[] = [];
+  const native = (_command: string, _args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) => {
+    effects++;
+    const child = spawn(process.execPath, ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed")`],
+      { ...options, stdio: ["pipe", "pipe", "pipe"] });
+    children.push(child); return child;
+  };
+  const codexStart = CodexAppServerHost.start;
+  const codex = spyOn(CodexAppServerHost, "start").mockImplementation(options => codexStart.call(CodexAppServerHost, {
+    ...options, readProtocolVersion: () => { if (["owner", "preparation", "definition", "workspace-revoked", "launch-replaced", "conversation-replaced", "budget-replaced", "recovery-budget-replaced", "termination-custody", "pipeline-removed", "session-replaced", "account-replaced", "remote-action"].includes(boundary)) replace(); return "0.162.1"; },
+  }));
+  // Claude's real preparation awaits auth status immediately before its
+  // launch setup. This is an isolated protocol reply, with no provider call.
+  try {
+    const opening = defaultStartHost({ engine, registry, receipt: begun.receipt,
+      spec: { engine, command: engine, cwd, windowName: "decision", launchProfile },
+      account: { engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      ["prompt"]: "", client: {} as RuntimeHostClient,
+    }, "fixture-capability", {
+      codex: { spawnProcess: native },
+      claude: { spawnProcess: native, readAuthStatus: async () => {
+        if (["owner", "preparation", "definition", "workspace-revoked", "launch-replaced", "conversation-replaced", "budget-replaced", "recovery-budget-replaced", "termination-custody", "pipeline-removed", "session-replaced", "account-replaced", "remote-action"].includes(boundary)) replace();
+        return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.209" };
+      } },
+    });
+    if (boundary === "import") queueMicrotask(replace);
+    // The positive engine executes its marker and exits without an RPC
+    // handshake; the authority refusal must precede that actual exec.
+    const rejection = await opening.then(() => null, error => error as Error);
+    const positive = boundary === "allowed" || boundary === "workspace-allowed";
+    if (replacement) expect(loadPipelines()[0]).toEqual(replacement);
+    const retained = loadPipelines()[0]?.runs[0]!.attempts[1];
+    if (boundary === "session-replaced") expect(retained?.sessionId).toBe("replacement-session");
+    if (boundary === "account-replaced") expect(retained?.accountId).toBe("replacement-account");
+    if (boundary === "remote-action") expect(loadPipelines()[0]?.remoteAction).toMatchObject({
+      id: "pending-takeover", action: "takeover", state: "pending", takeover: { expectedOwner: id, expectedEpoch: 1 },
+    });
+    expect(effects, `${boundary}: ${rejection?.message}`).toBe(positive ? 1 : 0);
+    expect(fs.existsSync(marker)).toBe(positive);
+    expect(rejection).toBeInstanceOf(Error);
+  } finally {
+    codex.mockRestore();
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    registry.close(); savePipelines(prior);
+  }
 });

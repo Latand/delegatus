@@ -1515,7 +1515,8 @@ export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 export type PatchPipelineRequest = {
   /** Required for resolve-decision, continue-review and accept-head, preserved as its durable receipt key. */
   clientRequestId?: string;
-  /** Opaque revision returned by get_pipeline or the pipeline detail route. */
+  /** Opaque revision from get_pipeline or the detail route. resolve-decision
+      also accepts the computed decisionRevision from that same read. */
   expectedRevision?: string;
   /** Answer to the settled question, up to MAX_DECISION_ANSWER_CHARS. */
   answer?: string;
