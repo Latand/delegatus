@@ -47,7 +47,7 @@ type PickerState =
   | { phase: "ready"; repoDir: string }
   | { phase: "creating"; repoDir: string }
   /* The draft exists and attaching its issue failed: retried on that draft. */
-  | { phase: "attach-failed"; repoDir: string; pipeline: Pipeline; source: PipelineLinkSource; error: string; retrying: boolean }
+  | { phase: "attach-failed"; repoDir: string; pipeline: Pipeline; source: PipelineLinkSource; error: string; retrying: boolean; current?: () => boolean }
   | { phase: "blocked"; code: PipelineRepoPreflightErrorCode; path: string; error?: string };
 
 /**
@@ -145,9 +145,11 @@ export function PipelineTemplatePicker({
     const from = link.phase === "resolved" ? { source: link.source, taskId: link.taskId } : undefined;
     setState({ phase: "creating", repoDir: canonicalRepoDir });
     const result = await (from ? onCreate(template, canonicalRepoDir, from) : onCreate(template, canonicalRepoDir));
+    if (result.current?.() === false) return;
+    if (result.accepted) { onClose(); return; }
     if (result.pipeline) {
       if (result.warning && from?.source.attachLink) {
-        setState({ phase: "attach-failed", repoDir: canonicalRepoDir, pipeline: result.pipeline, source: from.source, error: result.warning, retrying: false });
+        setState({ phase: "attach-failed", repoDir: canonicalRepoDir, pipeline: result.pipeline, source: from.source, error: result.warning, retrying: false, current: result.current });
         return;
       }
       onCreated(result.pipeline);
@@ -164,8 +166,10 @@ export function PipelineTemplatePicker({
   const retryAttach = async () => {
     if (state.phase !== "attach-failed" || state.retrying) return;
     const failed = state;
+    if (failed.current?.() === false) return;
     setState({ ...failed, retrying: true });
-    const failure = await attachDraftLink(failed.pipeline.id, failed.source);
+    const failure = await attachDraftLink(failed.pipeline.id, failed.source, failed.current);
+    if (failed.current?.() === false) return;
     if (!failure) {
       onCreated(failed.pipeline);
       return;
@@ -308,7 +312,7 @@ export function PipelineTemplatePicker({
             link={link}
             disabled={formLocked}
             onTask={(taskId) => { if (link.phase === "resolved") setTaskChoice({ source: link.source, taskId }); }}
-            attachFailure={state.phase === "attach-failed" ? { link: state.source.attachLink ?? "", error: state.error, retrying: state.retrying, onRetry: () => void retryAttach(), onOpen: () => onCreated(state.pipeline) } : null}
+            attachFailure={state.phase === "attach-failed" ? { link: state.source.attachLink ?? "", error: state.error, retrying: state.retrying, onRetry: () => void retryAttach(), onOpen: () => { if (state.current?.() !== false) onCreated(state.pipeline); } } : null}
           />
           <div className="flex flex-col gap-1">
             {templates.map((template) => (

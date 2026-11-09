@@ -123,14 +123,14 @@ test("an unsupported executable is refused before spawning an account app-server
     generateProtocolSchemas,
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.999.0; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.166.0");
+  })).rejects.toThrow("CLI 0.999.0; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.167.0");
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
     launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.150.0",
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.150.0; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
+  })).rejects.toThrow("CLI 0.150.0; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
   expect(spawned).toBe(false);
 });
 
@@ -162,7 +162,7 @@ test("account-management app-server retains zero-MCP process isolation", async (
   client.close();
 });
 
-test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
+test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
   const child = new FakeChild();
   child.onWrite = message => { if (message.id) child.respond(requestId(message), {}); };
   let args: readonly string[] = [];
@@ -770,4 +770,47 @@ test("consuming a reset credit sends the idempotency key and returns the backend
   expect(sent[1]).toEqual({ idempotencyKey: "attempt-two", creditId: "credit-one" });
   outcome = "surprise";
   await expect(client.consumeRateLimitResetCredit({ idempotencyKey: "attempt-three" })).rejects.toThrow("rateLimitResetCredit/consume response is malformed");
+});
+
+
+test.each(["config", "fallback", "allowed"] as const)("resume authority after %s response", async (boundary) => {
+  let allowed = true;
+  let resumes = 0;
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") return fake.respond(requestId(message), {});
+    if (message.method === "initialized") return;
+    if (message.method === "config/read") {
+      if (boundary === "config") allowed = false;
+      return fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    }
+    if (message.method === "thread/resume") {
+      resumes++;
+      expect(message.params).not.toHaveProperty("assertCurrent");
+      if (boundary === "fallback" && resumes === 1) {
+        allowed = false;
+        return fake.failRequest(requestId(message), "not supported");
+      }
+      return fake.respond(requestId(message), { thread: { id: "source" } });
+    }
+    throw new Error("unexpected fixture method");
+  });
+  const client = await start();
+  try {
+    const resume = client.resumeThread("source", { assertCurrent() { if (!allowed) throw new Error("ownership changed"); } });
+    if (boundary === "allowed") await expect(resume).resolves.toEqual({ id: "source", path: null });
+    else await expect(resume).rejects.toThrow("ownership changed");
+    expect(resumes).toBe(boundary === "config" ? 0 : 1);
+  } finally { client.close(); }
+});
+
+
+test("migration client rechecks caller custody after protocol preparation before spawn", async () => {
+  let allowed = true;
+  let spawned = false;
+  await expect(CodexAppServerClient.start({ home: "/fixture/home", launchBinary: "/fixture/codex",
+    readProtocolVersion: () => { allowed = false; return "0.162.1"; },
+    assertCurrent() { if (!allowed) throw new Error("launch owner changed"); },
+    spawn: () => { spawned = true; throw new Error("unexpected spawn"); },
+  })).rejects.toThrow("launch owner changed");
+  expect(spawned).toBe(false);
 });

@@ -3,6 +3,7 @@
 import { describe, expect, spyOn, test, fs, path, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, settleRecordFromJournal, readSeatTickState, writeSeatTickState, SeatTickAccounting, FileRuntimeEventStore, statePath, AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, pipelineRecord, harness, OVERDUE, RECENT, OPEN_LANE, HELD, childFixture, childRig, ago, ownLane, ageTranscript, sweepRegistryRow, agendaOf, endedTurnUnderADeadHost, STANDING_BOARD, unresolvedCardsOn, standingProject, MIGRATION_REFUSAL, REPORT_SHA, reportDeploys, settledLane, reportPort } from "./seatTickController.fixture";
 import type { SeatTickControllerDependencies, SeatTickProjectState, AgentLivenessRecord, ConversationMessage, DeliveryOutcome } from "./seatTickController.fixture";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { spawn, RuntimeJournal, journalClient } from "./seatTickController.fixture";
 
 
 test("one child with a failed and a finished turn is one line carrying its latest state (#1783)", async () => {
@@ -1170,6 +1171,7 @@ describe("seat authentication recovery through production seams", () => {
     let fixture: Awaited<ReturnType<typeof makeAuthFixture>> | undefined;
     try { fixture = await makeAuthFixture(dir, allowed, engine, history); await run(fixture); }
     finally {
+      await fixture?.mcp?.close();
       await fixture?.telegram.stopPoller();
       setAgentRegistryForTests(null);
       for (const [key, value] of Object.entries(previous)) {
@@ -1337,7 +1339,43 @@ describe("seat authentication recovery through production seams", () => {
       expect({ status: await child.exited, errors }).toEqual({ status: 0, errors: "" });
       return JSON.parse(output) as SeatTickProjectState;
     }
-    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests, restartAuthentication, migrateAccount,
+    // Authentication repair permits a wake only while the independent MCP
+    // owner is verified. Use the real adapter and registration, with the
+    // existing protocol process replacing the provider executable.
+    let mcp: { bind: () => Promise<void>; disconnect: () => Promise<void>; close: () => Promise<void> } | undefined;
+    if (engine === "codex") {
+      const { CodexAppServerHost } = await import("@/lib/runtime/codexAppServerHost");
+      const { codexHostColumns } = await import("@/lib/runtime/registry");
+      const { bindStructuredDeliveryQueue, structuredDeliveryMcpObservation } = await import("@/lib/runtime/structuredDeliveryController");
+      const key = { engine, sessionId: conversation.generations.at(-1)!.id };
+      const host = await CodexAppServerHost.adopt(key.sessionId, {
+        cwd: dir, mcpServers: [], cleanMemory: true, readProtocolVersion: () => "0.162.1",
+        eventStore: new FileRuntimeEventStore(path.join(dir, "events")),
+        spawnProcess: (_binary, _args, options) => spawn(process.execPath,
+          [path.resolve("src/lib/runtime/fixtures/codexCallbackProcess.ts"), "engine", dir, path.join(dir, "protocol.jsonl")], options),
+      });
+      const journal = new RuntimeJournal(path.join(dir, "runtime.sqlite"), { structuredHosts: true });
+      const disconnect = () => bindStructuredDeliveryQueue([], { registry, client: null });
+      const close = async () => {
+        try { await disconnect(); }
+        finally { try { await host.release(); } finally { journal.close(); } }
+      };
+      try {
+        expect((await host.health()).sessionKey).toBe(key.sessionId);
+        registry.upsert({ key, artifactPath: transcript, cwd: dir, accountId: a.id,
+          launchProfile: emptyLaunchProfile({ cwd: dir }), status: "idle", host: null,
+          claimEpoch: 1, claimOwner: "auth-fixture", pendingAction: null,
+          structuredHost: codexHostColumns(await host.health(), 1) });
+        const bind = () => bindStructuredDeliveryQueue([{ key, host }], { registry, client: journalClient(journal),
+          watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+        await bind();
+        // The delivery controller's registry identity is part of ownership.
+        rig.deps.sources!.registry = () => registry;
+        expect(structuredDeliveryMcpObservation(conversation.id, registry)).toBeUndefined();
+        mcp = { bind, disconnect, close };
+      } catch (error) { await close(); throw error; }
+    }
+    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests, restartAuthentication, migrateAccount, mcp,
       check: async () => { const result = await runSeatTickCheck(PROJECT, rig.deps); clock += 5 * MINUTE; return result; },
       seat: () => orchestratorSeatFor(PROJECT).active!, row: () => readSeatTickState(PROJECT),
       reports: () => readBridgeReportLog().reports, cards: () => loadTasks(statePath("tasks.json")).filter((task) => task.text.includes("monitor-ref: seat-auth-failed")),
@@ -1365,6 +1403,24 @@ describe("seat authentication recovery through production seams", () => {
       }, engine);
     });
   }
+
+  test("Codex credential repair keeps wakes held until the MCP owner is registered again", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      expect(f.rig.sent).toHaveLength(0);
+      await f.mcp!.disconnect();
+      fs.writeFileSync(path.join(f.a.home, "auth.json"), '{"repaired":true}', { mode: 0o600 });
+      const held = await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(held?.delivery?.outcome).toBe("seat-mcp-unavailable");
+      expect(f.rig.sent).toHaveLength(0);
+      await f.mcp!.bind();
+      await f.check();
+      expect(f.rig.sent).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1);
+    }, "codex");
+  });
 
   test("an empty Codex completion cannot promote an older assistant answer into recovery evidence", async () => {
     await authFixture(false, async (f) => {

@@ -95,6 +95,7 @@ export interface BandMirror {
 }
 
 export interface TaskBand {
+  creations?: readonly import("@/hooks/useFiles").CreationCard[];
   id: string;
   origin: BandOrigin;
   task: BoardTask | null;

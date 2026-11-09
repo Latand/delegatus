@@ -64,6 +64,7 @@ export function TextPane({
   mobile,
   line: targetLine = null,
   onFailure,
+  contentUrl = artifactContentUrl(path),
 }: {
   path: string;
   meta: ArtifactMeta;
@@ -71,6 +72,8 @@ export function TextPane({
   /** 1-based line the link named. */
   line?: number | null;
   onFailure: (failure: ArtifactFailure) => void;
+  /** Where the bytes come from; a local link reads `/api/artifact`. */
+  contentUrl?: string;
 }) {
   const { t } = useLocale();
   const [chunks, setChunks] = useState<Uint8Array[]>([]);
@@ -90,7 +93,7 @@ export function TextPane({
     abortRef.current = controller;
     try {
       const end = Math.min(loadedBytes + TEXT_CHUNK, meta.size) - 1;
-      const response = await fetch(artifactContentUrl(path), {
+      const response = await fetch(contentUrl, {
         signal: controller.signal,
         headers: { range: `bytes=${loadedBytes}-${end}`, "if-match": meta.etag },
       });
@@ -106,7 +109,7 @@ export function TextPane({
     } finally {
       setLoading(false);
     }
-  }, [loading, loadedBytes, meta, path, onFailure]);
+  }, [loading, loadedBytes, meta, contentUrl, onFailure]);
 
   /* First bounded chunk on mount; closing the preview aborts the in-flight
      read, which the route answers by closing its file descriptor. */

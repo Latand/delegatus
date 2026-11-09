@@ -1,3 +1,4 @@
+import { seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -3731,16 +3732,18 @@ export class SqliteAgentRegistryStore {
   }
 
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
-    const admitted = this.writerHeld;
-    if (!admitted) this.db.exec("BEGIN");
+    // A mutation consumes writer admission before calling its guard. Nested
+    // readers borrow the open transaction; only its owner may end it.
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) this.db.exec("BEGIN");
     try {
       const skipColdKeyInitialization = options.skipColdKeyInitialization === true;
       if (this.changesReady && !skipColdKeyInitialization) this.refreshColdKeys();
       const result = reader(this.loadLazyInTransaction(true, !skipColdKeyInitialization, true, skipColdKeyInitialization).file);
-      if (!admitted) this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { if (!admitted) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
@@ -4097,11 +4100,12 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  seatTickConversation(id: string): Pick<RegistryFile["conversations"][string], "id" | "turn"> | null {
-    this.db.exec("BEGIN");
+  seatTickConversation(id: string): SeatTickConversation | null {
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) this.db.exec("BEGIN");
     try {
       if (this.changesReady) this.refreshColdKeys();
-      const read = (collection: "conversationAliases" | "conversations", key: string) => {
+      const read = (collection: "conversationAliases" | "conversations" | "entries", key: string) => {
         const row = this.db.query<{ value_json: string }, [string, string]>(
           `SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`,
         ).get(collection, key);
@@ -4118,15 +4122,20 @@ export class SqliteAgentRegistryStore {
           const raw = read("conversations", current);
           const conversation = raw === undefined ? null : this.normalize({ version: 2, entries: {}, receipts: {}, conversations: { [current]: raw } }).conversations[current];
           if (raw !== undefined && !conversation) throw new Error("invalid seat conversation");
-          this.db.exec("COMMIT");
-          return conversation ? { id: conversation.id, turn: conversation.turn } : null;
+          const generation = conversation?.generations.at(-1);
+          const key = generation && conversation ? sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) : null;
+          const rawEntry = key ? read("entries", key) : undefined;
+          const entry = key && rawEntry !== undefined ? this.normalizePartial({ version: 2, entries: { [key]: rawEntry }, receipts: {} }).entries[key] : undefined;
+          const viewerMcp = conversation ? seatViewerMcpObservation(conversation, entry) : undefined;
+          if (ownsTransaction) this.db.exec("COMMIT");
+          return conversation ? { id: conversation.id, turn: conversation.turn, viewerMcpOwner: seatViewerMcpOwner(conversation, entry), ...(viewerMcp ? { viewerMcp } : {}) } : null;
         }
         if (typeof alias !== "string" || !alias.startsWith("conversation_")) throw new Error("invalid seat alias");
         current = alias;
       }
       throw new Error("seat alias traversal budget exhausted");
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
       throw error;
     }
   }

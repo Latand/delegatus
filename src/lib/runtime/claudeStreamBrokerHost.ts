@@ -726,6 +726,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private terminalExit: string | null = null;
   private cursor: number;
   private activeTurnId: string | null = null;
+  private assistantCandidate: { id: string | null; userUuid: string | null } | null = null;
+  private activeUserUuid: string | null = null;
+  /** The command still owns the stream after its evidence promise settles. */
+  private manualCompaction: PendingCompaction | null = null;
+  private lastResultUuid: string | null = null;
   private protocolVersion: string | null;
   private account: HostState["account"];
   private readonly memoryCell: AgentMemoryCell | null;
@@ -1238,7 +1243,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.activeTurnId) {
       throw new StructuredCompactError("a turn is active; compaction would race it", "refused");
     }
-    if ([...this.compactions.values()].some((compaction) => !compaction.settled)) {
+    if (this.manualCompaction) {
       throw new StructuredCompactError("a compaction is already running on this conversation", "refused");
     }
 
@@ -1258,6 +1263,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     /* A retry that arrives while the command is being written finds the entry
        here, so the registration happens before the frame. */
     this.compactions.set(request.operationId, compaction);
+    this.assistantCandidate = null;
+    this.manualCompaction = compaction;
     void promise.catch(() => undefined);
     this.write({
       type: "user",
@@ -1479,11 +1486,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     let restoredTurn: string | null = null;
     for (const event of stored) {
       if (event.kind === "turn-started") restoredTurn = event.turnId;
+      if (event.kind === "turn-ended") this.lastResultUuid = event.claudeResultUuid ?? null;
       if (event.kind === "turn-ended" && event.turnId === restoredTurn) restoredTurn = null;
       if (event.kind === "attention") this.attentions.set(event.id, record(event.attention) ?? {});
       if (event.kind === "attention-resolved") this.attentions.delete(event.id);
       if (event.kind === "session-status" && (event.status === "dead" || event.status === "unhosted")) {
-        restoredTurn = null;
+        // A host status is not a terminal outcome for its last started turn.
         this.attentions.clear();
       }
     }
@@ -1656,17 +1664,38 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return;
     }
     if (type === "stream_event") {
+      try { if (this.writerFence?.() === false) return; } catch { return; }
       const event = record(message.event);
+      const main = this.mainAssistantEnvelope(message);
+      if (event?.type === "message_start") {
+        const assistant = record(event.message);
+        this.assistantCandidate = main && assistant?.role === "assistant" && !this.manualCompaction
+          ? { id: stringField(assistant, "id"), userUuid: stringField(message, "user_message_uuid") }
+          : null;
+        if (main && this.activeTurnId) this.partialTurns.delete(this.activeTurnId);
+      }
+      const candidate = main ? this.assistantCandidate : null;
       const delta = record(event?.delta);
       const text = stringField(delta, "text");
+      if (candidate && ((event?.type === "content_block_delta" && delta?.type === "text_delta" && Boolean(text?.trim()))
+        || (event?.type === "content_block_start" && this.meaningfulAssistantBlock(event.content_block)))) {
+        this.startBackgroundTurn(candidate.id, candidate.userUuid);
+      }
       if (event?.type === "content_block_delta" && text !== null) {
         if (this.activeTurnId) this.partialTurns.add(this.activeTurnId);
         this.emit({ kind: "delta", turnId: this.activeTurnId ?? "unknown", text });
       }
+      if (main && event?.type === "message_stop") this.assistantCandidate = null;
       return;
     }
     if (type === "assistant") {
-      const text = textContent(record(message.message)?.content);
+      try { if (this.writerFence?.() === false) return; } catch { return; }
+      const assistant = record(message.message);
+      if (this.mainAssistantEnvelope(message) && assistant?.role === "assistant"
+        && Array.isArray(assistant.content) && assistant.content.some(block => this.meaningfulAssistantBlock(block))) {
+        this.startBackgroundTurn(stringField(assistant, "id"), stringField(message, "user_message_uuid"));
+      }
+      const text = textContent(assistant?.content);
       if (text && (!this.activeTurnId || !this.partialTurns.has(this.activeTurnId))) {
         this.emit({ kind: "delta", turnId: this.activeTurnId ?? "unknown", text });
       }
@@ -1728,25 +1757,69 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (type === "result") this.acceptResult(message);
   }
 
-  private acceptResult(message: JsonObject): void {
-    const turnId = this.turnQueue.shift() ?? this.activeTurnId;
-    if (!turnId) {
-      /* No turn owns this result, so it closes the `/compact` this host typed
-         into the conversation (#1214) — the only thing running off the turn
-         plane. A boundary would have come first, so reaching here means the
-         engine handled the command and compacted nothing. Say that now
-         instead of sitting out the evidence budget in silence. */
-      this.settlePendingCompactions(
-        new StructuredCompactError(CLAUDE_COMPACT_DECLINED_REASON, "refused"),
-      );
+  private mainAssistantEnvelope(message: JsonObject): boolean {
+    return message.parent_tool_use_id == null && message.agent_id == null
+      && message.error == null && message.aborted !== true;
+  }
+
+  private meaningfulAssistantBlock(value: unknown): boolean {
+    const block = record(value);
+    if (block?.type === "text") return Boolean(stringField(block, "text")?.trim());
+    return block?.type === "tool_use" && Boolean(stringField(block, "id")?.trim())
+      && Boolean(stringField(block, "name")?.trim()) && record(block.input) !== null;
+  }
+
+  private startBackgroundTurn(messageId: string | null, userUuid: string | null): void {
+    if (this.manualCompaction || this.unavailable()) return;
+    if (this.activeTurnId) {
+      this.activeUserUuid ??= userUuid;
       return;
     }
-    this.partialTurns.delete(turnId);
-    const interrupted = this.interruptedTurns.delete(turnId);
+    const token = messageId ? `message:${messageId}` : `sequence:${this.cursor + 1}`;
+    const digest = crypto.createHash("sha256").update(JSON.stringify([this.identity.sessionId, token])).digest("hex");
+    this.activeTurnId = `claude-background:${digest}`;
+    this.activeUserUuid = userUuid;
+    this.emit({ kind: "turn-started", turnId: this.activeTurnId });
+  }
+
+  private acceptResult(message: JsonObject): void {
+    // A result can still arrive while an owned release waits for reap.
+    try { if (this.writerFence?.() === false) return; } catch { return; }
+    const nativeUuid = stringField(message, "uuid");
+    const resultUuid = nativeUuid && nativeUuid.length <= 128 ? nativeUuid : null;
+    if (resultUuid && resultUuid === this.lastResultUuid) return;
+    // A foreground delivery can already own a turn despite the queue barrier.
+    // Its result retains that ownership; compact frames cannot start a turn.
+    if (this.manualCompaction && !this.activeTurnId) {
+      this.settleCompaction(this.manualCompaction, new StructuredCompactError(CLAUDE_COMPACT_DECLINED_REASON, "refused"));
+      this.manualCompaction = null;
+      this.assistantCandidate = null;
+      return;
+    }
+    const turnId = this.activeTurnId;
+    if (!turnId) {
+      this.assistantCandidate = null;
+      return;
+    }
+    const userUuid = stringField(message, "user_message_uuid");
+    if (userUuid) {
+      const deliveredUserUuid = this.deliveries.find(delivery => delivery.entry.id === turnId)?.engineMessageId;
+      const expectedUserUuid = deliveredUserUuid ?? this.activeUserUuid;
+      if ((expectedUserUuid && userUuid !== expectedUserUuid)
+        || this.deliveries.some(delivery => delivery.entry.id !== turnId && delivery.engineMessageId === userUuid)) return;
+    }
+    const interrupted = this.interruptedTurns.has(turnId);
     const status = interrupted || message.subtype === "interrupted"
       ? "interrupted"
-      : message.subtype === "success" ? "completed" : "error";
-    this.emit({ kind: "turn-ended", turnId, status });
+      : message.subtype === "success" && message.is_error !== true ? "completed" : "error";
+    this.emit({ kind: "turn-ended", turnId, status, ...(resultUuid ? { claudeResultUuid: resultUuid } : {}) });
+    if (this.ledgerFailed) return;
+    this.lastResultUuid = resultUuid;
+    if (this.turnQueue[0] === turnId) this.turnQueue.shift();
+    this.partialTurns.delete(turnId);
+    this.interruptedTurns.delete(turnId);
+    this.assistantCandidate = null;
+    this.activeUserUuid = null;
     /* Issue #765: a `result` proves the CLI's turn is over, so any control
        request it left unanswered can never be answered — the await behind it
        died with the turn. Claude sends no `control_cancel_request` on this
@@ -1826,11 +1899,25 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.finishRelease();
   }
 
+  /** Settle only the turn whose start was published. Queued inputs retain
+      their existing delivery evidence; termination cannot confirm them. */
+  private endActiveTurn(): void {
+    this.assistantCandidate = null;
+    this.activeUserUuid = null;
+    this.manualCompaction = null;
+    const turnId = this.activeTurnId;
+    this.activeTurnId = null;
+    this.turnQueue.length = 0;
+    this.partialTurns.clear();
+    this.interruptedTurns.clear();
+    if (turnId) this.emit({ kind: "turn-ended", turnId, status: "error" });
+  }
+
   private finishRelease(): void {
     if (this.released) return;
     this.released = true;
     this.releasing = false;
-    this.activeTurnId = null;
+    this.endActiveTurn();
     this.attentions.clear();
     this.rejectPending(new Error("Claude stream host released"));
     this.emit({ kind: "session-status", status: "unhosted" });
@@ -1859,7 +1946,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.dead || this.released) return;
     this.recordEnd("host-fault", error.message, null, null);
     this.dead = true;
-    this.activeTurnId = null;
+    this.endActiveTurn();
     this.attentions.clear();
     this.rejectPending(error);
     this.emit({ kind: "session-status", status: "dead" });
@@ -1868,6 +1955,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private failWithoutLedger(error: Error): void {
+    this.assistantCandidate = null;
+    this.activeUserUuid = null;
+    this.manualCompaction = null;
+    if (this.dead || this.released) {
+      console.warn("[structured host] terminal event persistence failed", { reason: safeError(error) });
+    }
     if (this.released) {
       this.notifyStateListeners();
       this.closeSubscribers();
