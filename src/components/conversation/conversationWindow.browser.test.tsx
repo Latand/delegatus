@@ -3032,6 +3032,20 @@ describe("a consumed queued send leaves the composer by its own id", () => {
                 });
               })(),
               overlaps,
+              /* The region's own overflow, and whether the open list's closing
+                 frame (its bottom border) is drawn inside the region and the
+                 window rather than past the region's clip edge. */
+              regionOverflow: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                return region ? region.scrollHeight - region.clientHeight : null;
+              })(),
+              listFrameInRegion: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                const stack = document.querySelector<HTMLElement>("[data-runtime-receipt-stack][open]");
+                if (!region || !stack) return null;
+                const clip = region.getBoundingClientRect(); const frame = stack.getBoundingClientRect();
+                return frame.bottom <= clip.bottom + 0.5 && frame.bottom <= innerHeight + 0.5 && frame.top >= clip.top - 0.5;
+              })(),
               geometry: (() => {
                 const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
                 const rr = region?.getBoundingClientRect();
@@ -3243,6 +3257,15 @@ describe("a consumed queued send leaves the composer by its own id", () => {
               .concat((state.panels.tileHeight ?? 99) < (viewport.touch ? 47.5 : 39.5) ? [`${key} ${phase}: the staged tile is only ${state.panels.tileHeight} px`] : [])
               .concat(state.panels.overlaps ? [`${key} ${phase}: a surface is painted over a neighbour`] : []));
           expect(panelFaults).toEqual([]);
+          /* On the phone the open list's three floors fit its region: nothing
+             scrolls in the region, the list's closing frame is drawn inside it
+             (the first card is cut by that frame, never by the region's edge,
+             under its Retry and Discard); its message and sentence stay
+             reachable by the list's own scroll, asserted above. */
+          if (viewport.touch) for (const [phase, state] of [["before", before], ["after", after]] as const) {
+            expect({ key, phase, regionOverflow: state.panels.regionOverflow }).toEqual({ key, phase, regionOverflow: 0 });
+            expect({ key, phase, listFrameInRegion: state.panels.listFrameInRegion }).toEqual({ key, phase, listFrameInRegion: true });
+          }
           expect(before.images).toBe(1);
           expect(after.images).toBe(1);
           expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);

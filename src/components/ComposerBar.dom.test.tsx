@@ -9,7 +9,7 @@ import { useComposer } from "@/hooks/useComposer";
 import { setLocale, translate } from "@/lib/i18n";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
-import { ComposerBar } from "./ComposerBar";
+import { ComposerBar, RECEIPTS_FIRST_ROW_CLOSING, RECEIPTS_FIRST_ROW_CLOSING_PHONE } from "./ComposerBar";
 import { ImagePreviewStrip, type PendingImage } from "./imageAttachments";
 
 /* A settle-on-demand FileReader: an intake's read is resolved inside the test's
@@ -575,10 +575,17 @@ test("on the phone the open list's room is paid for by the queue panel and the s
   /* The queue panel keeps its header line, the strip its row of tiles. */
   expect(region()).toContain("[&>[data-testid=native-queue-panel]]:min-h-[1.625rem]");
   expect(region()).toContain("[&>[data-testid=attachment-tray]]:min-h-14");
+  /* The list's own floor keeps the first row's controls whole and 4 px of the
+     card's closing under them (the desktop keeps the full 11), so the three
+     floors in a 390 x 844 region leave its closing frame inside it. */
+  const wrapper = () => host.querySelector<HTMLElement>('[data-testid="composer-receipts"]')!;
+  expect(wrapper().style.minHeight).toBe(`${142 - RECEIPTS_FIRST_ROW_CLOSING + RECEIPTS_FIRST_ROW_CLOSING_PHONE}px`);
   flushSync(() => root.render(<ReceiptsHarness minHeight={null} />));
   expect(region()).not.toContain("native-queue-panel");
+  expect(wrapper().style.minHeight).toBe("");
   flushSync(() => root.render(<ReceiptsHarness minHeight={142} hidden />));
   expect(region()).not.toContain("native-queue-panel");
+  expect(wrapper().style.minHeight).toBe("");
   flushSync(() => root.unmount());
 });
 

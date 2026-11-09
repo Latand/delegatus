@@ -127,6 +127,15 @@ export function composerSlotKind({ killed, offline, working, hasDraft }: {
     card's space with this added, and the region does not scroll for it. */
 export const RECEIPTS_FIRST_ROW_CLOSING = 11;
 
+/** What the phone's list keeps under its first card's controls: the card's own
+    4 px gap before its message. The phone's box is the 38dvh cap and its region
+    holds the queue's header line and the staged tile beside the list; with the
+    full closing the three floors together run 7 px past a 390 x 844 region, and
+    the list's closing frame, with it the card's continuation, falls outside the
+    region. The list's own frame then ends under the controls, inside the region,
+    and it takes the rest of the room the grid has. */
+export const RECEIPTS_FIRST_ROW_CLOSING_PHONE = 4;
+
 /** Height, in px, of a queue panel that shows its header and its first row's
     controls whole: the header line (26), the row's top padding (6) and the
     row of controls (22), with a pixel to spare. */
@@ -815,7 +824,7 @@ export function ComposerBar({
               region: a run of failed or uncertain deliveries wraps into rows of
               chips, and each chip carries the controls that settle it. */}
           {receipts ? (
-            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsListHoldsRoom ? { minHeight: receiptsMinHeight! } : undefined} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
+            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsListHoldsRoom ? { minHeight: yieldingFloors ? receiptsMinHeight! - RECEIPTS_FIRST_ROW_CLOSING + RECEIPTS_FIRST_ROW_CLOSING_PHONE : receiptsMinHeight! } : undefined} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
           ) : null}
         </div>
       ) : null}
