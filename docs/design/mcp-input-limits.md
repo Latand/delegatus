@@ -12,7 +12,7 @@ receipt or provenance.
 | Input | Hard maximum | Recommended target | Measurement |
 | --- | ---: | ---: | --- |
 | Lesson/rewrite rule | 300 (minimum 20) | 240 | Unicode code points after trimming and collapsing whitespace |
-| Lesson/rewrite reason, closing `none` | 160 | 120 | Same normalized code points; rule and reason also need 16 letters or digits |
+| Lesson/rewrite reason, closing `none` | 160 | 120 | Same normalized code points; rule and reason also need 16 letters or digits after NFKC matching normalization |
 | Problem statement / evidence | 300 / 1000 | 240 / 750 | Same normalized code points |
 | Task title/body | 6000 | 4500 | UTF-16 code units after task text normalization |
 | Task note | 280 | 220 | UTF-16 code units after collapsing whitespace and trimming |
@@ -28,6 +28,9 @@ receipt or provenance.
 | Stage result | 160 | 120 | UTF-16 code units; domain normalizer collapses whitespace |
 | Stage finding text | 1995 | 1500 | UTF-16 code units; severity prefix makes the stored bound 2000; at most 50 findings |
 | Complete bridge report | 8192 | 6000 | UTF-8 bytes of summary, headings and items joined by newlines |
+
+NFKC is used only for the recognisability counter; stored rule and provenance
+text retain their Unicode spelling.
 
 An astral scalar occupies one Unicode code point, two UTF-16 code units and
 four UTF-8 bytes. Combining marks are separate code points. These limits count

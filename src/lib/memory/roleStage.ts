@@ -66,7 +66,7 @@ function text(value: unknown, field: string, min: number, max: number): string {
     their words (roleStore.ts); text with too few to recognise is refused. */
 function recognisable(value: string, field: string): string {
   const count = lettersAndDigits(value);
-  if (count < LESSON_MATCH_MIN_CHARS) throw new RoleMemoryRefusal("LESSON_INVALID", `${field} needs at least ${LESSON_MATCH_MIN_CHARS} letters or digits; it has ${count}. Say it in words`);
+  if (count < LESSON_MATCH_MIN_CHARS) throw new RoleMemoryRefusal("LESSON_INVALID", `${field} needs at least ${LESSON_MATCH_MIN_CHARS} letters or digits after NFKC matching normalization; it has ${count}. Say it in words`);
   return value;
 }
 

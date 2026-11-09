@@ -116,6 +116,14 @@ test("lesson normalization and code-point bounds agree between protocol and doma
   }
 });
 
+test("lesson recognisability counts NFKC letters without rewriting stored provenance", () => {
+  const exact = "ﬃ".repeat(5) + "a";
+  const parsed = parseLessons({ lesson: { ...lesson, why: exact } }, "builder");
+  expect(parsed.lessons[0]!.why).toBe(exact);
+  expect(() => parseLessons({ lesson: { ...lesson, why: "ﬃ".repeat(5) } }, "builder"))
+    .toThrow("why needs at least 16 letters or digits after NFKC matching normalization; it has 15");
+});
+
 test("declared task whitespace normalization admits padded exact limits without dropping content", async () => {
   const note = unitText(280), details = unitText(20000);
   const args = { taskId: task.id, note: ` \n${note}\t `, details: ` \n${details}\t ` };
