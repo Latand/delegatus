@@ -25,7 +25,6 @@ const NEAR = 4;
  * a row's head parts are the toggle, the dot, the sign-in and the chevron.
  */
 function hideUnder(bubble: HTMLElement, anchor: HTMLElement): () => void {
-  const box = bubble.getBoundingClientRect();
   const near = (rect: DOMRect) => rect.width > 0.5 && rect.height > 0.5
     && rect.left < box.right + NEAR && rect.right > box.left - NEAR && rect.top < box.bottom + NEAR && rect.bottom > box.top - NEAR;
   const reaches = (element: Element) => {
@@ -34,8 +33,13 @@ function hideUnder(bubble: HTMLElement, anchor: HTMLElement): () => void {
     return [...range.getClientRects()].some(near);
   };
   const ownRow = anchor.closest("[data-account-row]");
+  // The open status belongs to its own row: a row too short to hold it grows
+  // by the difference, so the popover never reaches a neighbour whose head
+  // would then blank. The row's top stays put, so the popover keeps its place.
+  const grown = ownRow instanceof HTMLElement ? holdWithin(ownRow, bubble) : () => {};
+  const box = bubble.getBoundingClientRect();
   const scope = anchor.closest("[data-accounts-scroller]") ?? ownRow?.parentElement;
-  if (!scope) return () => {};
+  if (!scope) return grown;
   const hidden = new Set<HTMLElement>();
   const blank = new Set<HTMLElement>();
   for (const row of scope.querySelectorAll<HTMLElement>("[data-account-row]")) {
@@ -65,7 +69,17 @@ function hideUnder(bubble: HTMLElement, anchor: HTMLElement): () => void {
   return () => {
     for (const [part, visibility] of before) part.style.visibility = visibility;
     for (const [part, side, colour] of [...edges].reverse()) part.style[side] = colour;
+    grown();
   };
+}
+
+/** Grows the row so its bottom edge lies below the popover; returns the undo. */
+function holdWithin(row: HTMLElement, bubble: HTMLElement): () => void {
+  const need = bubble.getBoundingClientRect().bottom + NEAR - row.getBoundingClientRect().bottom;
+  if (need <= 0) return () => {};
+  const before = row.style.minHeight;
+  row.style.minHeight = `${Math.ceil(row.getBoundingClientRect().height + need)}px`;
+  return () => { row.style.minHeight = before; };
 }
 
 /**

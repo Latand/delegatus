@@ -194,6 +194,8 @@ test("desktop provider credential damage shows repair without OAuth sign-in", as
   mounted.push(view);
   const row = view.host.querySelector('[data-account-row="provider"]') as HTMLElement;
   expect(row.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Provider: Provider credential error");
+  // The problem is words on the closed row, not only a coloured dot.
+  expect(row.querySelector("[data-account-note='credential']")?.textContent).toBe("Provider credential error");
   openRow(view.host, "provider");
   expect(row.textContent).toContain("Edit provider");
   expect(row.textContent).not.toContain("Needs sign-in");
@@ -1027,7 +1029,7 @@ test("a watched retry clears an old login error and shows live limits without a 
     // A sign-in in flight shows no result of the attempt before it.
     expect(view.host.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Main: signing in…");
     expect(view.host.textContent).not.toContain("Auth error");
-    expect(view.host.textContent).not.toContain("no data yet");
+    expect(view.host.textContent).not.toContain("No data yet");
     phase = "authenticated";
     await store.refresh();
     await view.rerender(store);

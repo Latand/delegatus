@@ -157,3 +157,24 @@ test("a status opened by the keyboard closes when focus leaves the dot, restores
   expect(view.host.querySelector<HTMLElement>('[data-account-row="other"] [data-account-head]')!.style.visibility).toBe("");
   await view.unmount();
 });
+
+test("a row too short to hold the open status grows to hold it, and closing gives the height back", async () => {
+  const view = await mount("");
+  const row = view.host.querySelector<HTMLElement>('[data-account-row="own"]')!;
+  // The row ends at 50; the popover (40..90) would run into the next row without the growth.
+  row.setAttribute("data-box", "0,0,500,50");
+  const dot = view.host.querySelector<HTMLButtonElement>("[data-account-status]")!;
+  await act(async () => dot.click());
+  await run();
+  await run();
+  expect(row.style.minHeight).toBe("94px");
+  await act(async () => dot.click());
+  expect(row.style.minHeight).toBe("");
+  // A row that already holds the popover is left as it is.
+  row.setAttribute("data-box", "0,0,500,200");
+  await act(async () => dot.click());
+  await run();
+  await run();
+  expect(row.style.minHeight).toBe("");
+  await view.unmount();
+});

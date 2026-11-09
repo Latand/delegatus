@@ -359,7 +359,7 @@ test("a sign-in being verified shows no result of the attempt before it, and a f
   expect(pending.querySelector("[data-account-status]")?.getAttribute("aria-label")).toBe("Verify: signing in…");
   expect(text(pending)).toContain("Verifying…");
   expect(text(pending)).not.toContain("Auth error");
-  expect(text(pending)).not.toContain("no data yet");
+  expect(text(pending)).not.toContain("No data yet");
   const failedCard = host.querySelector('[data-mobile2-account="cl-failed"]')!;
   expect(text(failedCard)).toContain("Retry");
   expect(text(failedCard)).toContain("Sign-in timed out.");
@@ -570,7 +570,7 @@ test("an account with no reading says so instead of drawing an empty meter", asy
   expect(host.querySelector("[data-mobile2-account-corner]")).toBeNull();
   expect(host.querySelector("[data-account-limits]")).toBeNull();
   await open(host, "cl-bare");
-  expect(text(host.querySelector('[data-mobile2-account="cl-bare"]'))).toContain(translate(getLocale(), "limits.noDataYet"));
+  expect(text(host.querySelector('[data-mobile2-account="cl-bare"]'))).toContain(translate(getLocale(), "accounts.noDataYet"));
 });
 
 test("the account a badge steered here (#229) is ringed on the screen it lands on", async () => {

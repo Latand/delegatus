@@ -1159,6 +1159,7 @@ export const en = {
   "accounts.triggerAria": "{engine} accounts — switch or add",
   "accounts.limitsAria": "Quota windows for {label}",
   "accounts.limitsChecked": "Checked",
+  "accounts.noDataYet": "No data yet",
   "accounts.limitsStale": "Last known values",
   // Claude sign-in slice (#61)
   "accounts.claudeLoginStarted": "Sign-in started for {label}",

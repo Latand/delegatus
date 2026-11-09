@@ -349,7 +349,8 @@ test("awaiting_code renders the browser link, bounded code input, hint, and Canc
 test("starting and verifying show a spinner line, Cancel, and a hidden browser link", () => {
   const starting = render(claudeState(loginView({ phase: "starting", loginUrl: null, acceptsCode: false })));
   expect(starting).toContain("Starting sign-in…");
-  expect(starting).toContain("animate-spin");
+  // One spinner per signing-in row: the status dot's; the line beside Cancel carries only words.
+  expect(starting.match(/animate-spin/g)).toHaveLength(1);
   expect(starting).not.toContain("Open claude.ai sign-in");
   expect(starting).not.toContain("claude.ai/login");
   const verifying = render(claudeState(loginView({ phase: "verifying", loginUrl: null, acceptsCode: false })));

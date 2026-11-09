@@ -1155,6 +1155,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.triggerAria": "Акаунти {engine} — змінити або додати",
   "accounts.limitsAria": "Вікна лімітів для {label}",
   "accounts.limitsChecked": "Перевірено",
+  "accounts.noDataYet": "Поки немає даних",
   "accounts.limitsStale": "Останні відомі значення",
   // Claude sign-in slice (#61)
   "accounts.claudeLoginStarted": "Вхід для {label} розпочато",

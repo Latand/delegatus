@@ -239,7 +239,8 @@ function RowNotes({ account, facts, now, open }: { account: AccountOption; facts
   }
   /* The open row's Refresh line names the moment the numbers were read, so the note leaves it out there. */
   const refreshNamesIt = open && facts.checked !== null && !account.provider && account.authPresent;
-  if (facts.stale && !refreshNamesIt) lines.push({ key: "stale", ink: "text-muted", text: formatQuotaAsOf(facts.observedAt) ?? t("accounts.limitsStale") });
+  if (facts.stale && !refreshNamesIt) lines.push({ key: "stale", ink: "text-muted", text: formatQuotaAsOf(facts.observedAt, undefined, now * 1000) ?? t("accounts.limitsStale") });
+  if (account.provider && facts.status === "error") lines.push({ key: "credential", ink: "font-semibold text-danger", text: t("accounts.provider.credentialError") });
   if (account.provider && facts.status !== "error") lines.push({ key: "provider", ink: "text-muted", text: t("accounts.provider.limitsUnknown") });
   return <>{lines.map((line) => <p key={line.key} data-account-note={line.key} data-account-line className={`break-words ${s.line} ${line.ink}`}>{line.text.charAt(0).toUpperCase() + line.text.slice(1)}</p>)}</>;
 }
@@ -290,7 +291,7 @@ function RefreshLine({ account, state, facts, receipts }: { account: AccountOpti
   const refreshing = busy && state.limitsBusy?.operation === "refreshLimits";
   return (
     <div data-account-line className={`flex items-center gap-2 ${s.line} text-muted ${s.endLine}`}>
-      <span className="min-w-0 flex-1 break-words">{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("limits.noDataYet")}</span>
+      <span className="min-w-0 flex-1 break-words">{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</span>
       <button
         type="button"
         data-account-refresh-limits={account.id}
@@ -856,7 +857,8 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
     );
     const spinnerLine = (key: "accounts.claudeLogin.starting" | "accounts.claudeLogin.awaitingBrowser" | "accounts.claudeLogin.verifying" | "accounts.claudeLogin.canceling") => (
       <div className="flex items-center gap-2">
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none text-muted" aria-hidden />
+        {/* Inside a row the status dot already spins for the sign-in in progress. */}
+        {inRow ? null : <Loader2 className="h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none text-muted" aria-hidden />}
         <span className="min-w-0 flex-1 text-[11px] text-muted">{t(key)}</span>
         {cancelable ? cancelButton : null}
       </div>
