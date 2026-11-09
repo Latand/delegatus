@@ -5,9 +5,14 @@ import { richRequest } from "./rich.fixture";
 import type { RelayConversation } from "./conversations";
 import { ownerRequest, x1Request } from "./toolLoop.fixture";
 import { setRelaySwitch } from "./switches";
-import { requestSchema } from "./protocol";
+import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { MAX_STRUCTURED_TEXT_BYTES, StructuredEnvelopeTooLargeError } from "@/lib/runtime/structuredContent";
+
+type OwnerPromptMessage = Omit<ExternalRelayRequest["input"]["conversation"][number], "text"> & {
+  text?: string;
+  text_reference?: "owner_request.text" | "bridge_report.reportText";
+};
 
 function longReplyRequest() {
   const request = requestSchema.parse(contextRequest);
@@ -35,7 +40,7 @@ test("structured owner prompt builders fit escaped history while preserving the 
     ownerContinuationPrompt(request, owner, 1, record).prompt];
   for (const prompt of prompts) {
     expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
-    const messages = section(prompt, "conversation") as typeof request.input.conversation;
+    const messages = section(prompt, "conversation") as OwnerPromptMessage[];
     expect(messages.find(message => message.id === current.id)).toEqual({ ...current, text: undefined, text_reference: "owner_request.text" });
     expect(messages.find(message => message.id === parent.id)).toEqual(parent);
     expect(messages.length).toBeLessThan(request.input.conversation.length);
@@ -43,7 +48,7 @@ test("structured owner prompt builders fit escaped history while preserving the 
   const initial = ownerRunPrompt(request, owner, 1);
   expect(section(initial, "owner_reply_context")).toEqual({ message_id: parent.id, reply_to: parent.reply_to, earlier_request: null });
   expect(initial.match(/https:\/\/example\.test\/report/g)).toHaveLength(1);
-  const sent = section(initial, "conversation") as typeof request.input.conversation;
+  const sent = section(initial, "conversation") as OwnerPromptMessage[];
   const cursor = ownerInitialCursor(request, owner, 1);
   const originals = new Map(request.input.conversation.map(message => [message.id, message]));
   const complete = sent.filter(message => message.text === originals.get(message.id)?.text);
@@ -69,7 +74,7 @@ test("owner continuation budgets inbound context with optional memory and advanc
   expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
   expect(turn.prompt).toContain(inboundContext);
   expect(turn.prompt).not.toContain("optional memory");
-  const retained = section(turn.prompt, "conversation") as typeof request.input.conversation;
+  const retained = section(turn.prompt, "conversation") as OwnerPromptMessage[];
   expect(retained.find(message => message.id === current.id)).toEqual({ ...current, text: undefined, text_reference: "owner_request.text" });
   expect(retained.find(message => message.id === parent.id)).toEqual(parent);
   expect(turn.seen).toContain(current.id);
@@ -108,7 +113,7 @@ test("known agent answers stay in the resumed conversation while only the new ow
   const replaced = ownerContinuationPrompt(followup, instruction, 1, { ...record, conversationId: "conversation_replaced" });
   expect(section(replaced.prompt, "conversation")).toEqual([parent, { ...next, text: undefined, text_reference: "owner_request.text" }]);
   const edited = { ...followup, input: { ...followup.input, conversation: [root, { ...parent, text: parent.text + " Changed." }, next] } };
-  expect((section(ownerContinuationPrompt(edited, instruction, 1, record).prompt, "conversation") as typeof request.input.conversation)[0]!.text)
+  expect((section(ownerContinuationPrompt(edited, instruction, 1, record).prompt, "conversation") as OwnerPromptMessage[])[0]!.text)
     .toBe(parent.text + " Changed.");
 });
 

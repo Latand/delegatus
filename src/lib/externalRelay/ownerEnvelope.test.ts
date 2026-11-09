@@ -199,7 +199,9 @@ for (const mode of ["fresh", "resumed"] as const) {
       onConversation: () => {}, ports: {
         launch: async body => { launches++; sent = String(body.prompt); return { status: 202, body: { conversationId: "conversation_measured", initialMessage: "delivered" } }; },
         continue: async (turn, prompt, _target, authorize) => { authorize(); continues++; sent = prompt;
-          return { ok: true, structured: true, target: turn.conversationId!, outcome: "delivered", operationId: turn.clientAttemptId }; },
+          return { ok: true, structured: true, target: turn.conversationId!, outcome: "delivered", operationId: turn.clientAttemptId,
+            receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId, conversationId: turn.conversationId!,
+              kind: "send", status: "delivered", at, revision: 1 } }; },
         observe: async () => ({ state: "ended", finalText: "The requested fact is amber." }), stop: async () => {}, pollMs: 1,
       } }).done;
     expect(result.status).toBe("done");
