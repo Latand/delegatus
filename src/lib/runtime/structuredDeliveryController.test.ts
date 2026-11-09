@@ -30,7 +30,7 @@ for (const revoked of [false, true]) test(`an addressed startup host retains its
   let current = true;
   const guard = () => { if (!current) throw new StructuredRecoveryHeldForUpdateError("fixture recipient authority changed"); };
   const prepare = spyOn(startup, "prepareStructuredStartupRecipient").mockImplementation(async () => ({
-    admissionGuard: guard, authorityGuard: guard,
+    admissionGuard: guard, authorityGuard: guard, acceptSuccessorClaim: guard,
   }));
   let recoveries = 0;
   try {

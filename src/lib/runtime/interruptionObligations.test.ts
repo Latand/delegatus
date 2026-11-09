@@ -171,14 +171,16 @@ test("recipient evidence preserves supported optional writer fields and refuses 
   const obligations = path.join(directory, "optional-cut-fields");
   await initializeRecipientInterruptionIndex(obligations);
   const store = interruptionObligationStore(obligations);
+  const owner = { ...releaseCut.owner!, bootEpoch: "writer-boot" };
   const cut = store.record({ ...releaseCut,
-    owner: { ...releaseCut.owner!, ...{ bootEpoch: "writer-boot" } },
+    owner,
     checkpoint: { ...releaseCut.checkpoint, backgroundTasks: ["retained-tool"] },
     stage: { pipelineId: "cut-pipeline", stageId: "build", attempt: 1 },
   }).obligation;
   expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toEqual([cut]);
-  replaceSourceCut(obligations, { ...cut, futureAuthority: "requires-upgrade" }, cut.id);
-  expect(store.list()).toEqual([{ ...cut, futureAuthority: "requires-upgrade" }]);
+  const extended = { ...cut, futureAuthority: "requires-upgrade" };
+  replaceSourceCut(obligations, extended, cut.id);
+  expect(store.list()).toEqual([extended]);
   expect(() => recipientInterruptionEvidence(obligations, ["conversation_incoming"])).toThrow("incomplete");
 });
 
