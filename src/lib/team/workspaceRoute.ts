@@ -82,6 +82,21 @@ async function pipelineProject(id: string): Promise<string | null> {
   return loadPipelinesForList().find(pipeline => pipeline.id === id)?.project ?? null;
 }
 
+async function pipelineReadProject(id: string): Promise<string | null> {
+  const [{ findPipelineRecord }, { readPipelineCreationReceipt }] = await Promise.all([
+    import("@/lib/pipelines/store"), import("@/lib/pipelines/creationQueue"),
+  ]);
+  const stored = findPipelineRecord(id);
+  if (stored) return stored.project;
+  const queued = await readPipelineCreationReceipt(id);
+  const materialized = findPipelineRecord(id);
+  if (materialized) return materialized.project;
+  // A queue transition can expose both files to one read. The existing
+  // unavailable response retains the caller's locator until a later read.
+  if (queued.kind === "unavailable") throw new Error("pipeline creation ownership unavailable");
+  return queued.kind === "found" ? queued.receipt.project : null;
+}
+
 /** Handlers expand `~`, resolve lexically and the filesystem follows links,
  * while the path recognizers read the raw segments: `<own>/worktrees/../../x`
  * names the own repository to them. Each form a handler can act on must
@@ -225,7 +240,9 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
   }
   const params = await ctx?.params;
   if (params?.id && route.startsWith("/api/tasks/")) projects.push(await taskProject(params.id));
-  if (params?.id && route.startsWith("/api/pipelines/")) projects.push(await pipelineProject(params.id));
+  if (params?.id && route.startsWith("/api/pipelines/")) projects.push(await (
+    route === "/api/pipelines/[id]" && ["GET", "HEAD"].includes(request.method)
+      ? pipelineReadProject(params.id) : pipelineProject(params.id)));
   if (params?.conversationId) projects.push(await workspaceConversationProject(params.conversationId));
   return projects;
 }
@@ -243,6 +260,27 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
     let scope: Scope | null;
     try { scope = requestWorkspaceScope(request); }
     catch { return unavailable(); }
+    // Only this exact read includes the owner/solo fast paths in the fence.
+    // Capture before params, module loading or queue IO can yield authority.
+    if (route === "/api/pipelines/[id]" && ["GET", "HEAD"].includes(request.method)) {
+      const before = scopeSignature(scope);
+      return (async () => {
+        try {
+          if (scope && !scope.memberId) return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
+          const projects = await targetProjects(route, request, args[0] as Context | undefined);
+          const current = requestWorkspaceScope(request);
+          if (before !== scopeSignature(current) || (current && !current.owner
+            && (!projects.length || projects.some(project => current.access(project) === "none")))) return workspaceDenied();
+          const response = await invoke(request, ...args);
+          if (before !== scopeSignature(requestWorkspaceScope(request))) {
+            await response.body?.cancel();
+            return workspaceDenied();
+          }
+          response.headers.set("Cache-Control", "private, no-store");
+          return response;
+        } catch (error) { return error instanceof WorkspaceRefusal ? workspaceDenied() : unavailable(); }
+      })();
+    }
     if (!scope || scope.owner) return invoke(request, ...args);
     // A request without a live session gets the team gate's sign-in refusal.
     if (!scope.memberId) return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
@@ -283,6 +321,11 @@ function unavailable(): NextResponse {
 }
 
 export class WorkspaceRefusal extends Error {}
+
+export function assertWorkspaceReadProject(request: Request, project: string): void {
+  const scope = requestWorkspaceScope(request);
+  if (scope && scope.access(project) === "none") throw new WorkspaceRefusal("workspace access denied");
+}
 
 export function assertWorkspaceProject(request: Request, project: string | null | undefined): void {
   const scope = requestWorkspaceScope(request);

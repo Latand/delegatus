@@ -6,11 +6,227 @@ import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeStructuredHostAccess } from "./structuredSpawn";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { runTempSweep, sweepStaleTempDirs } from "@/lib/tempSweep";
+import { runTempSweep, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
+import { attemptReferencesClear } from "./attemptTempFilesystem";
 
 const roots: string[] = [];
 afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+const modeledBytesPerHour = (removedBytes: number, elapsedMs: number) => removedBytes * 3600000 / (60000 + elapsedMs);
+
+test("hourly reclaim model includes sweep duration before the scheduler's minute wait", () => {
+  const bytesPerRun = 537_133_056;
+  expect(modeledBytesPerHour(bytesPerRun, 7_390) / 1e9).toBeCloseTo(28.70, 1);
+  expect(modeledBytesPerHour(bytesPerRun, 5_600) / 1e9).toBeCloseTo(29.48, 1);
+  expect(modeledBytesPerHour(bytesPerRun, 7_390)).toBeLessThan(bytesPerRun * 3600000 / 60000);
+});
+
+// These fixtures own no containers. Keep the real process and checkout guards,
+// with a fixed container observation independent of host container churn.
+const references = (original: string, current: string, scan: ProcessScan) =>
+  attemptReferencesClear(original, current, scan, async () => true);
+
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_BENCHMARK !== "1")("retention benchmark: 727 roots under two CPU writers and one synced disk writer", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-benchmark-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "benchmark-lane", task: "Inventory", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "benchmark-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  const checkout = pipeline.worktreeDir!;
+  fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+  for (let n = 0; n < 1024; n++) fs.symlinkSync(path.join(root, "absent", String(n)), path.join(checkout, `link-${n}`));
+  savePipelines([pipeline]);
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const inventories = new Set<InstanceType<typeof RepositoryLinkInventory>>();
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const observed = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(function (this: InstanceType<typeof RepositoryLinkInventory>, repository: string) {
+    inventories.add(this); return targets.call(this, repository);
+  });
+  const loads: ReturnType<typeof Bun.spawn>[] = [];
+  try {
+    for (let n = 0; n < 727; n++) {
+      const directory = path.join(root, `llv-stage-${String(n).padStart(4, "0")}`); fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(n < 32 ? 16 * 1024 ** 2 : 4096));
+      store.register({ directory, pipelineId: pipeline.id, launchId: "benchmark-launch", retainUntilClose: false, createdAt: 1 });
+      store.measure(directory, n < 32 ? 16 * 1024 ** 2 : 4096); store.release(directory);
+    }
+    for (const kind of ["cpu", "cpu", "io"]) {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--load", kind, path.join(root, "load-file")],
+        { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      loads.push(child);
+      const ready = await child.stdout.getReader().read();
+      expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+    }
+    const load = () => process.platform === "linux" ? fs.readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).map(Number) : os.loadavg();
+    const before = load(), start = performance.now();
+    const report = await sweepAttemptTemps(store, { now: () => 1000 + performance.now() - start, maxRoots: 32, capBytes: 0,
+      state: attemptTempState, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+    const elapsedMs = performance.now() - start;
+    console.log("[attempt-temp benchmark] " + JSON.stringify({ registryRoots: 727, checkoutLinks: 1024,
+      ownedLoad: { cpuWorkers: 2, syncedDiskWriters: 1, writeBytes: 1024 ** 2 }, hostCpus: os.cpus().length,
+      loadBefore: before, loadAfter: load(), elapsedMs, checked: report.checked, removed: report.removed,
+      removedBytes: report.removedBytes, errors: report.errors,
+      checkoutWalks: [...inventories].reduce((sum, inventory) => sum + inventory.walks.length, 0),
+      modeledBytesPerHour: modeledBytesPerHour(report.removedBytes, elapsedMs) }));
+    expect(report).toMatchObject({ checked: 32, removed: 32, errors: 0 });
+  } finally {
+    for (const child of loads) child.kill();
+    await Promise.all(loads.map(child => child.exited));
+    observed.mockRestore(); store.close();
+  }
+}, 180_000);
+
+test("the real sweep shares checkout inventory with production lane authority across roots and rechecks", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-production-inventory-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "inventory-lane", task: "Inventory", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "inventory-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  fs.mkdirSync(path.join(pipeline.worktreeDir!, ".git"), { recursive: true });
+  savePipelines([pipeline]);
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const inventories = new Set<InstanceType<typeof RepositoryLinkInventory>>();
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const observed = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(function (this: InstanceType<typeof RepositoryLinkInventory>, repository: string) {
+    inventories.add(this); return targets.call(this, repository);
+  });
+  try {
+    for (let n = 0; n < 8; n++) {
+      const directory = path.join(root, `llv-stage-${n}`); fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+      store.register({ directory, pipelineId: pipeline.id, launchId: "inventory-launch", retainUntilClose: false, createdAt: 1 });
+    }
+    const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 8, capBytes: 0,
+      state: attemptTempState, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+    expect(report).toMatchObject({ checked: 8, removed: 8, errors: 0 });
+    expect([...inventories].reduce((sum, inventory) => sum + inventory.walks.length, 0)).toBe(1);
+  } finally { observed.mockRestore(); store.close(); }
+});
+
+test("a checkout link created after the first authority inventory keeps its attempt root", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { attemptReferencesClear, RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-late-checkout-link-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "late-link-lane", task: "Late checkout link", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "late-link-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  fs.mkdirSync(path.join(pipeline.worktreeDir!, ".git"), { recursive: true });
+  savePipelines([pipeline]);
+  const directory = path.join(root, "llv-stage-late-link"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+  const checkoutLink = path.join(pipeline.worktreeDir!, "nested", "node_modules");
+  fs.mkdirSync(path.dirname(checkoutLink), { recursive: true });
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  store.register({ directory, pipelineId: pipeline.id, launchId: "late-link-launch", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  let inventory: InstanceType<typeof RepositoryLinkInventory> | undefined;
+  let injected = false;
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const observed = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(function (this: InstanceType<typeof RepositoryLinkInventory>, repository: string) {
+    const read = targets.call(this, repository);
+    return read.then(found => {
+      if (!injected && repository === pipeline.worktreeDir) {
+        injected = true;
+        fs.symlinkSync(directory, checkoutLink, "dir");
+      }
+      return found;
+    });
+  });
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 1, capBytes: 0,
+      state: (owner, current) => { inventory = current; return attemptTempState(owner, current); },
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, inventory!),
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [pipeline.worktreeDir!] }] }) });
+    expect(injected).toBeTrue();
+    expect(report).toMatchObject({ removed: 0, errors: 0, held: 1, liveHeld: 1 });
+    expect(fs.existsSync(directory)).toBeTrue();
+    expect(fs.lstatSync(checkoutLink).isSymbolicLink()).toBeTrue();
+  } finally { observed.mockRestore(); store.close(); }
+});
+
+test.each([0, 1, 2, 3, 4, 5, 6, 7])("a restored checkout holds scratch across authority boundary %i (zero is the removal control)", async boundary => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-restored-checkout-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "restored-lane", task: "Checkout restoration", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "restored-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  const repository = pipeline.worktreeDir!;
+  roots.push(repository, repository + "-previous");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  savePipelines([pipeline]);
+  const directory = path.join(root, "llv-stage-restored"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "data"), "retained payload");
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  store.register({ directory, pipelineId: pipeline.id, launchId: "restored-launch", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  const exists = fs.existsSync;
+  let observations = 0, disappeared = false, restored = false;
+  const existence = spyOn(fs, "existsSync").mockImplementation(file => {
+    const present = exists(file);
+    if (file === repository && ++observations === boundary && present) {
+      disappeared = true; fs.renameSync(repository, repository + "-previous");
+    }
+    return present;
+  });
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const reads = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(async function (this: InstanceType<typeof RepositoryLinkInventory>, repo: string) {
+    try { return await targets.call(this, repo); }
+    finally {
+      if (disappeared && !restored && repo === repository) {
+        restored = true; fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+        fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+      }
+    }
+  });
+  let inventory: InstanceType<typeof RepositoryLinkInventory>;
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 1, capBytes: 0,
+      state: (owner, current) => { inventory = current; return attemptTempState(owner, current); },
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, inventory!),
+      scan: () => ({ ownNamespace: null, processes: [] }) });
+    if (boundary === 0) {
+      expect(report).toMatchObject({ removed: 1, errors: 0 });
+      expect(observations).toBeGreaterThanOrEqual(6);
+      expect(exists(directory)).toBeFalse();
+    } else {
+      expect(disappeared).toBeTrue(); expect(restored).toBeTrue();
+      expect(report.removed).toBe(0);
+      // Absence now refuses the inventory. The earlier presence mismatch
+      // still returns unknown; both paths must preserve the same payload.
+      expect(report.held + report.errors).toBe(1);
+      if (report.errors) expect(report.outcomes[0]!.reason).toContain("ENOENT");
+      expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
+      expect(fs.readlinkSync(path.join(repository, "dependency"))).toBe(directory);
+    }
+  } finally { reads.mockRestore(); existence.mockRestore(); store.close(); }
+});
 
 test("production settlement retires the attempt scratch and config sandbox", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-production-")); roots.push(root);
@@ -24,6 +240,7 @@ test("production settlement retires the attempt scratch and config sandbox", asy
     startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null,
     output: "done", verdict: { status: "pass" }, error: null };
   pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
+  fs.mkdirSync(pipeline.worktreeDir!, { recursive: true });
   savePipelines([pipeline]);
   const access = materializeStructuredHostAccess({ readOnly: false, sandbox: "full" }, { ...process.env }, null, root,
     { pipelineId: pipeline.id, launchId: "temp-launch", retainUntilClose: false });
@@ -38,7 +255,7 @@ test("production settlement retires the attempt scratch and config sandbox", asy
   if (production) {
     const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
     const store = new AttemptTempStore();
-    try { await sweepAttemptTemps(store, { state: production.attemptTempState, scan: () => ({ ownNamespace: null, processes: [] }) }); }
+    try { await sweepAttemptTemps(store, { state: production.attemptTempState, references, scan: () => ({ ownNamespace: null, processes: [] }) }); }
     finally { store.close(); }
   } else {
     await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: 86400000, scan: { ownNamespace: null, processes: [] } });
@@ -66,7 +283,7 @@ test("foreign and gate-named directories with no creation record survive registr
       expect(fs.existsSync(path.join(directory, ".delegatus-attempt-owner"))).toBeFalse();
     }
     store.register({ directory: orphan, pipelineId: "missing-lane", launchId: "orphan", retainUntilClose: false, createdAt: now - 2 * 86400000 });
-    const report = await sweepAttemptTemps(store, { now: () => now, state: production.attemptTempState,
+    const report = await sweepAttemptTemps(store, { now: () => now, state: production.attemptTempState, references,
       capBytes: 0, scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(report.removed).toBe(1); expect(fs.existsSync(orphan)).toBeFalse();
     const legacy = await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP: "on", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" },
@@ -97,6 +314,8 @@ test("an idle minute tick writes no journal line or report, and a changed condit
     const over = await tick({ LLV_ATTEMPT_TEMP_CAP_BYTES: "0" });
     expect(over).toHaveLength(1); expect(over[0]).toContain("measured bytes over cap");
     expect(JSON.parse(fs.readFileSync(report, "utf8")).condition).toEqual({ mode: "on", overCap: true, failing: false });
+    expect(JSON.parse(fs.readFileSync(report, "utf8")).summary).toContain("budget deferred");
+    expect(JSON.parse(fs.readFileSync(report, "utf8")).summary).toContain("held by evidence");
     const recovered = await tick();
     expect(recovered).toHaveLength(1); expect(recovered[0]).toContain("0 measured bytes over cap");
     const written = fs.readFileSync(report, "utf8");
@@ -117,6 +336,7 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
   pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state, launchId: "state-launch", effectiveRole: role,
     conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
     startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  fs.mkdirSync(pipeline.worktreeDir!, { recursive: true });
   savePipelines([pipeline]);
   const { attemptTempState } = await import("./attemptTempProduction");
   const owner = { directory: path.join(root, "llv-stage-fixture"), pipelineId: pipeline.id, launchId: "state-launch", retainUntilClose: false, createdAt: 1 };
@@ -168,7 +388,7 @@ test.each([false, true])("production access gives managed scratch and durable ev
     expect(admittedAs(evidence.replace(".png", ".svg"), allowed)).toBeNull();
     expect(admittedAs(evidence.replace(".png", ".json"), allowed)).toBeNull();
     access.cleanup();
-    await sweepAttemptTemps(store, { state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
+    await sweepAttemptTemps(store, { state: async () => "closed", references, scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(fs.existsSync(access.scratchDirectory!)).toBeFalse();
     await sweepStaleTempDirs({ roots: [{ path: statePath("scratch"), via: "" }], maxAgeMs: 0,
       scan: { ownNamespace: null, processes: [] } });
@@ -208,4 +428,53 @@ test.each(process.platform === "win32" ? ["intact", "missing", "operator"] : ["i
       expect(code).not.toBe(0); expect(error).toContain(proof === "operator" ? "StateStartupMutationRefused" : "OperatorStateUnderTestError"); expect(out).toBe("");
     }
   } finally { access.cleanup(); }
+});
+
+
+test.each(["closed", "completed"] as const)("an absent open-lane checkout holds scratch until the lane is %s and its consumer exits", async terminal => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-absent-lane-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "absent-lane", task: "Checkout lifetime", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "absent-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  const repository = pipeline.worktreeDir!; roots.push(repository);
+  savePipelines([pipeline]);
+  const directory = path.join(root, "llv-stage-absent"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  store.register({ directory, pipelineId: pipeline.id, launchId: "absent-launch", retainUntilClose: false, createdAt: 1 });
+  let now = 1000;
+  const processes: ProcessScan["processes"] = [];
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, state: attemptTempState, references,
+    scan: () => ({ ownNamespace: null, processes }) });
+  try {
+    const owner = store.owner(directory)!;
+    expect(await attemptTempState(owner)).toBe("unknown");
+    expect(await sweep()).toMatchObject({ removed: 0, held: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    // Closing a lane releases its own missing-checkout hold. A separate live
+    // consumer still owns its link even after the producer lane closes.
+    fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+    fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+    processes.push({ pid: 42, namespace: null, stamped: false, paths: [repository] });
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    pipeline.state = terminal; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z"; savePipelines([pipeline]);
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    // The next sweep owns a fresh inventory. No vanished consumer entry or
+    // missing terminal checkout survives as a permanent negative-cache hold.
+    processes.length = 0; fs.rmSync(repository, { recursive: true });
+    expect(await attemptTempState(owner, new RepositoryLinkInventory())).toBe("closed");
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { store.close(); }
 });

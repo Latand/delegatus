@@ -4,66 +4,230 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
 import { PRESERVED_MEDIA_EXTENSIONS } from "@/lib/artifact/evidenceFormats";
+import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
-async function repositoryLinks(directory: string, timeout?: number): Promise<string[]> {
-  if (process.platform !== "win32") return (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "-type", "l", "-print0"], timeout)).stdout.split("\0").filter(Boolean);
-  const pending = [directory], links: string[] = []; let visited = 0;
-  while (pending.length) for (const entry of await fs.promises.readdir(pending.pop()!, { withFileTypes: true })) {
-    if (++visited > 200_000) throw new Error("partial inbound-link inventory");
-    const file = path.join(entry.parentPath, entry.name);
-    if (entry.isSymbolicLink()) links.push(file);
-    else if (entry.isDirectory() && entry.name !== ".git") pending.push(file);
+type RepositoryDirectoryVersion = { path: string; identity: string; mtimeMs: number; ctimeMs: number };
+type RepositoryLinkSnapshot = { lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] };
+type RepositoryLinkRead = { at: number; targets: Promise<string[]>; directories?: RepositoryDirectoryVersion[]; physicalTargets?: string[] };
+type RepositoryDiscovery = { repository: string | null; signature: string };
+const sameStrings = (left: readonly string[], right: readonly string[]) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+const sameRepositoryDiscovery = (left: RepositoryDiscovery, right: RepositoryDiscovery) =>
+  left.repository === right.repository && left.signature === right.signature;
+function resolveObservedPhysicalPath(candidate: string): string {
+  const original = path.resolve(candidate);
+  let current = original;
+  const suffix: string[] = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(current), ...suffix); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return original;
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
   }
-  return links;
+}
+
+async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
+  const deadline = performance.now() + (timeout ?? 15_000);
+  // An unreadable checkout, including an absent one, proves nothing about
+  // its links. Let the failed read retain this root until a later sweep.
+  const rootStat = fs.lstatSync(directory);
+  const rootDevice = rootStat.dev;
+  const links: string[] = [], directories: RepositoryDirectoryVersion[] = [];
+  const checkBudget = () => {
+    if (performance.now() >= deadline) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+  };
+  const readEntries = async (current: string) => {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        fs.promises.readdir(current, { withFileTypes: true }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget")), remaining); }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+  };
+  const visit = async (current: string): Promise<void> => {
+    const before = fs.lstatSync(current);
+    if (before.dev !== rootDevice) return;
+    const entries = await readEntries(current);
+    checkBudget();
+    const after = fs.lstatSync(current, { throwIfNoEntry: false });
+    // The entry list and its cache validator must describe the same directory
+    // version. A link created after readdir but before lstat would otherwise
+    // pair a negative list with the new directory timestamps.
+    if (!after?.isDirectory() || after.isSymbolicLink()
+      || `${before.dev}:${before.ino}` !== `${after.dev}:${after.ino}`
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
+    }
+    directories.push({ path: current, identity: `${after.dev}:${after.ino}`, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs });
+    for (const entry of entries) {
+      checkBudget();
+      const file = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) links.push(file);
+      else if (entry.isDirectory() && entry.name !== ".git") await visit(file);
+    }
+  };
+  try { await visit(directory); }
+  catch (error) {
+    if (error instanceof AttemptTempBudgetDeferred) throw error;
+    throw new Error(attemptTempFailureDetail(error), { cause: error });
+  }
+  return { links, directories };
 }
 
 /** Each link's lexical and physical targets, including dangling links. */
-async function repositoryLinkTargets(repository: string, timeout?: number): Promise<string[]> {
-  const targets: string[] = [];
-  for (const link of await repositoryLinks(repository, timeout)) {
+async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
+  const deadline = performance.now() + (timeout ?? 15_000);
+  const inventory = await repositoryLinks(repository, timeout), lexicalTargets: string[] = [];
+  for (const link of inventory.links) {
     let target: string;
     try { target = path.resolve(path.dirname(link), fs.readlinkSync(link)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
-    targets.push(target, resolvePhysicalPath(target));
+    lexicalTargets.push(target);
   }
-  return targets;
+  // A nested directory can change after its own readdir/lstat pair while the
+  // remainder of this checkout is still being traversed. Revalidate the full
+  // inventory at the authority boundary so that such a late link cannot turn
+  // an earlier negative into deletion permission.
+  for (const directory of inventory.directories) {
+    if (performance.now() >= deadline)
+      throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+    const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
+    if (!current?.isDirectory() || current.isSymbolicLink()
+      || `${current.dev}:${current.ino}` !== directory.identity
+      || current.mtimeMs !== directory.mtimeMs || current.ctimeMs !== directory.ctimeMs) {
+      throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
+    }
+  }
+  return { lexicalTargets, directories: inventory.directories };
 }
 
 /** One tick's checkout link inventory, shared by every root the tick examines,
  * so the cost is one walk per checkout rather than one per checkout per root.
- * A read older than `freshMs` is repeated, and every walk ends by the tick's
- * budget; past it the remaining roots are held until the next tick. */
+ * Directory identity and change timestamps invalidate a negative result as
+ * soon as any inventoried directory changes. Older reads are also repeated;
+ * every walk ends by the tick's budget, then remaining roots are deferred. */
 export class RepositoryLinkInventory {
-  private readonly reads = new Map<string, { at: number; targets: Promise<string[]> }>();
-  private readonly repositoriesOf = new Map<string, string | null>();
+  private readonly reads = new Map<string, RepositoryLinkRead>();
+  private readonly repositoriesOf = new Map<string, RepositoryDiscovery>();
   private readonly deadline: number;
   readonly walks: string[] = [];
   constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number } = {}) {
     this.deadline = this.now() + (options.budgetMs ?? 30_000);
   }
   private now() { return (this.options.now ?? Date.now)(); }
+  private directoriesUnchanged(directories: readonly RepositoryDirectoryVersion[]) {
+    return directories.every(directory => {
+      const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
+      return !!current?.isDirectory() && !current.isSymbolicLink()
+        && `${current.dev}:${current.ino}` === directory.identity
+        && current.mtimeMs === directory.mtimeMs && current.ctimeMs === directory.ctimeMs;
+    });
+  }
+  /** Synchronous last check after the inventory's asynchronous observations. */
+  unchanged(repository: string) {
+    const read = this.reads.get(repository);
+    return !!read?.directories && this.directoriesUnchanged(read.directories);
+  }
+  /** Last synchronous fence for every checkout observed during this sweep. */
+  unchangedAll() {
+    for (const read of this.reads.values()) {
+      if (!read.directories || !this.directoriesUnchanged(read.directories) || !read.physicalTargets) return false;
+      const lexical = this.lexicalTargets.get(read);
+      if (!lexical) return false;
+      try {
+        if (!sameStrings(read.physicalTargets, lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]))) return false;
+      } catch { return false; }
+    }
+    for (const [cwd, observed] of this.repositoriesOf) {
+      try {
+        if (!sameRepositoryDiscovery(observed, this.discoverRepository(cwd))) return false;
+      } catch { return false; }
+    }
+    return true;
+  }
+  private readonly lexicalTargets = new WeakMap<object, string[]>();
+  private discoverRepository(cwd: string): RepositoryDiscovery {
+    const cwdStat = fs.statSync(cwd);
+    if (!cwdStat.isDirectory()) throw new Error(`process cwd is not a directory: ${cwd}`);
+    const versions: string[] = [];
+    let repository: string | null = null;
+    let current = path.resolve(cwd);
+    for (let depth = 0; depth < 64; depth++) {
+      const stat = fs.statSync(current);
+      versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`);
+      try {
+        const markerPath = path.join(current, ".git");
+        const marker = fs.lstatSync(markerPath);
+        versions.push(`${markerPath}:${marker.dev}:${marker.ino}:${marker.mtimeMs}:${marker.ctimeMs}`);
+        repository = current;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        versions.push(`${path.join(current, ".git")}:absent`);
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return { repository, signature: JSON.stringify(versions) };
+      current = parent;
+    }
+    if (!repository) throw new Error("process checkout ancestry exceeded its limit");
+    return { repository, signature: JSON.stringify(versions) };
+  }
   /** The nearest enclosing checkout of a process cwd. */
   repositoryOf(cwd: string): string | null {
-    if (this.repositoriesOf.has(cwd)) return this.repositoriesOf.get(cwd)!;
-    let repository: string | null = null;
-    for (let current = cwd, depth = 0; depth < 64 && current !== path.dirname(current); depth++, current = path.dirname(current)) {
-      if (fs.existsSync(path.join(current, ".git"))) { repository = current; break; }
-    }
-    this.repositoriesOf.set(cwd, repository);
-    return repository;
+    // Record negative results too: an existing cwd outside a checkout can
+    // become a checkout while another awaited observation is in flight.
+    const discovery = this.discoverRepository(cwd);
+    this.repositoriesOf.set(cwd, discovery);
+    return discovery.repository;
   }
-  targets(repository: string): Promise<string[]> {
+  async targets(repository: string): Promise<string[]> {
     const now = this.now(), cached = this.reads.get(repository);
-    if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)) return cached.targets;
+    if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)
+      && (!cached.directories || this.directoriesUnchanged(cached.directories))) {
+      // A link can point through an external alias whose own directory is
+      // outside the checkout. Re-resolve its physical destination on every
+      // use; checkout directory metadata cannot invalidate that alias change.
+      const lexical = await cached.targets;
+      const physical = lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]);
+      cached.physicalTargets = physical;
+      return physical;
+    }
     const remaining = this.deadline - now;
-    const targets = remaining > 0 ? repositoryLinkTargets(repository, Math.min(15_000, remaining))
-      : Promise.reject(new Error("checkout link inventory exceeded its tick budget"));
+    if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
+    const snapshot = repositoryLinkTargets(repository, Math.min(15_000, remaining));
+    const targets = snapshot.then(result => result.lexicalTargets);
+    const observed: Promise<string[]> = targets.catch(error => {
+      // A refused read is not a cache entry. The next root can observe a
+      // recovered checkout in this same process.
+      if (this.reads.get(repository)?.targets === observed) this.reads.delete(repository);
+      if (this.now() >= this.deadline) throw new AttemptTempBudgetDeferred(`checkout link inventory exceeded its tick budget; ${attemptTempFailureDetail(error)}`);
+      throw error;
+    });
+    const read: RepositoryLinkRead = { at: now, targets: observed };
+    this.reads.set(repository, read);
+    void snapshot.then(result => {
+      if (this.reads.get(repository) === read) {
+        read.directories = result.directories;
+        this.lexicalTargets.set(read, result.lexicalTargets);
+        read.at = this.now();
+      }
+    }, () => undefined);
     this.walks.push(repository);
-    this.reads.set(repository, { at: now, targets });
-    return targets;
+    const lexical = await observed;
+    const physical = lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]);
+    read.physicalTargets = physical;
+    return physical;
   }
 }
 
@@ -95,15 +259,29 @@ export async function attemptReferencesClear(original: string, current: string, 
     }
   }
   const repositories = new Set<string>();
+  const processCwds: string[] = [];
   for (const process of scan.processes) {
     const cwd = process.paths[0];
+    if (cwd?.startsWith(path.sep)) processCwds.push(cwd);
     const repository = cwd?.startsWith(path.sep) ? inventory.repositoryOf(cwd) : null;
     if (repository) repositories.add(repository);
   }
   for (const repository of [...repositories].sort()) {
     if (await repositoryReferencesAttemptTemp(repository, original, current, inventory)) return false;
   }
-  return process.platform !== "linux" || await containers([original, current]);
+  if (process.platform === "linux" && !await containers([original, current])) return false;
+  // The container query yields. Re-resolve every consumer checkout and links
+  // after it, then synchronously validate the directory snapshots so a late
+  // disappearance, permission change, replacement, or link creation cannot
+  // ride on the earlier negative inventory.
+  for (const cwd of processCwds) {
+    const repository = inventory.repositoryOf(cwd);
+    if (repository) repositories.add(repository);
+  }
+  for (const repository of [...repositories].sort()) {
+    if (await repositoryReferencesAttemptTemp(repository, original, current, inventory)) return false;
+  }
+  return [...repositories].every(repository => inventory.unchanged(repository));
 }
 
 async function containerMountsClear(roots: readonly string[]): Promise<boolean> {
@@ -187,7 +365,7 @@ const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
   + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
 
 async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
-  guard?: () => Promise<boolean>, requireNoEvidence = false) {
+  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean): Promise<{ identity: string; stdout: string }> {
   const initial = fs.lstatSync(directory);
   if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
   const identity = `${initial.dev}:${initial.ino}`;
@@ -208,12 +386,23 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   const final = fs.lstatSync(directory);
   if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity)
     throw new Error("attempt identity changed before namespace dispatch");
+  if (operation === "remove" && dispatchGuard && !dispatchGuard())
+    throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
-  return run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
+  const result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
     "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
     "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, original, ...markers]);
+  return { identity, stdout: result.stdout };
+}
+
+function removeEmptyNamespaceRoot(directory: string, identity: string, postDeleteGuard?: () => boolean) {
+  const current = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (!current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== identity)
+    throw new Error("attempt identity changed before namespace rmdir");
+  if (postDeleteGuard && !postDeleteGuard()) throw new Error("attempt temp deferred: authority changed before namespace rmdir");
+  fs.rmdirSync(directory);
 }
 
 /** Native find streams an arbitrarily large owned tree; the owned worker and
@@ -251,17 +440,19 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
   await containerCommand(directory, "evidence", original);
 }
 
-export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false): Promise<void> {
+export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard): Promise<void> {
   if (requireNoEvidence) {
-    await containerCommand(directory, "remove", original, guard, true);
-    await fs.promises.rmdir(directory);
+    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
     return;
   }
+  if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    await containerCommand(directory, "remove", original, guard, true);
-    await fs.promises.rmdir(directory);
+    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
   }
 }
 

@@ -104,8 +104,8 @@ gid=\$(id -g)
 groups=\$(id -G | tr ' ' ',')
 # The host cgroup mount and /proc membership paths need the same namespace.
 # Compose shares the host PID namespace. Keep the launch handle through exec.
-# A host without python3 runs the engine as before: the off receipt tells the
-# Viewer, and a headless run's own stderr carries the same line.
+# A host without python3 reports an unprotected launch. Guarded launches need
+# the Python exec acknowledgement and refuse when it is unavailable.
 exec nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="\$uid" --regid="\$gid" --groups="\$groups" -- /bin/sh -c 'cd "\$1" || exit; shift
 if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then
   launcher=\$LLV_SIGNAL_LAUNCHER; receipt=\$LLV_SIGNAL_RECEIPT; unset LLV_SIGNAL_LAUNCHER LLV_SIGNAL_RECEIPT LLV_DOCKER_NSENTER_SHIMS
@@ -114,6 +114,7 @@ if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then
     exec /usr/bin/python3 "\$launcher" --receipt "\$receipt" -- "\$@"
   fi
   reason="required host dependency is missing: python3"
+  if [ "\${LLV_SIGNAL_EXEC_ACK:-}" = 1 ]; then echo "agent signal sandbox unavailable: guarded fallback requires python3" >&2; exit 69; fi
   if [ -n "\$receipt" ] && mkdir -p "\${receipt%/*}"; then printf "{\"policyVersion\":1,\"boundary\":\"off\",\"reason\":\"%s\"}" "\$reason" > "\$receipt.new" && mv -f "\$receipt.new" "\$receipt"; fi
   if [ "\${LLV_SIGNAL_AUTOMATIC:-}" = 1 ]; then echo "agent signal sandbox: boundary off, running unprotected: \$reason" >&2; fi
   if [ -n "\${LLV_SIGNAL_OOM_SCORE:-}" ]; then
