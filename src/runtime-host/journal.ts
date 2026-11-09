@@ -98,6 +98,8 @@ export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000
 export const RUNTIME_ENTITY_READ_CACHE_ENTRIES = 65_536;
 export const RUNTIME_ENTITY_READ_CACHE_BYTES = 64 * 1024 * 1024;
 export const RUNTIME_ENTITY_READ_ADMISSION_BYTES = 16 * 1024 * 1024;
+// The eviction loop ends only when one admitted entity fits an empty cache.
+if (RUNTIME_ENTITY_READ_ADMISSION_BYTES > RUNTIME_ENTITY_READ_CACHE_BYTES) throw new Error("runtime entity read admission limit exceeds the cache size");
 /** A spawn or kill may wait through a short host succession. After one
     continuous hour with no runtime host and no current live registry
     conversation, the maintenance sweep terminalizes the orphaned work so
@@ -455,6 +457,9 @@ export class RuntimeJournal {
   private entityReadMaintenanceChanges = 0;
   private readingSnapshot = false;
   snapshotProjectionReads = 0;
+  /** Entities the cache dropped to make room. A count that grows on every
+      rebuild means one snapshot population no longer fits the cache. */
+  snapshotEntityEvictions = 0;
   /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
   snapshotCacheHits = 0;
   snapshotRebuilds = 0;
@@ -3562,6 +3567,7 @@ export class RuntimeJournal {
       while (this.entityReads.size >= RUNTIME_ENTITY_READ_CACHE_ENTRIES || this.entityReadBytes + bytes > RUNTIME_ENTITY_READ_CACHE_BYTES) {
         const oldest = this.entityReads.keys().next().value!;
         this.evictEntityRead(oldest);
+        this.snapshotEntityEvictions++;
       }
       this.entityReads.set(key, { value, bytes }); this.entityReadBytes += bytes;
       this.entityReadMaintenanceChanges += this.db.query("INSERT OR REPLACE INTO snapshot_entity_keys(key,kind,id) VALUES (?,?,?)").run(key,kind,id).changes;
