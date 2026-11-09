@@ -400,7 +400,8 @@ test.each(["expired", "unexpired", "replay"] as const)("runtime-switch refresh c
   f.h.ports.runtimeSwitchOutcome = async () => ({ state: "applied" });
   f.h.ports.runtimeSwitchDelivery = () => {
     receiptReads++;
-    return outcome === "replay" || continuations > 0 ? { state: "delivered", at: f.h.ports.now() } : null;
+    return outcome === "replay" || continuations > 0
+      ? { state: "delivered", at: f.h.ports.now() } : { state: "pending", admitted: false };
   };
   f.h.ports.conversationGeneration = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null,
     accountId: "default", sessionId: "session-new", agentPath: attempt.agentPath! });
