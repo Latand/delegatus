@@ -12,11 +12,12 @@ const pipelineControllerReferenceIndexes = declaredIndexes([
 
 export function pipelineControllerReferencesReady(db: Database, objects?: ReadonlySet<string>): boolean {
   const names = objects ?? new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
-  return ["pipeline_ref_inputs", "pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_refs_insert", "pipeline_refs_update", "pipeline_refs_delete",
-    "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"].every(name => names.has(name)) && pipelineControllerReferenceIndexes.ready(names);
+  return ["pipeline_ref_archive_complete", "pipeline_ref_inputs", "pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_refs_insert", "pipeline_refs_update", "pipeline_refs_delete",
+    "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"].every(name => names.has(name)) && pipelineControllerReferenceIndexes.ready(names)
+    && Boolean(db.query("SELECT 1 FROM pipeline_ref_archive_complete WHERE revision=1").get());
 }
 
-const populate = (source: string, key: string) => {
+const populate = (source: string, key: string, collection: string) => {
   const value = "controller_source.payload";
   const attemptValue = "a.payload";
   const runValue = "r.metadata";
@@ -72,29 +73,31 @@ const populate = (source: string, key: string) => {
         COALESCE(json_extract(${attemptValue},'$.conversationId'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.agentPath'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.paneId'),'') AS hostIdentity
       ${attempts} WHERE json_type(${runValue},'$.stageId')='text' AND json_type(${attemptValue},'$.n') IN ('integer','real'))
       SELECT ${key},position,stageId,n,run,attempt,historical,terminal,
-        CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY terminal DESC,position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs
+        CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY terminal DESC,position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs WHERE ${collection}='pipelines'
     ${["unconfirmedHosts","closeReport.unconfirmed","closeReport.pending"].map((field,index) => `UNION ALL
       SELECT ${key},281474976710656+${index}*4294967296+CAST(h.key AS INTEGER),json_extract(${hostValue},'$.stageId'),json_extract(${hostValue},'$.attempt'),-1,-1,1,0,0
-      FROM controller_source, json_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN json_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
+      FROM controller_source, json_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN json_extract(${value},'$.${field}') ELSE '[]' END) h WHERE ${collection}='pipelines' AND json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
     INSERT INTO pipeline_owner_refs ${cte}
-      SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing}) THEN 2
+      SELECT ${collection},${key},CASE WHEN ${collection}='pipelines' THEN ids.key ELSE 'archive:'||ids.key END,ids.value,CASE WHEN (${publishing}) THEN 2
         WHEN ${field("state")} NOT IN ('completed','closed') THEN 1 ELSE 0 END
       FROM controller_source, ${identities(value,["srcConversationId","srcPath"])} WHERE ids.value IS NOT NULL AND ids.value!=''
     UNION ALL
-      SELECT ${key},ids.key,ids.value,1
+      SELECT ${collection},${key},CASE WHEN ${collection}='pipelines' THEN ids.key ELSE 'archive:'||ids.key END,ids.value,1
       FROM controller_source, ${identities(value,["srcConversationId","srcPath"])}
       WHERE (${publishing}) AND ids.value IS NOT NULL AND ids.value!=''
     UNION ALL
-      SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing})
+      SELECT ${collection},${key},CASE WHEN ${collection}='pipelines' THEN ids.key ELSE 'archive:'||ids.key END,ids.value,CASE WHEN (${publishing})
         OR (json_extract(${attemptValue},'$.activation') IS NOT NULL AND json_extract(${attemptValue},'$.activation.phase') IS NOT 'settled') THEN 1
         WHEN ${released} THEN -1
         WHEN json_extract(${attemptValue},'$.state') IN ('pending','spawning','running','reviewing','committing')
           OR (json_extract(${attemptValue},'$.verdict') IS NULL AND COALESCE(json_extract(${attemptValue},'$.completedAt'),'')='') THEN 1 ELSE 0 END
       ${attempts}, ${identities(attemptValue,["conversationId","agentPath","paneId","launchId","sessionId"])} WHERE ids.value IS NOT NULL AND ids.value!=''
     UNION ALL
-      SELECT ${key},'flow',json_extract(${attemptValue},'$.flowId'),0 ${attempts} WHERE json_extract(${attemptValue},'$.flowId') IS NOT NULL ON CONFLICT DO NOTHING;`;
+      SELECT ${collection},${key},CASE WHEN ${collection}='pipelines' THEN 'flow' ELSE 'archive:flow' END,json_extract(${attemptValue},'$.flowId'),0 ${attempts} WHERE json_extract(${attemptValue},'$.flowId') IS NOT NULL
+    UNION ALL SELECT ${collection},${key},CASE WHEN ${collection}='pipelines' THEN 'unknown' ELSE 'archive:unknown' END,'',0 FROM controller_source WHERE json_extract(payload,'$.ownershipUnknown')=1
+    ON CONFLICT DO NOTHING;`;
 };
-const clear = (key: string, guard = "1") => `DELETE FROM pipeline_attempt_refs WHERE row_key=${key} AND (${guard}); DELETE FROM pipeline_owner_refs WHERE row_key=${key} AND (${guard});`;
+const clear = (key: string, collection: string, guard = "1") => `DELETE FROM pipeline_attempt_refs WHERE row_key=${key} AND ${collection}='pipelines' AND (${guard}); DELETE FROM pipeline_owner_refs WHERE collection=${collection} AND row_key=${key} AND (${guard});`;
 // Strip payload-only fields once per run/attempt. A compact equality guard
 // prevents any reference writes when an older peer edits output or reports.
 const compact = (source: string) => {
@@ -105,7 +108,8 @@ const compact = (source: string) => {
     ["cursor",["state"]],["terminalReap",["settledAt","settledAttempts"]],["closeReport",["unconfirmed","pending"]]] as const) {
     headers.push(`'${root}',json_object(${fields.map(field => `'${field}',${at(`${root}.${field}`)}`).join(",")})`);
   }
-  return `WITH source AS MATERIALIZED (SELECT ${source} AS payload),
+  return `WITH raw AS MATERIALIZED (SELECT ${source} AS value),
+    source AS MATERIALIZED (SELECT CASE WHEN json_valid(value) THEN value ELSE '{}' END AS payload FROM raw),
     runs AS MATERIALIZED (SELECT r.key,json_extract(r.value,'$.stageId') AS stageId,
       json_extract(r.value,'$.attempts') AS attempts FROM source,json_each(payload,'$.runs') r WHERE r.type='object'),
     attempts AS MATERIALIZED (SELECT r.key AS run,a.key,a.value AS payload
@@ -118,32 +122,40 @@ const compact = (source: string) => {
         json((SELECT json_group_array(json(a.payload)) FROM (SELECT payload FROM compact_attempts WHERE run=r.key ORDER BY key) a))) AS payload
       FROM runs r ORDER BY r.key)
     SELECT json_object(${headers.join(",")},
+      'ownershipUnknown',CASE WHEN json_type(payload) IS NOT 'object' OR json_type(payload,'$.runs') IS NOT 'array'
+        OR EXISTS (SELECT 1 FROM json_tree(payload) GROUP BY fullkey HAVING count(*)>1 OR instr(fullkey,char(92))>0)
+        OR EXISTS (SELECT 1 FROM json_each(payload,'$.runs') r WHERE r.type IS NOT 'object'
+          OR json_type(CASE WHEN r.type='object' THEN r.value ELSE '{}' END,'$.attempts') IS NOT 'array')
+        OR EXISTS (SELECT 1 FROM runs r,json_each(CASE WHEN json_type(r.attempts)='array' THEN r.attempts ELSE '[]' END) a
+          WHERE a.type IS NOT 'object' OR json_type(CASE WHEN a.type='object' THEN a.value ELSE '{}' END,'$.conversationId') NOT IN ('text','null'))
+        THEN 1 ELSE 0 END,
       'runs',json((SELECT json_group_array(json(payload)) FROM compact_runs))) FROM source`;
 };
 // Only semantic changes reach the reference-maintenance triggers.
-const writeInput = (source: string, key: string, guard = "1") => `INSERT INTO pipeline_ref_inputs(row_key,value_json)
-  SELECT ${key},* FROM (${compact(source)}) WHERE ${guard}
-  ON CONFLICT(row_key) DO UPDATE SET value_json=excluded.value_json WHERE value_json IS NOT excluded.value_json;`;
+const writeInput = (source: string, key: string, collection: string, guard = "1") => `INSERT INTO pipeline_ref_inputs(collection,row_key,value_json)
+  SELECT ${collection},${key},* FROM (${compact(source)}) WHERE ${guard}
+  ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json WHERE value_json IS NOT excluded.value_json;`;
 const paths = ["runs","state","srcConversationId","srcPath","delivery.operation","publicationAdmission.state","remoteAction.state",
   "cursor.state","terminalReap.settledAttempts","terminalReap.settledAt","unconfirmedHosts","closeReport.unconfirmed","closeReport.pending"]
   .map(field => `'$.${field}'`).join(",");
 const changed = `OLD.collection IS NOT NEW.collection OR OLD.row_key IS NOT NEW.row_key OR CASE
   WHEN json_valid(OLD.value_json) AND json_valid(NEW.value_json)
-  THEN json_extract(OLD.value_json,${paths}) IS NOT json_extract(NEW.value_json,${paths}) ELSE 1 END`;
+  THEN EXISTS (SELECT 1 FROM json_tree(NEW.value_json) GROUP BY fullkey HAVING count(*)>1 OR instr(fullkey,char(92))>0) OR json_extract(OLD.value_json,${paths}) IS NOT json_extract(NEW.value_json,${paths}) ELSE 1 END`;
 /** The trigger statements exactly as installed; readiness compares them with sqlite_master. */
+const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_archive')`;
 const referenceTriggers: Record<string, string> = Object.fromEntries([
-  `CREATE TRIGGER pipeline_ref_inputs_insert AFTER INSERT ON pipeline_ref_inputs BEGIN ${populate("NEW.value_json","NEW.row_key")} END`,
+  `CREATE TRIGGER pipeline_ref_inputs_insert AFTER INSERT ON pipeline_ref_inputs BEGIN ${populate("NEW.value_json","NEW.row_key","NEW.collection")} END`,
   `CREATE TRIGGER pipeline_ref_inputs_update AFTER UPDATE ON pipeline_ref_inputs BEGIN
-    ${clear("OLD.row_key")} ${populate("NEW.value_json","NEW.row_key")} END`,
-  `CREATE TRIGGER pipeline_refs_insert AFTER INSERT ON state_rows WHEN NEW.collection='pipelines' AND json_valid(NEW.value_json)
-    BEGIN ${writeInput("NEW.value_json","NEW.row_key")} END`,
-  `CREATE TRIGGER pipeline_refs_update AFTER UPDATE ON state_rows WHEN (OLD.collection='pipelines' OR NEW.collection='pipelines') AND (${changed}) BEGIN
-    ${clear("OLD.row_key", "OLD.collection='pipelines' AND (NEW.collection!='pipelines' OR OLD.row_key IS NOT NEW.row_key)")}
-    DELETE FROM pipeline_ref_inputs WHERE row_key=OLD.row_key AND OLD.collection='pipelines' AND (NEW.collection!='pipelines' OR OLD.row_key IS NOT NEW.row_key);
-    ${writeInput("CASE WHEN NEW.collection='pipelines' AND json_valid(NEW.value_json) THEN NEW.value_json ELSE '{}' END","NEW.row_key","NEW.collection='pipelines'")}
+    ${clear("OLD.row_key","OLD.collection")} ${populate("NEW.value_json","NEW.row_key","NEW.collection")} END`,
+  `CREATE TRIGGER pipeline_refs_insert AFTER INSERT ON state_rows WHEN ${tracked("NEW")}
+    BEGIN ${writeInput("NEW.value_json","NEW.row_key","NEW.collection")} END`,
+  `CREATE TRIGGER pipeline_refs_update AFTER UPDATE ON state_rows WHEN (${tracked("OLD")} OR ${tracked("NEW")}) AND (${changed}) BEGIN
+    ${clear("OLD.row_key", "OLD.collection", "NEW.collection IS NOT OLD.collection OR OLD.row_key IS NOT NEW.row_key")}
+    DELETE FROM pipeline_ref_inputs WHERE collection=OLD.collection AND row_key=OLD.row_key AND (NEW.collection IS NOT OLD.collection OR OLD.row_key IS NOT NEW.row_key);
+    ${writeInput("NEW.value_json","NEW.row_key","NEW.collection",tracked("NEW"))}
     END`,
-  `CREATE TRIGGER pipeline_refs_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines' BEGIN
-    ${clear("OLD.row_key")} DELETE FROM pipeline_ref_inputs WHERE row_key=OLD.row_key; END`,
+  `CREATE TRIGGER pipeline_refs_delete AFTER DELETE ON state_rows WHEN ${tracked("OLD")} BEGIN
+    ${clear("OLD.row_key","OLD.collection")} DELETE FROM pipeline_ref_inputs WHERE collection=OLD.collection AND row_key=OLD.row_key; END`,
 ].map(sql => [/^CREATE TRIGGER (\w+)/.exec(sql)![1]!, sql]));
 
 /** The triggers this module installs again whenever one is missing or differs. */
@@ -158,6 +170,14 @@ export function pipelineControllerReferencesCurrent(db: Database): boolean {
   return Object.entries(referenceTriggers).every(([name, sql]) => installed.get(name) === sql);
 }
 
+/** A same-named index with another key cannot certify a narrow read. */
+export function pipelineControllerReferenceIndexesCurrent(db: Database): boolean {
+  const indexes = new Set(db.query<{ sql: string | null }, []>(
+    "SELECT sql FROM sqlite_master WHERE type='index' AND name IN ('pipeline_attempt_terminal','pipeline_attempt_current','pipeline_owner_lookup')")
+    .all().map(row => row.sql));
+  return pipelineControllerReferenceIndexes.statements.every(sql => indexes.has(sql.replace(" IF NOT EXISTS","")));
+}
+
 /** Write-time projections. Old writers participate through the same row
  * triggers; controller reads never enumerate retained payloads for ownership. */
 export function installPipelineControllerReferences(db: Database, directory: string): void {
@@ -166,31 +186,35 @@ export function installPipelineControllerReferences(db: Database, directory: str
     && !pipelineControllerReferenceIndexes.ready(objects) && mayRunStateStartupMutation(directory)) {
     pipelineControllerReferenceIndexes.install(db, directory);
   }
-  if (pipelineControllerReferencesReady(db) && pipelineControllerReferencesCurrent(db)) return;
+  if (pipelineControllerReferencesReady(db) && pipelineControllerReferencesCurrent(db) && pipelineControllerReferenceIndexesCurrent(db)) return;
   if (!mayRunStateStartupMutation(directory)) return;
   for (const name of PIPELINE_REFERENCE_TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
-  for (const name of ["pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_ref_inputs"]) db.exec(`DROP TABLE IF EXISTS ${name}`);
-  db.exec("CREATE TABLE pipeline_ref_inputs(row_key TEXT PRIMARY KEY, value_json BLOB NOT NULL)");
+  for (const name of ["pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_ref_inputs", "pipeline_ref_archive_complete"]) db.exec(`DROP TABLE IF EXISTS ${name}`);
+  db.exec("CREATE TABLE pipeline_ref_inputs(collection TEXT NOT NULL, row_key TEXT NOT NULL, value_json BLOB NOT NULL, PRIMARY KEY(collection,row_key))");
   db.exec(`CREATE TABLE pipeline_attempt_refs (
     row_key TEXT NOT NULL, position INTEGER NOT NULL, stageId TEXT NOT NULL, n INTEGER NOT NULL,
     run INTEGER NOT NULL, attempt INTEGER NOT NULL, historical INTEGER NOT NULL, terminal INTEGER NOT NULL, firstHost INTEGER NOT NULL,
     PRIMARY KEY(row_key,position))`);
 
   db.exec(`CREATE TABLE pipeline_owner_refs (
-    row_key TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL, live INTEGER NOT NULL,
-    PRIMARY KEY(row_key,kind,identity,live))`);
+    collection TEXT NOT NULL, row_key TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL, live INTEGER NOT NULL,
+    PRIMARY KEY(collection,row_key,kind,identity,live))`);
+  // Archive kinds are namespaced as well as collection-qualified, so older
+  // readers of active custody keep their existing semantics.
   // Custody tags: 0 inactive, 1 live, 2 source publication, -1 released
   // operational attempt. Publication also keeps a live=1 companion so the
   // preceding release retains it during handover. Only positive tags retain.
   pipelineControllerReferenceIndexes.install(db, directory);
   db.exec("UPDATE pipeline_tick_work SET attempt_cursor=0");
   for (const sql of Object.values(referenceTriggers)) db.exec(sql);
-  for (const row of db.query<{ row_key: string }, []>("SELECT row_key FROM state_rows WHERE collection='pipelines' AND json_valid(value_json)").all()) {
+  for (const row of db.query<{ collection: string; row_key: string }, []>("SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')").all()) {
     // Initialization is fenced and transactional. Quote captured JSON as SQL data.
     const literal = (text: string) => `'${text.replaceAll("'", "''")}'`;
     const key = literal(row.row_key);
-    db.exec(writeInput(`(SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=${key})`,key));
+    db.exec(writeInput(`(SELECT value_json FROM state_rows WHERE collection=${literal(row.collection)} AND row_key=${key})`,key,literal(row.collection)));
   }
+  db.exec("CREATE TABLE pipeline_ref_archive_complete(revision INTEGER PRIMARY KEY CHECK(revision=1))");
+  db.exec("INSERT INTO pipeline_ref_archive_complete VALUES (1)");
   // Existing terminal lanes may have settled before an unstamped attempt was
   // considered. Re-enrol only indexed, outstanding hosts during this fenced
   // upgrade; preserve the recorded receipts and never scan payloads per tick.

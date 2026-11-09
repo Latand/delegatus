@@ -19,7 +19,7 @@ import { procBackend } from "@/lib/proc";
 import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
-import { installPipelineControllerReferences, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
+import { installPipelineControllerReferences, pipelineControllerReferenceIndexesCurrent, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
@@ -680,6 +680,7 @@ function openRawDatabase(filename: string): Database {
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && pipelineControllerReferencesReady(db, names)
+          && pipelineControllerReferenceIndexesCurrent(db)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
           && taskDueIndexCurrent(db)
@@ -1286,6 +1287,62 @@ function pipelineIndexRevision(filename: string, table: "pipeline_evidence_clock
   if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
   const clock = db.query<{ revision: number }, []>(`SELECT revision FROM ${table} WHERE id=1`).get();
   return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
+}
+
+/** Freshness proof for a held recipient preparation, including an index whose
+ * completeness marker or trigger policy was removed by another release. */
+export function recipientPipelineEvidenceRevision(filename: string): string | null {
+  const revision = pipelineEvidenceRevision(filename);
+  const db = evidenceVersions.reader?.db;
+  return revision && db && pipelineControllerReferencesReady(db) && pipelineControllerReferencesCurrent(db) && pipelineControllerReferenceIndexesCurrent(db) ? revision : null;
+}
+
+export type PipelineRecipientSelection = { ids: readonly string[]; conversationIds: readonly string[] };
+
+/** A cold reader uses only the persisted ownership index. Initialization belongs
+ * to the fenced startup writer; this path never backfills retained archives. */
+export function readRecipientPipelineEvidence(filename: string, selection: PipelineRecipientSelection): Array<{ collection: string; key: string; value: unknown }> {
+  if (!fs.existsSync(filename)) throw new Error("recipient pipeline ownership index is unavailable");
+  const identity = databaseFileIdentity(filename);
+  const db = connectReadonlyDatabase(filename);
+  try {
+    db.exec("BEGIN");
+    if (!pipelineControllerReferencesReady(db) || !pipelineControllerReferencesCurrent(db) || !pipelineControllerReferenceIndexesCurrent(db)
+      || !pipelineEvidenceIndexReady(db)) throw new Error("recipient pipeline ownership index is incomplete or incompatible");
+    const metadata = db.query<{ collection: string; schema_version: number }, []>(
+      "SELECT collection,schema_version FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
+    if (metadata.length !== 2 || metadata[0]!.schema_version !== metadata[1]!.schema_version
+      || metadata.some(row => ![5,6].includes(row.schema_version))) {
+      throw new Error("recipient pipeline collections are incomplete or incompatible");
+    }
+    // Indeterminate ownership cannot prove absence for any recipient.
+    if (db.query("SELECT 1 FROM pipeline_owner_refs WHERE kind IN ('unknown','archive:unknown') LIMIT 1").get()) {
+      throw new Error("recipient pipeline ownership contains unknown rows");
+    }
+    const keys = db.query<{ collection: string; row_key: string }, [string, string]>(`
+      WITH matches AS MATERIALIZED (
+        SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
+          AND row_key IN (SELECT value FROM json_each(?))
+        UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
+          WHERE kind IN ('conversationId','archive:conversationId') AND identity IN (SELECT value FROM json_each(?)) LIMIT 257)
+      SELECT collection,row_key FROM matches
+      UNION SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
+        AND row_key IN (SELECT row_key FROM matches)
+      LIMIT 257`).all(JSON.stringify(selection.ids), JSON.stringify(selection.conversationIds));
+    if (keys.length > 256) throw new Error("recipient pipeline ownership exceeds its bounded read");
+    const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+    let bytes = 0;
+    const size = db.query<{ bytes: number }, [string,string]>("SELECT length(CAST(value_json AS BLOB)) AS bytes FROM state_rows WHERE collection=? AND row_key=?");
+    const rows = keys.map(({ collection, row_key: key }) => {
+      bytes += size.get(collection,key)?.bytes ?? 0;
+      if (bytes > 16 * 1024 * 1024) throw new Error("recipient pipeline evidence exceeds its bounded byte read");
+      const raw = read.get(collection, key);
+      if (!raw) throw new Error("recipient pipeline ownership row is missing");
+      return { collection, key, value: performanceSpans.sync("state.json", () => parseSqliteJson(raw.value_json, db), 1, Buffer.byteLength(raw.value_json)) };
+    });
+    if (databaseFileIdentity(filename) !== identity) throw new StateSnapshotChangedError();
+    return rows;
+  } finally { rollbackQuietly(db); db.close(); }
 }
 
 export type CompactEvidenceCache<T> = { identity: string; sourceRevision?: number; rows: Map<string, { revision: number; value: T }> };

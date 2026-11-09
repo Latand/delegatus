@@ -40,7 +40,8 @@ process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 for (const mode of ["startup", "foreground"] as const)
-for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy"] as const) test.skipIf(process.platform === "win32")(`${mode} recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
+for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed"] as const) test.skipIf(process.platform === "win32")(`${mode} recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
+  loadPipelines();
   const cwd = fs.mkdtempSync(path.join(sandbox, "native-reconnect-"));
   const socketDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rpc-"));
   fs.chmodSync(socketDirectory, 0o700);
@@ -90,6 +91,11 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
   const adopt = spyOn(CodexAppServerHost, "adopt").mockResolvedValue(host as never);
   if (scenario === "failed-attachment") adopt.mockRejectedValue(new Error("native attachment refused"));
   if (scenario === "revoked") adopt.mockImplementation(async () => { authorized = false; return host as never; });
+  if (scenario === "pipeline-changed") adopt.mockImplementation(async () => {
+    const db=new Database(statePath("state.sqlite"));
+    try { db.exec("UPDATE pipeline_evidence_clock SET revision=revision+1 WHERE id=1"); } finally { db.close(); }
+    return host as never;
+  });
   let spawned = 0;
   const leaseEntered = Promise.withResolvers<void>();
   const releaseLease = Promise.withResolvers<void>();
@@ -113,8 +119,8 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
       releaseLease.resolve();
       await heldLease;
     }
-    if (scenario === "failed-attachment" || scenario === "revoked") {
-      await expect(pending).rejects.toThrow(scenario === "revoked" ? "reconnect authority revoked" : "native attachment refused");
+    if (scenario === "failed-attachment" || scenario === "revoked" || scenario === "pipeline-changed") {
+      await expect(pending).rejects.toThrow(scenario === "pipeline-changed" ? "recipient pipeline authority changed" : scenario === "revoked" ? "reconnect authority revoked" : "native attachment refused");
       expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner).toBeNull();
       expect(spawned).toBe(0);
       expect(hasStructuredDeliveryHost(key)).toBeFalse();

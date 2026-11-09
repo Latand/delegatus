@@ -10,7 +10,7 @@ import { createInterface } from "node:readline";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 
-import { buildPipeline, loadPipelinesForStartup, loadPipelinesForStartupAsync, loadPipelineOwnershipForStartupAsync, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { pipelineIdentity, buildPipeline, loadPipelinesForStartup, loadPipelinesForStartupAsync, loadPipelineOwnershipForStartupAsync, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import { StateLockDeferredError, stateLockProcessKind, stateLockWaitsInFlight, waitForStateLock } from "@/lib/state/lockWait";
 import { createViewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
@@ -773,4 +773,189 @@ test("keyed startup ownership keeps an attempt owner even when membership is abs
   expect(owners.map(owner => owner.id)).toEqual([row.id]);
   expect(owners[0]!.attempts).toEqual([{ conversationId, state: "passed" }]);
   expect(await loadPipelineOwnershipForStartupAsync([], new Set(["conversation_unrelated"])) ).toEqual([]);
+});
+
+function recipientOwner(seed: ReturnType<typeof buildPipeline>, id: string, conversationId: string) {
+  return { ...seed, id, ...pipelineIdentity(id,seed.task,seed.repoDir), runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed" as const, conversationId,
+    flowId: null, launchId: null, sessionId: null, agentPath: null, paneId: null, startedAt: "2026-10-22T00:00:00.000Z", completedAt: "2026-10-22T00:00:01.000Z",
+    error: null, output: null, verdict: null, activatedBy: null, effectiveRole: seed.stages[0]!.effectiveRole }] }] };
+}
+
+test("recipient ownership reads every active and archived owner while global health is held", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  retainedHistory(db, row);
+  const put = db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES(?,?,?,1000,1,0)");
+  for (const [collection,id] of [["pipelines","target-active"],["pipelines_archive","target-archive-one"],["pipelines_archive","target-archive-two"]]) {
+    put.run(collection!,id!,JSON.stringify(recipientOwner(row,id!,"conversation_target")));
+  }
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const originalRead = stateStore.readCompactPipelineEvidence;
+  const read = spyOn(stateStore,"readCompactPipelineEvidence").mockImplementation(async (...args) => {
+    const evidence = await originalRead(...args); entered.resolve(); await release.promise; return evidence;
+  });
+  const global = pipelineRegistryHealthAsync();
+  const decodes = observeEvidenceDecodes();
+  try {
+    await entered.promise;
+    decodes.reset();
+    for (const temperature of ["cold","warm"]) {
+      const owners = await loadPipelineOwnershipForStartupAsync([],new Set(["conversation_target"]));
+      expect(owners.map(owner => owner.id).sort()).toEqual(["target-active","target-archive-one","target-archive-two"]);
+      expect(decodes.rows()).toBe(3);
+      console.info(JSON.stringify({ case: "recipient-ownership", temperature, retainedUnrelated: 49, rowsRead: decodes.rows() }));
+      decodes.reset();
+    }
+    expect(await withPipelineStartupAdmission(async available => available
+      && (await loadPipelineOwnershipForStartupAsync([],new Set(["conversation_target"]))).length === 3,
+    "recipient fixture",undefined,true,{recipient:{ids:[],conversationIds:["conversation_target"]}})).toBe(true);
+    expect(decodes.rows()).toBe(3);
+  } finally { release.resolve(); await global; read.mockRestore(); decodes.stop(); db.close(); }
+});
+
+test("recipient ownership follows retarget, replace, archive moves and rollback atomically", async () => {
+  const { root, row } = fixture();
+  const filename = path.join(root,"state.sqlite");
+  const db = new Database(filename);
+  const owner = recipientOwner(row,row.id,"conversation_first");
+  const read = (id: string) => loadPipelineOwnershipForStartupAsync([],new Set([id]));
+  try {
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?").run(JSON.stringify(owner),row.id);
+    expect(await read("conversation_first")).toHaveLength(1);
+    db.exec("BEGIN IMMEDIATE");
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+      .run(JSON.stringify(recipientOwner(row,row.id,"conversation_rolled_back")),row.id);
+    // The source and ownership changes stay invisible to another connection.
+    expect(await read("conversation_first")).toHaveLength(1);
+    expect(await read("conversation_rolled_back")).toEqual([]);
+    db.exec("ROLLBACK");
+    db.query("UPDATE state_rows SET collection='pipelines_archive' WHERE collection='pipelines' AND row_key=?").run(row.id);
+    expect(await read("conversation_first")).toHaveLength(1);
+    db.query("INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,0,1,0)")
+      .run(row.id,JSON.stringify(recipientOwner(row,row.id,"conversation_replaced")));
+    expect(await read("conversation_first")).toEqual([]);
+    expect(await read("conversation_replaced")).toHaveLength(1);
+    db.query("UPDATE state_rows SET row_key='renamed',value_json=? WHERE collection='pipelines_archive' AND row_key=?").run(JSON.stringify(recipientOwner(row,"renamed","conversation_replaced")),row.id);
+    expect((await read("conversation_replaced"))[0]!.id).toBe("renamed");
+    db.query("DELETE FROM state_rows WHERE collection='pipelines_archive'").run();
+    expect(await read("conversation_replaced")).toEqual([]);
+  } finally { db.close(); }
+});
+
+test("recipient ownership refuses duplicate collection keys, unknown ownership and incomplete policy", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root,"state.sqlite"));
+  const owner = recipientOwner(row,row.id,"conversation_target");
+  const read = () => loadPipelineOwnershipForStartupAsync([],new Set(["conversation_target"]));
+  try {
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify(owner));
+    db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,0,1,0)")
+      .run(row.id,JSON.stringify(recipientOwner(row,row.id,"conversation_other")));
+    await expect(read()).rejects.toThrow("contradictory identities");
+    db.exec("DELETE FROM state_rows WHERE collection='pipelines_archive'");
+    expect(await read()).toHaveLength(1);
+    db.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines'").run();
+    await expect(read()).rejects.toThrow("unknown rows");
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify(owner));
+    db.exec("DELETE FROM pipeline_ref_archive_complete");
+    await expect(read()).rejects.toThrow("incomplete or incompatible");
+    db.exec("INSERT INTO pipeline_ref_archive_complete VALUES(1)");
+    db.exec("UPDATE state_collections SET schema_version=99 WHERE collection='pipelines_archive'");
+    await expect(read()).rejects.toThrow("incomplete or incompatible");
+    db.exec("UPDATE state_collections SET schema_version=6 WHERE collection='pipelines_archive'");
+    await expect(read()).rejects.toThrow("incomplete or incompatible");
+    db.exec("UPDATE state_collections SET schema_version=5 WHERE collection='pipelines_archive'");
+    db.exec("DROP INDEX pipeline_owner_lookup");
+    db.exec("CREATE INDEX pipeline_owner_lookup ON pipeline_owner_refs(row_key)");
+    await expect(read()).rejects.toThrow("incomplete or incompatible");
+    db.exec("DROP INDEX pipeline_owner_lookup");
+    db.exec("CREATE INDEX pipeline_owner_lookup ON pipeline_owner_refs(kind,identity,live)");
+    db.exec("DROP TRIGGER pipeline_refs_update");
+    await expect(read()).rejects.toThrow("incomplete or incompatible");
+  } finally { db.close(); }
+});
+
+test("a fresh process reads committed archive retargets and excludes a crashed writer's rollback", async () => {
+  const { root, row } = fixture();
+  const filename = path.join(root,"state.sqlite");
+  const db = new Database(filename);
+  const owner = recipientOwner(row,"archive-owner","conversation_before");
+  db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,0,1,0)")
+    .run(owner.id,JSON.stringify(owner));
+  db.close();
+  const writerSource = `import {Database} from 'bun:sqlite'; const db=new Database(${JSON.stringify(filename)});
+    db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].conversationId','conversation_after') WHERE collection='pipelines_archive'").run();
+    db.exec('BEGIN IMMEDIATE');
+    db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].conversationId','conversation_uncommitted') WHERE collection='pipelines_archive'").run();
+    process.exit(17);`;
+  const writer = Bun.spawn([process.execPath,"--eval",writerSource],{env:process.env,stdout:"pipe",stderr:"pipe"});
+  expect(await writer.exited).toBe(17);
+  expect(await new Response(writer.stderr).text()).toBe("");
+  const storeModule = path.join(import.meta.dir,"store.ts");
+  const reader = Bun.spawn([process.execPath,"--eval",`const {loadPipelineOwnershipForStartupAsync:read}=await import(${JSON.stringify(storeModule)});
+    for(const id of ['conversation_before','conversation_after','conversation_uncommitted']) console.log(JSON.stringify((await read([],new Set([id]))).map(row=>row.id)));`],
+  {env:process.env,stdout:"pipe",stderr:"pipe"});
+  const output = await new Response(reader.stdout).text();
+  expect(await reader.exited).toBe(0);
+  expect(await new Response(reader.stderr).text()).toBe("");
+  expect(output.trim().split("\n").map(line => JSON.parse(line))).toEqual([[],[owner.id],[]]);
+});
+
+test("recipient reads refuse a pre-index archive until fenced initialization completes", async () => {
+  const {root,row} = fixture();
+  const filename = path.join(root,"state.sqlite");
+  const db = new Database(filename);
+  const owner = recipientOwner(row,"archived","conversation_target");
+  db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,0,1,0)")
+    .run(owner.id,JSON.stringify(owner));
+  db.exec("DELETE FROM pipeline_ref_archive_complete");
+  const before = db.query("SELECT collection,row_key,value_json FROM state_rows ORDER BY collection,row_key").all();
+  try {
+    await expect(loadPipelineOwnershipForStartupAsync([],new Set(["conversation_target"]))).rejects.toThrow("incomplete");
+    expect(db.query("SELECT collection,row_key,value_json FROM state_rows ORDER BY collection,row_key").all()).toEqual(before);
+    expect(db.query("SELECT * FROM pipeline_ref_archive_complete").all()).toEqual([]);
+  } finally { db.close(); }
+  const storeModule = path.join(import.meta.dir,"store.ts");
+  const child = Bun.spawn([process.execPath,"--eval",`const {loadPipelines,loadPipelineOwnershipForStartupAsync:read}=await import(${JSON.stringify(storeModule)});
+    try { await read([],new Set(['conversation_target'])); throw Error('incomplete index was accepted'); } catch(error) { if(!error.message.includes('incomplete')) throw error; }
+    loadPipelines(); console.log(JSON.stringify((await read([],new Set(['conversation_target']))).map(row=>row.id)));`],
+  {env:process.env,stdout:"pipe",stderr:"pipe"});
+  const output=await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+  expect(await new Response(child.stderr).text()).toBe("");
+  expect(JSON.parse(output)).toEqual([owner.id]);
+});
+
+test("a failed reference trigger rolls back the source write and its ownership together", async () => {
+  const {root,row} = fixture();
+  const db = new Database(path.join(root,"state.sqlite"));
+  const owner=recipientOwner(row,row.id,"conversation_before");
+  try {
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify(owner));
+    db.exec("CREATE TRIGGER refuse_reference AFTER UPDATE ON pipeline_ref_inputs BEGIN SELECT RAISE(ABORT,'fixture reference refusal'); END");
+    expect(() => db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'")
+      .run(JSON.stringify(recipientOwner(row,row.id,"conversation_after")))).toThrow("fixture reference refusal");
+    expect((await loadPipelineOwnershipForStartupAsync([],new Set(["conversation_before"]))).map(owner=>owner.id)).toEqual([row.id]);
+    expect(await loadPipelineOwnershipForStartupAsync([],new Set(["conversation_after"]))).toEqual([]);
+  } finally { db.close(); }
+});
+
+test("recipient evidence refuses row and byte overflow before decoding payloads", async () => {
+  const {root,row}=fixture();
+  const db=new Database(path.join(root,"state.sqlite"));
+  const put=db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,0,1,0)");
+  const decodes=observeEvidenceDecodes();
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    for(let i=0;i<257;i++) {
+      const id=`owner-${i}`;
+      put.run(id,JSON.stringify(recipientOwner(row,id,"conversation_target")));
+    }
+    db.exec("COMMIT");
+    await expect(loadPipelineOwnershipForStartupAsync([],new Set(["conversation_target"]))).rejects.toThrow("bounded read");
+    expect(decodes.rows()).toBe(0);
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify({...row,padding:"x".repeat(16*1024*1024)}));
+    await expect(loadPipelineOwnershipForStartupAsync([row.id],new Set())).rejects.toThrow("bounded byte read");
+    expect(decodes.rows()).toBe(0);
+  } finally { decodes.stop();db.close(); }
 });
