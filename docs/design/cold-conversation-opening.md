@@ -284,10 +284,12 @@ same command.
 ### `src/app/api/files/route.test.ts` (operator path, production route and queue)
 
 These cases use the module's own queue slot, `globalThis.__llvFilesProjectionQueue`,
-replaced with `createFilesProjectionQueue({ maxDepth: 1, maxWaitMs: 50 })`
-whose single active slot holds a build that has not resolved yet. They use the
-worker runtime seam the existing cold-scope tests use
-(`setFilesResponseWorkerRuntimeForTests`).
+replaced with a `createFilesProjectionQueue` whose single active slot holds a
+build that has not resolved yet. The queue runs on a clock and a deadline timer
+the test owns, with the production bound of 30 s: a request waits until the
+queue has armed the build's deadline, and the deadline passes when the test
+advances the clock, never after a real delay. They use the worker runtime seam
+the existing cold-scope tests use (`setFilesResponseWorkerRuntimeForTests`).
 
 1. **Cold scope, expiry.** A pinned scope with no cached representation gives
    `503` with `code: "files_projection_unavailable"`, `reason: "expired"`,
@@ -322,7 +324,14 @@ Add these to the existing member harness, with the same held queue:
 ### `src/components/Viewer.deepLink.dom.test.tsx` (real Viewer, real `useFiles`)
 
 The stub answers pinned scopes with
-`pinOverlayPaths: [<target path>]`, as production does.
+`pinOverlayPaths: [<target path>]`, as production does. The cases in this group
+own the clock (`jest.useFakeTimers`): an answer the case wants late is held on
+a promise the case releases, and a held request ends with an `AbortError` when
+its signal fires, as a real fetch does. Time passes only by the amounts the
+case advances, in steps that read state (the notice kind, the board), so a
+paused event loop cannot change what they observe. A retry or a notice that
+must not happen is shown absent after the clock has passed the longest retry
+delay (30 s).
 
 11. **The pin stays.** The id scope carries the target, and the transcript-path
     scope always answers `503`. The target opens and is still open 1 s later.
