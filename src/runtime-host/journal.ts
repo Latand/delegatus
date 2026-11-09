@@ -90,6 +90,14 @@ export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/** The parsed-entity cache has to hold one whole snapshot population in both
+    session representations. A cap below that population makes every rebuild
+    evict the rows it is about to read, in the same order, so each rebuild
+    parses every stored row again. One entity above the admission size is
+    never retained. */
+export const RUNTIME_ENTITY_READ_CACHE_ENTRIES = 65_536;
+export const RUNTIME_ENTITY_READ_CACHE_BYTES = 64 * 1024 * 1024;
+export const RUNTIME_ENTITY_READ_ADMISSION_BYTES = 16 * 1024 * 1024;
 /** A spawn or kill may wait through a short host succession. After one
     continuous hour with no runtime host and no current live registry
     conversation, the maintenance sweep terminalizes the orphaned work so
@@ -3550,8 +3558,8 @@ export class RuntimeJournal {
     const value = sessionPresentation && (parsed as RuntimeSession).turn !== "running"
       ? { ...(parsed as RuntimeSession), liveTurn: null } as T : parsed;
     const bytes = sessionPresentation ? Buffer.byteLength(JSON.stringify(value)) : Buffer.byteLength(row.state_json);
-    if (bytes <= 16 * 1024 * 1024) {
-      while (this.entityReads.size >= 8192 || this.entityReadBytes + bytes > 16 * 1024 * 1024) {
+    if (bytes <= RUNTIME_ENTITY_READ_ADMISSION_BYTES) {
+      while (this.entityReads.size >= RUNTIME_ENTITY_READ_CACHE_ENTRIES || this.entityReadBytes + bytes > RUNTIME_ENTITY_READ_CACHE_BYTES) {
         const oldest = this.entityReads.keys().next().value!;
         this.evictEntityRead(oldest);
       }
