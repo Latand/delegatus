@@ -72,7 +72,9 @@ function catalogModelId(engine: "claude" | "codex" | "copilot", raw: string | nu
   if (engine === "copilot") return COPILOT_MODEL.test(raw) ? raw : null;
   if (engine === "codex") return ENGINE_MODELS.codex.some((item) => item.id === raw) ? raw : null;
   const stem = raw.trim().toLowerCase().replace(/-20\d{6}$/, "");
-  const pinned = ENGINE_MODELS.claude.find((item) => item.id === `claude-${stem}`);
+  /* A 1M-tagged id (`fable-5-1[1m]`) is the same release as its pinned row. */
+  const release = stem.replace(/\[1m\]$/, "").replace(/^claude-/, "");
+  const pinned = ENGINE_MODELS.claude.find((item) => item.id === `claude-${release}`);
   if (pinned) return pinned.id;
   const id = claudeCatalogModelId(raw);
   const row = ENGINE_MODELS.claude.find((item) => item.id === id);
@@ -80,11 +82,12 @@ function catalogModelId(engine: "claude" | "codex" | "copilot", raw: string | nu
   return row.id === stem || !/\d/.test(stem) || modelDisplayName("claude", stem) === row.label || standsForFamily(row) ? row.id : null;
 }
 
-/** An alias row whose label carries no version (`fable`) stands for every release
-    of its family when the catalogue lists no other release of that family: the
-    transcript's `fable-5-1` is that row. A family with a pinned sibling row
-    (`sonnet` next to `claude-sonnet-5-5`) or a versioned label (`opus` = Opus 5.5)
-    names one release, and another version is not it. */
+/** An alias row whose label carries no version stands for every release of its
+    family when the catalogue lists no other release of that family: a
+    transcript's versioned id of that family is that row. A family with a pinned
+    sibling row (`sonnet` next to `claude-sonnet-5-5`) or a versioned label
+    (`opus` = Opus 5.5, `fable` = Fable 5.2) names one release, and another
+    version is not it. */
 function standsForFamily(row: { id: string; label: string }): boolean {
   if (/\d/.test(row.label)) return false;
   return !ENGINE_MODELS.claude.some((item) => item.id !== row.id && item.id.startsWith(`claude-${row.id}-`));

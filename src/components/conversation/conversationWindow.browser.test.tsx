@@ -3326,8 +3326,9 @@ describe("the runtime pill names the model the conversation runs on", () => {
     sonnet: { face: "Sonnet 5.5", never: ["Opus"] },
     "claude-unreported": { face: null, never: ["Opus", "Sonnet"] },
     "opus-old": { face: "Opus 4.1", never: ["Opus 5.5"] },
-    /* The transcript's `fable-5-1` is the catalogue's Fable row: named, and its tiers stay open. */
-    fable: { face: "Fable", never: ["Opus", "Sonnet"] },
+    /* The transcript's `fable-5-1` is the catalogue's Fable 5.1 row: named, and its tiers stay open. */
+    fable: { face: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { face: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
   } as const;
 
   browserTest("the face names the observed or requested model, or none, and never the engine default", async () => {
@@ -3456,7 +3457,7 @@ describe("the runtime pill offers only current models and keeps a saved one", ()
   ] as const;
   const reasoningLabel = (lang: "en" | "uk", tier: string) => translate(lang, `reasoningTier.${tier}` as Parameters<typeof translate>[1]);
   const CODEX = ["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"];
-  const CLAUDE = ["Opus 5.5", "Fable", "Sonnet", "Claude Sonnet 5.5", "Haiku 5.5"];
+  const CLAUDE = ["Opus 5.5", "Fable 5.2", "Sonnet", "Claude Sonnet 5.5", "Haiku 5.5"];
   const FILES = {
     "legacy-sol": { models: [...CODEX, "GPT-5.6-Sol"], model: "GPT-5.6-Sol", tiers: 6, tier: "high" },
     "terra-ultra": { models: CODEX, model: "GPT-6.1-Terra", tiers: 6, tier: "ultra" },
@@ -3561,7 +3562,8 @@ describe("the headers name the model the conversation runs on", () => {
     unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
     unlisted: { shown: "gpt-5.5", never: ["Sol"] },
     sonnet: { shown: "Sonnet 5.5", never: ["Opus"] },
-    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { shown: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
   } as const;
   const VIEWPORTS = [{ name: "desktop-1440", width: 1440, height: 900 }, { name: "desktop-900", width: 900, height: 800 }] as const;
   const PHONE = { name: "phone-390", width: 390, height: 844 } as const;
