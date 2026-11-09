@@ -110,7 +110,7 @@ async function productionSourcePorts(sources: SeatTickSources): Promise<AuditSou
           candidates.delete(item);
         }
       }
-      return { records: page.records.map(record => {
+      return { records: page.records.map((record: MessageRecord) => {
         const anchor = anchors.get(record.seq);
         return anchor ? { ...record, deliveryKey: anchor.deliveryKey, ...(!record.author && !record.parts && anchor.kind === "operator" ? { author: { kind: "operator" } } : {}) } : record;
       }), hasMore: page.hasMore, cursor: page.cursor, scanned: { capped: page.scanned.capped } };
