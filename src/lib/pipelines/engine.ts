@@ -183,7 +183,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
+import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost } from "./hostRetirement";
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
@@ -7763,6 +7763,15 @@ function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefine
   return !!attempt && attempt.state === "pending" && !attempt.startedAt && !attempt.launchId
     && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
     && !attempt.completedAt && !attempt.report && !attempt.verdict;
+}
+
+function undispatchedRunAttempt(pipeline: Pipeline, stage: PipelineStage | null, attempt: PipelineStageAttempt | null): boolean {
+  if (stage?.kind !== "run" || !attempt || attempt.launchId || attempt.conversationId || attempt.sessionId
+    || attempt.agentPath || attempt.paneId || attempt.flowId || attempt.report || attempt.verdict || attempt.activation
+    || attempt.cloud || attempt.runtimeSwitches?.length || attempt.controllerWait || attempt.retiredLaunches?.length
+    || attempt.spawnCalls !== undefined && attempt.spawnCalls !== 0) return false;
+  try { return agentRegistry().pipelineSpawnHistory(clientAttemptId(pipeline, stage, attempt)).length === 0; }
+  catch { return false; }
 }
 
 function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts, activationPending = !!attempt.activation): string {
@@ -17944,9 +17953,19 @@ export async function patchPipeline(
           };
         }
       }
-      /* An internal review retries on the clean local head it holds; only a
-         `remote-branch` pipeline takes a remote repair or republishes. */
-      if (pipeline.delivery?.operation?.state === "settled") {
+      // An undispatched retry can reuse the current owner's successful receipt.
+      // Recheck all evidence synchronously after the worktree read yields.
+      const head = !pipelinePublicationHoldsHost(pipeline)
+        && pipeline.lastPassedCommit && settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
+        && pipeline.publishedCommit === pipeline.lastPassedCommit
+        ? await currentPipelineBranchHead(pipeline, ports.exec).catch(() => null) : null;
+      const keepPublication = head?.ok && head.sha === pipeline.lastPassedCommit
+        && !pipelinePublicationHoldsHost(pipeline)
+        && settledPublicationForHead(pipeline, head.sha) !== null
+        && pipeline.publishedCommit === head.sha
+        && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }) ?? pipeline) === null
+        && undispatchedRunAttempt(pipeline, stage, attempt);
+      if (pipeline.delivery?.operation?.state === "settled" && !keepPublication) {
         recordSettledPublicationFailure(pipeline, attempt, ports);
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;

@@ -207,11 +207,11 @@ key and a monthly spend cap, or through a Codex subscription.
 
 ## How they fit together
 
-One request travels through all of these:
+A request for work that needs agents travels through all of these:
 
 1. You write to the orchestrator.
-2. It opens a task on the board and starts a pipeline within the worker
-   limit.
+2. It checks the scope, opens a task on the board and starts a pipeline within
+   the worker limit.
 3. The pipeline's stages run as agents on your accounts, each one a
    conversation.
 4. The review loop spends its budget.

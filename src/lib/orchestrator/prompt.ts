@@ -113,7 +113,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
 // v64 combines task progress estimates with terminal review, due dates and report handling.
-export const ORCHESTRATOR_PROMPT_VERSION = 64;
+// v65 makes a quick scope check the default for a vague ask: the seat chooses direct work, a pipeline or research itself, and a form is for what stays materially ambiguous.
+export const ORCHESTRATOR_PROMPT_VERSION = 65;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -545,7 +546,12 @@ Do exactly what the operator asked, where they asked it; ${ORCHESTRATOR_LITERAL_
     conversation's «Рішення» column when no task carries it. v54 keeps waiting
     and repeated unanswered asks in those forms; v56 sends every ask there and
     leaves none in chat (the operator, 2026-10-15). */
-export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Decisions. Every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once. Any other question for the operator is a form too. Before non-trivial or two-way work, or on request, use a form; the operator may skip. Chat and reports only point to the form and ask nothing themselves. Never use engine built-in ask tools. After answers, write \"how I understood\" (3–5 lines) in task text and start. Hide a prototype review with dismiss_attention; its history can undo that.";
+export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Decisions. Every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once. Any other question for the operator is a form too. Use a form on request or for what stays materially ambiguous; the operator may skip. Chat and reports only point to the form and ask nothing themselves. Never use engine built-in ask tools. After answers, write \"how I understood\" (3–5 lines) in task text and start. Hide a prototype review with dismiss_attention; its history can undo that.";
+/** The decision paragraph v64 shipped, with the blanket form-first sentence.
+    `orchestratorMandateUpgraded` replaces it with the current one, and it counts
+    as the current paragraph for delivery, so a pending intent that recorded it
+    replays byte for byte. */
+const PREVIOUS_PROTOTYPE_DIRECTIVE = "Decisions. Every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once. Any other question for the operator is a form too. Before non-trivial or two-way work, or on request, use a form; the operator may skip. Chat and reports only point to the form and ask nothing themselves. Never use engine built-in ask tools. After answers, write \"how I understood\" (3–5 lines) in task text and start. Hide a prototype review with dismiss_attention; its history can undo that.";
 /** Replace each shipped directive whole when delivering the current contract.
     v55 names the paragraph for what it governs, decisions, inside the section
     on reaching the operator. */
@@ -573,6 +579,15 @@ const ORCHESTRATOR_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix
 const ORCHESTRATOR_REVIEW_READY_BAR = "A PR is ready when its final head passed review (terminal re-check included) or a nonterminal gate's last budget fix passed, required checks are green and its body is read.";
 const ORCHESTRATOR_AUTOMATIC_MERGE_BAR = "Setting on: Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed, once checks settle green";
 const SHIPPED_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next returns to review. advance (default) runs exactly N reviews and the fix of the N-th review, then completes next:null; checks and merge setting govern merging. It creates no terminal re-check and no budget follow-up task. continue-review cannot add rounds; traversed budgets cannot grow. Nonterminal gates follow their pass edge with findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.`;
+
+/** v65: the seat checks a vague ask's scope itself and picks the route; a form
+    is for what stays materially ambiguous. The opening of "How work runs" (the
+    pipeline-first sentence and the "Start by default" bullet) is replaced as one
+    block by exact match in a mandate that carries the v64 text, so a stored
+    default keeps no blanket pipeline-first sentence; a bespoke mandate that
+    reworded it keeps its own wording. */
+const SHIPPED_HOW_WORK_RUNS_OPENING = "Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits for an issue.\n- Start by default. When the operator asks for work, assess complexity, compose the stages and roles, and call create_pipeline with autoStart: true, with no confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: create_pipeline with autoStart: false, report the draft id, and wait for the operator to press Start on the board. That request may come in your own conversation or through the gateway; both channels carry the same authority. Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.";
+const ORCHESTRATOR_HOW_WORK_RUNS_OPENING = "Accepted work needing agents runs as a pipeline on its task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits on it.\n- Start by default. A vague ask gets a quick bounded scope check first; then choose alone: a small permitted step directly, a pipeline, or read-only research first. Routine technical choices within authority are yours; a form is only for intent, scope or trade-offs still materially ambiguous. A pipeline starts with autoStart: true, no confirmation step or draft. Draft only on an explicit request for one or to review the plan first: create_pipeline with autoStart: false, report the draft id, wait for Start on the board. Proactive means carrying accepted work to its merge bar and its owed reports unasked; work you spot waits for the operator's word.";
 
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key \`viewer\`). You never act outside them: no direct process or runtime manipulation. The working rules below apply to you as to every agent; the rest of this mandate adds what a seat does.
 
@@ -604,8 +619,7 @@ Working rules 3 and 4 apply with a seat's reach. At the start of any non-trivial
 ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## How work runs
-Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits for an issue.
-- Start by default. When the operator asks for work, assess complexity, compose the stages and roles, and call create_pipeline with autoStart: true, with no confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: create_pipeline with autoStart: false, report the draft id, and wait for the operator to press Start on the board. That request may come in your own conversation or through the gateway; both channels carry the same authority. Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.
+${ORCHESTRATOR_HOW_WORK_RUNS_OPENING}
 - Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.
 - Size the lane first, then compose it from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage (builder mode=apply-fixes with the implementer's domain and size, which returns to a fresh reviewer); add stages when the task needs them. A fix stage's self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
@@ -715,7 +729,7 @@ function withoutRoleTable(text: string): string {
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
 const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
-  { markers: [ORCHESTRATOR_PROTOTYPE_DIRECTIVE], directive: ORCHESTRATOR_PROTOTYPE_DIRECTIVE },
+  { markers: [ORCHESTRATOR_PROTOTYPE_DIRECTIVE, PREVIOUS_PROTOTYPE_DIRECTIVE], directive: ORCHESTRATOR_PROTOTYPE_DIRECTIVE },
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
@@ -781,6 +795,8 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(rule13);
   mandate = mandate.split(SHIPPED_PREPARATION_CONSENT_RULE).join(ORCHESTRATOR_BUG_REPORT_RULE);
   mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
+  mandate = mandate.split(SHIPPED_HOW_WORK_RUNS_OPENING).join(ORCHESTRATOR_HOW_WORK_RUNS_OPENING);
+  mandate = mandate.split(PREVIOUS_PROTOTYPE_DIRECTIVE).join(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
   for (const previous of SHIPPED_TASK_CURRENT_BULLETS) mandate = mandate.split(previous).join(ORCHESTRATOR_TASK_CURRENT_BULLET);
   if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
   return mandate.includes(OPERATOR_CORRECTION_RULE) ? mandate : `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;

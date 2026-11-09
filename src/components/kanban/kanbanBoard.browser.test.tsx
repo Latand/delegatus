@@ -69,6 +69,113 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("accepted queued creation continuity", () => {
+  browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
+    const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "accepted-creation-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { expect(await captureAcceptedCreation(browser, out, false)).toHaveLength(24); }
+    finally { await browser.close(); sockets.close(); }
+  }, 600_000);
+});
+
+describe("independent creation lock", () => {
+  type CreationResult = { id?: string; accepted?: boolean; error?: string; warning?: string };
+  type CreationWindow = typeof window & { createAcceptedEvidence(): Promise<CreationResult>; firstResult: CreationResult | null };
+  for (const seam of ["headers", "body", "closed"] as const) browserTest(`a ${seam} stall releases capacity for another document`, async () => {
+    const { serveEvidenceFixture, openFixture, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "creation-lock", seam);
+    fs.mkdirSync(out, { recursive: true });
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let posts = 0;
+    let queued = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/fixture/config": { task: "Independent accepted work", repoDir: "/fixture/repo", project: "atlas", autoStart: false, stages: [] },
+      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: { tmux: { status: "healthy" } } },
+      "/api/tasks": { tasks: [] },
+      "/api/pipelines": async (request: Request) => {
+        if (request.method !== "POST") return Response.json({ pipelines: [] });
+        const number = ++posts;
+        const pipeline = buildPipeline({ id: `independent-${number}`, project: "atlas", task: "Independent accepted work", repoDir: "/fixture/repo", taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+        pipeline.state = "draft";
+        if (number === 1) {
+          entered();
+          if (seam === "body") return new Response(new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"pipeline":'));
+              await held;
+              try { controller.enqueue(new TextEncoder().encode(JSON.stringify(pipeline) + "}")); controller.close(); }
+              catch { /* The timed-out reader has already cancelled its stream. */ }
+            },
+          }), { status: 201, headers: { "content-type": "application/json" } });
+          await held;
+        }
+        return queued
+          ? Response.json({ pipeline, queued: { queuedAt: pipeline.createdAt, reason: "store_unavailable" } }, { status: 202 })
+          : Response.json({ pipeline }, { status: 201 });
+      },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const { context, page } = await openFixture(browser, `${server.base}?scenario=accepted-creation&project=atlas`, { width: 900, height: 700 }, "light", "en");
+    try {
+      await page.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
+      await page.clock.pauseAt(new Date("2030-01-01T00:00:01Z"));
+      const headers = seam === "body" ? page.waitForResponse(response => response.url().endsWith("/api/pipelines") && response.request().method() === "POST") : null;
+      await page.evaluate(() => {
+        (window as CreationWindow).firstResult = null;
+        void (window as CreationWindow).createAcceptedEvidence().then((value) => { (window as CreationWindow).firstResult = value; });
+      });
+      await started;
+      if (headers) await headers;
+      expect((await page.evaluate(() => navigator.locks.query())).held?.some(lock => lock.name === "delegatus-accepted-create")).toBe(true);
+      const second = await context.newPage();
+      await second.goto(`${server.base}?scenario=accepted-creation&project=atlas`);
+      await second.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      if (seam === "closed") await page.close();
+      else {
+        await page.clock.runFor(29_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toBeNull();
+        await page.clock.runFor(1_001);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+      }
+      const result = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+      expect(result).toEqual({ id: "independent-2" });
+      expect(posts).toBe(2);
+      release();
+      if (seam !== "closed") {
+        await page.clock.runFor(60_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+        expect(await page.locator('[data-pipeline="independent-1"], [data-creation="independent-1"]').count()).toBe(0);
+      }
+      expect(posts).toBe(2);
+      // Successful acceptance still serializes the shared eight-ID snapshot.
+      if (seam !== "closed") {
+        queued = true;
+        for (let index = 0; index < 8; index++) {
+          const document = index % 2 === 0 ? second : page;
+          expect(await document.evaluate(() => (window as CreationWindow).createAcceptedEvidence()))
+            .toEqual({ id: `independent-${index + 3}`, accepted: true });
+        }
+        const refused = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+        expect(refused.error).toContain("tracking is full");
+        expect(posts).toBe(10);
+      }
+      const locks = await second.evaluate(() => navigator.locks.query());
+      expect(locks.held?.filter(lock => lock.name === "delegatus-accepted-create")).toHaveLength(0);
+      fs.writeFileSync(path.join(out, "result.json"), JSON.stringify({ seam, posts, result, locks }, null, 2));
+    } finally { release(); await context.close(); await browser.close(); sockets.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("per-account paid spending", () => {
   browserTest("account row switch and balance fit in both locales and themes", async () => {
     const out = path.resolve(".artifacts/account-spend-credits"); fs.mkdirSync(out, { recursive: true });
@@ -43782,4 +43889,61 @@ describe("a task card without inline conversations", () => {
     fs.writeFileSync("evidence/task-card-no-inline-conversations/rendered.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 1_500_000);
+});
+
+
+describe("MCP engine refusal card", () => {
+  browserTest("the persisted refusal and recovery reason remain readable in both locales and themes", async () => {
+    const { ensureSeatTickCard } = await import("@/lib/monitor/seatTickController");
+    const { seatMcpHealth } = await import("@/lib/monitor/seatMcpHealth");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { statePath } = await import("@/lib/configDir");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR!, "mcp-health-card");
+    fs.mkdirSync(out, { recursive: true });
+    const health = seatMcpHealth(null, null, "unused", Date.parse("2026-11-06T00:00:00Z"), "http", {
+      seq: 1, observedAt: "2026-11-06T00:00:00Z", denied: [{ tool: "get_task", seq: 1 }], unverified: false,
+    });
+    ensureSeatTickCard("atlas", { kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "1",
+      detail: `${health.detail}; check the seat conversation and rotate the seat if recovery remains unavailable` }, "2026-11-06T00:00:00Z");
+    const notice = loadTasks(statePath("tasks.json")).find(task => task.project === "atlas"
+      && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"))!.text;
+    const server = await serveEvidenceFixture(out);
+    // A short alias to this test's owned temp directory keeps Chromium sockets
+    // within the platform limit without allocating outside the stage sandbox.
+    const tempFd = process.platform === "linux" ? fs.openSync(process.env.TMPDIR!, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) {
+        const texts = { notice, failed: "Maintenance finished", live: "Maintenance running" };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(Buffer.from(JSON.stringify(texts)).toString("base64"))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390, 1, new Date("2026-11-06T00:00:00Z"));
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').tap();
+          let node = page.locator(width === 390 ? '[data-phone-card="task:t-tick-notice"]' : card("t-tick-notice"));
+          await node.waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-card.png`) });
+          if (width === 390) {
+            expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+            await node.tap();
+            await page.locator('[data-phone-task-description]').tap();
+            node = page.locator('[data-phone-task-editor="description"] textarea');
+          } else {
+            await node.locator("[data-describe]").click();
+            node = node.locator("textarea");
+          }
+          await node.waitFor();
+          expect(await node.inputValue()).toBe(notice.split("\n").slice(2).join("\n"));
+          expect(notice).toContain("engine approval denied: get_task");
+          expect(notice).toContain("Wakes to a live host with broken MCP remain withheld");
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-reason.png`) });
+          readings.push({ lang, theme, width, text: await node.inputValue(), errors: pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 180_000);
 });

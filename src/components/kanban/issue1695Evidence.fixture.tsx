@@ -8,6 +8,8 @@ import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/p
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
+import { createPipeline as createAcceptedPipeline } from "@/components/pipelines/pipelineModel";
+import * as acceptedFilesCache from "@/hooks/useFiles";
 import { AttentionCard } from "@/components/runtime/AttentionCard";
 import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
@@ -144,7 +146,7 @@ if (COLD_BOARD) {
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
    and the lanes it publishes. */
 const SYNCED = SCENARIO === "synced-task";
-const PROJECT = SCENARIO === "linked-agents" || SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
+const PROJECT = SCENARIO === "accepted-creation" ? new URLSearchParams(location.search).get("project")! : SCENARIO === "linked-agents" || SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
 const STAGE_INSTALL = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
@@ -4190,6 +4192,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (answer) return answer;
   }
   const url = new URL(String(input), location.origin);
+  if (SCENARIO === "accepted-creation" && (url.pathname.startsWith("/api/pipelines") || url.pathname.startsWith("/fixture/")
+    || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
   if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
@@ -5522,6 +5526,7 @@ function RetiredReviewScene() {
 
 /* The team view is read once the fetch double above answers it. */
 if (WORKSPACES) void refreshTeamView();
+if (SCENARIO === "accepted-creation") void refreshTeamView();
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
@@ -5581,6 +5586,17 @@ function SpendCreditsScene() {
     <div className="relative w-full max-w-[480px]"><AccountsPanel state={state} onClose={() => {}} placement="header" /></div>
   </main>;
 }
+
+if (SCENARIO === "accepted-creation") Object.assign(window, {
+  async createAcceptedEvidence() {
+    await refreshTeamView();
+    const { savedLink, ...config } = await (await fetch("/fixture/config")).json();
+    const result = await createAcceptedPipeline(config, savedLink);
+    return { id: result.pipeline?.id, accepted: result.accepted, error: result.error, warning: result.warning };
+  },
+  // The same browser case can exercise the baseline's ordinary create echo.
+  refreshAcceptedEvidence: () => acceptedFilesCache.retryPipelineCreationRead?.(),
+});
 
 createRoot(document.getElementById("root")!).render(SCENARIO === "spend-credits" ? <SpendCreditsScene /> : SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />

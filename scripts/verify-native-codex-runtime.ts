@@ -190,7 +190,7 @@ if (import.meta.main) {
     for (const key of ISOLATED_ROOT_KEYS) {
       fileEnv[key] = join(fileRoot, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(fileEnv[key]!);
     }
-    const result = spawnSync(process.execPath, ["test", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
+    const result = spawnSync(process.execPath, ["test", "--timeout=60000", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) process.exit(result.status ?? 1);
   }

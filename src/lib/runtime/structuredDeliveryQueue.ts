@@ -125,7 +125,7 @@ export interface StructuredDeliveryQueuePort {
       which is exactly when it has to be honoured. */
   settled?(operationId: string): boolean | Promise<boolean>;
   /** Synchronous live cutoff at the engine call, after all journal/health waits. */
-  authorizeDispatch?(operationId: string, conversationId: string): void;
+  authorizeDispatch?(operationId: string, conversationId: string, origin?: MessageOrigin): void;
   /** Durable caller attribution for background queue diagnostics. */
   diagnosticError?(...args: unknown[]): void;
   /** The writer claim that currently owns this conversation's structured host —
@@ -1943,7 +1943,7 @@ export class StructuredDeliveryQueue {
             memberRefused = p;
             throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", ROLE_MEMORY_CHANGED_MESSAGE);
           }
-          try { this.port.authorizeDispatch?.(p.effect.operationId, p.effect.conversationId); }
+          try { this.port.authorizeDispatch?.(p.effect.operationId, p.effect.conversationId, p.effect.origin); }
           catch (error) { memberRefused = p; throw error; }
         }
       };
@@ -2586,7 +2586,7 @@ export class StructuredDeliveryQueue {
         if (effect.roleMemoryRevision && roleMemoryRevisionToken() !== effect.roleMemoryRevision) {
           throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", ROLE_MEMORY_CHANGED_MESSAGE);
         }
-        this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
+        this.port.authorizeDispatch?.(effect.operationId, effect.conversationId, effect.origin);
       };
       if (canCoalesce(effect)) {
         try { authorize(); }
@@ -3206,7 +3206,7 @@ export class StructuredDeliveryQueue {
       if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
       const retired = this.port.conversationRetired?.(effect.conversationId);
       if (retired) throw new StructuredSendRefusedError(retired);
-      this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
+      this.port.authorizeDispatch?.(effect.operationId, effect.conversationId, effect.origin);
       beforeWrite?.();
     };
     let outcome;
