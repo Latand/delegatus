@@ -8,10 +8,11 @@ import * as timers from "node:timers/promises";
 import { Database } from "bun:sqlite";
 import { OperationLease, OperationLeaseExpiredError } from "@/lib/operationLease";
 import { roleMemoryCollection, storedLessonRevision } from "./roleStore";
-import { withoutStoredLessonsAsync, withCurrentRoleMemory, renderReportAsync, scrubIssueReportAsync, refreshCurationKnownValuesAsync } from "./privacy";
+import { withoutStoredLessonsAsync, withCurrentRoleMemory, renderReportAsync, scrubIssueReportAsync, refreshCurationKnownValuesAsync, RoleMemoryChanged } from "./privacy";
 import { PrivacyWorkError, privacyFailureOf } from "./privacyFailure";
 import { PRIVACY_RETRY_WINDOW_MS, privacyWorkTimeoutMs } from "./privacyRetry";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
+import { sharedLinkState } from "@/lib/links/runtimeState";
 
 const privateText = "Keep silver orchard evidence private until the owning operation completes";
 let generation = 0;
@@ -313,6 +314,7 @@ test("real worker deadline is independently supervised and cleans up its process
 }, 220_000);
 
 test.skipIf(!process.env.LLV_PRIVACY_DEADLINE_CHILD)("real worker deadline child", async () => {
+  store();
   const directory = process.env.LLV_PRIVACY_DEADLINE_CHILD!;
   const fixture = path.join(directory, "blocked-worker.ts");
   // The leased helper is a real subprocess that remains blocked until its
@@ -323,6 +325,9 @@ fs.appendFileSync(${JSON.stringify(path.join(directory, "workers.jsonl"))}, JSON
 setInterval(() => {}, 1000);
 `);
   const worker = new TaskPageWorker({ launch: { executable: process.execPath, workerPath: fixture } });
+  const pool = sharedLinkState("taskPages.worker", () => ({ directory: "", worker: null as TaskPageWorker | null }));
+  pool.directory = process.env.LLV_STATE_DIR!;
+  pool.worker = worker;
   let dispatches = 0, calls = 0;
   const started = performance.now();
   try {
@@ -331,13 +336,136 @@ setInterval(() => {}, 1000);
       // request then has much less than 60 seconds left (about 27 seconds),
       // giving the independent watchdog ample room to detect a removed cap.
       if (++calls === 1) await timers.setTimeout(30_000);
-      return worker.privacy({ kind: "filter", value: privateText });
+      return withoutStoredLessonsAsync(privateText);
     }).then(value => { dispatches++; return value; });
     const error = await result.catch(error => error);
-    console.info(JSON.stringify({ reason: String(error.message), dispatches }));
-    expect(error).toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE", message: expect.stringContaining("worker-timeout; retry window exhausted after 180 seconds") });
+    const reason = String(error.message);
+    console.info(JSON.stringify({ reason, dispatches }));
+    expect(error.code).toBe("LESSON_PRIVACY_UNAVAILABLE");
+    expect(reason).toContain("worker-timeout; retry window exhausted after 180 seconds");
+    expect(reason).toContain("during privacy worker request; privacy worker requests 3");
     expect(performance.now() - started).toBeGreaterThanOrEqual(PRIVACY_RETRY_WINDOW_MS);
     expect(dispatches).toBe(0);
     expect(calls).toBe(3);
   } finally { await worker.shutdown(); }
 }, 220_000);
+
+
+test.each(["worker", "composition", "backoff", "real-timeouts"] as const)("exhaustion reports safe phase and the genuine preceding cause: %s", async mode => {
+  store();
+  let clock = 0, calls = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async <T = void>(ms: number | undefined, value?: T): Promise<T> => {
+    clock += Number(ms);
+    return value as T;
+  });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async () => {
+    calls++;
+    clock += privacyWorkTimeoutMs();
+    throw new PrivacyWorkError("worker-timeout");
+  });
+  try {
+    const error = await withCurrentRoleMemory(async () => {
+      if (mode === "composition") { clock = 180_000; return "late"; }
+      if (mode === "backoff") { clock = 179_500; throw new PrivacyWorkError("store-busy"); }
+      if (mode === "worker") clock = 170_000;
+      return withoutStoredLessonsAsync(privateText);
+    }).catch(error => error);
+    const cause = mode === "real-timeouts" ? "worker-timeout" : mode === "backoff" ? "store-busy" : "window-exhausted";
+    const phase = mode === "worker" || mode === "real-timeouts" ? "privacy worker request" : mode;
+    const message = error.message;
+    expect(error.code).toBe("LESSON_PRIVACY_UNAVAILABLE");
+    expect(message).toContain(`${cause}; retry window exhausted after 180 seconds during ${phase}`);
+    expect(message).toContain(`privacy worker requests ${calls}`);
+    expect(clock).toBe(180_000);
+    if (mode === "worker") {
+      expect(calls).toBe(1);
+      expect(message).toContain("(10.0 s), composition 170.0 s");
+      expect(log.mock.calls.flat().join("\n")).not.toContain("worker-timeout");
+    }
+    if (mode === "real-timeouts") expect(calls).toBe(3);
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});
+
+test.each(["none", "store-busy", "worker-timeout"] as const)("a fractional clipped timeout preserves the request phase and preceding cause: %s", async prior => {
+  store();
+  let clock = 0, calls = 0, dispatches = 0;
+  const budgets: number[] = [];
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async <T = void>(ms: number | undefined, value?: T): Promise<T> => {
+    clock += Number(ms);
+    return value as T;
+  });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async () => {
+    calls++;
+    const budget = privacyWorkTimeoutMs();
+    budgets.push(budget);
+    // Timers truncate fractional delays, so the clipped request can time out
+    // just before the outer cutoff. Its budget still belongs to that window.
+    clock += Math.floor(budget);
+    throw new PrivacyWorkError("worker-timeout");
+  });
+  let attempts = 0;
+  try {
+    const error = await withCurrentRoleMemory(async () => {
+      if (++attempts === 1 && prior !== "none") {
+        if (prior === "store-busy") throw new PrivacyWorkError(prior);
+        return withoutStoredLessonsAsync(privateText);
+      }
+      clock = 170_000.25;
+      return withoutStoredLessonsAsync(privateText);
+    }).then(value => { dispatches++; return value; }).catch(error => error);
+    const cause = prior === "none" ? "window-exhausted" : prior;
+    expect(error.code).toBe("LESSON_PRIVACY_UNAVAILABLE");
+    expect(error.message).toContain(`${cause}; retry window exhausted after 180 seconds during privacy worker request`);
+    expect(error.message).toContain(`privacy worker requests ${calls}`);
+    expect(clock).toBe(179_999.25);
+    expect(budgets).toEqual(prior === "worker-timeout" ? [60_000, 9_999.75] : [9_999.75]);
+    expect(pause).toHaveBeenCalledTimes(prior === "none" ? 0 : 1);
+    expect(attempts).toBe(prior === "none" ? 1 : 2);
+    expect(dispatches).toBe(0);
+    expect(error.message).not.toContain(privateText);
+    const logged = log.mock.calls.flat().join("\n");
+    expect(logged).not.toContain(privateText);
+    if (prior === "none") expect(logged).not.toContain("worker-timeout");
+    expect(logged).not.toContain("during backoff");
+  } finally { worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});
+
+test("revision churn preserves the caller deferral without sleeping or parking", async () => {
+  store();
+  const collection = roleMemoryCollection()!;
+  let calls = 0;
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async () => { throw Error("revision deferral was retried"); });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await expect(withCurrentRoleMemory(async () => {
+      const rule = collection.get("r:r_privacy_retry")!;
+      if (rule.kind !== "rule") throw Error("rule missing");
+      collection.boundedPatch(1, tx => tx.put({ ...rule, changedAt: `2026-11-06T00:00:0${++calls}Z` }));
+      return "unapproved";
+    })).rejects.toBeInstanceOf(RoleMemoryChanged);
+    expect(calls).toBe(3);
+    expect(pause).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join("\n")).toContain("store-changed; deferring to the caller");
+    expect(log.mock.calls.flat().join("\n")).not.toContain("worker-unavailable");
+  } finally { pause.mockRestore(); log.mockRestore(); }
+});
+
+test.each(["deferral", "exhaustion"] as const)("lease revocation remains decisive on the %s refusal path", async mode => {
+  store();
+  const lease = new OperationLease();
+  let clock = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  try {
+    await expect(lease.run(() => withCurrentRoleMemory(async () => {
+      lease.expire();
+      if (mode === "deferral") throw new RoleMemoryChanged();
+      clock = 180_000;
+      throw new PrivacyWorkError("store-busy");
+    }))).rejects.toBeInstanceOf(OperationLeaseExpiredError);
+  } finally { now.mockRestore(); }
+});

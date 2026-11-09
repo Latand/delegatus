@@ -24,6 +24,45 @@ function virtualClock() {
   }, timers };
 }
 
+test("a sweep has one curator owner and every project journals phase timings", async () => {
+  const rig = harness({ state: RECENT });
+  const clock = virtualClock();
+  Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler });
+  rig.deps.sources!.activeSeats = () => [PROJECT, "second-project", "third-project"];
+  let reconciles = 0, choices = 0;
+  rig.deps.curation = {
+    reconcile: async () => { reconciles++; return null; },
+    launchIfDue: async () => { choices++; return null; },
+  };
+  const records = await reconcileSeatTick(rig.deps);
+  expect(records).toHaveLength(3);
+  expect(reconciles).toBe(1);
+  expect(choices).toBe(1);
+  expect(new Set(records.map(record => record.timing!.checkId)).size).toBe(3);
+  for (const record of records) {
+    expect(record.timing!.phases.some(row => row.phase === "check.sources.seatFor")).toBe(true);
+    expect(record.timing!.cpuUs).toBeGreaterThanOrEqual(0);
+  }
+});
+
+test("a check awaits its production journal and closes completed phase spans", async () => {
+  const { readSeatTickRecords } = await import("./journalStore");
+  const rig = harness({ state: RECENT });
+  delete rig.deps.appendRecord; delete rig.deps.readRecords;
+  const previous = process.env.LLV_SEAT_TICK_AUDIT_FILE;
+  const file = path.join(SANDBOX, "check-timings.ndjson");
+  process.env.LLV_SEAT_TICK_AUDIT_FILE = file;
+  try {
+    const record = await runSeatTickCheck(PROJECT, rig.deps);
+    if (!record?.timing) throw Error("expected a check with phase timings");
+    expect(readSeatTickRecords(1, file, PROJECT)[0]).toEqual(record);
+    expect(record.timing.phases.filter(row => row.pending)).toEqual([]);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_SEAT_TICK_AUDIT_FILE;
+    else process.env.LLV_SEAT_TICK_AUDIT_FILE = previous;
+  }
+});
+
 function deployRig() {
   const rig = harness({ state: RECENT, seatDeployments: [{ deploymentId: "deploy-own", conversationId: CONVERSATION }],
     deployments: { "deploy-own": { phase: "succeeded", terminal: true, revision: "a".repeat(40) } },
@@ -218,8 +257,13 @@ test("callbacks during one project check coalesce one owed check with fresh stat
   rig.deps.sources!.prepareRead = async () => {
     if (++preparations === 1) { entered.resolve(); await preparing.promise; }
   };
+  let curatorChoices = 0;
+  const curator = {
+    reconcile: async () => null,
+    launchIfDue: async () => { curatorChoices++; return null; },
+  };
   Object.assign(rig.deps, { ownsTraffic: () => true, recordSuccessions: () => [],
-    workStarted: () => { checks++; }, curation: null, release: null, maintenance: null });
+    workStarted: () => { checks++; }, curation: curator, release: null, maintenance: null });
   const append = rig.deps.appendRecord!;
   rig.deps.appendRecord = record => { append(record); if (checks === 2) finished.resolve(); };
   const first = reconcileSeatTick(rig.deps);
@@ -234,6 +278,7 @@ test("callbacks during one project check coalesce one owed check with fresh stat
     await finished.promise;
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(checks).toBe(2);
+    expect(curatorChoices).toBe(2);
     expect(rig.sent).toHaveLength(1);
     expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
   } finally { preparing.resolve(); await first; stopSeatTick(); }

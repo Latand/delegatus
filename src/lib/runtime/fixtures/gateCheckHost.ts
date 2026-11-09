@@ -30,6 +30,7 @@ if (mode === "engine") {
         case "initialize": reply({ userAgent: "fixture" }); break;
         case "account/read": reply({ account: { type: "chatgpt", planType: "pro" } }); break;
         case "model/list": reply({ data: [] }); break;
+        case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "config/read": reply({ config: { mcp_servers: {} } }); break;
         case "thread/resume":
           reply({ thread: { id: threadId, path: null, turns: [{ id: turnId, status: "inProgress", items: [] }], status: { type: "active", activeFlags: [] } } });

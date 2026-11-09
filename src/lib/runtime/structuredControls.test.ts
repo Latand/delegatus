@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { accountProjectOverrides } from "@/lib/accounts/accountOverrides";
@@ -27,6 +27,12 @@ import { clearAccountFixture, seedAccountSource } from "@/lib/accounts/accountsS
 import { accountProjectBindings } from "@/lib/accounts/projectBindings";
 import { writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
 
+import { accountManager } from "@/lib/accounts/manager";
+import type { AccountContext } from "@/lib/accounts/contracts";
+
+const sourceAccounts = new Map<string, AccountContext>();
+const sourceOwner = spyOn(accountManager, "resolveTranscriptOwner").mockImplementation((_engine, pathname) => sourceAccounts.get(pathname) ?? null);
+
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-controls-"));
 
 /* Every account switch below asks the account↔project binding record, which
@@ -38,6 +44,7 @@ const ORIGINAL_STATE_DIR = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = STATE;
 
 beforeEach(() => {
+  sourceAccounts.clear();
   process.env.LLV_STATE_DIR = STATE;
   resetAccountCollectionsForTests();
   clearAccountFixture(BINDINGS_SOURCE);
@@ -45,6 +52,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  sourceOwner.mockRestore();
   if (ORIGINAL_STATE_DIR === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = ORIGINAL_STATE_DIR;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -68,6 +76,11 @@ function structuredConversation(
   const engine = options.engine ?? "codex";
   const id = crypto.randomUUID();
   const pathname = path.join(sandbox, `${id}.jsonl`);
+  if (engine === "codex") {
+    fs.writeFileSync(pathname, JSON.stringify({ type: "session_meta", payload: { id } }) + "\n", { mode: 0o600 });
+    sourceAccounts.set(pathname, { engine, accountId: options.accountId ?? `${engine}-subscription`, kind: "managed",
+      home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } });
+  }
   const registry = options.registry
     ?? new AgentRegistry(path.join(sandbox, `${id}.registry.json`), undefined, undefined, { sqliteMode: "off" });
   const begun = beginLegacySpawnFixture(registry, {
@@ -564,6 +577,52 @@ test("resume converges on and republishes an already live structured successor",
       spawned: false,
     },
   });
+});
+
+test("resume reconnects a surviving Codex process missing its Viewer adapter", async () => {
+  const fixture = structuredConversation();
+  const recoveries: unknown[] = [];
+  const wakes: string[] = [];
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "resume" }, {
+    registry: fixture.registry,
+    client: null,
+    enabled: () => true,
+    onResumed: id => { wakes.push(id); },
+    hostProcessAlive: () => true,
+    republish: async () => false,
+    recover: async (request) => {
+      recoveries.push(request);
+      return { target: null, path: fixture.path, conversationId: fixture.conversationId as `conversation_${string}`, spawned: false, reconnected: true };
+    },
+  });
+  expect(wakes).toEqual([fixture.conversationId]);
+  expect(recoveries).toEqual([{ path: fixture.path, conversationId: fixture.conversationId, reconnectLiveHost: true }]);
+  expect(result).toEqual({ status: 200, body: { ok: true, structured: true, target: fixture.conversationId, outcome: "resumed", spawned: false } });
+});
+
+for (const reconnected of [false, undefined]) {
+  test(`resume refuses an unconfirmed native reconnect (${reconnected})`, async () => {
+    const fixture = structuredConversation();
+    const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "resume" }, {
+      registry: fixture.registry, client: null, enabled: () => true,
+      hostProcessAlive: () => true, republish: async () => false,
+      recover: async () => ({ target: null, path: fixture.path,
+        conversationId: fixture.conversationId as `conversation_${string}`, spawned: false, reconnected }),
+    });
+    expect(result).toMatchObject({ status: 503, body: { error: "structured recovery ownership is unavailable" } });
+  });
+}
+
+test("a missing live Claude adapter does not enter native Codex reconnect", async () => {
+  const fixture = structuredConversation({ engine: "claude" });
+  let recovered = false;
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "resume" }, {
+    registry: fixture.registry, client: null, enabled: () => true,
+    hostProcessAlive: () => true, republish: async () => false,
+    recover: async () => { recovered = true; return null; },
+  });
+  expect(recovered).toBeFalse();
+  expect(result).toMatchObject({ status: 503 });
 });
 
 test("stale-live Codex resume recovers the production conversation identity", async () => {

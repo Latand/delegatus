@@ -1,3 +1,4 @@
+import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
 import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
@@ -155,6 +156,7 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
+  viewerMcp?: ViewerMcpObservation;
   exitProcess?: ProcessIdentity;
   signalDomain?: AgentSignalDomain;
   /** Why this host's engine runs without the signal boundary, if it does. */
@@ -684,6 +686,42 @@ export class SupersedenceConflictError extends Error {
     super(message);
     this.name = "SupersedenceConflictError";
   }
+}
+
+export type SeatTickConversation = Pick<RegistryConversation, "id" | "turn"> & {
+  viewerMcp?: ViewerMcpObservation;
+  /** Undefined for other engines; null means this Codex generation has no proven owner. */
+  viewerMcpOwner?: { key: string; identity: string } | null;
+};
+
+/** Fixed-size ownership fields only; never copy the observation into its fence. */
+export function viewerMcpOwnerForEntry(entry: AgentRegistryEntry | undefined): SeatTickConversation["viewerMcpOwner"] {
+  const host = entry?.structuredHost;
+  if (!entry || entry.key.engine !== "codex" || entry.host || !entry.claimOwner
+    || host?.kind !== "codex-app-server" || entry.claimEpoch !== host.writerClaimEpoch) return null;
+  return { key: sessionKeyId(entry.key), identity: JSON.stringify([
+    entry.artifactPath, entry.claimOwner, entry.claimEpoch, host.endpoint, host.process,
+  ]) };
+}
+
+export function seatViewerMcpOwner(conversation: RegistryConversation, entry: AgentRegistryEntry | undefined): SeatTickConversation["viewerMcpOwner"] {
+  if (conversation.engine !== "codex" || entry?.host) return undefined;
+  const generation = conversation.generations.at(-1);
+  if (!generation || entry?.key.sessionId !== generation.id || entry.artifactPath !== generation.path) return null;
+  return viewerMcpOwnerForEntry(entry);
+}
+
+/** The named current native and its writer claim are the authority for this
+ * projection. A mismatched observation stays unavailable until re-established. */
+export function seatViewerMcpObservation(conversation: RegistryConversation, entry: AgentRegistryEntry | undefined): ViewerMcpObservation | undefined {
+  const observation = entry?.structuredHost?.viewerMcp;
+  if (observation === undefined) return undefined;
+  const generation = conversation.generations.at(-1);
+  if (conversation.engine !== "codex" || !generation || entry?.key.engine !== conversation.engine
+    || entry.key.sessionId !== generation.id || entry.artifactPath !== generation.path
+    || !entry.claimOwner || entry.claimEpoch !== entry.structuredHost?.writerClaimEpoch
+    || entry.structuredHost.kind !== "codex-app-server") return normalizeViewerMcpObservation(null);
+  return normalizeViewerMcpObservation(observation);
 }
 
 export interface RegistryConversation {
@@ -2254,6 +2292,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   }
   return {
     kind: host.kind,
+    ...(host.viewerMcp !== undefined ? { viewerMcp: normalizeViewerMcpObservation(host.viewerMcp) } : {}),
     ...(host.exitProcess ? { exitProcess: host.exitProcess } : {}),
     ...(signalDomain ? { signalDomain } : {}),
     ...(normalizeSignalBoundaryOff(host.signalBoundary) ? { signalBoundary: normalizeSignalBoundaryOff(host.signalBoundary)! } : {}),
@@ -2603,7 +2642,7 @@ function canonicalHeldDeliveryCommand(
   const command: HeldDeliveryCommand = {
     operationId: value?.operationId || deliveryId,
     kind: value?.kind === "steer" ? "steer" : value?.kind === "inject" ? "inject" : "send",
-    policy: value?.policy === "queue" || value?.policy === "steer-if-active" || value?.policy === "steer-or-queue"
+    policy: value?.policy === "queue" || value?.policy === "context-or-queue" || value?.policy === "steer-if-active" || value?.policy === "steer-or-queue"
       ? value.policy
       : "interrupt-active",
   };
@@ -6126,12 +6165,18 @@ export class AgentRegistry {
       answers from its ordinary snapshot instead (#1465), so the seat's turn is
       always readable — the children projection beside it is what a JSON
       backend cannot bound, and {@link pageSeatChildren} says so with null. */
-  seatTickConversation(id: string): Pick<RegistryConversation, "id" | "turn"> | null {
+  seatTickConversation(id: string): SeatTickConversation | null {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) {
       return this.sqliteStore.seatTickConversation(id);
     }
-    const conversation = this.conversation(id as ViewerConversationId);
-    return conversation ? { id: conversation.id, turn: conversation.turn } : null;
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, id as ViewerConversationId)];
+      if (!conversation) return null;
+      const generation = conversation.generations.at(-1);
+      const entry = generation ? file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] : undefined;
+      const viewerMcp = seatViewerMcpObservation(conversation, entry);
+      return { id: conversation.id, turn: conversation.turn, viewerMcpOwner: seatViewerMcpOwner(conversation, entry), ...(viewerMcp ? { viewerMcp } : {}) };
+    });
   }
 
   /** The completion-notice consumer's one keyed read of a child
@@ -9640,6 +9685,16 @@ export class AgentRegistry {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       return conversation ? clone(conversation) : null;
     });
+  }
+
+  /** Album sources need only the addressed conversation and its aliases.
+      Keep retained history keys and the global snapshot off this read. */
+  conversationTranscriptPaths(id: ViewerConversationId): string[] {
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      return conversation ? [...new Set([...conversation.continuityPaths,
+        ...conversation.generations.map(generation => generation.path)])] : [];
+    }, { skipColdKeyInitialization: true });
   }
 
   conversationAuthorityFacts(id: string): ConversationAuthorityFacts | null {

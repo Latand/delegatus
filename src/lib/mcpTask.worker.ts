@@ -15,7 +15,7 @@ if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit
 // App Router modules capture this global when they load. A standalone executor
 // has no Next server bootstrap to install it before the compiled binding graph.
 (globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??= AsyncLocalStorage;
-const { identifyCallerWhenReady, logCallerIdentificationError } = await import("./mcp/callerIdentification");
+const { identifyCallerWhenReady, logCallerIdentificationError, callerIdentificationFailureClass } = await import("./mcp/callerIdentification");
 const { runAsMcpHttpCaller } = await import("./mcp/callerContext");
 const { TASK_EXECUTOR_FRAME_BYTES, TASK_EXECUTOR_HTTP_FRAME_BYTES, TASK_EXECUTOR_TOOLS } = await import("./mcp/taskExecutor");
 const { createProductionViewerMcpService, createViewerMcpServer, mcpTextResultClient, MCP_HTTP_CLIENT_ID, McpReceiptsNotReadyError, taskExecutorFailure } = await import("./mcp/server");
@@ -181,7 +181,7 @@ input.on("line", (line: string) => {
   if (request.name === "identifyCapability") {
     void identifyCallerWhenReady(() => identifyCapability(request.caller.capability), request.caller.capability, request.deadlineAt, admission.signal)
       .then(conversationId => send({ id: request.id, result: { conversationId } }))
-      .catch(() => send({ id: request.id, error: "task executor could not identify the caller" }))
+      .catch(error => send({ id: request.id, error: `task executor could not identify the caller (${callerIdentificationFailureClass(error, request.deadlineAt, admission.signal)})` }))
       .finally(() => admission.close());
     return;
   }

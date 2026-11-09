@@ -52,7 +52,8 @@ export function headlessFixtureTransport(): typeof spawn | null { return fixture
 type EngineSpawn = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 export async function spawnManagedEngine(command: string, args: string[], options: SpawnOptionsWithoutStdio,
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
-  transportSpawn?: EngineSpawn): Promise<ChildProcessWithoutNullStreams> {
+  transportSpawn?: EngineSpawn, assertCurrent?: () => void): Promise<ChildProcessWithoutNullStreams> {
+  assertCurrent?.();
   if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
   options = { ...options, env: { ...(options.env ?? process.env), LLV_HOST_EXIT_RECEIPTS: "1" } };
   const waiters: Array<ReturnType<typeof spawnNativeWaitOwner>> = [];
@@ -65,7 +66,7 @@ export async function spawnManagedEngine(command: string, args: string[], option
   const scope = memory && (memory.plan.mechanism === "scope" || memory.plan.cpu) ? memory.plan.unit : null;
   const capabilityEnv = sourceEnv.LLV_GATE_SLOT_LEASE ? { ...(options.env ?? process.env), LLV_GATE_SLOT_LEASE: sourceEnv.LLV_GATE_SLOT_LEASE } : undefined;
   try {
-    const child = await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv) as ChildProcessWithoutNullStreams;
+    const child = await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv, assertCurrent) as ChildProcessWithoutNullStreams;
     for (const waiter of waiters) waiter.retainExit(!signalDomain(child));
     return child;
   } catch (error) {
@@ -145,16 +146,16 @@ function prepareLaunch(capabilityEnv: NodeJS.ProcessEnv, env: NodeJS.ProcessEnv,
 }
 
 function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return { ...env, LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) };
+  return { ...env, LLV_SIGNAL_EXEC_ACK: undefined, LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) };
 }
 
 /** `handle` is the process the caller started: the monitor itself, or the
  * launcher that waits outside the transient scope the monitor runs in. */
-type SignalReceipt = { domain: AgentSignalDomain; handle: number } | { off: string };
+type SignalReceipt = { domain: AgentSignalDomain; handle: number } | { off: string; execAck: boolean };
 function readReceipt(file: string): SignalReceipt {
   const value = JSON.parse(fs.readFileSync(file, "utf8"));
   if (value?.policyVersion === 1 && value.boundary === "off") {
-    return { off: typeof value.reason === "string" && value.reason ? value.reason : "the launcher could not establish the boundary" };
+    return { off: typeof value.reason === "string" && value.reason ? value.reason : "the launcher could not establish the boundary", execAck: value.execAck === true };
   }
   const domain = normalizeAgentSignalDomain(value)!;
   const launcher = value.launcher as ProcessIdentity | undefined;
@@ -401,7 +402,8 @@ function cacheHostTooling(launcher: string, scripts: string): { launcher: string
 /** The resource wrapper remains outside the namespace. An injected spawn is
  * the host tests' protocol seam; production callers always use this adapter. */
 export async function spawnSignalSandbox(command: string, args: string[], options: SpawnOptions,
-  start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env): Promise<ChildProcess> {
+  start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env, assertCurrent?: () => void): Promise<ChildProcess> {
+  assertCurrent?.();
   const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
   const prepared = prepareLaunch(capabilityEnv, options.env ?? process.env, bridged);
   if ("off" in prepared) {
@@ -415,6 +417,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   const receipt = path.join(directory, "ready.json");
   const diagnosticFile = options.env?.LLV_SIGNAL_IGNORE_NATIVE_STDIO === "1" ? `${directory}.stderr` : undefined;
   const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
+    LLV_SIGNAL_EXEC_ACK: assertCurrent ? "1" : undefined,
     ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
@@ -437,15 +440,23 @@ export async function spawnSignalSandbox(command: string, args: string[], option
       if (fs.existsSync(receipt)) {
         const parsed = readReceipt(receipt);
         if ("off" in parsed) {
-          // The launcher has executed the engine in its own place.
           recordSignalBoundaryOff(child, parsed.off, "managed");
-          fs.rmSync(directory, { recursive: true, force: true });
+          if (assertCurrent) {
+            if (!parsed.execAck) throw new Error("agent signal sandbox unavailable: fallback exec acknowledgement is unavailable");
+            assertCurrent();
+            fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
+            // The launcher removes its scratch after consuming the approval.
+          } else {
+            // Unguarded launchers have already executed the engine.
+            fs.rmSync(directory, { recursive: true, force: true });
+          }
           return child;
         }
         const domain = parsed.domain;
         if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
         if (env.LLV_HOST_EXIT_RECEIPTS === "1") bindHostExitWriter(directory, domain.native, domain.monitor);
+        assertCurrent?.();
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
         return child;
       }
