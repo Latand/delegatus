@@ -71,7 +71,7 @@ import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } 
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
-import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { roleMemoryDeferralReason, RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
@@ -437,6 +437,8 @@ async function terminateVerifiedStructuredSpawnProcess(expected: ProcessIdentity
 }
 
 function structuredSpawnFailureReason(error: unknown): string {
+  const deferral = roleMemoryDeferralReason(error);
+  if (deferral) return deferral;
   if (isRuntimeHostTransportFailure(error)) {
     return supervisedRuntimeHostUnavailableReason("structured spawn runtime host");
   }
@@ -3240,7 +3242,7 @@ export async function spawnStructuredConversation(
       transport: "structured",
     };
   } catch (error) {
-    return await withoutOperationLease(async () => {
+    try { return await withoutOperationLease(async () => {
         clearDurableSetupTimeout();
         const pending = input.registry.spawnReceipt(operationId) ?? undefined;
         // Admission succeeded, but this owner never called startHost. Preserve the
@@ -3365,7 +3367,12 @@ export async function spawnStructuredConversation(
           });
         }
         throw error;
-    });
+    }); } catch (cleanupFailure) {
+      // Keep the proven pre-delivery refusal through lost cleanup/write ACKs.
+      // This grants only reconciliation of the original launch, never a resend.
+      if (roleMemoryDeferralReason(error)) throw error;
+      throw cleanupFailure;
+    }
   } finally {
     // This call no longer advances setup, including when cleanup/projection
     // failed. Hand recovery back without releasing a newer admission owner.

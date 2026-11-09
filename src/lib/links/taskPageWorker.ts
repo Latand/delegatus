@@ -131,7 +131,10 @@ export class TaskPageWorker {
       while ((end = worker.buffer.indexOf("\n")) >= 0) {
         const line = worker.buffer.slice(0, end); worker.buffer = worker.buffer.slice(end + 1);
         try {
-          const frame = JSON.parse(line);
+          let frame;
+          try { frame = JSON.parse(line); }
+          catch { throw unavailable("worker-invalid-reply"); }
+          if (!frame || typeof frame !== "object") throw unavailable("worker-invalid-reply");
           const job = this.active;
           if (!job || job.settled || job.id !== frame.id) throw unavailable("worker-invalid-reply");
           if (frame.phase === "compile" || frame.phase === "match") {
