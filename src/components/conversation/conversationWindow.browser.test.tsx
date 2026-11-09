@@ -7201,10 +7201,10 @@ describe("message document links", () => {
         const response = await fetch(resource + suffix, { headers: value ? { cookie: `${MEMBER_COOKIE}=${value}` } : {} });
         expect(response.status).toBe(status); await response.arrayBuffer();
       }
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 605, 820, 1050, 1280]) {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 605, 820, 1000, 1050, 1280, 1440]) {
         const phone = width === 390;
         const query = new URLSearchParams({ case: "document-links", lang, cwd: source, parent, denied });
-        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: phone ? 844 : 900 }, theme, lang, "no-preference", phone);
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: phone ? 844 : width === 1000 ? 700 : 900 }, theme, lang, "no-preference", phone);
         await context.addCookies([{ name: MEMBER_COOKIE, value: owner.value, url: served.base }]);
         try {
           const input = await page.evaluate(() => ({ coarse: matchMedia("(pointer: coarse)").matches, touchPoints: navigator.maxTouchPoints }));
@@ -7214,8 +7214,9 @@ describe("message document links", () => {
           await entry.waitFor();
           const initial = page.url();
           const start = reads.length;
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-message.png`) });
           if (phone) await entry.tap();
-          else { await entry.focus(); await page.keyboard.press("Enter"); }
+          else await entry.click();
           const pane = page.locator("[data-artifact-preview]");
           await pane.waitFor();
           const target = pane.locator("[data-preview-target]");
@@ -7244,21 +7245,61 @@ describe("message document links", () => {
             expect(box!.height).toBeGreaterThanOrEqual(44);
           }
           await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-source.png`) });
+          const rawStart = reads.length;
+          const rawPromise = context.waitForEvent("page");
+          const openExternal = pane.locator("[data-preview-open-external]");
+          if (phone) await openExternal.tap(); else await openExternal.click();
+          const raw = await rawPromise;
+          await raw.waitForLoadState();
+          expect(raw.url()).toBe(resource);
+          expect(await raw.locator("body").innerText()).toBe(bytes);
+          expect(reads.slice(rawStart).some(read => read.path === report && read.status === 200 && read.hash === sha256(bytes))).toBe(true);
+          expect(await raw.evaluate(() => window.opener === null)).toBe(true);
+          await raw.close();
           if (phone) await close.tap(); else await close.click();
           await pane.waitFor({ state: "detached" });
           const heading = page.getByRole("link", { name: "Heading", exact: true });
           if (phone) await heading.tap(); else await heading.click();
           await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-heading.png`) });
           if (phone) await close.tap(); else await close.click();
           const invisible = page.getByRole("link", { name: "Invisible", exact: true });
           if (phone) await invisible.tap(); else await invisible.click();
           await pane.locator("[data-preview-target]").waitFor();
           expect(await pane.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-invisible.png`) });
           if (phone) await close.tap(); else await close.click();
           for (const [label, key] of [["Missing", "preview.missing"], ["Denied", "preview.denied"], ["Changed", "preview.changed"]] as const) {
             const link = page.getByRole("link", { name: label, exact: true });
             if (phone) await link.tap(); else await link.click();
             await pane.getByText(translate(lang, key), { exact: true }).waitFor();
+            const actions = pane.locator('a[download], [data-preview-open-external]');
+            expect(await actions.count()).toBe(label === "Changed" ? 2 : 0);
+            expect(page.url()).toBe(initial);
+            expect(context.pages()).toHaveLength(1);
+            const failureFits = await pane.getByRole("alert").evaluate(element => {
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let parent = walker.currentNode.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+                }
+                if ([...range.getClientRects()].some(rect => rect.left < left || rect.right > right || rect.top < top || rect.bottom > bottom)) return false;
+              }
+              return true;
+            });
+            expect(failureFits).toBe(true);
+            if (phone) {
+              expect(await close.evaluate(element => {
+                const rect = element.getBoundingClientRect();
+                return rect.width >= 44 && rect.height >= 44 && [[rect.left + 1, rect.top + 1], [rect.right - 1, rect.bottom - 1]]
+                  .every(([x, y]) => element.contains(document.elementFromPoint(x!, y!)));
+              })).toBe(true);
+            }
             await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${label.toLowerCase()}.png`) });
             if (phone) await close.tap(); else await close.click();
           }

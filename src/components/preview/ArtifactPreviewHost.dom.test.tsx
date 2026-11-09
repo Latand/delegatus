@@ -137,6 +137,7 @@ test("renders nothing until a preview opens, then shows title, size and bounded 
   expect(text).toContain("second line");
   /* line numbers are rendered in a dedicated gutter */
   expect(sheet!.querySelector("[data-line-number]")).not.toBeNull();
+  expect(sheet!.querySelectorAll('a[download], [data-preview-open-external]').length).toBe(2);
   /* only the artifact route was touched: no snapshot, scan or transcript fetch */
   expect(fetchLog.length).toBeGreaterThan(0);
   for (const call of fetchLog) expect(call.url.startsWith("/api/artifact")).toBe(true);
@@ -161,6 +162,30 @@ test("search reports matches within the loaded content", async () => {
   expect(surface()!.textContent).toContain("1/1");
 });
 
+test("switching files hides the previous file's actions while the new metadata is pending", async () => {
+  textRoutes();
+  await render();
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()!.querySelectorAll("a").length).toBe(2);
+
+  const previousFetch = globalThis.fetch;
+  const pending = Promise.withResolvers<Response>();
+  globalThis.fetch = () => pending.promise;
+  try {
+    await act(async () => openArtifactPreview("~/fixtures/next.md"));
+    expect(surface()!.getAttribute("data-artifact-state")).toBe("loading");
+    expect(surface()!.querySelectorAll("a").length).toBe(0);
+    await act(async () => pending.resolve(respond({ status: 403, body: { error: "access denied" } })));
+    await flush();
+    expect(surface()!.getAttribute("data-artifact-state")).toBe("denied");
+    expect(surface()!.querySelectorAll("a").length).toBe(0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("missing, denied and oversized artifacts show explicit states", async () => {
   await render();
 
@@ -168,11 +193,20 @@ test("missing, denied and oversized artifacts show explicit states", async () =>
   await act(async () => openArtifactPreview("~/fixtures/gone.md"));
   await flush();
   expect(surface()!.getAttribute("data-artifact-state")).toBe("missing");
+  expect(surface()!.querySelectorAll("a").length).toBe(0);
+  expect(surface()!.querySelector('button[aria-label="Close preview"]')).not.toBeNull();
 
   routes = [() => ({ status: 403, body: { error: "path not allowed", code: "access-denied" } })];
   await act(async () => openArtifactPreview("~/fixtures/denied.md"));
   await flush();
   expect(surface()!.getAttribute("data-artifact-state")).toBe("denied");
+  expect(surface()!.querySelectorAll("a").length).toBe(0);
+
+  textRoutes();
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()!.querySelectorAll('a[download], [data-preview-open-external]').length).toBe(2);
 
   routes = [() => ({ status: 413, body: { error: "artifact exceeds the configured byte bound", code: "too-large" } })];
   await act(async () => openArtifactPreview("~/fixtures/huge.md"));
@@ -191,7 +225,22 @@ test("a stale validator mid-read surfaces the changed state", async () => {
   await flush();
   await flush();
   expect(surface()!.getAttribute("data-artifact-state")).toBe("changed");
+  expect(surface()!.querySelectorAll('a[download], [data-preview-open-external]').length).toBe(2);
 });
+
+for (const [status, state] of [[404, "missing"], [403, "denied"]] as const) {
+  test(`a content read that becomes ${state} removes file actions despite earlier metadata`, async () => {
+    routes = [(url) => url.searchParams.get("mode") === "meta"
+      ? { status: 200, body: { name: "live.log", kind: "text", mime: "text/plain; charset=utf-8", size: 10, etag: '"old"' } }
+      : { status, body: { error: state } }];
+    await render();
+    await act(async () => openArtifactPreview("~/fixtures/live.log"));
+    await flush();
+    await flush();
+    expect(surface()!.getAttribute("data-artifact-state")).toBe(state);
+    expect(surface()!.querySelectorAll("a").length).toBe(0);
+  });
+}
 
 test("escape closes the preview, restores opener focus and never touches history", async () => {
   textRoutes();
