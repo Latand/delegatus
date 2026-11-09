@@ -57,7 +57,7 @@ import {
   type TurnState,
   type ViewerConversationId,
 } from "./contracts";
-import { CodexForkOutcomeUnknownError, RegisteredSuccessorProvider, SuccessorPendingError } from "./provider";
+import { captureCodexSourceAuthority, CodexForkOutcomeUnknownError, RegisteredSuccessorProvider, SourceOwnershipChangedError, SuccessorPendingError } from "./provider";
 import { MigrationTargetUnavailableError, safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
 import { AUTO_BALANCE_COOLDOWN_MS } from "./quotaPolicy";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "./intentLiveness";
@@ -787,6 +787,8 @@ export interface MigrationCoordinatorOptions {
   /** Reports transcript reads that cannot yet safely acknowledge an inventory path. */
   onTranscriptRead?: (pathname: string, complete: boolean) => void;
   ownsOperation?: () => Promise<boolean>;
+  /** Synchronous authority at provider and registry effect boundaries. */
+  assertCurrent?: () => void;
   /** Asked right before the successor is created and at every ownership
       check of its publication, the controller's registration included; a
       throw fails the switch like any provider failure, and a successor
@@ -985,10 +987,11 @@ export async function advanceConversationMigration(
   if (engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
   if (reconfigureOwnsMigration(conversation, options.reconfigureOperationId)) return conversation;
   let migration = conversation.migration;
+  let assertSourceAuthority = () => {};
   if (migration.creditGuard) {
     const priorTargetCheck = options.authorizeTarget;
-    options = { ...options, authorizeTarget: async () => {
-      await priorTargetCheck?.();
+    const priorAssertion = options.assertCurrent;
+    const assertCreditTarget = () => {
       const current = registry.conversation(conversationId);
       const source = current?.generations.find(generation => generation.id === migration.sourceGenerationId);
       if (!current || !source) throw new Error("paid-credit recovery source is unavailable");
@@ -999,7 +1002,11 @@ export async function advanceConversationMigration(
       if (selection.kind !== "available" || selection.account.accountId !== migration.targetId) {
         throw new Error("paid-credit recovery target is no longer admissible");
       }
-    } };
+    };
+    options = { ...options,
+      assertCurrent: () => { priorAssertion?.(); assertCreditTarget(); },
+      authorizeTarget: async () => { await priorTargetCheck?.(); assertCreditTarget(); },
+    };
   }
   /* Every write that advances the switch waits for the lock off the loop and
      is correlated with the switch's operation (rule c). One the lock refused
@@ -1033,6 +1040,8 @@ export async function advanceConversationMigration(
   try {
     if (migration.providerReceipt) {
       receipt = migration.providerReceipt;
+      const source = conversation.generations.find(generation => generation.id === migration.sourceGenerationId);
+      if (engine === "codex" && source) assertSourceAuthority = captureCodexSourceAuthority(registry, conversation.id, source);
     } else {
       if (!successorCreationReady(conversation, registry)) return conversation;
       const creationFencePhase = migration.phase;
@@ -1100,13 +1109,26 @@ export async function advanceConversationMigration(
         ...source,
         launchProfile: migration.successorLaunchProfile!,
       };
+      if (engine === "codex") assertSourceAuthority = captureCodexSourceAuthority(registry, conversationId, source);
+      const assertCreation = () => {
+        if (engine !== "codex") return;
+        options.assertCurrent?.();
+        assertSourceAuthority();
+        const current = registry.conversation(conversationId)?.migration;
+        if (!current || current.operationId !== creationOwner.operationId || current.revision !== creationOwner.revision
+          || current.phase !== "successor-starting" || current.targetId !== migration.targetId) {
+          throw new SourceOwnershipChangedError();
+        }
+      };
       await authorizeMigrationTarget(options);
+      assertCreation();
       receipt = await successorProvider.create({
         engine,
         operationId: creationOwner.operationId,
         conversationId,
         source: successorSource,
         targetAccountId: migration.targetId,
+        assertCurrent: assertCreation,
         /* A path the lock refused throws before the provider goes on, so
            `create` fails busy and the next pass calls it again for the same
            operation, which returns the same successor. */
@@ -1128,11 +1150,22 @@ export async function advanceConversationMigration(
     const successorProfile = migration.successorLaunchProfile
       ?? migrationSuccessorLaunchProfile(source.launchProfile);
     if (!receipt || receipt.operationId !== migration.operationId) throw new Error("persisted successor receipt operation does not match");
-    await successorProvider.verify(receipt, { engine, targetAccountId: migration.targetId, launchProfile: successorProfile });
     const publicationConversationId = conversation.id;
     const publicationReceipt = receipt;
     const publicationRevision = migration.revision;
     const publicationOperationId = migration.operationId;
+    const assertPublication = () => {
+      if (engine !== "codex") return;
+      options.assertCurrent?.();
+      assertSourceAuthority();
+      const current = registry.conversation(publicationConversationId)?.migration;
+      if (!current || current.phase !== "verifying" || current.revision !== publicationRevision
+        || current.operationId !== publicationOperationId || !current.providerReceipt
+        || !sameProviderReceiptOutcome(current.providerReceipt, publicationReceipt)) {
+        throw new SourceOwnershipChangedError();
+      }
+    };
+    await successorProvider.verify(receipt, { engine, targetAccountId: migration.targetId, launchProfile: successorProfile, assertCurrent: assertPublication });
     /* The provider hands this question to the native publisher and to the
        delivery controller's registration, which await the host and the
        journal between their own checks. So the target account is asked here
@@ -1152,6 +1185,7 @@ export async function advanceConversationMigration(
         && sameProviderReceiptOutcome(ownerMigration.providerReceipt, publicationReceipt))) return false;
       try {
         await authorizeMigrationTarget(options);
+        assertPublication();
       } catch (error) {
         publicationRefusal = { error };
         return false;
@@ -1184,6 +1218,7 @@ export async function advanceConversationMigration(
       targetAccountId: migration.targetId,
       launchProfile: successorProfile,
       ownsOperation: ownsPublication,
+      assertCurrent: assertPublication,
     });
     raisePublicationRefusal();
     publishOwner = registry.conversation(publicationConversationId);
@@ -1206,14 +1241,14 @@ export async function advanceConversationMigration(
        held; the next pass publishes again, idempotently per operation, and
        commits. */
     const targetId = migration.targetId;
-    const committed = await offLoopOrBusy(registry, "migration.commit", publicationOperationId, () => registry.commitSuccessor(publicationConversationId, {
+    const committed = await offLoopOrBusy(registry, "migration.commit", publicationOperationId, () => { assertPublication(); return registry.commitSuccessor(publicationConversationId, {
       id: publicationReceipt.nativeId,
       path: publicationReceipt.path,
       accountId: targetId,
       launchProfile: successorProfile,
       historyHash: publicationReceipt.historyHash,
       host: publicationReceipt.host,
-    }, publicationRevision, publicationOperationId, publicationReceipt));
+    }, publicationRevision, publicationOperationId, publicationReceipt); });
     if (!options.deferBoardRepair) await repairCommittedBoardSuccessions(
       [committed],
       registry,
@@ -1223,6 +1258,10 @@ export async function advanceConversationMigration(
     return registry.conversation(committed.id) ?? committed;
   } catch (error) {
     const latest = registry.conversation(conversation.id);
+    if (error instanceof SourceOwnershipChangedError && latest) {
+      await cleanupDiscardedSuccessor(successorProvider, receipt, latest, registry);
+      return registry.conversation(latest.id) ?? latest;
+    }
     if (error instanceof SuccessorPendingError) return latest ?? conversation;
     if (error instanceof RegistryWriterBusyError) return latest ?? conversation;
     if (isStructuredDeliveryControllerUnavailable(error)) return latest ?? conversation;

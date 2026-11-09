@@ -67,6 +67,7 @@ export interface ConversationActionDependencies {
   interruptConversation: typeof interruptConversation;
   killConversation: typeof killConversation;
   resumeConversation: typeof resumeConversation;
+  onResumed?: (conversationId: string) => void | Promise<void>;
   compactConversation: typeof compactConversation;
   answerDialogKey: typeof answerDialogKey;
   /** The conversation's current native question or plan, read from its
@@ -190,7 +191,16 @@ export async function applyConversationAction(
     }
     return deliveryResult(outcome);
   }
-  if (request.action === "resume") return deliveryResult(await dependencies.resumeConversation(transcriptPath));
+  if (request.action === "resume") {
+    const outcome = await dependencies.resumeConversation(transcriptPath);
+    if (outcome.ok && "outcome" in outcome && outcome.outcome === "resumed" && conversation) {
+      void Promise.resolve().then(async () => {
+        const notify = dependencies.onResumed ?? (await import("@/lib/monitor/resumedSeatTick")).requestResumedSeatTick;
+        await notify(conversation.id);
+      }).catch(error => console.warn("[conversation resume] seat recheck deferred", error instanceof Error ? error.message : String(error)));
+    }
+    return deliveryResult(outcome);
+  }
   if (request.action === "compact") return deliveryResult(await dependencies.compactConversation(transcriptPath));
   return deliveryResult(await dependencies.answerDialogKey(
     transcriptPath,

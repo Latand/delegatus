@@ -1,3 +1,4 @@
+import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
@@ -210,6 +211,8 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 export interface CodexAppServerHostOptions {
+  /** Synchronous launch authority, retained through adoption preparation and RPCs. */
+  assertCurrent?: () => void;
   /** Exact surviving owner admitted under the registry writer claim. */
   socketOwner?: CodexSocketOwner;
   /** Test seam; production uses the reviewed native socket on current Codex. */
@@ -1428,6 +1431,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private failureCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   private releasePromise: Promise<void> | null = null;
   private releaseCleanup: (() => void) | null;
+  private openingAuthority: (() => void) | undefined;
   private writerFence: (() => boolean) | null = null;
   private persistenceFlush: (() => Promise<void>) | null = null;
   private ledgerFailed = false;
@@ -1469,6 +1473,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
     this.pidAlive = options.pidAlive ?? ((pid) => procBackend.pidAlive(pid));
     this.releaseCleanup = options.releaseCleanup ?? null;
+    this.openingAuthority = options.assertCurrent;
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
     this.memoryCell?.setExitProcess(this.exitProcess);
@@ -1525,6 +1530,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let entered = false;
     try {
       return await withCodexCliLaunch(launchBinary, () => {
+        options.assertCurrent?.();
         entered = true;
         return this.openWithCliGuard(options, threadId);
       });
@@ -1546,6 +1552,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let cleanupArgs: string[];
     let questionPolicy: ReturnType<typeof codexOperatorQuestionPolicy> | undefined;
     try {
+      options.assertCurrent?.();
       features = options.socketOwner || options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
       cleanupArgs = options.socketOwner ? [] : codexProcessCleanupArgs(options.codexHome);
       if (!options.socketOwner && options.operatorDecisionForms) {
@@ -1579,6 +1586,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let telegram: TelegramLaunchGrant;
     try {
       options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
+      options.assertCurrent?.();
       telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,
@@ -1600,14 +1608,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     else delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
     let child: CodexTransport;
     try {
+      options.assertCurrent?.();
       const spawnOptions = { cwd: options.cwd, env: childEnv, detached: true };
       child = options.socketOwner
         ? await CodexSocketTransport.reconnect(options.socketOwner)
         : process.platform !== "win32"
           && (options.persistentCallbacks ?? !options.spawnProcess)
           ? await CodexSocketTransport.launch(binary, args, spawnOptions, undefined,
-            (command, argv, opts, base) => spawnManagedEngine(command, argv, opts, options.memoryCell, options.spawnProcess, options.env ?? process.env, base))
-          : await spawnManagedEngine(binary, args, spawnOptions, options.memoryCell, options.spawnProcess, options.env ?? process.env);
+            (command, argv, opts, base) => spawnManagedEngine(command, argv, opts, options.memoryCell, options.spawnProcess, options.env ?? process.env, base, options.assertCurrent))
+          : await spawnManagedEngine(binary, args, spawnOptions, options.memoryCell, options.spawnProcess, options.env ?? process.env, undefined, options.assertCurrent);
       if (options.socketOwner && child.pid) options.memoryCell?.attach(child.pid);
     } catch (error) {
       options.releaseCleanup?.();
@@ -1622,6 +1631,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;
     try {
+      options.assertCurrent?.();
       // Native queue and realtime need the single experimental opt-in. Account
       // probes use stable APIs; no unrelated extension is requested here.
       const capabilities = protocol.initializeCapabilities(["thread/queue/list", "thread/realtime/start"]);
@@ -1632,6 +1642,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       });
       provisional.notify("initialized", {});
       const accountResult = record(await provisional.rpc("account/read", { refreshToken: false }));
+      options.assertCurrent?.();
       const account = record(accountResult?.account);
       const accountType = stringField(account, "type");
       if (accountType !== "chatgpt") throw new Error("Codex app-server requires a ChatGPT subscription login");
@@ -1648,6 +1659,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
            An image send triggers another discovery attempt. */
         provisional.imageInputSupport = "unknown";
       }
+      options.assertCurrent?.();
       if (protocol.hasMethod("ClientRequest", "modelProvider/capabilities/read")) {
         try {
           const receipt = record(await provisional.rpc("modelProvider/capabilities/read", {}, Math.min(250, provisional.requestTimeoutMs), true));
@@ -1656,8 +1668,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           }
         } catch { /* A missing receipt remains unknown, never a capability grant. */ }
       }
+      options.assertCurrent?.();
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier, provisional.tierAccountHome);
       const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
+      options.assertCurrent?.();
       const config = headlessCodexThreadConfig(
         configRead,
         options.allowSubagents === true,
@@ -1708,8 +1722,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ].filter(Boolean).join("\n\n"),
         }
         : {};
+      // A reconnect can recreate the registered stdio MCP child. Restore its
+      // installation and caller binding without changing the thread's policy.
+      const registeredViewer = record(record(record(configRead)?.config)?.mcp_servers)?.viewer;
+      const reconnectConfig = typeof record(registeredViewer)?.command === "string" && viewer
+        ? { mcp_servers: { viewer } } : undefined;
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(reconnectConfig ? { config: reconnectConfig } : {}) } : {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
@@ -1726,6 +1745,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
+      options.assertCurrent?.();
       if (threadId && identity.threadId !== threadId) {
         throw new Error("thread/resume returned a different thread id");
       }
@@ -1733,6 +1753,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       provisional.identity.path = identity.path;
       provisional.requestedModel = stringField(result, "model") ?? provisional.requestedModel;
       if (granted.length > 0) await provisional.verifyPluginGrant(granted, config);
+      options.assertCurrent?.();
       provisional.rememberConfirmedDeliveries(result);
       provisional.restoreEvents();
       // Capture a previously observed interruption before resume history
@@ -1747,18 +1768,26 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
-      if (!options.socketOwner) await provisional.verifyViewerMcp();
+      await provisional.verifyViewerMcp();
+      options.assertCurrent?.();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
+      options.assertCurrent?.();
       await provisional.negotiateHistoryCapability();
+      options.assertCurrent?.();
       /* Before the queue's head can start a turn, so the first turn of this
          run already reads it. */
       if (noticeIntoHistory) await provisional.injectRunNotice(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+      options.assertCurrent?.();
       if (threadId && !deliberatelyPaused && threadStatus(result)?.type === "idle") await provisional.recoverIdleNativeQueue();
+      options.assertCurrent?.();
       if (provisional.dead || provisional.released) throw provisional.failure ?? new Error("Codex app-server connection closed during initialization");
       provisional.reconnecting = false;
+      provisional.openingAuthority = undefined;
       return provisional;
     } catch (error) {
+      // Cleanup retains authority over this attempt's child after launch custody ends.
+      provisional.openingAuthority = undefined;
       try {
         await withHostStopOrigin({ path: "codex-startup-cleanup", operationId: provisional.identity.threadId }, () => provisional.release());
       } catch (cleanupError) {
@@ -2501,7 +2530,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
    *   the operation fails with that reason; it is never quietly delivered as
    *   something the operator did not ask for.
    */
-  async inject(request: RuntimeInjectRequest): Promise<RuntimeInjectOutcome> {
+  async inject(request: RuntimeInjectRequest, authorizeDispatch?: () => void): Promise<RuntimeInjectOutcome> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredInjectError("Codex app-server host is unavailable", "refused");
     }
@@ -2555,6 +2584,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (request.expectedTurnId !== undefined && request.expectedTurnId !== this.activeTurnId) {
       throw new StructuredInjectError("stale-turn", "refused");
     }
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     /* Read once, before the write, so the placement reported afterwards is the
        one the request was actually issued against rather than whatever the turn
        axis drifted to while the insertion was being observed. */
@@ -2582,6 +2614,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new StructuredInjectError("stale-generation", "refused");
     }
     if (this.activeTurnId !== turnAtActuation) throw new StructuredInjectError("stale-turn", "refused");
+    // The metadata write above yielded; the caller's seat, account and drain
+    // authority must still hold at the native write boundary.
+    authorizeDispatch?.();
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
     try {
       await this.rpc("thread/inject_items", { threadId: this.identity.threadId, items });
     } catch (error) {
@@ -3421,6 +3459,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!this.ledgerFailed && receipt) this.callbackReceipts.set(id, receipt);
   }
 
+  readViewerMcpObservation(): ViewerMcpObservation | undefined {
+    if (this.dead || this.releasing || this.released || this.ledgerFailed || !this.writerFenceAllowsActuation()) {
+      return normalizeViewerMcpObservation(null);
+    }
+    return normalizeViewerMcpObservation(this.viewerMcp);
+  }
+
   async health(): Promise<HostState> {
     if (this.pendingSteers.size && !this.writerFenceAllowsActuation()) this.settleUnverifiedSteers();
     return this.currentState();
@@ -3446,6 +3491,81 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     catch { return false; }
   }
 
+  private viewerMcp: ViewerMcpObservation | undefined;
+  private readonly viewerMcpTerminals = new Set<string>();
+  private viewerMcpHistoryLost = false;
+  private readonly viewerMcpStarts = new Map<string, { tool: string; seq: number | null }>();
+
+  private rememberViewerMcpStart(key: string | null, tool: string | null, seq: number | null): void {
+    if (key && this.viewerMcpStarts.get(key)?.tool === tool) return;
+    if (!key || !tool || this.viewerMcpStarts.has(key) || this.viewerMcpStarts.size >= 32) {
+      this.viewerMcpHistoryLost = true;
+      return;
+    }
+    this.viewerMcpStarts.set(key, { tool, seq });
+  }
+
+  private rememberViewerMcpTerminal(key: string | null): void {
+    if (!key) { this.viewerMcpHistoryLost = true; return; }
+    this.viewerMcpTerminals.add(key);
+    if (this.viewerMcpTerminals.size > 32) {
+      this.viewerMcpTerminals.delete(this.viewerMcpTerminals.values().next().value!);
+      this.viewerMcpHistoryLost = true;
+    }
+  }
+
+  private observeViewerMcp(event: Extract<RuntimeEvent, { kind: "item" }>): void {
+    if (event.codexItemIdentity?.threadId !== this.identity.threadId || !this.writerFenceAllowsActuation()) return;
+    const item = record(event.item);
+    if (item?.type !== "mcpToolCall" || item.server !== "viewer") return;
+    const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+    const id = typeof item.id === "string" && item.id.length <= 256 ? item.id : null;
+    const key = id && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, id]) : null;
+    const observation = this.viewerMcp;
+    // A newly sequenced replay is still the same terminal call. Remember
+    // completions even while healthy, before any recovery is needed.
+    if (key && this.viewerMcpTerminals.has(key)) return;
+    if (event.phase === "started") {
+      // Keep the first start even while healthy. A replay must retain its
+      // original ordering relative to a denial that arrives later.
+      this.rememberViewerMcpStart(key, tool, event.seq);
+      if (observation?.denied.length && this.viewerMcpHistoryLost) {
+        this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
+      }
+    } else {
+      const start = key ? this.viewerMcpStarts.get(key) : undefined;
+      if (key) this.viewerMcpStarts.delete(key);
+      this.rememberViewerMcpTerminal(key);
+      const denial = item.status === "failed" && record(item.error)?.message === "MCP tool call requires approval, but approval policy is never";
+      if (denial) {
+        const next: ViewerMcpObservation = observation ? structuredClone(observation) : { seq: event.seq, observedAt: new Date().toISOString(), denied: [], unverified: false };
+        next.seq = event.seq;
+        next.observedAt = new Date().toISOString();
+        if (!tool || (!next.denied.some(entry => entry.tool === tool) && next.denied.length >= 32)) next.unverified = true;
+        else {
+          next.denied = next.denied.filter(entry => entry.tool !== tool);
+          next.denied.push({ tool, seq: event.seq });
+        }
+        this.viewerMcp = next;
+      } else if (observation && tool && start?.tool === tool && start.seq !== null && item.status === "completed" && item.error == null) {
+        const result = record(item.result);
+        // Structured server refusals are successful transports, with no proof
+        // that the denied management capability is now permitted.
+        const structured = record(result?.structuredContent);
+        if (result && result.isError !== true && structured?.ok === true && observation.denied.length && this.viewerMcpHistoryLost) {
+          // Eviction loses proof for clearing an outstanding denial. Preserve
+          // confirmed healthy state while retaining the fence for later recovery.
+          this.viewerMcp = { ...observation, seq: event.seq, unverified: true };
+        } else if (result && result.isError !== true && structured?.ok === true) {
+          const startSeq = start.seq;
+          this.viewerMcp = { ...observation, seq: event.seq, observedAt: new Date().toISOString(),
+            denied: observation.denied.filter(entry => entry.tool !== tool || startSeq <= entry.seq) };
+        }
+      }
+    }
+    if (this.viewerMcp) event.viewerMcp = structuredClone(this.viewerMcp);
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
@@ -3458,6 +3578,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       : this.engineStatus;
     return {
       status,
+      ...(this.viewerMcp ? { viewerMcp: structuredClone(this.viewerMcp) } : {}),
       sessionKey: this.identity.threadId,
       endpoint: pid ? this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` : "stdio:released",
       pid,
@@ -3798,6 +3919,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
+    if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
       this.eventStore.append(this.identity.threadId, sequenced);
     } catch (error) {
@@ -3857,7 +3979,31 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.cursor,
       this.onEventCursorRecovery,
     );
+    this.viewerMcp = undefined;
+    this.viewerMcpStarts.clear();
+    this.viewerMcpTerminals.clear();
+    this.viewerMcpHistoryLost = false;
+    let previousMcpHistorySeq = 0;
     for (const event of stored) {
+      if (event.seq !== previousMcpHistorySeq + 1) this.viewerMcpHistoryLost = true;
+      previousMcpHistorySeq = event.seq;
+      if (event.kind === "item") {
+        if (event.viewerMcp !== undefined) this.viewerMcp = normalizeViewerMcpObservation(event.viewerMcp);
+        const item = record(event.item);
+        if (event.codexItemIdentity?.threadId === this.identity.threadId && item?.type === "mcpToolCall" && item.server === "viewer") {
+          const key = typeof item.id === "string" && item.id.length > 0 && item.id.length <= 256
+            && event.turnId && event.turnId.length <= 256 ? JSON.stringify([event.turnId, item.id]) : null;
+          if (event.phase === "completed") {
+            if (key) this.viewerMcpStarts.delete(key);
+            this.rememberViewerMcpTerminal(key);
+          } else if (!key || !this.viewerMcpTerminals.has(key)) {
+            const tool = typeof item.tool === "string" && /^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool) ? item.tool : null;
+            // A predecessor start cannot prove recovery in this generation,
+            // but its first completion can still establish a new denial.
+            this.rememberViewerMcpStart(key, tool, null);
+          }
+        }
+      }
       if (event.kind === "turn-started") {
         this.cancelledVoiceTurns.delete(event.turnId);
         this.activeTurnId = event.turnId;
@@ -4285,6 +4431,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private rpc(method: string, params: JsonObject = {}, timeoutMs = this.requestTimeoutMs, preserveHost = false): Promise<unknown> {
+    try { this.openingAuthority?.(); } catch (error) { return Promise.reject(error); }
     if (this.dead || this.releasing || this.released) return Promise.reject(new Error("Codex app-server host is unavailable"));
     try { this.protocol.assertRequest(method, params, this.experimentalApi); } catch (error) { return Promise.reject(error); }
     const id = this.nextRpcId++;
@@ -4324,6 +4471,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private notify(method: string, params: JsonObject): void {
+    this.openingAuthority?.();
     this.protocol.assertNotification(method, params);
     this.write({ jsonrpc: "2.0", method, params });
   }
@@ -4797,7 +4945,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
-        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+        ...((user?.type === "userMessage" || (user?.type === "mcpToolCall" && user.server === "viewer")) && turnId && stringField(params, "threadId") === this.identity.threadId
           ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt, attachedAt: new Date().toISOString() } } : {}),

@@ -1,15 +1,17 @@
 import { worktreeMapStore } from "@/lib/projects/persistence";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { z } from "zod";
 
 import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { directoryProjectId, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { resetStateReadonlyReaderForTests } from "@/lib/state/sqliteStateStore";
 
 import { globalCache } from "./caches";
@@ -782,6 +784,116 @@ test("a deleted worktree still groups under its parent repo: a pipeline sibling 
   expect(projectForCwd(path.join(sibling, "src", "lib"))).toBe(parent);
 });
 
+/** Timing alone proves no write: require the child exit here and the map below. */
+function assertWorktreeChildSuccess(child: Pick<SpawnSyncReturns<string>, "pid" | "status" | "stderr">): void {
+  const transactionTiming = z.strictObject({
+    collection: z.literal("worktree_map"), heldMs: z.number().int().min(50),
+    pid: z.number().int().positive().pipe(z.literal(child.pid)), role: z.literal("unowned"),
+  });
+  // The shared validator checks the complete wire shape. Bind its successful
+  // state records to this synchronous worktree writer before handing them off.
+  const worktreeWait = z.object({
+    site: z.literal("state-write-lock"), subject: z.literal("worktree_map"),
+    role: z.literal("unowned"), synchronous: z.literal(true), operationId: z.null(),
+    label: z.string(),
+    stateWait: z.object({
+      pid: z.number().int().positive().pipe(z.literal(child.pid)),
+      callSite: z.enum(["state.lease", "state.lease.release", "state.marker", "state.transaction.worktree_map"]),
+      outcome: z.literal("success"), processKind: z.literal("embedded"),
+    }),
+  }).refine(sample => sample.label === sample.stateWait.callSite);
+  try {
+    const waits: string[] = [];
+    const lines = child.stderr === "" ? [] : child.stderr.replace(/\r?\n$/, "").split(/\r?\n/);
+    for (const line of lines) {
+      const holdPrefix = "[state transaction-hold] ";
+      const waitPrefix = "[blocking-wait] ";
+      if (line.startsWith(holdPrefix)) {
+        transactionTiming.parse(JSON.parse(line.slice(holdPrefix.length)));
+      } else if (line.startsWith(waitPrefix)) {
+        worktreeWait.parse(JSON.parse(line.slice(waitPrefix.length)));
+        waits.push(line);
+      } else {
+        throw new Error("unexpected worktree child diagnostic");
+      }
+    }
+    assertStateChildSuccess(child.status, waits.join("\n"));
+  } catch (cause) {
+    throw new Error(`worktree child failed (status=${child.status}, pid=${child.pid}); stderr:\n${child.stderr}`, { cause });
+  }
+}
+
+test.each(["LF", "CRLF"])("worktree child result accepts only bound SQLite timing (%s)", ending => {
+  const newline = ending === "LF" ? "\n" : "\r\n";
+  const script = `
+    const wait = { site: "state-write-lock", role: "unowned", durationMs: 91.6,
+      synchronous: true, subject: "worktree_map", label: "state.lease", operationId: null,
+      at: "2026-01-01T00:00:00.000Z",
+      stateWait: { callSite: "state.lease", reason: "sqlite", outcome: "success", attempts: 1,
+        maxSliceMs: 91.6, backoffMs: 0, synchronousSleepMs: 0, release: null,
+        pid: process.pid, processKind: "embedded" } };
+    const hold = { collection: "worktree_map", heldMs: 74, pid: process.pid, role: "unowned" };
+    process.stderr.write("[blocking-wait] " + JSON.stringify(wait) + ${JSON.stringify(newline)}
+      + "[state transaction-hold] " + JSON.stringify(hold) + ${JSON.stringify(newline)});
+    process.stdout.write(String(process.pid));
+  `;
+  const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8" });
+  expect(child.status).toBe(0);
+  expect(child.pid).toBeGreaterThan(0);
+  expect(child.stdout).toBe(String(child.pid));
+  const [waitLine, holdLine, tail] = child.stderr.split(newline);
+  expect(tail).toBe("");
+  const wait = JSON.parse(waitLine!.slice("[blocking-wait] ".length));
+  const hold = JSON.parse(holdLine!.slice("[state transaction-hold] ".length));
+  const line = (prefix: string, value: unknown) => prefix + JSON.stringify(value) + newline;
+  const waitRecord = (value: unknown) => line("[blocking-wait] ", value);
+  const holdRecord = (value: unknown) => line("[state transaction-hold] ", value);
+  for (const stderr of ["", waitLine + newline, holdLine + newline, child.stderr]) {
+    assertWorktreeChildSuccess({ ...child, stderr });
+    for (const status of [3, null]) {
+      expect(() => assertWorktreeChildSuccess({ ...child, status, stderr })).toThrow();
+    }
+  }
+  for (const callSite of ["state.lease.release", "state.marker", "state.transaction.worktree_map"]) {
+    assertWorktreeChildSuccess({ ...child, stderr: waitRecord({ ...wait, label: callSite,
+      stateWait: { ...wait.stateWait, callSite } }) });
+  }
+  const failed = spawnSync(process.execPath, ["-e", script + "process.exit(3);"], { encoding: "utf8" });
+  expect(failed.status).toBe(3);
+  expect(() => assertWorktreeChildSuccess(failed)).toThrow(failed.stderr);
+  const unexpected = [
+    "unknown warning" + newline, "[blocking-wait] {" + newline, "[state transaction-hold] {" + newline,
+    waitRecord(null), holdRecord(null), waitRecord({}), holdRecord({}),
+    ...["error", "extra"].flatMap(key => [
+      waitRecord({ ...wait, [key]: "unexpected" }),
+      waitRecord({ ...wait, stateWait: { ...wait.stateWait, [key]: "unexpected" } }),
+      holdRecord({ ...hold, [key]: "unexpected" }),
+    ]),
+    ...["refused", "deferred"].map(key => waitRecord({ ...wait, [key]: true })),
+    ...["error", "refused", "deferred", "waiting", "timeout"].map(outcome =>
+      waitRecord({ ...wait, stateWait: { ...wait.stateWait, outcome } })),
+    waitRecord({ ...wait, subject: "other" }), holdRecord({ ...hold, collection: "other" }),
+    ...[0, child.pid + 1].flatMap(pid => [
+      waitRecord({ ...wait, stateWait: { ...wait.stateWait, pid } }), holdRecord({ ...hold, pid }),
+    ]),
+    waitRecord({ ...wait, label: "other" }), waitRecord({ ...wait, operationId: "other" }),
+    waitRecord({ ...wait, stateWait: { ...wait.stateWait, callSite: "state.other" }, label: "state.other" }),
+    waitRecord({ ...wait, site: "registry-lock" }), waitRecord({ ...wait, synchronous: false }),
+    waitRecord({ ...wait, stateWait: { ...wait.stateWait, processKind: "viewer" } }),
+    ...["viewer", ""].flatMap(role => [waitRecord({ ...wait, role }), holdRecord({ ...hold, role })]),
+    ...[49, 50.5, "74"].map(heldMs => holdRecord({ ...hold, heldMs })),
+    waitRecord({ ...wait, durationMs: 49 }), waitRecord({ ...wait, at: "invalid" }),
+    newline, " " + newline, child.stderr + newline, child.stderr + "error" + newline,
+    waitLine + " trailing error" + newline, holdLine + " trailing error" + newline,
+    "[mcp slow] pid=7 role=unowned tool=list_tasks callerMs=0 httpMs=0 claimMs=0 bindingMs=2000 completionMs=0 serializationMs=0 serviceTotalMs=2000 replayMs=0" + newline,
+  ];
+  for (const stderr of unexpected) {
+    // Retain the entire raw stream, including valid neighbours, in the failure.
+    expect(() => assertWorktreeChildSuccess({ ...child, stderr })).toThrow(stderr);
+    expect(() => assertWorktreeChildSuccess({ ...child, stderr: child.stderr + stderr })).toThrow(child.stderr + stderr);
+  }
+});
+
 test("two processes writing the worktree map keep each other's records (#2202)", () => {
   /* The order the review reproduced: process A reads the map, process B
      records a checkout the sweep is about to remove, A records another one.
@@ -820,7 +932,7 @@ test("two processes writing the worktree map keep each other's records (#2202)",
   const script = `const { recordWorktreeResolution } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
     + `if (!recordWorktreeResolution(${JSON.stringify(b)})) process.exit(3);`;
   const second = spawnSync(process.execPath, ["-e", script], { cwd: path.join(import.meta.dir, "..", "..", ".."), env: child, encoding: "utf8" });
-  expect(second.stderr).toBe("");
+  assertWorktreeChildSuccess(second);
   expect(second.status).toBe(0);
 
   /* A: records wt-a without having re-read the file. */

@@ -1884,3 +1884,77 @@ test("emergency succession ranks duplicate guidance by the tasks being combined 
   const view = projectView(PROJECT).scopes.find(row => row.scope === scope)!;
   expect(view.active.find(row => row.id === ids[0])?.tasks).toBe(2);
 });
+
+
+function keyedOperation(p: CuratorPass, key = "editorial-request", digest = "a".repeat(64)) {
+  const owned = patchPass(p.id, { conversationId: "conversation_curator-fixture" })!;
+  return { owned, operation: { pass: owned.id, conversationId: owned.conversationId!, project: owned.project,
+    requestId: key, digest, assertCurrent: () => {} } };
+}
+
+test("keyed apply returns its historical revisions after later writes and Undo without effects", async () => {
+  const { readCurationOperation, curationOperationResult } = await import("./apply");
+  const scope = roleScope(PROJECT, "builder"), id = fixture(scope, { id: "r_keyed-source" });
+  const { owned, operation } = keyedOperation(pass());
+  const plan = input({ [scope]: [id] }, { rewrite: [{ id, rule: "Verify the current owner before every stored guidance edit.", note: "Keep the ownership check at the edit boundary." }] });
+  const first = applyCuration(owned, plan, at(1), { operation });
+  expect(first).toMatchObject({ disposition: "committed", revisions: [{ scope, input: 1, result: 2 }], counts: { calls: 1, rewritten: 1 } });
+  expect(curationOperationResult(readCurationOperation(operation)!)).toEqual(first);
+  const before = roleMemoryCollection()!.snapshot();
+  expect(applyCuration(owned, plan, at(2), { operation })).toEqual(first);
+  expect(roleMemoryCollection()!.snapshot()).toEqual(before);
+  applyCuration(owned, input({ [scope]: [id] }, { rewrite: [{ id, rule: "Recheck the target scope before committing any stored guidance edit.", note: "Retain the later writer's scope check." }] }), at(3));
+  expect(() => applyCuration(owned, plan, at(4), { operation: { ...operation, requestId: "unrelated-stale" } })).toThrow(/now revision/);
+  expect(applyCuration(owned, plan, at(4), { operation })).toEqual(first);
+  patchPass(owned.id, { state: "succeeded", endedAt: at(5) });
+  revertCuratorPass(owned.id, at(6));
+  const undone = roleMemoryCollection()!.snapshot();
+  // The trusted history reader can observe the saved disposition; ended-pass
+  // admission stays closed and never re-enters the editorial apply path.
+  expect(curationOperationResult(readCurationOperation(operation)!)).toEqual(first);
+  expect(() => applyCuration(owned, plan, at(7), { operation })).toThrow(/pass has ended/);
+  expect(roleMemoryCollection()!.snapshot()).toEqual(undone);
+});
+
+test.each(["role_memory", "role_memory_curation"])("%s write failure rolls editorial rows and witness back together", async collection => {
+  const { readCurationOperation } = await import("./apply");
+  const scope = roleScope(PROJECT, "builder"), id = fixture(scope, { id: "r_rollback-source" });
+  const { owned, operation } = keyedOperation(pass());
+  const plan = input({ [scope]: [id] }, { rewrite: [{ id, rule: "Check current scope ownership before committing stored guidance.", note: "Retain this scope check before writes." }] });
+  const held = roleMemoryCollection()!, before = held.snapshot();
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    db.exec(`CREATE TRIGGER refuse_editorial BEFORE INSERT ON state_rows WHEN NEW.collection='${collection}' BEGIN SELECT RAISE(ABORT, 'fixture transaction refusal'); END`);
+    expect(() => applyCuration(owned, plan, at(1), { operation })).toThrow(/fixture transaction refusal/);
+    expect(held.snapshot()).toEqual(before);
+    expect(readCurationOperation(operation)).toBeNull();
+    db.exec("DROP TRIGGER refuse_editorial");
+    expect(applyCuration(owned, plan, at(2), { operation })).toMatchObject({ disposition: "committed", counts: { calls: 1 } });
+    expect(readPass(owned.id)!.counts.calls).toBe(1);
+  } finally { db.close(); }
+});
+
+test("keyed acknowledgement bound is checked before every collection effect", async () => {
+  const hugeScope = `project:${"x".repeat(140_000)}`;
+  fixture();
+  const { owned, operation } = keyedOperation(pass());
+  const { curationCollection } = await import("./store");
+  const withScope = { ...owned, scopes: [...owned.scopes, hugeScope] };
+  curationCollection()!.boundedPatch(2, tx => tx.put(withScope));
+  const held = roleMemoryCollection(true)!, before = held.snapshot();
+  expect(() => applyCuration(withScope, { scopes: [{ scope: hugeScope, revision: 0, order: [] }] }, at(1), { operation })).toThrow(/bound/);
+  expect(held.snapshot()).toEqual(before);
+});
+
+test.each(["a", "ї", "😀"])("rendered %s code points accept the exact scope bound and refuse overflow", char => {
+  const scope = roleScope(PROJECT, "builder"), id = "r_boundary";
+  // One rendered line includes bullet, brackets, identifier and spacing.
+  const overhead = Array.from(`- [${id}] `).length;
+  fixture(scope, { id, rule: char.repeat(ROLE_MEMORY_BOUND - overhead) });
+  const p = pass();
+  expect(scopeChars([row(id)])).toBe(ROLE_MEMORY_BOUND);
+  expect(applyCuration(p, input({ [scope]: [id] }), at(1)).counts.calls).toBe(1);
+  roleMemoryCollection()!.boundedPatch(2, tx => tx.put({ ...row(id), rule: row(id).rule + char }));
+  expect(scopeChars([row(id)])).toBe(ROLE_MEMORY_BOUND + 1);
+  expect(() => applyCuration(p, input({ [scope]: [id] }), at(2))).toThrow(/bound/);
+});

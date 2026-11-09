@@ -3,6 +3,7 @@
 const failures = {
   "store-busy": true,
   "worker-timeout": true,
+  "window-exhausted": false,
   "worker-queue-full": true,
   "worker-exited": false,
   "worker-io": false,

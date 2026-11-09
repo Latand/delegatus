@@ -1239,10 +1239,10 @@ export class RuntimeJournal {
       if (stopCompleted && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
-      // Steer-first fallback follows the next live turn. Keep the observed turn
-      // on its receipt, without pinning the durable effect to the ended turn.
+      // Policies that select a running turn at dispatch retain its identity on
+      // the receipt. A proven pre-write refusal can then retry when idle.
       if (beginning && (command.kind === "send" || command.kind === "steer")
-        && command.policy !== "steer-or-queue" && details.turnId !== undefined) {
+        && command.policy !== "steer-or-queue" && command.policy !== "context-or-queue" && details.turnId !== undefined) {
         const effect = this.db.query<{ payload_json: string }, [string]>("SELECT payload_json FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`);
         if (!effect) throw new Error("runtime operation effect is missing");
