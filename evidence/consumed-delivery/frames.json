@@ -18,6 +18,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -37,8 +39,8 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
@@ -59,7 +61,7 @@
         "first": {
           "whyReachable": true,
           "fadeOverText": false,
-          "operation": "consumed-tick",
+          "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
           "whyWhole": true,
@@ -84,6 +86,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
@@ -103,8 +107,8 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
@@ -133,6 +137,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -196,6 +202,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
@@ -267,6 +275,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
@@ -315,6 +325,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -381,6 +393,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
@@ -430,6 +444,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -493,6 +509,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
@@ -564,6 +582,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
@@ -612,6 +632,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -678,6 +700,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
@@ -727,6 +751,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -790,6 +816,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
@@ -861,6 +889,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
@@ -909,6 +939,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -928,8 +960,8 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
@@ -975,6 +1007,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
@@ -1024,6 +1058,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -1087,6 +1123,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
@@ -1158,6 +1196,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
@@ -1206,6 +1246,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -1272,6 +1314,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -1321,6 +1365,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -1384,6 +1430,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -1455,6 +1503,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
@@ -1503,6 +1553,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -1569,6 +1621,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -1618,6 +1672,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -1681,6 +1737,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -1752,6 +1810,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
@@ -1800,6 +1860,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -1819,8 +1881,8 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
@@ -1841,7 +1903,7 @@
         "first": {
           "whyReachable": true,
           "fadeOverText": false,
-          "operation": "consumed-tick",
+          "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
           "whyWhole": true,
@@ -1866,6 +1928,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -1885,8 +1949,8 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
@@ -1915,6 +1979,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -1978,6 +2044,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -2049,6 +2117,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
@@ -2097,6 +2167,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
@@ -2163,6 +2235,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -2212,6 +2286,8 @@
           "tileHeight": 40,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
@@ -2275,6 +2351,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
@@ -2346,6 +2424,8 @@
           "tileHeight": 40,
           "queueControlsWhole": false,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
           "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
@@ -2394,6 +2474,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "body",
@@ -2463,7 +2545,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2512,6 +2596,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "chip",
@@ -2578,7 +2664,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2652,7 +2740,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 36,
+          "listFrameInRegion": false,
+          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "button",
         "listOpen": true,
@@ -2700,6 +2790,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "body",
@@ -2769,7 +2861,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2818,6 +2912,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "chip",
@@ -2884,7 +2980,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2958,7 +3056,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 36,
+          "listFrameInRegion": false,
+          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "button",
         "listOpen": true,
@@ -3006,6 +3106,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "body",
@@ -3075,7 +3177,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -3124,6 +3228,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "chip",
@@ -3190,7 +3296,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -3264,7 +3372,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 36,
+          "listFrameInRegion": false,
+          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "button",
         "listOpen": true,
@@ -3312,6 +3422,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "body",
@@ -3331,8 +3443,8 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
@@ -3381,7 +3493,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -3430,6 +3544,8 @@
           "tileHeight": 48,
           "queueControlsWhole": true,
           "overlaps": false,
+          "regionOverflow": 0,
+          "listFrameInRegion": null,
           "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "chip",
@@ -3496,7 +3612,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-724.0 scroll 0/0; header 508.0-532.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "list",
         "listOpen": true,
@@ -3570,7 +3688,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+          "regionOverflow": 36,
+          "listFrameInRegion": false,
+          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
         },
         "active": "button",
         "listOpen": true,
