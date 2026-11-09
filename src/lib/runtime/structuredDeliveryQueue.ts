@@ -1204,10 +1204,10 @@ export class StructuredDeliveryQueue {
           // control has: past it, it settles with its reason during startup.
           let settledControls = 0;
           for (const control of heldControls) {
-            if (await this.settleExpiredDeferredControl(control)) settledControls += 1;
+            if (await this.settleExpiredDeferredControl(control, lane)) settledControls += 1;
           }
           const settleKilledReconfigures = async () => {
-            if (this.port.handoffHeld?.()) return;
+            if (lane.released || this.retirementExecutor.retired || this.port.handoffHeld?.()) return;
             for (const effect of deferred) {
               if (isReconfigureEffect(effect) && this.killedReconfigures.has(effect.operationId)) {
                 await this.transitionReconfigure(effect, "failed", { reason: "conversation-killed" });
@@ -3124,9 +3124,18 @@ export class StructuredDeliveryQueue {
 
   /** A control held by startup deferral keeps its settlement ceiling. Answers
       whether the control is settled; one that is still open waits for startup
-      with a bounded wake toward its deadline. */
-  private async settleExpiredDeferredControl(effect: ControlEffect): Promise<boolean> {
+      with a bounded wake toward its deadline.
+
+      This shortcut runs outside `drainTarget`, so it carries that drain's
+      ownership fences itself: a released lane, a retired executor or an
+      update handoff writes nothing for the control, neither before the status
+      read nor after it, because the read can outlast this executor's
+      authority while a successor or the release takes the conversation. */
+  private async settleExpiredDeferredControl(effect: ControlEffect, lane: DeliveryLane): Promise<boolean> {
+    const owned = () => !lane.released && !this.retirementExecutor.retired && !this.port.handoffHeld?.();
+    if (!owned()) return false;
     const durable = await this.readStatus(effect.operationId);
+    if (!owned()) return false;
     if (!durable.readable) {
       this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "delivery journal status is unavailable" });
       this.retrySoon();

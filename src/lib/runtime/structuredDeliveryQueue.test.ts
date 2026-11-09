@@ -20,6 +20,7 @@ import {
   type StructuredDeliveryQueuePort,
 } from "./structuredDeliveryQueue";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContentDigest, type StructuredImageRef } from "./structuredContent";
+import type { DeliveryProgressSink } from "./deliveryProgress";
 import { deputySeatNoteRequest } from "@/lib/orchestrator/deputySweep";
 import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
 
@@ -2222,6 +2223,66 @@ for (const recoverable of [false, true]) {
       await queue.drain();
       expect(statuses.get("held-interrupt")).toBe("failed");
       expect(reasons.get("held-interrupt")).toBe("interrupt control exceeded its 2-minute settlement deadline; retry from the current conversation state");
+    } finally { queue.retire(); }
+  });
+}
+
+/* The startup shortcut that settles a held control runs outside the ordinary
+   drain, so it must carry that drain's ownership fences across its own status
+   read. Each case holds the read, changes who owns the conversation, then lets
+   an overdue queued receipt come back. "current-owner" changes nothing and
+   keeps the ordinary deadline settlement. */
+for (const interleaving of ["current-owner", "retired", "update-handoff"] as const) {
+  test(`a startup-held interrupt whose status read outlasts its owner writes nothing (${interleaving})`, async () => {
+    const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+    setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+    const transitions: Array<[string, string]> = [];
+    const progressWrites: string[] = [];
+    let handoff = false;
+    let releaseRead!: () => void;
+    let readEntered!: () => void;
+    const entered = new Promise<void>(resolve => { readEntered = resolve; });
+    const held = new Promise<void>(resolve => { releaseRead = resolve; });
+    const progress: DeliveryProgressSink = {
+      mark: id => { progressWrites.push(`mark:${id}`); },
+      note: id => { progressWrites.push(`note:${id}`); },
+      stalled: id => { progressWrites.push(`stalled:${id}`); },
+      deadline: id => { progressWrites.push(`deadline:${id}`); },
+      settle: (id, state) => { progressWrites.push(`settle:${id}:${state}`); },
+      get: () => null,
+      open: () => [],
+    };
+    const queue = new StructuredDeliveryQueue({
+      deferTarget: () => true,
+      canRecoverDeferredTarget: () => false,
+      handoffHeld: () => handoff,
+      progress,
+      effects: async () => transitions.length ? [] : [{ id: "owned-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+        operationId: "owned-interrupt", conversationId: "conversation-owned", turnId: "turn-owned",
+      } }],
+      status: async () => {
+        readEntered();
+        await held;
+        return { status: "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() };
+      },
+      transition: async (id, status) => { transitions.push([id, status]); },
+    }, () => null);
+    try {
+      const pass = queue.drain();
+      await entered;
+      const writesBeforeRelease = progressWrites.length;
+      if (interleaving === "retired") queue.retire();
+      if (interleaving === "update-handoff") handoff = true;
+      releaseRead();
+      await pass;
+      if (interleaving === "current-owner") {
+        expect(transitions).toEqual([["owned-interrupt", "failed"]]);
+        expect(progressWrites).toContain("settle:owned-interrupt:failed");
+      } else {
+        expect(transitions).toEqual([]);
+        expect(progressWrites.slice(writesBeforeRelease).filter(write => write.endsWith(":owned-interrupt")
+          || write.startsWith("settle:owned-interrupt"))).toEqual([]);
+      }
     } finally { queue.retire(); }
   });
 }
