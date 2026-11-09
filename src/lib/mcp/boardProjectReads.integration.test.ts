@@ -304,6 +304,70 @@ function barrier() {
   return { reached, release, async wait() { entered(); await held; } };
 }
 
+function setBoardAliases(aliases: Record<string, string>) {
+  projectAliasStore.mutate(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), current => ({
+    next: { ...current, aliases: { ...current.aliases, ...aliases } }, result: undefined,
+  }));
+}
+
+for (const tool of TOOLS) for (const workspace of [false, true]) {
+  test(`${tool}: alias-chain proof allows unrelated alias changes workspace=${workspace}`, async () => {
+    const h = await harness(workspace);
+    setBoardAliases({ "outer-alias": "middle-alias", "middle-alias": OWN });
+    h.atSdkReturn(() => setBoardAliases({ "unrelated-alias": FOREIGN }));
+    expect(await h.call(tool, { project: "outer-alias" })).toMatchObject({ ok: true, total: 1 });
+  });
+  for (const spelling of ["outer-alias", "legacy_board"]) {
+    for (const form of ["fresh", "keyed", "replay"] as const) {
+      for (const change of ["unchanged", "redirect", "revoke", "rewire"] as const) {
+        test(`${tool}: alias-chain SDK return ${spelling} ${form} ${change} workspace=${workspace}`, async () => {
+          const h = await harness(workspace);
+          setBoardAliases({ "outer-alias": "middle-alias", "middle-alias": OWN, "legacy-board": "middle-alias", "other-middle": OWN });
+          const args = { project: spelling, ...(form === "fresh" ? {} : { clientRequestId: `chain-${form}` }) };
+          if (form === "replay") expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1 });
+          const db = new Database(h.filename);
+          try {
+            const receiptBytes = () => JSON.stringify(db.query("SELECT * FROM mcp_receipts ORDER BY receipt_key").all());
+            const before = receiptBytes(), reads = h.rowReads();
+            h.atSdkReturn(() => {
+              if (change === "redirect") setBoardAliases({ "middle-alias": FOREIGN });
+              if (change === "rewire") setBoardAliases({ "middle-alias": "other-middle" });
+              if (change === "revoke") projectAliasStore.mutate(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), current => {
+                const aliases = { ...current.aliases }; delete aliases["middle-alias"];
+                return { next: { ...current, aliases }, result: undefined };
+              });
+            });
+            const result = await h.call(tool, args);
+            if (change === "unchanged") expect(result).toMatchObject({ ok: true, total: 1, replayed: form === "replay" });
+            else {
+              refused(result, workspace ? "workspace_forbidden" : "project_scope_refused");
+              expect(h.wire()).not.toContain("Own task"); expect(h.wire()).not.toContain("Own lane");
+            }
+            if (form === "replay") { expect(receiptBytes()).toBe(before); expect(h.rowReads()).toBe(reads); }
+            h.atSdkReturn(() => {});
+            setBoardAliases({ "middle-alias": OWN });
+            h.reopen();
+            expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1, replayed: form !== "fresh" });
+          } finally { db.close(); }
+        });
+      }
+    }
+  }
+}
+
+for (const workspace of [false, true]) for (const spelling of ["outer-alias", "legacy_board"]) {
+  for (const changed of [false, true]) test(`list_pipelines: alias-chain page await ${spelling} changed=${changed} workspace=${workspace}`, async () => {
+    const h = await harness(workspace); h.many();
+    setBoardAliases({ "outer-alias": "middle-alias", "middle-alias": OWN, "legacy-board": "middle-alias" });
+    const first = await h.call("list_pipelines", { project: spelling, limit: 1 });
+    expect(first).toMatchObject({ ok: true, total: 251, hasMore: true });
+    h.onRows(() => { queueMicrotask(() => { if (changed) setBoardAliases({ "middle-alias": FOREIGN }); }); });
+    const result = await h.call("list_pipelines", { project: spelling, limit: 1 });
+    if (changed) refused(result, workspace ? "workspace_forbidden" : "project_scope_refused");
+    else expect(result).toMatchObject({ ok: true, total: 251, hasMore: true });
+  });
+}
+
 for (const tool of TOOLS) {
   for (const seam of ["authorization", "claim-before", "claim-after", "binding", "completion"] as const) {
     for (const changed of [false, true]) test(`${tool}: ${seam} await ${changed ? "refuses replaced authority" : "allows unchanged authority"}`, async () => {

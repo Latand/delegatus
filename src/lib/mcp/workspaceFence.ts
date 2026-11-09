@@ -15,7 +15,7 @@ import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
 import { McpToolRefusal, retainResponseAuthority, type McpToolBindings, type McpToolService } from "./server";
-import { captureBoardCaller, resolveBoardProject, type ViewerMcpDomainDependencies } from "./bindings";
+import { captureBoardAliasProof, captureBoardCaller, resolveBoardProject, type ViewerMcpDomainDependencies } from "./bindings";
 import { runWithMcpCallerResolution } from "./callerContext";
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
@@ -109,10 +109,8 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       let allowed = workspacePrincipalAccess(principal);
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
-      const named = typeof input.project === "string" ? input.project.trim().toLowerCase() : "";
+      const named = typeof input.project === "string" ? input.project.trim() : "";
       const aliases = boardRead ? projectAliasSnapshot({ strict: true }).aliases : {};
-      const aliasKey = Object.keys(aliases).find(key => key.toLowerCase() === named) ?? named;
-      const alias = aliases[aliasKey];
       const projectRefusal = (details: Record<string, unknown>) => {
         const permitted = (value: unknown): value is { project: string; name: string } => Boolean(value && typeof value === "object"
           && typeof (value as { project?: unknown }).project === "string" && typeof (value as { name?: unknown }).name === "string"
@@ -141,6 +139,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       }
       if (boardRead && typeof args.project === "string" && !args.project.trim()) args.project = project;
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
+      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases) : undefined;
       const checks: (() => string | null | undefined)[] = [() => project];
       const task = (id: string) => {
         const source = dependencies.taskSelectionSource?.();
@@ -202,7 +201,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       const assert = () => {
         if (boardRead) {
           assertBoardCaller();
-          if (projectAliasSnapshot({ strict: true }).aliases[aliasKey] !== alias) denied();
+          if (!aliasesUnchanged?.()) denied();
         }
         allowed = workspacePrincipalAccess(principal);
         if (!checks.every(check => allowed(check()))) denied();

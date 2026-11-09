@@ -6370,6 +6370,31 @@ export function captureBoardCaller(dependencies: ViewerMcpDomainDependencies, co
   return { fingerprint: pinned, assert };
 }
 
+/** Pin alias edges without resolving the selected board again after an await. */
+export function captureBoardAliasProof(named: string, project: string, aliases: Readonly<Record<string, string>>): () => boolean {
+  // Match the spelling vocabulary accepted by the shared named-project resolver.
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[._/\\-]+/gu, "-").replace(/^-|-$/gu, "");
+  const spelling = normalize(named);
+  const matchingKeys = (current: Readonly<Record<string, string>>) => Object.keys(current).filter(key => spelling && normalize(key) === spelling).sort();
+  const keys = matchingKeys(aliases);
+  const proof = new Map<string, string | undefined>();
+  for (const start of [project, named, ...keys]) {
+    let key = start;
+    while (key && !proof.has(key)) {
+      const target = Object.hasOwn(aliases, key) ? aliases[key] : undefined;
+      // Retain terminal absence too: introducing an alias changes the proof.
+      proof.set(key, target);
+      if (!target) break;
+      key = target;
+    }
+  }
+  return () => {
+    const current = projectAliasSnapshot({ strict: true }).aliases;
+    return JSON.stringify(matchingKeys(current)) === JSON.stringify(keys)
+      && [...proof].every(([key, target]) => (Object.hasOwn(current, key) ? current[key] : undefined) === target);
+  };
+}
+
 /** One selection per call; fresh authority at every read/disclosure boundary. */
 function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): McpBoardRead {
   assertWorkspaceMcpCall();
@@ -6385,16 +6410,15 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   if (resolved !== undefined && named !== resolved) {
     throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
   }
+  const aliases = projectAliasSnapshot({ strict: true }).aliases;
   const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
     : resolved !== undefined ? resolved : named ? resolveBoardProject(named, dependencies) : "";
-  const aliases = projectAliasSnapshot({ strict: true }).aliases;
-  const aliasKey = Object.keys(aliases).find(key => key.toLowerCase() === named.toLowerCase()) ?? named;
-  const alias = aliases[aliasKey];
   const project = boardReadProject(requested, dependencies);
+  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases);
   return { project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([project, caller.fingerprint])).digest("hex")}`, assert() {
     assertWorkspaceMcpCall();
     caller.assert();
-    if (canonicalProject(project) !== project || alias !== projectAliasSnapshot({ strict: true }).aliases[aliasKey]
+    if (canonicalProject(project) !== project || !aliasesUnchanged()
       || boardReadProject(requested, dependencies) !== project) {
       throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false });
     }
