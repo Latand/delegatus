@@ -9,8 +9,9 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import type { AgentMemoryPlan } from "./agentMemory";
 
 const [root, mode] = process.argv.slice(2);
-const delayed = ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler"].includes(mode!);
+const delayed = ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler", "ownerloss"].includes(mode!);
 const owned: Array<{ identity: ReturnType<typeof captureProcessIdentity>; closed: Promise<void> }> = [];
+const fixtureIdentity = captureProcessIdentity(process.pid);
 let nativeCompleted = false;
 let waiterLive = false;
 let initialSize: number | undefined;
@@ -22,9 +23,18 @@ if (delayed) {
   mock.module("./nativeWaitOwner", () => ({ ...waitOwner,
   nativeWaitOwnerSource: waitOwner.nativeWaitOwnerSource.replace("process.exitCode = code ??", `
     fs.writeFileSync(path.join(directory, "waiter-live"), "ready");
+    const owner = JSON.parse(fs.readFileSync(path.join(process.env.DRAIN_ROOT, "fixture-owner.json"), "utf8"));
+    const ownerAlive = () => {
+      try {
+        const stat = fs.readFileSync("/proc/" + owner.pid + "/stat", "utf8");
+        const start = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\\s+/)[19];
+        return owner.startIdentity === owner.pid + ":" + start;
+      } catch { return false; }
+    };
     const barrierDeadline = Date.now() + 3000;
     while (!fs.existsSync(path.join(process.env.DRAIN_ROOT, "release-waiter"))) {
       if (Date.now() > barrierDeadline) throw new Error("waiter barrier deadline exceeded");
+      if (!ownerAlive()) { fs.writeFileSync(path.join(process.env.DRAIN_ROOT, "waiter-owner-lost"), "ready"); break; }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
     process.exitCode = code ??`),
@@ -41,20 +51,37 @@ if (delayed) {
   // Acknowledged barriers hold the drain after its first short read. The test
   // observes durable native exit and sink state before releasing either owner.
   fs.writeFileSync(path.join(bin, "dd"), `#!/bin/sh
+owner_alive() {
+  IFS= read -r owner_pid < "$DRAIN_ROOT/fixture-owner.pid" || return 1
+  IFS= read -r owner_start < "$DRAIN_ROOT/fixture-owner.start" || return 1
+  IFS= read -r stat < "/proc/$owner_pid/stat" || return 1
+  stat=\${stat##*) }
+  set -- $stat
+  shift 19
+  actual_start=$1
+  printf '%s:%s:%s\n' "$owner_pid" "$owner_start" "$actual_start" > "$DRAIN_ROOT/owner-identity-check"
+  [ "$owner_start" = "$actual_start" ]
+}
 if [ ! -e "$DRAIN_ROOT/first" ]; then
   "${dd}" "$@"
   touch "$DRAIN_ROOT/first"
 else
   if [ ! -e "$DRAIN_ROOT/delayed" ]; then
     touch "$DRAIN_ROOT/delayed"
-    until [ -e "$DRAIN_ROOT/release-drain" ]; do sleep 0.005; done
+    attempts=0
+    while [ ! -e "$DRAIN_ROOT/release-drain" ]; do
+      if ! owner_alive; then touch "$DRAIN_ROOT/drain-owner-lost"; exit 0; fi
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 600 ]; then touch "$DRAIN_ROOT/drain-watchdog"; exit 0; fi
+      sleep 0.005
+    done
   fi
   exec "${dd}" "$@"
 fi
 `, { mode: 0o700 });
   fs.writeFileSync(path.join(bin, "cat"), `#!/bin/sh
 touch "$DRAIN_ROOT/drain-tail"
-touch "$DRAIN_ROOT/release-waiter"
+[ "$DRAIN_BARRIER_OWNER_LOSS" = "1" ] || touch "$DRAIN_ROOT/release-waiter"
 exec "${cat}" "$@"
 `, { mode: 0o700 });
   fs.writeFileSync(path.join(bin, "wc"), `#!/bin/sh
@@ -67,6 +94,11 @@ else
 fi
 `, { mode: 0o700 });
   process.env.DRAIN_ROOT = root;
+  process.env.DRAIN_BARRIER_OWNER_LOSS = mode === "ownerloss" ? "1" : "0";
+  const [ownerPid, ownerStart] = (fixtureIdentity.startIdentity ?? "").split(":");
+  fs.writeFileSync(path.join(root!, "fixture-owner.json"), JSON.stringify({ pid: fixtureIdentity.pid, startIdentity: fixtureIdentity.startIdentity }));
+  fs.writeFileSync(path.join(root!, "fixture-owner.pid"), `${ownerPid ?? ""}\n`);
+  fs.writeFileSync(path.join(root!, "fixture-owner.start"), `${ownerStart ?? ""}\n`);
   if (mode === "shortlive") {
     fs.writeFileSync(path.join(root, "release-drain"), "ready");
     fs.writeFileSync(path.join(root, "release-waiter"), "ready");
@@ -100,7 +132,7 @@ const peer = `
   const file = process.argv.at(-1).slice("unix://".length);
   const mode = process.env.PEER_MODE.replace(/^(managed|shim)/, "");
   write(2, "EADDRINUSE: callback bind refused\\n");
-  if (["delayedexit", "delayedcontrol", "shortlive", "unlinked"].includes(mode)) {
+  if (["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler", "ownerloss"].includes(mode)) {
     const until = Date.now() + 3000;
     while (!fs.existsSync(process.env.DRAIN_ROOT + "/first")) {
       if (Date.now() > until) throw new Error("first drain read did not settle");
@@ -109,8 +141,8 @@ const peer = `
   }
   write(2, "Bearer " + "private".repeat(8) + "\\n");
   write(2, process.env.HOME + "/private/file\\n");
-  if (mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler" || mode === "exit" || mode === "large" || mode === "boundary" || mode === "secret") {
-    if (mode === "large" || mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler") write(2, "x".repeat(20000) + "\\n");
+  if (mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler" || mode === "ownerloss" || mode === "exit" || mode === "large" || mode === "boundary" || mode === "secret") {
+    if (mode === "large" || mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler" || mode === "ownerloss") write(2, "x".repeat(20000) + "\\n");
     if (mode === "boundary") write(2, "Bearer " + "private".repeat(3000));
     if (mode === "secret") {
       // The key header and the first payload lines are visible; the footer is past the retained bytes.
@@ -119,7 +151,7 @@ const peer = `
       for (let line = 0; line < 150; line++) write(2, "KEYPAYLOAD" + String(line).padStart(3, "0") + "A".repeat(50) + "\\n");
       write(2, "-----END PRIVATE KEY-----\\n");
     }
-    if (["delayedexit", "delayedcontrol", "unlinked", "scheduler"].includes(mode)) fs.writeFileSync(process.env.DRAIN_ROOT + "/writes.json", JSON.stringify(writes));
+    if (["delayedexit", "delayedcontrol", "unlinked", "scheduler", "ownerloss"].includes(mode)) fs.writeFileSync(process.env.DRAIN_ROOT + "/writes.json", JSON.stringify(writes));
     process.exit(23);
   }
   if (mode === "signal" || mode === "wrappedsignal") process.kill(process.pid, "SIGTERM");
@@ -200,7 +232,7 @@ try {
       const startup = path.dirname(args.at(-1)!.slice("unix://".length));
       const until = performance.now() + 3000;
       const completion = path.join(startup, "native-exit.json");
-      if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler") {
+      if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler" || mode === "ownerloss") {
         while (!fs.existsSync(completion)) {
           if (performance.now() > until) throw new Error("native exit did not become durable");
           await Bun.sleep(5);
@@ -212,6 +244,11 @@ try {
         initialSize = fs.fstatSync(sink!).size;
         nativeCompleted = JSON.parse(fs.readFileSync(completion, "utf8")).code === 23;
         waiterLive = peerProcess.exitCode === null && peerProcess.signalCode === null;
+        if (mode === "ownerloss") {
+          fs.writeFileSync(path.join(root!, "owned.json"), JSON.stringify(owned.map(child => child.identity)));
+          fs.writeFileSync(path.join(root!, "ownerloss-ready"), "ready");
+          await new Promise<void>(() => {});
+        }
         if (mode === "scheduler") await Bun.sleep(250); // Simulate a delayed readiness observer while both owners are held.
         releaseDrainTimer = setTimeout(() => fs.writeFileSync(path.join(root!, "release-drain"), "ready"), mode === "scheduler" ? 500 : 250);
       }
@@ -300,6 +337,8 @@ try {
       })]);
       collection = { nativeCompleted, waiterLive, initialSize, size: fs.fstatSync(sink!).size,
         writes: mode === "shortlive" ? [] : JSON.parse(fs.readFileSync(path.join(root!, "writes.json"), "utf8")),
+        ownerIdentityCheck: fs.existsSync(path.join(root!, "owner-identity-check"))
+          ? fs.readFileSync(path.join(root!, "owner-identity-check"), "utf8") : null,
         children: owned.map(child => ({ identity: child.identity, status: processIdentityStatus(child.identity) })),
         childrenDead: owned.length === 2 && owned.every(child => processIdentityStatus(child.identity) === "dead") };
       if (process.env.STDERR_TEST_EVIDENCE_DIR) {
