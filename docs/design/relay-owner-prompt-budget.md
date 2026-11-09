@@ -37,6 +37,9 @@ rounds add their current answer frame and tool results separately from the
 duplicated conversation. Confirmed Cloud fallback prepares the native delivery
 mode again and retains prior tool results. Existing authorization, uncertainty,
 fallback and completion guards remain responsible for effects.
+Size refusals retain the earlier action's completed, unknown or confirmation
+status in the answer and additive diagnostic metadata. They preserve the
+existing action ledger and do not retry that action.
 
 The accepted design and its historical evidence limits are recorded unchanged
 in [the repair plan](relay-envelope-repair-plan.md) and

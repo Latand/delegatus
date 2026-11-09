@@ -14,7 +14,8 @@ export type OwnerTurnDiagnostic = {
   deadlineFallback?: null | "absent" | "unparseable" | "past";
   rawDeadlineAt?: string | null;
   executionLimitMs?: number;
-  promptBudget?: { kind: "mandatory_core_too_large"; mandatoryBytes: number; limitBytes: number };
+  promptBudget?: { kind: "mandatory_core_too_large"; mandatoryBytes: number; limitBytes: number;
+    priorAction?: "completed" | "unknown" | "confirmation_pending" | "confirmation_expired" };
 };
 
 export function ownerTurnDiagnostic(source: OwnerTurnDiagnostic["source"], reason: unknown, credentials: readonly string[] = []): OwnerTurnDiagnostic {

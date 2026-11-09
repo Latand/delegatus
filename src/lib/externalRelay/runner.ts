@@ -248,6 +248,14 @@ export async function runClaimedRequest(
   const ownerCredentials = [relay.credential, process.env.LLV_CODEX_CLOUD_TOKEN].filter((value): value is string => !!value);
   let diagnostic: OwnerTurnDiagnostic | undefined;
   const recordDiagnostic = (value: OwnerTurnDiagnostic) => {
+    if (!diagnostic && value.promptBudget) {
+      const actions = (loop?.results ?? ownerTools?.loop.results ?? []).filter(result => result.effect === "action");
+      const confirmation = actions.findLast(result => result.status === "confirmation_pending");
+      const priorAction = actions.some(result => result.execution_unknown || result.status === "outcome_unknown") ? "unknown"
+        : confirmation ? confirmation.expires_in_s === 0 ? "confirmation_expired" : "confirmation_pending"
+          : actions.some(result => result.status === "ok") ? "completed" : undefined;
+      value = { ...value, promptBudget: { ...value.promptBudget, ...(priorAction ? { priorAction } : {}) } };
+    }
     diagnostic ??= value;
     recorder?.diagnose(diagnostic);
   };

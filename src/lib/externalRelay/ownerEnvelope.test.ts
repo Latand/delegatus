@@ -246,4 +246,51 @@ test(`mandatory refusal has a readable ${language} answer and numeric diagnostic
     expect(answer.text).toContain(language === "uk" ? "Скоротіть" : "Shorten");
     expect(answer.text).not.toContain("StructuredEnvelope");
   }
+  const shortStatuses = language === "uk" ? ["Виконано", "невідомий", "підтвердження", "минув"]
+    : ["Done", "unknown", "Confirm", "expired"];
+  for (const [index, priorAction] of (["completed", "unknown", "confirmation_pending", "confirmation_expired"] as const).entries()) {
+    const withOutcome = { ...diagnostic, promptBudget: { ...diagnostic.promptBudget!, priorAction } };
+    const answer = ownerFailureAnswer(r, owner, withOutcome)!;
+    expect(Array.from(answer.text).length).toBeLessThanOrEqual(20);
+    expect(answer.text).toContain(shortStatuses[index]!);
+  }
+});
+
+for (const status of ["ok", "outcome_unknown", "confirmation_pending"] as const)
+test(`Cloud size refusal preserves the prior ${status} action and does not dispatch another turn`, async () => {
+  let posts = 0, cloud = 0, launches = 0;
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/tool-calls")) {
+      posts++;
+      const call = body as { call_id: string; tool: string };
+      return { body: { call_id: call.call_id, tool: call.tool, status, output: "<".repeat(6000), truncated: false,
+        effect: "action", delivered: false, replayed: false, calls_remaining: 15,
+        ...(status === "confirmation_pending" ? { confirmation_id: "fixture-confirmation", expires_at: "2099-01-01T00:00:00Z" } : {}) } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = pairedRelay(service.origin);
+  paired.targets[0] = { ...target, engine: "codex-cloud", project: "fixture-project", cloudEnvironmentId: "answer-env" };
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const r = request(); r.request_id = `size-after-${status}`;
+  r.input.conversation[1]!.text = "Write the requested note";
+  r.input.tools = [{ name: "write_note", summary: "Write a note", mode: "direct", effect: "action",
+    parameters: { type: "object", properties: {} } }];
+  try {
+    const result = await runClaimedRequest(paired, r, undefined, { leaseWorker: false,
+      cloudTransport: async () => { cloud++; return JSON.stringify({ action: "call", text: "", reply_to: null,
+        calls: [{ tool: "write_note", arguments: "{}", cursor: null }] }); },
+      ownerPorts: { launch: async () => { launches++; throw new Error("unexpected local fallback"); },
+        observe: async () => ({ state: "failed" }), stop: async () => {} },
+    });
+    const outcome = status === "ok" ? "completed" : status === "outcome_unknown" ? "unknown" : "confirmation_pending";
+    const answerText = result?.outcome === "answered" ? result.answer.text : "";
+    expect(result?.outcome).toBe("answered");
+    expect(answerText).toContain("Shorten");
+    expect(answerText).toContain(status === "ok" ? "action completed"
+      : status === "outcome_unknown" ? "outcome is unknown" : "awaits confirmation");
+    const { readAnswerRecord } = await import("./answers");
+    expect(readAnswerRecord(paired.id, r.target_id, r.request_id)).toMatchObject({ diagnostic: { promptBudget: { priorAction: outcome } } });
+    expect({ posts, cloud, launches }).toEqual({ posts: 1, cloud: 1, launches: 0 });
+  } finally { await service.close(); }
 });

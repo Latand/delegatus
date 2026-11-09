@@ -288,14 +288,31 @@ export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerIn
   // Diagnostics stay in durable custody and the journal. They may contain
   // internal exception names and are never suitable as chat copy.
   const oversized = diagnostic.promptBudget?.kind === "mandatory_core_too_large";
-  const explanation = oversized ? (ukrainian
+  const sizeExplanation = oversized ? (ukrainian
     ? "Обов’язковий контекст запиту завеликий. Скоротіть або розділіть запит і потрібні цитати."
     : "The required request context is too large. Shorten or split the request and its required quotations.") : ukrainian
     ? "Не вдалося завершити запит. Спробуйте ще раз."
     : "Your request could not be completed. Please try again.";
+  const priorAction = diagnostic.promptBudget?.priorAction;
+  const outcomes = ukrainian ? {
+    completed: "Попередню дію вже виконано. Не повторюйте її.",
+    unknown: "Результат попередньої дії невідомий. Перевірте її стан перед повторенням.",
+    confirmation_pending: "Попередня дія очікує підтвердження в чаті.",
+    confirmation_expired: "Підтвердження попередньої дії прострочене.",
+  } : {
+    completed: "The earlier action completed. Do not repeat it.",
+    unknown: "The earlier action's outcome is unknown. Check its status before retrying it.",
+    confirmation_pending: "The earlier action awaits confirmation in the chat.",
+    confirmation_expired: "Confirmation for the earlier action has expired.",
+  };
+  const explanation = priorAction ? outcomes[priorAction] + " " + sizeExplanation : sizeExplanation;
   const caps = answerCapabilities(request, "");
   const clean = scrubOwnerOutput(explanation, credentials);
-  const compact = oversized ? (ukrainian ? "Скоротіть запит." : "Shorten the request.") : ukrainian ? "Спробуйте ще раз." : "Please try again.";
+  const compactOutcomes = ukrainian ? { completed: "Виконано; завелике.", unknown: "Результат невідомий.",
+    confirmation_pending: "Чекає підтвердження.", confirmation_expired: "Час згоди минув." }
+    : { completed: "Done; context large.", unknown: "Outcome unknown.",
+      confirmation_pending: "Confirm in chat.", confirmation_expired: "Confirmation expired." };
+  const compact = priorAction ? compactOutcomes[priorAction] : oversized ? (ukrainian ? "Скоротіть запит." : "Shorten the request.") : ukrainian ? "Спробуйте ще раз." : "Please try again.";
   const text = Array.from(clean).length <= caps.plainMax ? clean : Array.from(scrubOwnerOutput(compact, credentials)).slice(0, caps.plainMax).join("");
   // A failure reply carries no answer parts the interrupted agent staged.
   const answer = checkedAnswerV2({ action: "reply", text, reply_to: owner.messageId, ...(caps.rich ? { format: "plain", buttons: [] } : {}) }, request, caps, { handoff: false, ignore: false });
