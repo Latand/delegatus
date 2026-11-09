@@ -590,3 +590,90 @@ for (const tool of TOOLS) test(`${tool}: serialized operator context cannot bypa
   h.domain.authorizedSeats = () => [];
   refused(await h.call(tool, { project: OWN, operatorBoardProject: OWN }), "ambiguous_project");
 });
+
+for (const tool of TOOLS) {
+  for (const keyed of [false, true]) test(`${tool}: workspace preserves resolved selection through a canonical-key name collision keyed=${keyed}`, async () => {
+    const h = await harness(true); h.domain.authorizedSeats = () => [];
+    expect(persistProjectAliases([{ source: "foreign-key-label", target: FOREIGN, displayName: OWN }])).toBe(true);
+    const args = keyed ? { clientRequestId: "resolved-board" } : {};
+    for (const project of ["Example Board", "WidgetsRepo", h.folder, "legacy-board"]) {
+      const answer = await h.call(tool, { ...args, project });
+      expect(h.wire()).not.toContain(FOREIGN);
+      expect(h.wire()).not.toContain(FOREIGN.slice(0, 13));
+      expect(answer).toMatchObject({ ok: true, total: 1 });
+    }
+    // A genuinely ambiguous wire argument still uses the complete directory.
+    refused(await h.call(tool, { ...args, project: OWN, resolvedBoardProject: OWN }), "workspace_forbidden");
+    expect(h.wire()).not.toContain(FOREIGN);
+  });
+
+  for (const workspace of [false, true]) test(`${tool}: early revoked caller stays terminal before replay workspace=${workspace}`, async () => {
+    const h = await harness(true);
+    if (!workspace) delete h.reader.generations[0]!.launchProfile.workspace;
+    const designate = (key: string, conversationId: string) => {
+      beginOrchestratorSeatIntent({ project: OWN, mandate: "Read board", clientRequestId: key, mode: "existing", conversationId });
+      completeOrchestratorSeatIntent({ project: OWN, clientRequestId: key, conversationId, path: null });
+    };
+    designate("first", CALLER);
+    const args = { project: OWN, clientRequestId: "read-before-revoke" };
+    expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1 });
+    const unknown = `${tool}:unknown-read`;
+    h.receipts.claim(unknown, requestDigest(tool, { project: OWN, clientRequestId: "unknown-read" }), "bounded");
+    const db = new Database(h.filename);
+    try {
+      const bytes = () => JSON.stringify(db.query("SELECT * FROM mcp_receipts ORDER BY receipt_key").all());
+      const before = bytes(), reads = h.rowReads();
+      designate("second", "conversation_successor"); h.mode("agent");
+      for (let reopen = 0; reopen < 2; reopen++) {
+        for (const clientRequestId of [undefined, "read-before-revoke", "unknown-read"]) {
+          refused(await h.call(tool, { project: OWN, ...(clientRequestId ? { clientRequestId } : {}) }), "orchestrator_seat_revoked");
+          expect(h.wire()).not.toContain("Own task"); expect(h.wire()).not.toContain("Own lane");
+        }
+        expect(h.rowReads()).toBe(reads); expect(bytes()).toBe(before); h.reopen();
+      }
+    } finally { db.close(); }
+  });
+
+  test(`${tool}: unavailable workspace authority remains transient`, async () => {
+    const h = await harness(true);
+    h.domain.attentionAuthority = () => { throw new Error("AUTHORITY_STORE_CANARY"); };
+    for (const args of [{}, { clientRequestId: "unavailable-board" }]) {
+      expect(await h.call(tool, { ...args, project: OWN })).toMatchObject({ ok: false, code: "workspace_unavailable", retryable: true });
+      expect(h.wire()).not.toContain("AUTHORITY_STORE_CANARY");
+    }
+    expect(h.rowReads()).toBe(0);
+  });
+
+  test(`${tool}: unreadable durable revocations retain a retryable authority refusal`, async () => {
+    const h = await harness(true);
+    expect(await h.call(tool, { project: OWN })).toMatchObject({ ok: true, total: 1 });
+    const reads = h.rowReads();
+    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), "{");
+    for (const args of [{}, { clientRequestId: "unreadable-revocations" }]) {
+      expect(await h.call(tool, { ...args, project: OWN })).toMatchObject({ ok: false,
+        code: "orchestrator_seat_authority_unavailable", retryable: true,
+        details: { code: "orchestrator_seat_authority_unavailable", retryable: true } });
+      expect(h.wire()).not.toContain("Own task"); expect(h.wire()).not.toContain("Own lane");
+    }
+    expect(h.rowReads()).toBe(reads);
+  });
+
+  for (const code of ["unknown_project", "ambiguous_project"]) {
+    for (const foreign of [false, true]) test(`${tool}: downstream ${code} filters workspace candidates foreign=${foreign}`, async () => {
+      const h = await harness(true);
+      const names = [{ project: OWN, name: "Example Board" }, ...(foreign ? [{ project: FOREIGN, name: "FOREIGN_LABEL_CANARY" }] : [])];
+      const read = h.bindings[tool];
+      h.bindings[tool] = Object.assign(async () => {
+        throw new McpToolRefusal(names.map(row => `${row.project}: ${row.name}`).join(", "), {
+          code, retryable: false, ...(code === "unknown_project" ? { closeMatches: names } : { candidates: names.map(row => row.project), candidateNames: names }),
+        });
+      }, read);
+      for (const full of [false, true]) for (const keyed of [false, true]) {
+        const result = await h.call(tool, { project: "Example Board", full, ...(keyed ? { clientRequestId: `downstream-refusal-${full}` } : {}) });
+        refused(result, code === "ambiguous_project" && foreign ? "workspace_forbidden" : code);
+        for (const value of [FOREIGN, FOREIGN.slice(0, 13), "FOREIGN_LABEL_CANARY"]) expect(h.wire()).not.toContain(value);
+        if (!foreign || code === "unknown_project") expect(h.wire()).toContain("Example Board");
+      }
+    });
+  }
+}

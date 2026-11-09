@@ -6380,7 +6380,12 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   if (operatorProject !== undefined && named !== operatorProject) {
     throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
   }
-  const requested = operatorProject !== undefined ? canonicalProject(operatorProject) : named ? resolveBoardProject(named, dependencies) : "";
+  const resolved = context.resolvedBoardProject;
+  if (resolved !== undefined && named !== resolved) {
+    throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
+  }
+  const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
+    : resolved !== undefined ? resolved : named ? resolveBoardProject(named, dependencies) : "";
   const aliases = projectAliasSnapshot({ strict: true }).aliases;
   const aliasKey = Object.keys(aliases).find(key => key.toLowerCase() === named.toLowerCase()) ?? named;
   const alias = aliases[aliasKey];

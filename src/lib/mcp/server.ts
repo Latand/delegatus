@@ -340,6 +340,8 @@ export interface McpToolCallContext {
   responseAuthority?: McpResponseAuthority;
   /** Board selection and current authority captured before normalization can await. */
   boardRead?: McpBoardRead;
+  /** Canonical selection resolved by the workspace fence; never a wire argument. */
+  resolvedBoardProject?: string;
   /** Authenticated in-process operator selection; never read from tool arguments. */
   operatorBoardProject?: string;
   /** Trusted read projection; never accepted from serialized tool arguments. */

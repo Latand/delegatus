@@ -57,6 +57,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
     }
     const refuse = () => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
       replayed: false, code: "workspace_forbidden", error: "workspace access denied", retryable: false });
+    const boardRead = tool === "list_tasks" || tool === "list_pipelines";
     try {
       const store = existingTeamStore();
       const authority = dependencies.attentionAuthority();
@@ -69,7 +70,6 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       });
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
       const principalIdentity = JSON.stringify(principal);
-      const boardRead = tool === "list_tasks" || tool === "list_pipelines";
       const conversationProject = (id: string): string | null => {
         if (dependencies.workspaceProject) return dependencies.workspaceProject(id);
         const record = lookup(id);
@@ -113,24 +113,27 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       const aliases = boardRead ? projectAliasSnapshot({ strict: true }).aliases : {};
       const aliasKey = Object.keys(aliases).find(key => key.toLowerCase() === named) ?? named;
       const alias = aliases[aliasKey];
+      const projectRefusal = (details: Record<string, unknown>) => {
+        const permitted = (value: unknown): value is { project: string; name: string } => Boolean(value && typeof value === "object"
+          && typeof (value as { project?: unknown }).project === "string" && typeof (value as { name?: unknown }).name === "string"
+          && allowed((value as { project: string }).project));
+        const candidates = Array.isArray(details.candidateNames) ? details.candidateNames : [];
+        if (details.code === "ambiguous_project" && !candidates.every(permitted)) denied();
+        const names = candidates.filter(permitted);
+        const matches = (Array.isArray(details.closeMatches) ? details.closeMatches : []).filter(permitted);
+        responseProjects.push(...names.map(row => row.project), ...matches.map(row => row.project));
+        // Rebuild both channels, including refusals returned by the inner service.
+        return { ...refuse(), code: String(details.code),
+          error: details.code === "ambiguous_project" ? `ambiguous project: ${names.map(row => row.name).join(", ")}`
+            : `no such project; ${matches.length ? `close matches: ${matches.map(row => row.name).join(", ")}` : "no close matches"}`,
+          details: { code: details.code, retryable: false,
+            ...(details.code === "ambiguous_project" ? { candidates: names.map(row => row.project), candidateNames: names } : { closeMatches: matches }) } };
+      };
       if (boardRead && typeof args.project === "string" && args.project.trim()) {
         try { args.project = resolveBoardProject(args.project.trim(), dependencies); }
         catch (error) {
           if (!(error instanceof McpToolRefusal) || !["unknown_project", "ambiguous_project"].includes(String(error.details.code))) throw error;
-          const permitted = (value: unknown): value is { project: string; name: string } => Boolean(value && typeof value === "object"
-            && typeof (value as { project?: unknown }).project === "string" && typeof (value as { name?: unknown }).name === "string"
-            && allowed((value as { project: string }).project));
-          const candidates = Array.isArray(error.details.candidateNames) ? error.details.candidateNames : [];
-          if (error.details.code === "ambiguous_project" && !candidates.every(permitted)) denied();
-          const names = candidates.filter(permitted);
-          const matches = (Array.isArray(error.details.closeMatches) ? error.details.closeMatches : []).filter(permitted);
-          responseProjects.push(...names.map(row => row.project), ...matches.map(row => row.project));
-          // Rebuild both channels: the resolver's original message includes foreign labels.
-          return { ...refuse(), code: String(error.details.code),
-            error: error.details.code === "ambiguous_project" ? `ambiguous project: ${names.map(row => row.name).join(", ")}`
-              : `no such project; ${matches.length ? `close matches: ${matches.map(row => row.name).join(", ")}` : "no close matches"}`,
-            details: { code: error.details.code, retryable: false,
-              ...(error.details.code === "ambiguous_project" ? { candidates: names.map(row => row.project), candidateNames: names } : { closeMatches: matches }) } };
+          return projectRefusal(error.details);
         }
       } else if (!boardRead && typeof args.project === "string") {
         const matches = allowedProjects.filter(key => key === args.project || key.startsWith(args.project as string));
@@ -232,13 +235,21 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         }
         return value;
       };
+      let boardRefusal: ReturnType<typeof projectRefusal> | undefined;
       return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied(); }, async () => {
         const result = await service.callTool(tool, args, { ...context,
-          ...(boardRead ? { assertCaller() { context?.assertCaller?.(); assert(); } } : {}),
+          ...(boardRead ? { resolvedBoardProject: typeof args.project === "string" ? args.project : undefined,
+            assertCaller() { context?.assertCaller?.(); assert(); } } : {}),
           assertResult(answer) {
           context?.assertResult?.(answer);
           assert();
-          if (!answer.ok) return;
+          if (!answer.ok) {
+            if (boardRead && ["unknown_project", "ambiguous_project"].includes(answer.code)) {
+              // Judge full identities before the service compacts project keys.
+              boardRefusal = projectRefusal({ ...answer.details, code: answer.code });
+            }
+            return;
+          }
           if (tool === "search_transcripts") {
             const scope = answer.projectScope as { resolved?: string } | undefined;
             // The outer fence discards an unscoped search fallback wholesale.
@@ -258,6 +269,10 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           visit(answer);
         } });
         assert();
+        if (boardRead && !result.ok && ["unknown_project", "ambiguous_project"].includes(result.code)) {
+          const safe = boardRefusal?.code === result.code ? boardRefusal : projectRefusal({ ...result.details, code: result.code });
+          return { ...safe, replayed: result.replayed };
+        }
         answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
           const scope = result.projectScope as { resolved?: string } | undefined;
@@ -270,6 +285,11 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       });
     } catch (error) {
       if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") return refuse();
+      if (boardRead && error instanceof McpToolRefusal && ["orchestrator_seat_revoked", "orchestrator_seat_authority_unavailable",
+        "caller_unidentified", "project_scope_refused", "cross_project_refused"].includes(String(error.details.code))) {
+        const code = String(error.details.code), retryable = error.details.retryable === true;
+        return { ...refuse(), code, retryable, error: "board caller authority refused the read", details: { code, retryable } };
+      }
       // A broken authority store cannot silently restore installation reach.
       return { ...refuse(), code: "workspace_unavailable", error: "workspace authority is unavailable", retryable: true };
     }
