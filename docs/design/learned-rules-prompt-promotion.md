@@ -6,13 +6,13 @@ This document is an internal research handoff. It must stay out of the eventual 
 
 ## Conclusions and limits
 
-The existing shared core already covers requirement anchoring, evidence, scope, isolation, privacy and uncertain effects. Preserve that work. Add a small argument-preparation rule, make retry guidance distinguish uncertain execution from a proved refusal, and give the orchestrator a verified parameter worksheet. Add the curator's deployment-and-audience equivalence check to both its scaffold and its scheduled checklist.
+The existing shared core already covers requirement anchoring, evidence, scope, isolation, privacy and uncertain effects. Preserve that work. Add a small argument-preparation rule, make retry guidance distinguish uncertain execution from a proved refusal, and propose verified parameter guidance at tool-selection time. Put the curator's deployment-and-audience equivalence policy once in its scaffold, with a short reference in its scheduled checklist.
 
 The evidence supports several causes of failure. A useful task-guard rule existed but was absent from one seat's recorded memory delivery. Another seat received that rule, supplied both guards, encountered a task revision change around launch, refreshed the task and succeeded. A decision-guard rule was delivered with an incomplete guard list. Numeric lesson bounds are enforced by a refinement that does not expose those bounds in the generated TypeScript tool description. Some retries reused an operation key after changing arguments. These require different remedies.
 
 No worked case establishes the complete chain needed to conclude that an agent received, understood and then ignored a specific rule. Recurrence establishes an investigation lead. It does not establish that conclusion.
 
-The earlier reading queues record completion for 8,173 distinct rule texts and 4,431 supporting reasons in the 8,392-record snapshot. The initial 291-text sample maps to 295 records; the additional queue covers 7,882 texts across 8,097 records. Text-reading completion and a semantic promotion decision are separate claims. Independent review found that most coverage fields in the original map were generic retention defaults. They supply inventory and provenance, without establishing individual prompt coverage. The corrected decision ledger covers all 1,039 active heads and all 522 heads archived for budget alone. It preserves the 262 shared-head decisions and adds 1,299 individual comparisons: 518 other active project heads, 259 project-orchestrator heads and 522 budget archives. Each comparison names the full invariant, a current source clause, the conditions left specific, a decision and a distinct reason. Other dispositions retain recorded history and sampled checks. No deployed equivalence, archive or restoration is authorized.
+The earlier reading queues record completion for 8,173 distinct rule texts and 4,431 supporting reasons in the 8,392-record snapshot. The initial 291-text sample maps to 295 records; the additional queue covers 7,882 texts across 8,097 records. Text-reading completion and a semantic promotion decision are separate claims. Independent review found that most coverage fields in the original map were generic retention defaults. They supply inventory and provenance, without establishing individual prompt coverage. The corrected decision ledger covers all 1,039 active heads and all 522 heads archived for budget alone. It preserves the 262 shared-head decisions and adds 1,299 individual comparisons: 518 other active project heads, 259 project-orchestrator heads and 522 budget archives. Each comparison names the full invariant, a source comparison, the conditions left specific, a decision and a distinct reason. The seat-audience correction below supersedes 373 earlier comparisons that cited shared full rules or other roles' bodies. Other dispositions retain recorded history and sampled checks. No deployed equivalence, archive or restoration is authorized.
 
 ## Sources, snapshots and safe access
 
@@ -164,10 +164,10 @@ Attribution remains bounded: F01 has no established delivered numeric advice and
 
 | Candidate | General invariant | Existing coverage | Decision and canonical home |
 | --- | --- | --- | --- |
-| U01 | Prepare a tool request from its actual contract, target identity, field formats, units and applicable guards. | Shared rules 2 and 6 are broad; role registry and tool descriptions contain only parts of the preparation. | Sharpen shared rule 2, in full and short forms. Put Delegatus-specific examples in the default orchestrator mandate. |
-| U02 | Separate a proved refusal from unknown execution; keep the original identity and payload during uncertainty. | Shared rule 15 covers uncertain effects, but leaves changed-payload/new-request behavior implicit. | Replace rule 15 in both forms. Include authoritative receipt type and post-recovery state checks. |
+| U01 | Prepare a tool request from its actual contract, target identity, field formats, units and applicable guards. | Shared rules 2 and 6 are broad; role registry and tool descriptions contain only parts of the preparation. | Sharpen shared rule 2, in full and short forms. Keep concrete parameter guidance at tool descriptions under option A; retain scoped complements. |
+| U02 | Separate a proved refusal from unknown execution; keep the original identity and payload during uncertainty. | Shared rule 15 covers uncertain effects, but leaves changed-payload/new-request behavior implicit. | Replace rule 15 in both forms. Keep concrete receipt-family guidance and post-recovery state checks in scoped memory and current tool contracts. |
 | U03 | Evidence states its scope, source, units and unverified remainder. | Shared rules 6, 12 and 14 and judging blocks already say this. | Retain existing coverage. Concrete query plans, benchmark procedures, browser recipes and environment constraints stay local. |
-| U04 | A learned duplicate becomes removable only after equivalent guidance is proved effective for the same deployed audience. | Curator checklist checks current instructions; neither merge nor a returned scaffold proves deployment and audience coverage. | Add the deployed-equivalence policy to the curator scaffold and scheduled checklist. Preserve reversible provenance and supported-tool limits. |
+| U04 | A learned duplicate becomes removable only after equivalent guidance is proved effective for the same deployed audience. | Curator checklist checks current instructions; neither merge nor a returned scaffold proves deployment and audience coverage. | Add the deployed-equivalence policy once to the curator scaffold; refer to it from the scheduled checklist. Preserve reversible provenance and supported-tool limits. |
 | U05 | Requirement and authorization boundaries persist through handoff and recovery. | Shared rules 1, 8, 11–13; role fences; scope-first mandate. | Preserve. Do not universalize an installation's provider, account, routing, spending, scheduling or release choices. |
 
 The original private map preserves all 8,392 IDs and their source, time, versions, text/reason and read representatives. Its earlier selection and generic retention fields are inventory evidence. The final private decision ledger supersedes those fields for all 1,039 active heads and 522 budget archives: 1,561 records and 1,559 distinct bodies. Two exact-body copies retain separate reasons and provenance; body identity grants no deployed-equivalence or archive authority.
@@ -201,39 +201,43 @@ These are proposed texts. Their behavioral effect is unmeasured. Preserve all ex
 
 Replace full rule 2 and short rule 2 with:
 
-> 2. Read project instructions first. Run their or CI's checks; if none, name yours and why. Check unfamiliar tools' operation, target, fields, values, units and guards. Copy IDs; leave headroom; check replies before dependent calls; stop on refusal.
+> 2. Read project instructions first. Checks they or CI name are required; else report yours and why. Before each call, check tool, target, fields, values, units, guards. Copy IDs; keep headroom. Inspect replies; refusal stops dependent calls.
 
 Replace full rule 15 and short rule 15 with:
 
-> 15. Error, timeout or status proves nothing: read affected state before retry. Uncertain: retry with the same key and arguments, or its recovery read. Proved no-effect refusal: refresh, correct with a new key. Never change a key's arguments. Delivery needs destination proof; unresolved stays unknown.
+> 15. Error, timeout or status proves nothing. Read affected state before retry. If uncertain, use the same key and arguments or its recovery read. On proved no-effect refusal, refresh and correct with a new key. Keep each key's arguments. Delivery needs destination proof; unresolved stays unknown.
 
-For full rule 13 only, shorten its opening from “Read later answers first; change only named decisions; never re-ask settled questions.” to “Read later answers first; change only named decisions; never re-ask.” Keep the following correction instruction unchanged. The short form already has that opening.
+Keep full and short rule 13 unchanged, including the full form's restriction to settled questions and the exact correction instruction. No rule-13 shortening is needed for the measured candidate.
 
-F01's wrapper continued after a refusal; future scripts must inspect each result before dependent dispatch. Already-dispatched independent calls still require reconciliation. “Fields” includes requiredness and permitted omission; formats, units and action guards come from the current contract. Headroom is a recommended drafting margin below the true bound.
+F01's wrapper continued after a refusal; future scripts must inspect each result before dependent dispatch. Already-dispatched independent calls still require reconciliation. “Each call” includes familiar tools and reads as well as mutations, covering F01/F02/F15/F16/F17 and identifier lookups. “Tool” includes choosing the correct operation and receipt family. “Fields” includes requiredness and permitted omission; formats, units and action guards come from the current contract. Headroom is a recommended drafting margin below the true bound.
 
 | Obligation | Clause and check |
 | --- | --- |
-| Read project instructions before changing or judging; project/CI checks govern | Rule 2 starts with that prerequisite and reports selected checks and reasons when none are named. Its former parenthetical file examples are removed. |
-| Verify operation, target, fields, values, units and guards; copy identifiers | Rule 2, remaining sentences. Preserve authority fields while shortening prose. |
-| Inspect before dependent dispatch and stop on refusal | Rule 2, final clause; reconcile independent calls already sent. |
+| Read project instructions before changing or judging; project/CI checks govern | “Read project instructions first” compresses the former explicit “before you change or judge anything”; it applies before both activities. Checks named by those files or CI remain requirements, subject to the role's authority, rather than an instruction that a seat execute CI itself. When none are named, report the selected checks and why. The parenthetical file examples are removed. |
+| Verify operation, target, fields, values, units and guards; copy identifiers | Rule 2 checks every call, including familiar tools; it names tool, target, fields, values, units and guards. Copy IDs and preserve authority fields. This adds contract preparation without changing required-check selection. |
+| Inspect before dependent dispatch and stop on refusal | Rule 2, final sentence; stop dependent dispatch, refresh and correct a proved refusal under rule 15, and reconcile independent calls already sent. The task itself continues under rule 5. |
 | Error replies, timeouts and statuses establish no effects | Rule 15, first sentence. |
-| Read affected state before retrying | Rule 15, first sentence. |
+| Read affected state before retrying | Rule 15, second sentence. |
 | Explicit same-key retry with unchanged arguments during uncertainty | Rule 15, uncertain clause. A timed-out update_task can replay its identical call/key; no separate recovery endpoint is invented. |
 | Operation-owned recovery read when available | The alternative in the uncertain clause; message_receipt and spawn recovery retain their own contracts. |
 | Corrected arguments use a new key only after a proved no-effect refusal | Rule 15, refusal clause. A timeout alone supplies no such proof. |
 | Never change a used key's arguments | Rule 15, separate prohibition. |
 | Delivery requires destination proof; unresolved stays unknown | Closing clauses; accepted or queued status alone is insufficient. |
-| Later answers change only named decisions; settled questions are not re-asked | Full rule 13's shorter opening and unchanged correction marker. |
+| Later answers change only named decisions; settled questions are not re-asked | Unchanged full rule 13 and correction marker; its settled-question condition stays explicit. |
 
-Keep all 16 rule numbers. Full rules shrink by four UTF-16 units, including the rule-13 reduction. Reviewer bodies, fences and caps remain unchanged.
+Keep all 16 rule numbers. Full rules grow by three UTF-16 units. Rule 13 is unchanged. Reviewer bodies, fences and caps remain unchanged.
 
 ### Correction marker and saved audiences
 
 **Keep OPERATOR_CORRECTION_RULE byte-identical.** It is the includes() marker in `orchestrator/prompt.ts:794-802`, `pipelines/prompts.ts:96`, `roles/registry.ts:133` and `pipelines/roles.ts:77-78`. Appended bounds would cause a second insertion into old text. Put numeric bounds in the proposed leave_lesson description below; keep closing lesson requests unchanged.
 
-Fresh default scaffolds and non-mandated orchestrators receive full rules. New default seats and rotations selecting the current default receive short rules. Retained pipeline scaffolds, stored overrides and bespoke mandates keep their saved rules 2/15; the stable marker supplies no retrofit or duplicate. Existing exact-string upgrades and pending-intent replay stay unchanged. Retrofitting saved audiences would require separately scoped delivery work. Under option A, tool descriptions add guidance when those callers select the tool; option B retains that exposure gap.
+Fresh default scaffolds and non-mandated orchestrators receive full rules. New default seats and rotations selecting the current default receive short rules. Retained pipeline scaffolds and stored role overrides keep their saved rules 2/15; the stable correction marker supplies no retrofit. Under option A, tool descriptions add guidance when those callers select the tool; option B retains that exposure gap.
 
-A pure isolated probe sends the saved v65 core through the candidate production upgrader: 26,848 bytes before and after, one correction marker, zero growth, identical bytes on a second upgrade. A serialized base reviewer scaffold remains exactly 11,590 UTF-16 units through the candidate renderer, with one marker and zero growth. This establishes marker idempotence only.
+Saved seat mandates need five explicit exact-text replacements in the existing `orchestratorMandateUpgraded` chain at `orchestrator/prompt.ts:788-803`: the shipped opening, earlier-answer paragraph, three-bullet block, short rule 2 and short rule 15. Capture the pre-edit v65 strings as constants and replace only byte-identical matches with the new strings. Keep the existing upgrades in their order, the correction marker unchanged, and pending-intent replay byte-identical. Apply these replacements before recording a new intent, at the same boundary as the existing v65 compatibility replacements; never modify a pending intent.
+
+A bespoke mandate also receives a replacement wherever it retains an exact shipped passage. Reworded passages stay untouched. Therefore “custom mandates never change” would be false. In an isolated probe of all 32 subsets of the five shipped passages, a fully saved v65 default shrinks from 26,848 to 26,674 bytes and delivers the same text as the fresh candidate default. A bespoke mandate retaining only shipped short rules 2/15 grows by **276 bytes**; one retaining none grows by zero. Every subset is idempotent on a second upgrade and retains one correction marker. These bounds cover the five replacements, not arbitrary custom-prompt admission. Check final composition before dispatch and retain refusal when it cannot fit.
+
+A serialized base reviewer scaffold remains exactly 11,590 UTF-16 units through the candidate renderer, with one correction marker and zero growth. This separate saved-scaffold observation establishes marker idempotence; it does not establish that saved role overrides receive the new rules.
 
 ### Default mandate and scaffold budgets
 
@@ -242,61 +246,76 @@ Keep the detailed parameter worksheet at tool-selection descriptions below. Add 
 Use these three prose reductions, preserving scope-first `How work runs`, personality, operator approvals and release gates:
 
 - Opening: “You own this project's board and work as Delegatus orchestrator. Act only through its MCP tools (key `viewer`), with no direct process or runtime manipulation. Working rules govern you and every agent; this mandate adds seat duties.”
-- Earlier-answer paragraph: “For non-trivial work or a problem, failure or unknown, run 3-5 varied search_transcripts queries (error, subsystem, symptom, file or tool), project then unscoped. Open hits with conversation_messages at their paths; read surrounding turns first. Cite title and date in plans or specs, or report no relevant result.”
-- Its three following bullets become: “- A spec makes an unobserved external fact step 1 and stops to ask if it cannot be observed. Check the operator-visible production result after deploy before closing the task. Send each status with the next available action.”
+- Earlier-answer paragraph: “At the start of non-trivial work and on a problem, failure or unknown, run 3-5 varied search_transcripts queries (error, subsystem, symptom, file or tool), project then unscoped. Open hits with conversation_messages at their paths; read nearby turns before deciding. Cite title and date in plans or specs, or report no relevant result.”
+- Its three following bullets become: “- A spec asserts no unobserved external fact: observing it is step 1; the stage stops to ask if it cannot. After deploy, check the operator-visible production result before closing the task. Send each status with the next action.”
 
-These keep authority, every search trigger and count, project-first/unscoped queries, primary-record opening, surrounding turns, citations or negative results, external facts as the first spec step, production verification and next-action status.
+| Original mandate obligation | Candidate clause |
+| --- | --- |
+| Board ownership and action only through Delegatus MCP; working rules govern every agent | The new opening retains ownership, MCP key, direct-process prohibition and working-rule authority. |
+| Search at the start of any non-trivial task | “At the start of non-trivial work” preserves the timing. |
+| Search on a problem, failure or unknown | “and on a problem, failure or unknown”. |
+| Three to five varied queries using error, subsystem, symptom, file or tool; project first, then unscoped | The query clause retains the count, variation, examples and scope order. |
+| A snippet is a pointer; open the primary transcript and read nearby turns before deciding | “Open hits with conversation_messages at their paths; read nearby turns before deciding.” |
+| Cite conversation title and date in a plan/specification, or report no relevant result | The last search sentence retains all three requirements. |
+| A specification must assert no unobserved external fact | “A spec asserts no unobserved external fact”. |
+| Observing that fact is step one; the stage stops and asks if observation is impossible | “observing it is step 1; the stage stops to ask if it cannot.” The stage is the stopping actor. |
+| Verify the operator-visible production result after deployment before closing | The second sentence of the new bullet. |
+| When no operator input is needed, send status with the next action | The last sentence requires status with the next action; unchanged short rule 5 supplies the no-input continuation condition. |
+
+Scope-first `How work runs`, personality, approvals and release gates remain byte-identical. The proposed search and fact-observation reductions preserve their obligations; the table states where each survives.
 
 Measurements use tracked scratch exports of `0f5995e7` with the literal candidate above, PA01/D01/MH01 and the curator policy below. HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR were private. Production renderers and pure composition functions were invoked; no test suite, build, typecheck, launch or model call ran. Exact strings, source digests, runner and results remain private.
 
 | Fixed seat change | Before bytes | After bytes | Delta UTF-8 bytes |
 | --- | ---: | ---: | ---: |
 | Opening | 342 | 232 | -110 |
-| Short rule 2 | 127 | 248 | +121 |
-| Short rule 15 | 135 | 301 | +166 |
+| Short rule 2 | 127 | 241 | +114 |
+| Short rule 15 | 135 | 297 | +162 |
 | Correction marker | 225 | 225 | 0 |
-| Earlier-answer paragraph | 581 | 314 | -267 |
-| Three bullets | 323 | 224 | -99 |
-| Net | — | — | -189 |
+| Earlier-answer paragraph | 581 | 335 | -246 |
+| Three bullets | 323 | 229 | -94 |
+| Net | — | — | -174 |
 
-Production composition and the literal delta table both measure a net reduction of **189 bytes**. The previous +314-byte candidate is withdrawn: its 101-byte rotation reserve admitted an envelope while failing the required history-reserve invariant.
+Production composition and the literal delta table both measure a net reduction of **174 bytes**. The previous +314-byte candidate is withdrawn: its 101-byte rotation reserve admitted an envelope while failing the required history-reserve invariant.
 
 | Delivery case | Base bytes, with overhead | Candidate bytes | Remaining from 32,000 |
 | --- | ---: | ---: | ---: |
-| Fresh default spawn | 30,517 | 30,328 | 1,672 |
-| Existing-seat default delivery | 30,224 | 30,035 | 1,965 |
-| Rotation, immediate readable predecessor | 31,585 | 31,396 | 604 |
-| Rotation, older readable predecessor | 31,576 | 31,387 | 613 |
-| Rotation, no readable predecessor | 31,329 | 31,140 | 860 |
+| Fresh default spawn | 30,517 | 30,343 | 1,657 |
+| Existing-seat default delivery | 30,224 | 30,050 | 1,950 |
+| Rotation, immediate readable predecessor | 31,585 | 31,411 | 589 |
+| Rotation, older readable predecessor | 31,576 | 31,402 | 598 |
+| Rotation, no readable predecessor | 31,329 | 31,155 | 845 |
 
 The rotation fixture uses a synthetic 94-byte project key, 49-byte conversation IDs, all three exact `seatCommand.ts:1700-1712` headers, its `:1477` read call and non-droppable board pointer. Its deliver callback uses production-loaded role definitions; bare defaults reduce this fixture by 23 bytes and are not the recorded rotation case.
 
-The existing `handoffDigest.test.ts:440-473` reserve expression reproduces as 3,750 > 3,670 on base and **3,939 > 3,670** on the candidate. Its historical correction allowance is unchanged. No additional history spending or cap increase is proposed.
+The existing `handoffDigest.test.ts:440-473` reserve expression reproduces as 3,750 > 3,670 on base and **3,924 > 3,670** on the candidate. Its historical correction allowance is unchanged. No additional history spending or cap increase is proposed.
 
-With no optional caller notes, maximum retained ASCII history bodies in those fixtures are 393/402/649 bytes on base and 582/591/838 on the candidate (immediate/older/no-readable predecessor). Using that production composition with the `proj-a` key and 49-byte IDs of `seatCommand.test.ts:1964-1979`, the immediate-predecessor history threshold is 481 bytes on base and 670 on the candidate. Thus one byte fits and 900/2,000 drop, matching that file's existing cases. The full seat-command test remains mandatory at implementation; this was a pure composition probe, without launching its stateful workflow. These bounded fixtures guarantee no universal identifier or custom-registry maximum.
+With no optional caller notes, maximum retained ASCII history bodies in those fixtures are 393/402/649 bytes on base and 567/576/823 on the candidate (immediate/older/no-readable predecessor). Using that production composition with the `proj-a` key and 49-byte IDs of `seatCommand.test.ts:1964-1979`, the immediate-predecessor history threshold is 481 bytes on base and 655 on the candidate. Thus one byte fits and 900/2,000 drop, matching that file's existing cases. The full seat-command test remains mandatory at implementation; this was a pure composition probe, without launching its stateful workflow. These bounded fixtures guarantee no universal identifier or custom-registry maximum.
 
 | Shipped role | Minimum stage reserve on base, UTF-16 units | Candidate |
 | --- | ---: | ---: |
-| Architect | 1,397 | 1,401 |
-| Builder, including fix/frontend | 674 | 678 |
-| Cleaner | 5,469 | 5,473 |
-| Curator | 5,059 | 4,240 |
-| Deployer | 3,928 | 3,762 |
-| Issue reporter | 2,442 | 2,446 |
-| Merger | 680 | 684 |
-| Orchestrator stage | 5,460 | 5,464 |
-| Production auditor | 4,505 | 4,110 |
-| Reviewer | 205 | 209 |
-| Verifier | 4,306 | 4,310 |
-| Visual critic | 2,541 | 2,545 |
+| Architect | 1,397 | 1,394 |
+| Builder, including fix/frontend | 674 | 671 |
+| Cleaner | 5,469 | 5,466 |
+| Curator | 5,059 | 4,233 |
+| Deployer | 3,928 | 3,755 |
+| Issue reporter | 2,442 | 2,439 |
+| Merger | 680 | 677 |
+| Orchestrator stage | 5,460 | 5,457 |
+| Production auditor | 4,505 | 4,103 |
+| Reviewer | 205 | 202 |
+| Verifier | 4,306 | 4,303 |
+| Visual critic | 2,541 | 2,538 |
 
 These are all 120 non-maintainer default/variant combinations in `pipelines/roles.test.ts:249-262`, including the role-specific additions below. Every result retains rule 16 and more than 200 units. Maintainer is not a pipeline role and is excluded by that test; review its standalone body with the overlapping audit hunk intact. Another 36 text-parameter probes at 40/250/499/2,000 units either retain all rules or return the existing parameter-overflow refusal; four refuse on both base and candidate. These production-function probes do not claim complete test-file success. Keep MAX_SCAFFOLD_LENGTH at 12,000 for old-release compatibility.
 
 ### Curator scaffold and scheduled checklist
 
-Add the following policy to the curator scaffold and beside the scheduled checklist's existing instruction-file path. Preserve checklist item 2, its `2. Current. ` insertion anchor and its project-file `in-instructions` route. The swarm insertion remains unchanged.
+Add the following 821-unit policy once to the curator scaffold. In scheduled checklist item 2, immediately after “guidance already required in instructions as in-instructions with the file.”, add only this 90-unit reference (including its leading space): “ For a shipped-prompt duplicate, follow the scaffold policy and retain uncertain coverage.” Preserve item 2, its `2. Current. ` insertion anchor, the project-file route and the swarm insertion.
 
 > For a shipped-prompt duplicate, first establish the effective deployed guidance for the affected audience. Use the serving process's curation scope scaffold, current role_presets overrides, and get_orchestrator full:true for the seat's actual mandate; retain the release and composition evidence. Proposed or merged source alone is insufficient. Compare the complete trigger, audience, action, conditions and exceptions, including custom mandates and overrides. Keep local additions and uncertain or conflicting coverage. When equivalence and supported repository evidence are proved, reversibly archive only redundant active injection, preserving lineage and the deployment evidence. Otherwise retain it and name the missing proof or supported evidence route. Project instruction files keep their existing evidence path.
+
+The scheduled launcher supplies curatorBrief as the brief (`memory/curation/run.ts:31`), and role composition adds the curator scaffold (`roles/registry.ts:182-183,218`). The isolated composed scheduled prompt contains the complete policy exactly once; its checklist contains only the short reference. The curator's minimum stage reserve is 4,233 UTF-16 units, including the three-unit shared-rule growth. An installation with an overridden curator scaffold must retain uncertain duplicates if that scaffold lacks the policy.
 
 For genuinely shared prompt guidance, use an authorized Delegatus curation pass when the existing evidence validator permits it. Compare the serving scaffold with its matching `src/lib/roles/defaults.ts:<line>` in that checkout; for a seat also compare the effective mandate. Other-project passes must not cite this file as their own repository evidence. This is an addition to ordinary project-file dispositions, with no invented prompt URI or alternate archive reason.
 
@@ -311,20 +330,33 @@ The final decision ledger covers every active head and every budget archive belo
 | Role / scope | Active shared | Active project | Budget archives | Coverage and decision |
 | --- | ---: | ---: | ---: | --- |
 | Machine | 56 | 0 | 3 | `roles/defaults.ts:47-61` supplies check, evidence, ownership and isolation duties. Keep operating-system, tool-version, account and author-specific detail local. |
-| Architect | 57 | 86 | 0 | Scaffold at `:309`, shared paths at `:120`, server rules at `:128`, rendered rules at `:115`. Existing requirements cover the principles; retain specific research, SQL, prototype and measurement methods. No additional role text selected. |
-| Builder | 57 | 226 | 458 | Scaffold at `:297`, tests at `:118`, shared paths at `:120`, records at `:126`, rendering at `:115`. Keep detailed race, serializer, platform and UI fixtures; no claim that broad principles replace those conditions. |
+| Architect | 57 | 86 | 0 | Scaffold at `:309`, shared paths at `:120`, server rules at `:128`, rendered rules at `:117`. Existing requirements cover the principles; retain specific research, SQL, prototype and measurement methods. No additional role text selected. |
+| Builder | 57 | 226 | 458 | Scaffold at `:297`, tests at `:118`, shared paths at `:120`, records at `:126`, rendering at `:117`. Keep detailed race, serializer, platform and UI fixtures; no claim that broad principles replace those conditions. |
 | Cleaner | 3 | 0 | 0 | Scaffold/fences at `:319-321` require approved recovery and backups. Keep disk targets, squash-merge classification and nested removal sequence scoped. |
 | Deployer | 2 | 20 | 0 | Scaffold at `:348` requires health and procedure, but lacks explicit fresh-process log-window coverage. Propose D01 below; keep fixed file-permission recipes local. |
 | Maintainer | 2 | 0 | 0 | Body at `:170-196` covers external waits and board truth. Propose MH01 below for preserving an explicit newer hold; keep `hold:null` readback as tool-specific guidance. Preserve the overlapping maintainer audit hunk. |
 | Merger | 3 | 16 | 0 | Scaffold at `:361` already covers reviewed heads, launch actor, project procedure and attribution. Keep predecessor closure, forge author and stage-commit mechanics scoped. |
-| Orchestrator | 53 | 259 | 61 | Short rules and mandate at `orchestrator/prompt.ts:592`, shared rules at `roles/defaults.ts:47,60`. U01/U02 cover preparation and recovery. Action guards, graph limits, field persistence and custody conditions remain concrete advice; incomplete historical decision advice is not treated as current truth. |
+| Orchestrator | 53 | 259 | 61 | Compare only the actual mandate at `orchestrator/prompt.ts:592-646` and its interpolated short rules at `roles/defaults.ts:72-89`. Of 373 records, two next-step instructions have complete source coverage; **371 remain outside full mandate coverage** (53 shared, 257 active project, 61 budget). Six have an option-A description route for part of their contract/recovery guidance; 365 retain memory as their route. No archive or restoration follows. |
 | Production auditor | 14 | 18 | 0 | Scaffold at `:331` forbids writes, but omits handler effects and remote diagnostic artifacts. Promote PA01 below. Keep SQL, clock, heap and frame-analysis techniques scoped. |
-| Visual critic | 15 | 7 | 0 | Body at `:221`, rendering at `:115` and evidence at `:51` cover rendered correctness. Retain font, bidi, harness, viewport and document-specific techniques. |
+| Visual critic | 15 | 7 | 0 | Body at `:221`, rendering at `:117` and evidence at `:51` cover rendered correctness. Retain font, bidi, harness, viewport and document-specific techniques. |
 | Reviewer | 0 | 0 | 0 | Shared preparation/recovery changes only. Keep read-only authority, judging contract and automatic-memory exclusion. |
 | Verifier | 0 | 0 | 0 | Shared changes only. Keep claim labels and automatic-memory exclusion. |
 | Issue reporter | 0 | 0 | 0 | Shared changes only. Keep preview-only publication boundary and automatic-memory exclusion. |
 | Curator | 0 | 0 | 0 | Shared changes plus deployed-equivalence addition. Keep scheduled-pass authority and automatic-memory exclusion. |
 | Project-wide | 0 | 145 | 0 | Shared rules cover evidence, authority, privacy and isolation. Retain manuscript terminology, client-topic routing, model choices, application-specific UI rules and operating procedures. |
+
+The corrected private seat ledger names each of the 373 complete instructions, its closest clause included by default seat composition, missing conditions and route. It supersedes the earlier use of full shared rules, code-review records/tests/rendering blocks and deployer, merger, production-auditor or cleaner scaffolds as seat coverage. The seat's role table contains configuration and descriptions; it does not deliver those scaffold blocks. The source comparison establishes two complete next-step equivalents: continuing available authorized work and answering a cheap read directly under scope-first choice. Deployment for those audiences is still unproved. “Outside full coverage” includes partial principles; it does not mean the mandate says nothing related.
+
+| Seat instruction still outside full coverage | What the mandate actually supplies | Route and reason |
+| --- | --- | --- |
+| Pair current expectedProject/expectedRevision; refresh after launch; preserve whole task and read back saved fields | Task ownership reads details before replacing them (`orchestrator/prompt.ts:407`); short rule 2 adds contract preparation. Neither spells out those guards or hold-kind retention. | Option A describes guards; retain field-persistence complements in memory. Fixed mandate bytes cannot hold every task worksheet. |
+| Resolve decisions with expectedStageId, positive expectedAttempt and expectedRevision; do not transfer graph/retry guards indiscriminately | The graph contract at `orchestrator/prompt.ts:635` and short rules 2/15 give general preparation/recovery. The exact guard names are absent from the mandate. | Option A describes this contract; preserve action-specific and historical exceptions until rechecked. |
+| Read stop receipts through deployment_status and accepted-send receipts through message_receipt, then reconcile current custody | The task-ownership receipt paragraph (`orchestrator/prompt.ts:423`) and short rule 15 describe original-key recovery. They do not name these receipt families or stop identity. | Retain memory; the five proposed description hunks do not fully teach this receipt routing. A broad records block for code reviewers cannot replace it. |
+| Standalone review links require reviews and roleParams.diffSource | The role table and pipeline graph do not expose that complete standalone-call contract. | Retain memory and consult the selected tool's current contract; no new spawn-description hunk is silently added to option A. |
+| Graph stage limits, frozen pass edges, publication handoff and owner/epoch checks | The mandate describes graph edges, review budgets and pipeline/task ownership, without the complete recovery sequences. | Keep scoped procedures; copying them into the fixed mandate would consume its bounded rotation reserve. |
+| Customer-topic, language, account, deployment-window and evaluation policies | Shared short principles and the mandate's authority fences give no installation-specific values or exceptions. | Retain their true audience and stored state; never universalize them. |
+
+The 589-byte smallest fixed rotation reserve is the measured budget context for retaining these complements, rather than proof that any particular extra paragraph could never fit. Source-level overlap authorizes no deletion. All 61 budget archives remain archived; route selection supplies no restoration authority.
 
 Proposed PA01, added only to the production-auditor scaffold:
 
@@ -338,7 +370,7 @@ Proposed MH01, added alongside the maintainer's hold handling:
 
 > Clear a recorded wait only after evidence shows its stated prerequisite has been met. A pending pull request supplies no such evidence by itself; retain later authorized blockers and flag conflicting maintenance policy.
 
-These fill concrete role gaps instead of copying the shared additions into every body. They add no production access, release permission, board-write authority or live mutation. They do not enlarge the seat's generated configuration table; role scaffold text is not a table column. Their measured scaffold reserves appear above. Implementation must rerun the named complete composition files on its final literals.
+These address concrete role gaps. PA01, D01 and MH01 each have only one shared-role source rule and at most one project-role supporting head in this snapshot; recurrence alone supplies weak evidence. PA01 deliberately broadens a nominal read-only HTTP request to production reads generally, because commands and handlers can persist effects too. That is a proposed policy generalization for personal review, with no measured behavioral outcome. They add no production access, release permission, board-write authority or live mutation. They do not enlarge the seat's generated configuration table; role scaffold text is not a table column. Their measured scaffold reserves appear above. Implementation must rerun the named complete composition files on its final literals.
 
 ## Length units, headroom and graceful handling
 
@@ -416,15 +448,19 @@ No proposal here authorizes implementation, an issue publication, a replay of th
 
 ### Allowed source scope
 
-Implement from fresh current main on a new same-task lane with its own lineage. Keep this research lane internal. The eventual product diff should contain only prompt strings in:
+Implement from fresh current main on a new same-task lane with its own lineage. Keep this research lane internal. The eventual product diff contains prompt strings in these files, plus the narrowly specified delivery compatibility and version/fixture data below:
 
-- `src/lib/roles/defaults.ts`: full/short rules 2 and 15, the full rule-13 opening only, curator policy, PA01 production-auditor condition, D01 log verification and MH01 external-hold preservation. Keep OPERATOR_CORRECTION_RULE unchanged.
-- `src/lib/orchestrator/prompt.ts`: the three measured prose reductions and required prompt-version metadata; shared short rules arrive through the existing interpolation. Add no worksheet/bounds paragraph; preserve scope-first/custom-default boundaries.
-- `src/lib/memory/curation/brief.ts`: add deployed-prompt policy alongside the existing project-file route; preserve checklist item 2 and the swarm insertion anchor.
+- `src/lib/roles/defaults.ts`: full/short rules 2 and 15, curator policy, PA01 production-auditor condition, D01 log verification and MH01 external-hold preservation. Keep OPERATOR_CORRECTION_RULE unchanged.
+- `src/lib/orchestrator/prompt.ts`: the three measured prose reductions, prompt-version metadata, five pre-edit text constants and five exact-match substitutions in the existing mandate upgrader. Shared short rules arrive through interpolation; saved mandates also need the two rule substitutions. Add no worksheet/bounds paragraph. Preserve scope-first, reworded custom passages and pending-intent bytes.
+- `src/lib/memory/curation/brief.ts`: add only the 90-unit policy reference alongside the existing project-file route; preserve checklist item 2 and the swarm insertion anchor. The full policy belongs only in the curator scaffold.
 
 Conditional scope A also permits only the descriptive string hunks listed above in `src/lib/mcp/server.ts`, after the operator's scope choice. Scope B keeps that file untouched. No unresolved choice grants permission to edit behavior or delay the already authorized report corrections.
 
-The mandate must advance from v65 to the next unoccupied version. The existing `prompt.test.ts` fingerprint/version registration and staleness-boundary data must advance with it; existing fingerprint entries remain immutable. This is the prompt-delivery metadata the pinned brief asks the implementation to identify. These literal data changes are the only non-prose hunks in scope; keep them explicit in the PR description. Add no phrase tests or runtime logic. Never ship an unversioned mandate edit or disable the fingerprint check.
+The mandate must advance from v65 to the next unoccupied version. Preserve the shipped v65 text as `src/lib/orchestrator/fixtures/mandate-v65.txt`, whose digest must equal the immutable v65 entry. Add the new fingerprint and update the version/staleness literals in the existing `prompt.test.ts` contract. Keep the v64 fixture and its historical fingerprint immutable; compare its three-line v64-to-v65 transition against the frozen v65 fixture, not the new live mandate. Extend the existing delivery cases to the new saved default and retain v54–v64 coverage, idempotence, bespoke passage preservation and exact pending replay. Existing `seatCommand.test.ts` delivery cases must agree with the new expected policy.
+
+The only compatibility operations allowed beyond prompt strings and version/fixture data are the five exact-string substitutions at the existing upgrader boundary described above. They are necessary to deliver the changed text to saved seats. Do not add a new delivery mechanism, authority rule, selector or branch based on prompt version. List these narrow compatibility hunks explicitly in the product PR and keep all other runtime changes outside scope.
+
+The handed independent review ran the previous literal candidate through complete isolated files: pipeline roles 34/0, handoff 19/0, role registry 23/0 and role store 21/0, matching base. Without the five substitutions, seven delivery tests failed in addition to the expected fingerprint/fixture failures. Adding them left prompt 44/2 (only the not-yet-updated fingerprint and v64-transition fixture assertions), and seat-command 133/2, matching its two base model-catalog failures. This revision reopens those logs and checks the final strings through pure composition and upgrade functions; it does not claim that the previous candidate's complete-file results certify the revised literals. Implementation must rerun all named files after the version/fixture update.
 
 Do not change schemas, validators, guard logic, selection/scoring, model/account mappings, settings, memory ingestion, archive operations, UI or deployment. Do not bring this report, evidence files, private identifiers or research helper scripts into the product branch. Review all prompt string changes as behavioral instructions, rather than treating a `.ts` suffix as runtime permission.
 
@@ -434,7 +470,7 @@ The initial inventory contained 34 open PRs; this revision's read still contains
 
 Use existing isolated explicit-file checks for composition and delivery: `roles/registry.test.ts`, `roles/store.test.ts`, **`pipelines/roles.test.ts`**, `orchestrator/prompt.test.ts` and `orchestrator/seatCommand.test.ts`. Read their final contents and applicable project guidance before running; do not add wording-presence tests. Run only the files justified by the final touched paths and the explicit implementation brief. The publication hook owns the wider repository checks.
 
-For a mandate edit, include the existing byte-admission and rotation cases in `orchestrator/handoffDigest.test.ts`. Use the measured fixed-headroom table above, including the 604-byte smallest fixed reserve and measured retained history in the bounded rotation fixtures. The source comparison demonstrates a candidate satisfying the existing reserve expression, without guaranteeing arbitrary custom prompts or registry growth. Measure the actual final composition with the then-current registry and retained large handoffs, plus multibyte inputs that cannot be dropped. Fit without raising the cap, losing required content or hiding failed admission.
+For a mandate edit, include the existing byte-admission and rotation cases in `orchestrator/handoffDigest.test.ts`. Use the measured fixed-headroom table above, including the 589-byte smallest fixed reserve and measured retained history in the bounded rotation fixtures. The source comparison demonstrates a candidate satisfying the existing reserve expression, without guaranteeing arbitrary custom prompts or registry growth. Measure the actual final composition with the then-current registry and retained large handoffs, plus multibyte inputs that cannot be dropped. Fit without raising the cap, losing required content or hiding failed admission.
 
 Extend this report's clause-preservation table across standalone/stage scaffolds, stored defaults, bespoke mandates, rotation, child delivery and any approved tool-description strings. Trace every producer, copy, default, consumer and delivery transform before editing. The byte probe supplies the exact candidate strings; longer additions require new measurement. Apply the gate's real metric, UTF-8 bytes of decoded composed text plus launch overhead, rather than double-counting transport JSON escaping. If the final composition cannot fit, retain refusal and identify the residual admission/composition work separately.
 
@@ -456,13 +492,13 @@ This sequence is supported by the inspected internal-settlement, explicit-public
 
 ## Private provenance package and research validation
 
-The controller-retained private package contains the original specification, per-store snapshots, all-project key mapping, all-scope records, native and import/archive accounting, reading queues and duplicate mappings, the original inventory/provenance map, the superseded 521-head supplement and the final 1,561-record decision ledger, transcript manifest, normalized call/result index, static arguments, contemporary schemas, delivered rule versions, the original 15 worked cases and two additional form episodes, original-record digests and analysis scripts. This revision retains 1,299 individually written new comparisons, complete source texts and hashes, exact candidate strings, per-role/variant reserves, base/candidate production-function results, mixed-form original-record digests and 19 disposition spot checks. No evidence artifact or analysis helper belongs in the product PR. The public case and candidate labels are independent of private rule IDs.
+The controller-retained private package contains the original specification, per-store snapshots, all-project key mapping, all-scope records, native and import/archive accounting, reading queues and duplicate mappings, the original inventory/provenance map, the superseded 521-head supplement and the final 1,561-record decision ledger, transcript manifest, normalized call/result index, static arguments, contemporary schemas, delivered rule versions, the original 15 worked cases and two additional form episodes, original-record digests and analysis scripts. This revision retains the earlier 1,299 individual comparisons and supersedes all 373 orchestrator comparisons against actual seat text, with 371 explicit incomplete-coverage routes. It also retains complete source texts and hashes, exact candidate strings, per-role/variant reserves, base/candidate production-function results, mixed-form original-record digests and 19 disposition spot checks. No evidence artifact or analysis helper belongs in the product PR. The public case and candidate labels are independent of private rule IDs.
 
-Research validation covers report claims and the isolated pure composition measurement: reconcile tables/counting units, open original records in bounded reads, verify source references, inspect the complete report for private data, and run whitespace/link checks plus the repository publication/privacy scanner on this file. No test suite, build, typecheck, paid evaluation or historical operation replay was run. The handed independent review supplied these corrections; the corrected report still needs the controller's next independent review. Source inspection and size admission establish no measured change in model behavior.
+Research validation covers report claims and the isolated pure composition measurement: reconcile tables/counting units, open original records in bounded reads, verify source references, inspect the complete report for private data, and run whitespace/link checks plus the repository publication/privacy scanner on this file. This report-fix stage ran no test suite, build, typecheck, paid evaluation or historical operation replay. Earlier independent complete-file results are attributed above and remain private. The three fixed research review rounds remain spent; this correction does not create another round. The owning seat must arrange independent review of the eventual final prompt implementation before its personal-review draft handoff. Source inspection and size admission establish no measured change in model behavior.
 
 ## Completed coverage and retained evidence gaps
 
-The original queues record zero unread entries among 8,173 unique texts and 4,431 reasons, with 8,251 rule/reason pairs, versions and exact copies preserved. Native/archive accounting likewise records completed lesson sections. Those ledgers record reading completion; they do not replace substantive per-rule prompt comparisons. The final ledger records source comparisons and distinct reasons for every one of the 1,039 active heads and all 522 budget archives, with no generic retention placeholder in either set. Historical versions and other archive reasons retain their dispositions with the sampled checks above; native/import bodies retain their separately completed reading and provenance. Individual source comparison establishes no deployed equivalence. No bulk deduplication follows from these counts.
+The original queues record zero unread entries among 8,173 unique texts and 4,431 reasons, with 8,251 rule/reason pairs, versions and exact copies preserved. Native/archive accounting likewise records completed lesson sections. Those ledgers record reading completion; they do not replace substantive per-rule prompt comparisons. The final ledger records source comparisons and distinct reasons for every one of the 1,039 active heads and all 522 budget archives, with complete source-comparison records in both sets. For the seat, 371 comparisons explicitly decline complete source coverage and name the retained instruction and route; a broad role principle cannot certify its concrete conditions. Historical versions and other archive reasons retain their dispositions with the sampled checks above; native/import bodies retain their separately completed reading and provenance. Individual source comparison establishes no deployed equivalence. No bulk deduplication follows from these counts.
 
 Other retained-evidence gaps are the 56 missing transcript paths, unregistered older orchestrators, 925 unpaired envelopes, 3,719 unparsed paired envelopes, dynamic argument values and delivery outside ledger retention. These gaps forbid exhaustive-compliance, ignored-memory and bulk-deduplication claims. Missing history is preserved as missing.
 
