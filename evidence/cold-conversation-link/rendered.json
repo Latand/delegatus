@@ -9,16 +9,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "(a hint line that wraps on uk)."
-        ],
         "contrast": 16.7,
         "box": {
-          "left": 1200,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "retrying": {
@@ -27,19 +23,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "#2160",
-          "(a hint line that wraps on uk).",
-          "Waiting",
-          "Done"
-        ],
         "contrast": 5.17,
         "box": {
-          "left": 1063,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "opened": {
@@ -58,16 +47,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "(a hint line that wraps on uk)."
-        ],
         "contrast": 14.06,
         "box": {
-          "left": 1200,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "retrying": {
@@ -76,19 +61,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "#2160",
-          "(a hint line that wraps on uk).",
-          "Waiting",
-          "Done"
-        ],
         "contrast": 7.63,
         "box": {
-          "left": 1063,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "opened": {
@@ -107,37 +85,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "(a hint line that wraps on uk)."
-        ],
         "contrast": 16.7,
         "box": {
-          "left": 1176,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "#2160",
-          "(a hint line that wraps on uk).",
-          "Очікують",
-          "Готові"
-        ],
         "contrast": 5.17,
         "box": {
-          "left": 1015,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "opened": {
@@ -156,37 +123,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "(a hint line that wraps on uk)."
-        ],
         "contrast": 14.06,
         "box": {
-          "left": 1176,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          ": APPROVE. The fix for the stuck compose",
-          "#2160",
-          "(a hint line that wraps on uk).",
-          "Очікують",
-          "Готові"
-        ],
         "contrast": 7.63,
         "box": {
-          "left": 1015,
-          "top": 856,
-          "right": 1428,
-          "bottom": 888
+          "left": 248,
+          "top": 869,
+          "right": 1440,
+          "bottom": 900
         }
       },
       "opened": {
@@ -196,7 +152,7 @@
         "latestInView": true,
         "gap": 0
       },
-      "calls": 7
+      "calls": 6
     },
     "1200x800-en-light": {
       "opening": {
@@ -205,16 +161,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Waiting",
-          "Done"
-        ],
         "contrast": 16.7,
         "box": {
-          "left": 960,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "retrying": {
@@ -223,17 +175,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Nothing in progress",
-          "Waiting",
-          "Done"
-        ],
         "contrast": 5.17,
         "box": {
-          "left": 823,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "opened": {
@@ -252,16 +199,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Waiting",
-          "Done"
-        ],
         "contrast": 14.06,
         "box": {
-          "left": 960,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "retrying": {
@@ -270,17 +213,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Nothing in progress",
-          "Waiting",
-          "Done"
-        ],
         "contrast": 7.63,
         "box": {
-          "left": 823,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "opened": {
@@ -299,35 +237,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Очікують",
-          "Готові"
-        ],
         "contrast": 16.7,
         "box": {
-          "left": 936,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Нічого в роботі",
-          "Очікують",
-          "Готові"
-        ],
         "contrast": 5.17,
         "box": {
-          "left": 775,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "opened": {
@@ -346,35 +275,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Очікують",
-          "Готові"
-        ],
         "contrast": 14.06,
         "box": {
-          "left": 936,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [
-          "Нічого в роботі",
-          "Очікують",
-          "Готові"
-        ],
         "contrast": 7.63,
         "box": {
-          "left": 775,
-          "top": 756,
-          "right": 1188,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 1200,
+          "bottom": 800
         }
       },
       "opened": {
@@ -393,13 +313,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 16.7,
         "box": {
-          "left": 760,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "retrying": {
@@ -408,13 +327,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 5.17,
         "box": {
-          "left": 623,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "opened": {
@@ -433,13 +351,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 14.06,
         "box": {
-          "left": 760,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "retrying": {
@@ -448,13 +365,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 7.63,
         "box": {
-          "left": 623,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "opened": {
@@ -473,28 +389,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 16.7,
         "box": {
-          "left": 736,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 5.17,
         "box": {
-          "left": 575,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "opened": {
@@ -513,28 +427,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 14.06,
         "box": {
-          "left": 736,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 7.63,
         "box": {
-          "left": 575,
-          "top": 656,
-          "right": 988,
-          "bottom": 688
+          "left": 248,
+          "top": 669,
+          "right": 1000,
+          "bottom": 700
         }
       },
       "opened": {
@@ -553,13 +465,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 16.7,
         "box": {
-          "left": 460,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "retrying": {
@@ -568,13 +479,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 5.17,
         "box": {
-          "left": 323,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "opened": {
@@ -593,13 +503,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 14.06,
         "box": {
-          "left": 460,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "retrying": {
@@ -608,13 +517,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 7.63,
         "box": {
-          "left": 323,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "opened": {
@@ -633,28 +541,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 16.7,
         "box": {
-          "left": 436,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 5.17,
         "box": {
-          "left": 275,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "opened": {
@@ -673,28 +579,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 14.06,
         "box": {
-          "left": 436,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 7.63,
         "box": {
-          "left": 275,
-          "top": 756,
-          "right": 688,
-          "bottom": 788
+          "left": 248,
+          "top": 769,
+          "right": 700,
+          "bottom": 800
         }
       },
       "opened": {
@@ -713,13 +617,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 16.7,
         "box": {
-          "left": 81,
-          "top": 736,
-          "right": 309,
-          "bottom": 768
+          "left": 0,
+          "top": 813,
+          "right": 390,
+          "bottom": 844
         }
       },
       "retrying": {
@@ -728,13 +631,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 5.17,
         "box": {
-          "left": 12,
-          "top": 736,
-          "right": 378,
-          "bottom": 768
+          "left": 0,
+          "top": 813,
+          "right": 390,
+          "bottom": 844
         }
       },
       "opened": {
@@ -753,13 +655,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 14.06,
         "box": {
-          "left": 81,
-          "top": 736,
-          "right": 309,
-          "bottom": 768
+          "left": 0,
+          "top": 813,
+          "right": 390,
+          "bottom": 844
         }
       },
       "retrying": {
@@ -768,13 +669,12 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 7.63,
         "box": {
-          "left": 12,
-          "top": 736,
-          "right": 378,
-          "bottom": 768
+          "left": 0,
+          "top": 813,
+          "right": 390,
+          "bottom": 844
         }
       },
       "opened": {
@@ -793,28 +693,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 16.7,
         "box": {
-          "left": 69,
-          "top": 736,
-          "right": 321,
-          "bottom": 768
+          "left": 0,
+          "top": 813,
+          "right": 390,
+          "bottom": 844
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 5.17,
         "box": {
-          "left": 12,
-          "top": 718,
-          "right": 378,
-          "bottom": 768
+          "left": 0,
+          "top": 795,
+          "right": 390,
+          "bottom": 844
         }
       },
       "opened": {
@@ -833,28 +731,26 @@
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 14.06,
         "box": {
-          "left": 69,
-          "top": 736,
-          "right": 321,
-          "bottom": 768
+          "left": 0,
+          "top": 813,
+          "right": 390,
+          "bottom": 844
         }
       },
       "retrying": {
         "state": "retrying",
-        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
         "inViewport": true,
         "whole": true,
         "overlaps": [],
-        "coversBoardText": [],
         "contrast": 7.63,
         "box": {
-          "left": 12,
-          "top": 718,
-          "right": 378,
-          "bottom": 768
+          "left": 0,
+          "top": 795,
+          "right": 390,
+          "bottom": 844
         }
       },
       "opened": {

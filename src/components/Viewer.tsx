@@ -2055,6 +2055,20 @@ function ViewerApp() {
         </BarNeedsFilterProvider>
         </BoardPaneProvider>
         <StateWritesAlert storage={systemHealth.storage} />
+        {/* A pasted link still looking for its conversation says so. It is a strip in
+            the column's flow under the board, as the storage alert is, so the board
+            gives it a line of its own and no text of the board is drawn under it.
+            The not-found notice replaces it. */}
+        {pendingHash && pendingNoticeFor === pendingHash && !staleFocusNotice && !unknownFragmentNotice ? (
+          <div
+            role="status"
+            data-link-pending-notice={catalogFailures > 0 ? "retrying" : "opening"}
+            className={`shrink-0 border-t px-3 py-1.5 text-center text-[12px] font-semibold ${catalogFailures > 0 ? "border-warning/45 bg-warning-soft text-warning" : "border-border bg-card text-primary"}`}
+            style={{ paddingBottom: "max(0.375rem, env(safe-area-inset-bottom))" }}
+          >
+            {t(catalogFailures > 0 ? "viewer.linkRetrying" : "viewer.linkOpening")}
+          </div>
+        ) : null}
       </main>
       {panelDocked ? panel("docked") : null}
       {/* Runtime connection pill — mounts the tab-wide bus and shows live /
@@ -2129,19 +2143,6 @@ function ViewerApp() {
       {/* Staging instances (#659) announce themselves on every device; prod
           renders nothing. Top-center, clear of both corner anchors. */}
       <StagingBadge />
-      {/* A pasted link still looking for its conversation says so. It sits at
-          the bottom, as the deploy pill does: the top edge holds the header,
-          the search field and the window titles, which a pill there covered.
-          On a desktop it sits at the right, clear of the project sidebar's
-          footer; on the phone it clears the composer dock. The not-found
-          notice replaces it. */}
-      {pendingHash && pendingNoticeFor === pendingHash && !staleFocusNotice && !unknownFragmentNotice ? (
-        <div className={`pointer-events-none fixed z-40 ${isMobile ? "bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2" : "bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-3"}`} role="status" data-link-pending-notice={catalogFailures > 0 ? "retrying" : "opening"}>
-          <div className={`w-max max-w-[calc(100vw-1.5rem)] rounded-[18px] border px-3.5 py-1.5 text-center text-[12px] font-semibold shadow-1 backdrop-blur ${catalogFailures > 0 ? "border-warning/45 bg-warning-soft text-warning" : "border-border bg-card text-primary"}`}>
-            {t(catalogFailures > 0 ? "viewer.linkRetrying" : "viewer.linkOpening")}
-          </div>
-        </div>
-      ) : null}
       {/* A Back/Forward entry or pasted deep link whose conversation never
           resolves (issues #866, P1 #c= bounce): says so and STAYS — the notice
           survives until a navigation, a successful resolution, or its dismiss

@@ -208,8 +208,12 @@ one the link already sent and the server already authorized.
 
 ### C2. Client: the pending link says so, on the existing notice
 
-The pending state reuses the existing not-found notice element and its anchor
-(`Viewer.tsx:2109-2124`). No new component is added.
+The pending state is one status strip in the flow of the main column, under the
+board and beside the storage alert. The board gives it a line of its own, so no
+text of the board, the sidebar, an open conversation or a field is drawn under
+it, at any width. The first design drew it as a fixed pill at the bottom edge,
+and a rendered review showed that pill over board text at 1440×900 and
+1200×800, so the strip replaced it. No new component is added.
 
 - A link shows the notice once it has been pending for 1 s
   (`LINK_PENDING_NOTICE_MS = 1_000`), while `pendingHash` is set and neither
@@ -389,12 +393,12 @@ between the named 1000 and 390) and 390×844 (phone), each in `en` and `uk`,
 
 In every frame, the driver measures from text ranges that:
 
-- the notice is inside the viewport and overlaps no foreign text (header,
-  search field, phone top bar, seat window title);
+- the notice is inside the viewport and shares no pixel with any other visible
+  text range on the page (header, search field, phone top bar, board columns
+  and cards, sidebar, seat window title, conversation reader);
 - its text meets the contrast floor.
 
-If the shared anchor overlaps at any width, both notices move together to the
-first position that clears every width. In the opened frame, the transcript
+In the opened frame, the transcript
 reader is the visible pane, and its scroll offset plus the client height
 equals the scroll height.
 

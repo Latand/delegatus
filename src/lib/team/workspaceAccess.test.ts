@@ -825,6 +825,18 @@ describe("a cold pinned board scope the projection queue refuses", () => {
   let release: (() => void) | undefined;
   let held: Promise<unknown> | undefined;
   let queue: FilesProjectionQueue;
+  /* The queue runs on a clock and a deadline timer the test owns: a request waits
+     until the queue has taken its build (its timer is armed then), and a deadline
+     passes when the test advances the clock, never after a real delay. */
+  const maxWaitMs = 30_000;
+  let clock = 0;
+  let armed: Array<{ callback: () => void; cancelled: boolean }> = [];
+  let armWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const queued = (count: number) => armed.length >= count ? Promise.resolve() : new Promise<void>(resolve => { armWaiters.push({ count, resolve }); });
+  const expireWaiting = () => {
+    clock += maxWaitMs + 1;
+    for (const entry of armed.filter(candidate => !candidate.cancelled)) { entry.cancelled = true; entry.callback(); }
+  };
   let ownId: string;
   let foreignId: string;
   const pinned = (identity: string, actor?: Member) => {
@@ -844,7 +856,20 @@ describe("a cold pinned board scope the projection queue refuses", () => {
     scanCache.setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
     setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") }, timeoutMs: 30_000 });
     // One build holds the only worker slot, so a later scope waits past its bound.
-    queue = createFilesProjectionQueue({ maxDepth: 4, maxWaitMs: 150 });
+    clock = 0;
+    armed = [];
+    armWaiters = [];
+    queue = createFilesProjectionQueue({
+      maxDepth: 4,
+      maxWaitMs,
+      now: () => clock,
+      timer: (callback) => {
+        const entry = { callback, cancelled: false };
+        armed.push(entry);
+        for (const waiter of armWaiters) if (armed.length >= waiter.count) waiter.resolve();
+        return { cancel: () => { entry.cancelled = true; } };
+      },
+    });
     queues.__llvFilesProjectionQueue = queue;
     held = queue.run(() => new Promise<{ timing: string }>(resolve => { release = () => resolve({ timing: "" }); }));
     delete (globalThis as { __llvFilesProjectionCache?: unknown }).__llvFilesProjectionCache;
@@ -863,7 +888,10 @@ describe("a cold pinned board scope the projection queue refuses", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       for (const actor of [member, manager]) {
-        const response = await filesGET(pinned(ownId, actor));
+        const reply = filesGET(pinned(ownId, actor));
+        await queued(armed.length + 1);
+        expireWaiting();
+        const response = await reply;
         expect(response.status).toBe(503);
         const text = await response.text();
         expect(JSON.parse(text)).toEqual({ error: "board unavailable" });
@@ -885,9 +913,10 @@ describe("a cold pinned board scope the projection queue refuses", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const pending = filesGET(pinned(ownId, member));
-      for (let turn = 0; turn < 200 && queue.diagnostics().waiting === 0; turn++) await Bun.sleep(10);
+      await queued(2);
       expect(queue.diagnostics().waiting).toBe(1);
       store.removeWorkspaceMember(W1, member.id);
+      expireWaiting();
       expect((await pending).status).toBe(403);
     } finally { warn.mockRestore(); }
   });

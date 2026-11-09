@@ -4054,7 +4054,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "viewer.closeProjects": "Закрити список проєктів",
   "viewer.agentWaiting": "Агент чекає відповіді",
   "viewer.linkOpening": "Відкриваю розмову за посиланням…",
-  "viewer.linkRetrying": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+  "viewer.linkRetrying": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
   "viewer.staleFocusEntry": "Ця розмова більше недоступна",
   "viewer.unknownFragment": "Це посилання не вказує ні на що відоме Delegatus",
   "viewer.closeNotification": "Закрити сповіщення",

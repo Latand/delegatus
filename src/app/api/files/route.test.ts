@@ -4797,11 +4797,24 @@ test("a failed bootstrap refinement leaves saved bytes available for a later ret
 });
 
 /* A refused cold scope: the projection queue holds one build that has not
-   finished, so the next scope waits past its bound or finds the queue full. */
+   finished, so the next scope waits past its bound or finds the queue full.
+   The queue runs on a clock and a deadline timer the test owns: a request waits
+   until the queue has taken its build (the timer is armed then), and a deadline
+   passes when the test advances the clock, never after a real delay. */
 describe("a cold scope the projection queue refuses", () => {
+  const HELD_QUEUE_WAIT_MS = 30_000;
   let held: (() => void) | undefined;
   let heldRun: Promise<unknown> | undefined;
-  const store = globalThis as typeof globalThis & { __llvFilesProjectionQueue?: FilesProjectionQueue };
+  let pending: Promise<unknown>[] = [];
+  let clock = 0;
+  let armed: Array<{ callback: () => void; cancelled: boolean }> = [];
+  let armWaiters: Array<{ count: number; resolve: () => void }> = [];
+  let joined = 0;
+  let joinWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const store = globalThis as typeof globalThis & {
+    __llvFilesProjectionQueue?: FilesProjectionQueue;
+    __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
+  };
   const pinnedUrl = (target: string) => `http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(target)}`;
   const realWorker = () => setFilesResponseWorkerRuntimeForTests({
     launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
@@ -4809,9 +4822,49 @@ describe("a cold scope the projection queue refuses", () => {
       HOME: path.join(stateDir, "home"), XDG_CONFIG_HOME: path.join(stateDir, "config"), TMPDIR: stateDir },
     timeoutMs: 30_000,
   });
-  const holdQueue = (options: { maxDepth: number; maxWaitMs: number }) => {
-    const queue = createFilesProjectionQueue(options);
+  const reached = (waiters: Array<{ count: number; resolve: () => void }>, count: number, now: number) =>
+    now >= count ? Promise.resolve() : new Promise<void>((resolve) => { waiters.push({ count, resolve }); });
+  const notify = (waiters: Array<{ count: number; resolve: () => void }>, now: number) => {
+    for (const waiter of waiters) if (now >= waiter.count) waiter.resolve();
+  };
+  /** Resolves once the queue has taken this many builds (the one it holds counts). */
+  const queued = (count: number) => reached(armWaiters, count, armed.length);
+  /** Resolves once this many callers have joined the build already in flight for their scope. */
+  const joinedCallers = (count: number) => reached(joinWaiters, count, joined);
+  /** Runs a request the test finishes, or settles in `afterEach` when it does not. */
+  const request = <T>(work: Promise<T>): Promise<T> => {
+    pending.push(work.catch(() => undefined));
+    return work;
+  };
+  /** The deadline of every build still waiting passes. */
+  const expireWaiting = () => {
+    clock += HELD_QUEUE_WAIT_MS + 1;
+    for (const entry of armed.filter((candidate) => !candidate.cancelled)) {
+      entry.cancelled = true;
+      entry.callback();
+    }
+  };
+  const holdQueue = (options: { maxDepth: number }) => {
+    const queue = createFilesProjectionQueue({
+      maxDepth: options.maxDepth,
+      maxWaitMs: HELD_QUEUE_WAIT_MS,
+      now: () => clock,
+      timer: (callback) => {
+        const entry = { callback, cancelled: false };
+        armed.push(entry);
+        notify(armWaiters, armed.length);
+        return { cancel: () => { entry.cancelled = true; } };
+      },
+    });
     store.__llvFilesProjectionQueue = queue;
+    const inflight = new Map<string, Promise<unknown>>();
+    const lookup = inflight.get.bind(inflight);
+    inflight.get = (key: string) => {
+      const current = lookup(key);
+      if (current) { joined += 1; notify(joinWaiters, joined); }
+      return current;
+    };
+    store.__llvFilesProjectionInflight = inflight;
     heldRun = queue.run(() => new Promise<{ timing: string }>((resolve) => { held = () => resolve({ timing: "" }); }));
     return queue;
   };
@@ -4823,20 +4876,31 @@ describe("a cold scope the projection queue refuses", () => {
   };
   beforeEach(() => {
     scannedFiles = [file("/sessions/cold-one.jsonl"), file("/sessions/cold-two.jsonl")];
+    clock = 0;
+    armed = [];
+    armWaiters = [];
+    joined = 0;
+    joinWaiters = [];
+    pending = [];
     realWorker();
   });
   afterEach(async () => {
     await releaseQueue();
+    await Promise.all(pending);
     store.__llvFilesProjectionQueue = undefined;
+    store.__llvFilesProjectionInflight = undefined;
     setFilesResponseWorkerRuntimeForTests(null);
     await stopTestWorker();
   });
 
   test("expires into a controlled 503 with no rows", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    holdQueue({ maxDepth: 4, maxWaitMs: 50 });
+    holdQueue({ maxDepth: 4 });
     try {
-      const response = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+      const reply = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+      await queued(2);
+      expireWaiting();
+      const response = await reply;
       expect(response.status).toBe(503);
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(response.headers.get("x-llv-files-projection-cache")).toBe("unavailable");
@@ -4851,28 +4915,36 @@ describe("a cold scope the projection queue refuses", () => {
     } finally { warn.mockRestore(); }
   });
 
-  test("a full queue refuses a second distinct scope at once", async () => {
+  test("a full queue refuses a second distinct scope at once, whatever the scanner's delay", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    const queue = holdQueue({ maxDepth: 1, maxWaitMs: 60_000 });
+    const queue = holdQueue({ maxDepth: 1 });
+    /* The first scope's scan is held, so its build cannot reach the queue until the test lets the scan go. */
+    let releaseScan!: () => void;
+    scanGates.push(new Promise<void>((resolve) => { releaseScan = resolve; }));
     try {
-      const waiting = GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
-      await Bun.sleep(20);
+      const waiting = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+      expect(armed.length).toBe(1);
+      releaseScan();
+      await queued(2);
       expect(queue.diagnostics().waiting).toBe(1);
-      const refused = await GET(new Request(pinnedUrl("/sessions/cold-two.jsonl")));
+      const refused = await request(GET(new Request(pinnedUrl("/sessions/cold-two.jsonl"))));
       expect(refused.status).toBe(503);
       expect((await refused.json() as { reason: string }).reason).toBe("full");
       expect(queue.diagnostics().refused).toBe(1);
       await releaseQueue();
       expect((await waiting).status).toBe(200);
-    } finally { warn.mockRestore(); }
+    } finally { releaseScan(); warn.mockRestore(); }
   });
 
   test("callers joined on one scope all get the 503 and one build was queued", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    const queue = holdQueue({ maxDepth: 4, maxWaitMs: 50 });
+    const queue = holdQueue({ maxDepth: 4 });
     try {
-      const replies = await Promise.all([1, 2].map(() => GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")))));
-      expect(replies.map((response) => response.status)).toEqual([503, 503]);
+      const replies = [1, 2].map(() => request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")))));
+      await queued(2);
+      await joinedCallers(1);
+      expireWaiting();
+      expect((await Promise.all(replies)).map((response) => response.status)).toEqual([503, 503]);
       expect(queue.diagnostics().expired).toBe(1);
     } finally { warn.mockRestore(); }
   });
@@ -4883,19 +4955,25 @@ describe("a cold scope the projection queue refuses", () => {
     const warmBody = await first.text();
     scannedFiles = [file("/sessions/cold-one.jsonl"), file("/sessions/cold-two.jsonl"), file("/sessions/cold-three.jsonl")];
     await currentFileScan({ fresh: true });
-    holdQueue({ maxDepth: 4, maxWaitMs: 50 });
-    const second = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+    holdQueue({ maxDepth: 4 });
+    const reply = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+    await queued(2);
+    expireWaiting();
+    const second = await reply;
     expect(second.status).toBe(200);
     expect(await second.text()).toBe(warmBody);
   });
 
   test("the same scope answers once the queue frees", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    holdQueue({ maxDepth: 4, maxWaitMs: 50 });
+    holdQueue({ maxDepth: 4 });
     try {
-      expect((await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")))).status).toBe(503);
+      const refused = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+      await queued(2);
+      expireWaiting();
+      expect((await refused).status).toBe(503);
       await releaseQueue();
-      const recovered = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+      const recovered = await request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
       expect(recovered.status).toBe(200);
       const body = await recovered.json() as { files: FileEntry[] };
       expect(body.files.some((entry) => entry.path === "/sessions/cold-one.jsonl")).toBe(true);
@@ -4903,7 +4981,10 @@ describe("a cold scope the projection queue refuses", () => {
   });
 
   test("board preparation still sees the refusal as a throw", async () => {
-    holdQueue({ maxDepth: 4, maxWaitMs: 50 });
-    await expect(prepareBoardSummary(true)).rejects.toMatchObject({ name: "FilesProjectionQueueError", reason: "expired" });
+    holdQueue({ maxDepth: 4 });
+    const preparing = request(prepareBoardSummary(true));
+    await queued(2);
+    expireWaiting();
+    await expect(preparing).rejects.toMatchObject({ name: "FilesProjectionQueueError", reason: "expired" });
   });
 });

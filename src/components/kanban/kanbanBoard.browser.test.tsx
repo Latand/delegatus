@@ -43744,7 +43744,6 @@ describe("cold conversation link", () => {
     inViewport: boolean;
     whole: boolean;
     overlaps: string[];
-    coversBoardText: string[];
     contrast: number;
     box: { left: number; top: number; right: number; bottom: number };
   };
@@ -43753,7 +43752,7 @@ describe("cold conversation link", () => {
   const readNotice = (page: Page, state: "opening" | "retrying") => page.evaluate((expected) => {
     const host = document.querySelector<HTMLElement>(`[data-link-pending-notice="${expected}"]`);
     if (!host) return null;
-    const pill = host.firstElementChild as HTMLElement;
+    const pill = host;
     const pillBox = pill.getBoundingClientRect();
     const textRange = document.createRange();
     textRange.selectNodeContents(pill);
@@ -43781,11 +43780,9 @@ describe("cold conversation link", () => {
     const backdrop = over(rgba(style.backgroundColor), canvas.some(Number.isNaN) || canvas[3] === 0 ? [255, 255, 255, 1] : canvas);
     const text = over(rgba(style.color), backdrop);
     const [hi, lo] = [luminance(text), luminance(backdrop)].sort((a, b) => b - a);
-    /* A toast covers some of the board while it shows, as the deploy pill does. What it may not cover is what names
-       the screen or carries a conversation: the top band (header, search field, phone top bar, window titles), an
-       open conversation's text, or a field. Board and sidebar text it passes over is reported, not failed. */
+    /* The notice owns its strip: no visible text range of any other element, in the board, the sidebar, an open
+       conversation or a field, may share a pixel with it. */
     const overlaps: string[] = [];
-    const coversBoardText: string[] = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       const element = node.parentElement;
@@ -43794,12 +43791,20 @@ describe("cold conversation link", () => {
       const range = document.createRange();
       range.selectNodeContents(node);
       for (const rect of range.getClientRects()) {
-        const x = Math.min(rect.right, pillBox.right) - Math.max(rect.left, pillBox.left);
-        const y = Math.min(rect.bottom, pillBox.bottom) - Math.max(rect.top, pillBox.top);
-        if (rect.width <= 0 || x <= 0.5 || y <= 0.5) continue;
-        const named = rect.top < 120
-          || element.closest("input, textarea, select, [data-agent-window], [data-kanban-reader], [data-log-feed-scroller]") !== null;
-        (named ? overlaps : coversBoardText).push((node.textContent ?? "").trim().slice(0, 40));
+        if (rect.width <= 0) continue;
+        /* Only the part of the text a person can see counts: each ancestor that clips its content cuts the range to its box. */
+        let [left, top, right, bottom] = [rect.left, rect.top, rect.right, rect.bottom];
+        for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== document.documentElement; ancestor = ancestor.parentElement) {
+          const { overflowX, overflowY } = getComputedStyle(ancestor);
+          if (overflowX === "visible" && overflowY === "visible") continue;
+          const box = ancestor.getBoundingClientRect();
+          if (overflowX !== "visible") { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+          if (overflowY !== "visible") { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+        }
+        const x = Math.min(right, pillBox.right) - Math.max(left, pillBox.left);
+        const y = Math.min(bottom, pillBox.bottom) - Math.max(top, pillBox.top);
+        if (right - left <= 0 || bottom - top <= 0 || x <= 0.5 || y <= 0.5) continue;
+        overlaps.push((node.textContent ?? "").trim().slice(0, 40));
       }
     }
     return {
@@ -43808,7 +43813,6 @@ describe("cold conversation link", () => {
       inViewport: pillBox.left >= 0 && pillBox.top >= 0 && pillBox.right <= innerWidth && pillBox.bottom <= innerHeight,
       whole: textBoxes.length > 0 && textBoxes.every((rect) => rect.left >= pillBox.left - 0.5 && rect.right <= pillBox.right + 0.5 && rect.top >= pillBox.top - 0.5 && rect.bottom <= pillBox.bottom + 0.5),
       overlaps: [...new Set(overlaps)],
-      coversBoardText: [...new Set(coversBoardText)],
       contrast: Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100,
       box: { left: Math.round(pillBox.left), top: Math.round(pillBox.top), right: Math.round(pillBox.right), bottom: Math.round(pillBox.bottom) },
     };
