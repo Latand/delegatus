@@ -226,7 +226,7 @@ async function pressTool(page: Page, id: string, tool: string) {
 }
 
 /** States that only open, close or read: they send nothing. */
-const QUIET_STATES = new Set(["rest", "opened", "details", "details-reset", "free", "claude-row", "status", "long-id", "next-for-unpinned", "open-no-data", "open-stale-read", "one-closes-as-another-opens", "long-names-codex", "long-names-claude", "provider-error", "signing-in-codex", "signing-in-claude"]);
+const QUIET_STATES = new Set(["rest", "opened", "details", "details-reset", "free", "claude-row", "status", "status-opened", "status-opened-no-data", "long-id", "next-for-unpinned", "open-no-data", "open-stale-read", "one-closes-as-another-opens", "long-names-codex", "long-names-claude", "provider-error", "signing-in-codex", "signing-in-claude"]);
 
 export const ROW_STATES: RowState[] = [
   { id: "rest", set: "core", engine: "codex", run: async () => `${rowOf("night-shift")} [data-account-default-mark]` },
@@ -242,6 +242,9 @@ export const ROW_STATES: RowState[] = [
     return `[data-account-spend-credits="night-shift"] [role="alert"]`;
   } },
   { id: "status", set: "core", engine: "codex", run: async (page) => { await page.locator(`${rowOf("studio")} [data-account-status]`).click(); await settlePopover(page); return `[data-account-status-popover="studio"]`; } },
+  // The status over an opened row: its Make default line is hidden whole or stays whole, never half under the popover.
+  { id: "status-opened", set: "core", engine: "codex", run: async (page) => { await openRow(page, "studio"); await page.locator(`${rowOf("studio")} [data-account-status]`).click(); await settlePopover(page); return `[data-account-status-popover="studio"]`; } },
+  { id: "status-opened-no-data", set: "edge", engine: "codex", run: async (page) => { await openRow(page, "no-reading"); await page.locator(`${rowOf("no-reading")} [data-account-status]`).click(); await settlePopover(page); return `[data-account-status-popover="no-reading"]`; } },
   { id: "signed-out", set: "core", engine: "codex", run: async () => `[data-account-signin-start="old-laptop"]` },
   { id: "long-id", set: "edge", engine: "codex", run: async (page) => { await page.locator(`${rowOf("long-name")} [data-account-status]`).click(); await settlePopover(page); return `[data-account-status-popover="long-name"] [data-account-id]`; } },
   { id: "next-for-unpinned", set: "core", engine: "codex", next: "studio", run: async (page) => { await page.locator(`${rowOf("studio")} [data-account-status]`).click(); await settlePopover(page); return `[data-account-status-popover="studio"]`; } },

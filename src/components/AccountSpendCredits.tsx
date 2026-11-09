@@ -5,7 +5,7 @@ import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccoun
 import { useLocale, type Locale } from "@/lib/i18n";
 import type { ReconciledQuota } from "@/lib/rateLimit";
 import { SettingSwitch } from "./ProjectSettingRow";
-import { formatCheckedClock, formatReadClock } from "./rateLimit";
+import { formatReadClock } from "./rateLimit";
 
 /** Paid spending is on and the account still holds a positive balance: past its plan limit it keeps working. */
 export function paidSpendingActive(account: AccountOption): boolean {
@@ -84,10 +84,11 @@ export function AccountSpendCredits({ account, state, quota, phone = false, colu
   }, [enabled]);
   if (!shown) return null;
   const paid = account.paidCredits;
-  const checked = quota ? limitsCheckedClock(quota) : null;
-  const readAt = paid?.checkedAt && !Number.isNaN(new Date(paid.checkedAt).getTime()) ? formatReadClock(paid.checkedAt) : null;
-  // A read time earns its words only when it differs from the limits' check time.
-  const shownRead = readAt && readAt !== checked ? readAt : null;
+  const checkedMinute = quota ? limitsCheckedMinute(quota) : null;
+  const readMs = paid?.checkedAt ? new Date(paid.checkedAt).getTime() : NaN;
+  // A read time earns its words only when it is another minute than the limits' check time. The two clocks
+  // word a date differently (24 hours back against the calendar day), so the instants are compared, not their words.
+  const shownRead = Number.isNaN(readMs) || Math.floor(readMs / 60_000) === checkedMinute ? null : formatReadClock(paid!.checkedAt!);
   return (
     <div ref={detailRef} data-account-spend-credits={account.id} className={className}>
       <div data-account-line className={`flex items-center gap-2 ${phone ? "min-h-11" : "min-h-6"}`}>
@@ -109,8 +110,8 @@ export function AccountSpendCredits({ account, state, quota, phone = false, colu
   );
 }
 
-/** The clock time the row's limits were read, in the form the "Checked" line shows it. */
-function limitsCheckedClock(quota: ReconciledQuota): string | null {
+/** The minute the row's limits were first read, the one its "Checked" line shows. */
+function limitsCheckedMinute(quota: ReconciledQuota): number | null {
   const observed = [quota.session, quota.weekly, ...quota.tiers].flatMap((window) => window?.observedAt != null ? [window.observedAt] : []);
-  return observed.length ? formatCheckedClock(new Date(Math.min(...observed) * 1000).toISOString()) : null;
+  return observed.length ? Math.floor(Math.min(...observed) / 60) : null;
 }

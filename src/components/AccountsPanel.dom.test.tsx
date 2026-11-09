@@ -1207,6 +1207,41 @@ test("a device sign-in line ends when the next read shows the account signed out
   expect(line()).toBeNull();
 });
 
+test("an opened row names an identical credit and limits reading once across midnight, in both languages", async () => {
+  const previous = getLocale();
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      setLocale(locale);
+      // Just before midnight the day before: the limits' own line words it with its date rule, the credit line with the calendar's.
+      setSystemTime(new Date("2026-11-05T09:00:00Z"));
+      const stamp = "2026-11-04T20:14:00Z";
+      const account = { ...managedAcc, spendCredits: true, paidCredits: { balance: "100", checkedAt: stamp },
+        limits: { freshness: "fresh" as const, session: null, weekly: { usedPercent: 99, resetsAt: null, windowMinutes: 10_080, observedAt: Date.parse(stamp) / 1000 }, checkedAt: stamp } };
+      const view = await mount(state(login({ phase: "authenticated" }), { engine: "codex", accounts: [account] }));
+      mounted.push(view);
+      openRow(view.host, account.id);
+      const row = view.host.querySelector("[data-account-row]")!;
+      const clock = formatCheckedClock(stamp);
+      expect(row.textContent!.split(clock)).toHaveLength(2);
+      expect(row.querySelector("[data-account-spend-credits]")!.textContent).not.toContain(translate(locale, "accounts.paidRead", { at: "" }).trim());
+    }
+  } finally { setSystemTime(); setLocale(previous); }
+});
+
+test("an opened row keeps a credit reading time that differs from the limits' by a minute or more", async () => {
+  setLocale("en");
+  setSystemTime(new Date("2026-11-05T09:00:00Z"));
+  try {
+    const observed = "2026-11-05T08:00:00Z";
+    const account = { ...managedAcc, spendCredits: true, paidCredits: { balance: "100", checkedAt: "2026-11-05T08:30:00Z" },
+      limits: { freshness: "fresh" as const, session: null, weekly: { usedPercent: 99, resetsAt: null, windowMinutes: 10_080, observedAt: Date.parse(observed) / 1000 }, checkedAt: observed } };
+    const view = await mount(state(login({ phase: "authenticated" }), { engine: "codex", accounts: [account] }));
+    mounted.push(view);
+    openRow(view.host, account.id);
+    expect(view.host.querySelector("[data-account-spend-credits]")!.textContent).toContain(translate("en", "accounts.paidRead", { at: formatCheckedClock("2026-11-05T08:30:00Z") }));
+  } finally { setSystemTime(); }
+});
+
 test("an opened row with a stale reading says when it was read once, on the Refresh line; the closed row keeps its note", async () => {
   const observedAt = Date.parse("2020-01-01T09:00:00.000Z") / 1000;
   const view = await mount(state(login({ phase: "authenticated" }), {

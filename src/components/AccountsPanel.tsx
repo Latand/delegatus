@@ -687,6 +687,7 @@ function AccountRow({ account, engine, quota, surface }: {
               <button
                 type="button"
                 data-account-make-default={account.id}
+                data-account-line
                 aria-label={t("accounts.makeDefaultAria", { label: account.label })}
                 disabled={state.mutation !== null}
                 onClick={() => {
