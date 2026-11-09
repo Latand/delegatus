@@ -144,10 +144,11 @@ function announceResult(child: FakeClaude, host: ClaudeStreamBrokerHost): void {
 function startHost(options: {
   child: FakeClaude;
   compactEvidenceTimeoutMs?: number;
+  eventStore?: RuntimeEventStore;
 } ): Promise<ClaudeStreamBrokerHost> {
   return ClaudeStreamBrokerHost.start({
     cwd: sandbox,
-    eventStore: new MemoryEventStore(),
+    eventStore: options.eventStore ?? new MemoryEventStore(),
     deliveryLedger: new MemoryDeliveryLedger(),
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
     readTranscript: () => [],
@@ -330,4 +331,62 @@ test("a host that dies mid-compaction terminalizes unverified rather than hangin
   const outcome = await compaction;
   expect(outcome).toBeInstanceOf(StructuredCompactError);
   expect((outcome as StructuredCompactError).phase).toBe("unverified");
+});
+
+
+for (const outcome of ["boundary", "refused", "timeout"] as const) {
+  test(`manual compaction owns assistant frames until its result: ${outcome}`, async () => {
+    const child = new FakeClaude();
+    const store = new MemoryEventStore();
+    const host = await startHost({ child, eventStore: store, compactEvidenceTimeoutMs: outcome === "timeout" ? 10 : 2_000 });
+    const response = () => child.emitJson({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "compact summary" }] } });
+    const turns = () => store.load(host.identity.sessionId).filter(e => e.kind === "turn-started" || e.kind === "turn-ended");
+    try {
+      const pending = host.compact({ operationId: "compact-owner" }).then(value => value, error => error as StructuredCompactError);
+      await waitFor(() => compactFrames(child).length === 1, "compact command missing");
+      response();
+      child.emitJson({ type: "stream_event", event: { type: "message_start", message: { role: "assistant", id: "compact-message" } } });
+      child.emitJson({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "summary" } } });
+      expect(turns()).toEqual([]);
+      if (outcome === "boundary") {
+        announceBoundary(child, host, "compact-boundary");
+        expect(await pending).toEqual({ compactionId: "compact-boundary" });
+      } else if (outcome === "timeout") expect(await pending).toBeInstanceOf(StructuredCompactError);
+      if (outcome !== "refused") {
+        response();
+        await expect(host.compact({ operationId: "second-compact" })).rejects.toThrow("already running");
+        expect(turns()).toEqual([]);
+      }
+      announceResult(child, host);
+      const settled = await pending;
+      if (outcome === "refused") expect(settled).toBeInstanceOf(StructuredCompactError);
+      expect(turns()).toEqual([]);
+      // The observed result releases stream ownership, even after timeout.
+      response();
+      expect((await host.health()).status).toBe("active");
+      announceResult(child, host);
+      expect(turns().map(e => e.kind)).toEqual(["turn-started", "turn-ended"]);
+      expect(await host.compact({ operationId: "compact-owner" }).then(value => value, error => error)).toBe(settled);
+      expect(compactFrames(child)).toHaveLength(1);
+    } finally { await host.release(); }
+  });
+}
+
+test("automatic compact boundaries preserve active work and create no idle work", async () => {
+  const child = new FakeClaude();
+  const store = new MemoryEventStore();
+  const host = await startHost({ child, eventStore: store });
+  try {
+    announceBoundary(child, host, "idle-auto");
+    announceResult(child, host);
+    expect(store.load(host.identity.sessionId).filter(e => e.kind === "turn-started" || e.kind === "turn-ended")).toEqual([]);
+    child.emitJson({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "background work" }] } });
+    const turn = (await host.health()).activeTurnRef;
+    expect(turn).toBeTruthy();
+    announceBoundary(child, host, "active-auto");
+    child.emitJson({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "continued work" }] } });
+    expect((await host.health()).activeTurnRef).toBe(turn);
+    announceResult(child, host);
+    expect(store.load(host.identity.sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn, status: "completed" }]);
+  } finally { await host.release(); }
 });

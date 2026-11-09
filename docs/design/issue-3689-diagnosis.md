@@ -175,3 +175,75 @@ This stage's validation is document/source review, retained-probe digest and exi
 ## Deferred — not currently justified
 
 Transcript-age fallback in seat tick; new agenda asks derived from prose verdicts; notification policy/coalescing changes; broad recovery or native queue redesign; universal historical raw-frame deduplication; full producer-version capture campaigns; automatic retries of uncertain operations; historical backfill; new background pollers; UI changes; paid-provider probes; runtime-host socket campaigns beyond existing isolated fixtures; deployment and installed acceptance. These remain visible scope cuts. The requirement is met by observing a genuine background start and carrying its identity through the existing completion path.
+
+
+## Implementation evidence — 9 November
+
+The builder integrated current main before editing, retaining #3733. Published
+#2926 and #3749 modify launch/signal authority; #3355 modifies native queue
+replay. Their actual patches do not overlap this parser/result change. A bounded
+scan of existing registered, non-scratch worktrees found no authored uncommitted
+changes to the selected source and test files. Missing files in an initializing
+checkout were excluded from that authored-change observation.
+
+The implementation admits a background start only at meaningful main-session
+assistant content. The broker persists its session-scoped identity and settles
+that active identity before advancing a waiting foreground input. Manual
+compaction retains stream ownership after boundary or timeout; an already-active
+foreground delivery still owns its result, preserving the original compact
+regression. Immediate native-result UUID replay is rejected across adoption;
+legacy and uncorrelated frames retain the limits stated above. The optional
+correlation remains internal to the broker ledger.
+
+The promoted retained replay was run unchanged against the integrated base:
+queued control passed; unqueued reply failed because active identity was null
+(one pass, one fail, actual exit 1). The first complete broker run passed 188
+tests. The first compact run exposed the foreground-result priority regression,
+which was corrected. The first integration run exposed a fixture wait that
+passed an async predicate to a synchronous helper; the wait now observes the
+persisted start before reading health. Its stored notice already carried the
+correct background identity. Initial failing logs remain in private evidence.
+
+Checks use separate commands and fresh isolated exports, state, homes and logs.
+The integration fixture runs an owned local protocol peer, the production
+broker/controller/journal and the notice consumer/store/sweep. Notice delivery
+uses the real reservation and receipt path with a fixture recipient engine. It
+checks coalescing, opt-out, repeated consumption, journal/host reopening and a
+lost acceptance reply under the same key and text. No live/provider delivery or
+installed acceptance is implied. No performance improvement is claimed.
+
+
+Final per-file results (Bun 1.4.0; each listed command has actual exit 0):
+
+| File under `src/lib/` | Passed |
+| --- | ---: |
+| `runtime/claudeStreamBrokerHost.test.ts` | 189 |
+| `runtime/claudeStreamBrokerHost.compact.test.ts` | 12 |
+| `runtime/eventStore.test.ts` | 46 |
+| `runtime/structuredDelivery.integration.test.ts` | 80 |
+| `runtime/engineHostEvents.test.ts` | 25 |
+| `runtime/consumers.test.ts` | 5 |
+| `spawnNotice/sweep.test.ts` | 24 |
+
+Total: 381 passed assertions-bearing tests in seven files. The explicit
+`runtime/claudeStreamBrokerHost.nativeQueue.test.ts` command exited 0 with all
+four installed-CLI cases skipped because `LLV_CLAUDE_BINARY` was unset. It is
+not native protocol acceptance. The broker and integration suites exercise
+queue identity with local fixture peers. Installed acceptance and the three
+independent lifecycle reviews remain subsequent stages.
+
+The final refresh found main advanced from `0f5995e7e591` to `9218e06e28c3`
+through #3787, changing seat-tick/curation/scanner paths outside this patch.
+The issue body timestamp and zero-comment count, #3749 and #3355 heads, and the
+bounded unpublished-overlap scan remained unchanged. Tests use the recorded
+integrated base and the final source export; no combined-tree test of that later
+main commit is claimed. The source change does not alter the keep-list.
+
+
+Self-review also tightened the existing writer fence for assistant and partial
+output: a rejected background start must not leave unidentified output in a
+successor's ledger. The native fixture now acknowledges its injected response
+after the stdout parser has handled it; owner/epoch replacement then requires
+byte-for-byte unchanged broker events. No asynchronous work was added to the
+production parsing path. An event-store regression expectation was corrected
+to preserve the existing refusal of malformed complete rows.
