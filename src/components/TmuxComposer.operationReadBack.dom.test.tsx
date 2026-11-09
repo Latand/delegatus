@@ -991,7 +991,7 @@ for (const locale of ["en", "uk"] as const) {
       expect(rows()).toEqual(["held-same-text", "consumed-tick"]);
       expect(notice()).toBe(hint);
       expect(card("consumed-tick")?.textContent).toContain(translate(locale, "composer.deliveryCheckEnded"));
-      expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 2 }));
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 2 }));
       const draft = () => host.querySelector("textarea")!;
       const propsKey = Object.keys(draft()).find((key) => key.startsWith("__reactProps$"))!;
       await act(async () => {
@@ -1024,7 +1024,7 @@ for (const locale of ["en", "uk"] as const) {
       expect(notice()).toBeNull();
       expect(card("consumed-tick")).toBeNull();
       expect(card("unknown-send")?.textContent).toContain(translate(locale, "composer.deliveryCheckEnded"));
-      expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 1 }));
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 1 }));
       expect(draft().value).toBe("an unsent draft");
 
       // A late moving receipt for the same id cannot bring any of it back.
@@ -1033,7 +1033,7 @@ for (const locale of ["en", "uk"] as const) {
       await render();
       await waitFor(() => false);
       expect(card("consumed-tick")).toBeNull();
-      expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 1 }));
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 1 }));
       expect(rows()).toEqual(["held-same-text"]);
 
       // A remount from what the tab retains shows the same truth.
@@ -1045,7 +1045,7 @@ for (const locale of ["en", "uk"] as const) {
         await waitFor(() => card("unknown-send") !== null);
         expect(card("consumed-tick")).toBeNull();
         expect(card("unknown-send")).not.toBeNull();
-        expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 1 }));
+        expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 1 }));
       } finally { await again(); }
       expect(queueReads).toContain("unreadable");
       expect(queueWrites).toEqual([]);

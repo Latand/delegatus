@@ -10,6 +10,7 @@ import select
 import shlex
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -371,16 +372,55 @@ def file_identity(path):
 def obligation_places(directory, pending):
     """Every place a record can be, by what would change if one moved: the
     pending journal and each import claim by file identity, the record
-    directory by its names. A rename, an append, a publication and a deleted
-    claim each change one of them."""
+    directory by its names, or the sealed source by its marker and database
+    identity. A rename, append, publication or deleted claim changes one."""
     try:
         beside = sorted(os.listdir(directory.parent))
     except FileNotFoundError:
         beside = []
     claims = tuple((name, file_identity(directory.parent / name))
                    for name in beside if name.startswith(PENDING_JOURNAL + ".claim-"))
-    names = tuple(sorted(os.listdir(directory))) if os.path.lexists(directory) else ()
+    if directory.is_file():
+        database = directory.parent / "state.sqlite"
+        status = database.stat()
+        names = (file_identity(directory), (status.st_dev, status.st_ino))
+    else:
+        names = tuple(sorted(os.listdir(directory))) if os.path.lexists(directory) else ()
     return file_identity(pending), claims, names
+
+
+def read_sqlite_obligations(directory, unreadable):
+    """Reads the canonical source without migrating, repairing or opening a writer."""
+    try:
+        marker = json.loads(directory.read_text())
+    except (OSError, ValueError) as error:
+        raise OSError("canonical cut source is unreadable") from error
+    try:
+        database = directory.parent / "state.sqlite"
+        status = database.stat()
+        collection = "interruption_obligations:" + directory.name
+        if (not isinstance(marker, dict) or marker.get("format") != "interruption-sqlite-v2"
+                or marker.get("collection") != collection or not isinstance(marker.get("epoch"), str)
+                or marker.get("databaseIdentity") != str(status.st_dev) + ":" + str(status.st_ino)):
+            raise ValueError("incompatible cut source")
+        with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)) as db:
+            db.execute("BEGIN")
+            meta = db.execute("SELECT schema_version,migration_id FROM state_collections WHERE collection=?", (collection,)).fetchone()
+            if meta != (2, "interruption-source-v2"):
+                raise ValueError("incomplete cut collection")
+            records = {}
+            for key, payload in db.execute("SELECT row_key,value_json FROM state_rows WHERE collection=? ORDER BY row_order,row_key", (collection,)):
+                try:
+                    record = json.loads(payload)
+                    if not isinstance(record, dict) or record.get("id") != key:
+                        raise ValueError("incompatible cut row")
+                    records[key] = record
+                except (ValueError, TypeError):
+                    unreadable.append(key + ":shape")
+            return records
+    except (OSError, ValueError, sqlite3.Error) as error:
+        unreadable.append(directory.name + ":" + type(error).__name__)
+        return {}
 
 
 def read_obligations(directory, pending, claims):
@@ -389,8 +429,10 @@ def read_obligations(directory, pending, claims):
     read_journal(pending, journaled, unreadable)
     for name in claims:
         read_journal(directory.parent / name, journaled, unreadable)
-    records = {}
-    names = sorted(os.listdir(directory)) if os.path.lexists(directory) else []
+    records = read_sqlite_obligations(directory, unreadable) if directory.is_file() else {}
+    if not directory.is_file() and directory.with_name(directory.name + ".source.json").exists():
+        unreadable.append(directory.name + ":incomplete")
+    names = sorted(os.listdir(directory)) if directory.is_dir() else []
     for name in names:
         if not (name.startswith("interruption-continuation-") and name.endswith(".json")):
             continue
@@ -418,8 +460,10 @@ def interrupted_conversations(state, since, hosts=()):
 
     A record can wait in the pending journal, and an import takes that journal
     by renaming it to a claim beside it, writes its records into the
-    directory, returns the ones the directory refused to the journal and only
-    then deletes the claim. A later import takes over a claim one died holding
+    canonical source, returns refused records to the journal and only then
+    deletes the claim. A sealed SQLite source is read in one read-only snapshot;
+    its marker and database identity join the same journal-movement inventory.
+    Unrelated collection writes cannot invalidate that coherent cut snapshot. A later import takes over a claim one died holding
     by renaming it to a claim of its own. A record can therefore move while it
     is read, so a read counts only when every place it can be is unchanged
     across it. A read that never finds them still is reported as unreadable,

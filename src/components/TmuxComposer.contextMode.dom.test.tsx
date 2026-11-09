@@ -71,6 +71,40 @@ afterAll(() => composerStorage.uninstall());
 const CARD = "conversation_inject";
 const realFetch = globalThis.fetch;
 
+/* Readiness is signalled by the code under test, never by elapsed time: the
+   queue and send stubs wake whoever waits on them, and the attachment reader is
+   resolved by the test itself, as ComposerBar.attachmentGate.dom.test does. */
+let signalWaiters: Array<() => void> = [];
+const signal = () => {
+  const waiting = signalWaiters;
+  signalWaiters = [];
+  for (const wake of waiting) wake();
+};
+async function until(condition: () => boolean): Promise<void> {
+  while (!condition()) await new Promise<void>((resolve) => { signalWaiters.push(resolve); });
+}
+
+class DeferredReader {
+  static pending: DeferredReader[] = [];
+  result: string | null = null;
+  error: unknown = null;
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+  private file: File | null = null;
+  readAsDataURL(file: File) {
+    this.file = file;
+    DeferredReader.pending.push(this);
+    signal();
+  }
+  async finish() {
+    const bytes = new Uint8Array(await this.file!.arrayBuffer());
+    this.result = `data:${this.file!.type};base64,${Buffer.from(bytes).toString("base64")}`;
+    this.onload?.();
+  }
+}
+Object.assign(globalThis, { FileReader: DeferredReader });
+
 let queueWrites: Record<string, unknown>[] = [];
 let queueEntries: NativeQueueRecord[] = [];
 let sends: Record<string, unknown>[] = [];
@@ -115,6 +149,7 @@ const queueTransport: NativeQueueDependencies = {
   read: async () => ({ entries: queueEntries, native: { threadId: "thread-1", items: [], stale: false } }),
   write: async (body) => {
     queueWrites.push(body);
+    signal();
     return journalReceipt(body);
   },
 };
@@ -165,6 +200,8 @@ beforeEach(() => {
   queueWrites = [];
   queueEntries = [];
   sends = [];
+  DeferredReader.pending = [];
+  signalWaiters = [];
   steerSupported = true;
   turn = "idle";
   nativeQueueCapable = true;
@@ -187,6 +224,7 @@ beforeEach(() => {
     useRuntimeReceiptsForArtifact: (() => durableReceipts) as never,
     sendRuntimeMessage: (async (options: Record<string, unknown>) => {
       sends.push(options);
+      signal();
       return { ok: true, status: 202, operationId: "send-1", receipt: {
         operationId: "send-1", conversationId: options.conversationId,
         idempotencyKey: options.idempotencyKey, kind: "send", status: "queued",
@@ -449,6 +487,140 @@ test("Alt+Enter still hands the draft to Codex's own queue in context mode", asy
   await settle(() => press(textarea(host), "Enter", { altKey: true }));
   await settle(() => {});
   expect(queueWrites).toHaveLength(1);
+  expect(injections).toEqual([]);
+  root.unmount();
+});
+
+/** A picture pasted into the field, the way the operator stages one. */
+async function pasteImage(host: HTMLElement, tag = "shot"): Promise<void> {
+  const field = textarea(host);
+  const propsKey = Object.keys(field).find((candidate) => candidate.startsWith("__reactProps$"))!;
+  const props = (field as unknown as Record<string, { onPaste(event: unknown): void }>)[propsKey]!;
+  const bytes = new TextEncoder().encode(`png-${tag}`);
+  await settle(() => props.onPaste({
+    clipboardData: { items: [{ type: "image/png", getAsFile: () => new File([bytes], `${tag}.png`, { type: "image/png" }) }] },
+    preventDefault() {},
+  }));
+  await until(() => DeferredReader.pending.length > 0);
+  const reader = DeferredReader.pending.shift()!;
+  await act(async () => { await reader.finish(); });
+  await settle(() => {});
+  expect(host.querySelectorAll("img").length).toBeGreaterThan(0);
+}
+
+const refusal = (host: HTMLElement) => host.querySelector<HTMLElement>('[data-testid="composer-status"]');
+
+test("Send in context mode with a staged picture names the Context toggle and the Codex queue, keeps the draft and the picture, and posts nothing", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    turn = "running";
+    const { host, root } = await mount();
+    try {
+      await type(host, "look at this");
+      await pasteImage(host);
+      const staged = host.querySelectorAll("img").length;
+      expect(staged).toBeGreaterThan(0);
+      expect(host.querySelector<HTMLButtonElement>("button[type=submit]")!.disabled).toBe(false);
+      await clickSend(host);
+      await settle(() => {});
+      /* The refusal points at the controls that DO carry the picture: the
+         Context toggle by its own label and the queue by the label of its menu
+         entry — never at Send, which is the control that refused. */
+      const line = refusal(host)!;
+      expect(line.textContent).toBe(translate(locale, "composer.context.imagesBlockedQueue", {
+        toggle: translate(locale, "composer.context.toggle"),
+        queue: translate(locale, "queue.queueMessage"),
+      }));
+      expect(line.getAttribute("role")).toBe("status");
+      expect(line.className).toContain("shrink-0");
+      expect(injections).toEqual([]);
+      expect(sends).toEqual([]);
+      expect(queueWrites).toEqual([]);
+      expect(textarea(host).value).toBe("look at this");
+      expect(host.querySelectorAll("img").length).toBe(staged);
+    } finally {
+      root.unmount();
+      document.body.replaceChildren();
+    }
+  }
+});
+
+test("on a touch screen the refusal names the send menu and no keyboard shortcut, and keeps the draft and the picture", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    turn = "running";
+    mobile = true;
+    const { host, root } = await mount();
+    try {
+      await type(host, "look at this");
+      await pasteImage(host);
+      const staged = host.querySelectorAll("img").length;
+      await clickSend(host);
+      await settle(() => {});
+      const line = refusal(host)!;
+      expect(line.textContent).toBe(translate(locale, "composer.context.imagesBlockedQueueTouch", {
+        queue: translate(locale, "queue.queueMessage"),
+        menu: translate(locale, "composer.sendMenuTitle"),
+      }));
+      expect(line.textContent).not.toContain("Alt+Enter");
+      expect(line.className).toContain("shrink-0");
+      expect(injections).toEqual([]);
+      expect(sends).toEqual([]);
+      expect(queueWrites).toEqual([]);
+      expect(textarea(host).value).toBe("look at this");
+      expect(host.querySelectorAll("img").length).toBe(staged);
+    } finally {
+      root.unmount();
+      document.body.replaceChildren();
+    }
+  }
+});
+
+test("a host with no native queue gets the refusal without the queue route", async () => {
+  turn = "running";
+  nativeQueueCapable = false;
+  const { host, root } = await mount();
+  await type(host, "look at this");
+  await pasteImage(host);
+  await clickSend(host);
+  await settle(() => {});
+  expect(refusal(host)!.textContent).toBe(translate("en", "composer.context.imagesBlocked", { toggle: translate("en", "composer.context.toggle") }));
+  expect(refusal(host)!.textContent).not.toContain(translate("en", "queue.queueMessage"));
+  expect(injections).toEqual([]);
+  root.unmount();
+});
+
+test("after the refusal, Context off sends the picture as an ordinary message and Alt+Enter queues it", async () => {
+  turn = "running";
+  const { host, root } = await mount();
+  await type(host, "look at this");
+  await pasteImage(host);
+  await clickSend(host);
+  await settle(() => {});
+  expect(refusal(host)).not.toBeNull();
+  /* Alt+Enter keeps its queue path with the picture while Context is on. */
+  await settle(() => press(textarea(host), "Enter", { altKey: true }));
+  await until(() => queueWrites.length > 0);
+  await settle(() => {});
+  expect(queueWrites).toHaveLength(1);
+  expect(JSON.stringify(queueWrites[0])).toContain("png");
+  expect(injections).toEqual([]);
+  root.unmount();
+});
+
+test("after the refusal, turning Context off sends the picture with an ordinary Enter", async () => {
+  turn = "running";
+  const { host, root } = await mount();
+  await type(host, "look at this");
+  await pasteImage(host);
+  await clickSend(host);
+  await settle(() => {});
+  await settle(() => toggle(host)!.click());
+  await settle(() => press(textarea(host), "Enter"));
+  await until(() => sends.length > 0);
+  await settle(() => {});
+  expect(sends).toHaveLength(1);
+  expect(JSON.stringify(sends[0]?.images ?? [])).toContain("png");
   expect(injections).toEqual([]);
   root.unmount();
 });

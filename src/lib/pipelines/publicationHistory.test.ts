@@ -98,7 +98,8 @@ test.each(["PRIVACY GATE: FAIL", "pre-push: privacy: failed (1)", "pre-push: pri
   expect(recoverablePublication({ error: "privacy refused publication", failure })).toBe(false);
 });
 
-test.each(["passed", "passed-phases", "privacy", "privacy-partial"])("publication clipping retains diagnostic provenance: %s", async shape => {
+test.each(["passed", "passed-phases", "privacy", "privacy-partial", "completed", "boundary", "partial-pass",
+  "second-start", "second-fail", "second-pass", "quoted-pass", "quoted-start", "many-phases", "long-fail"])("publication clipping retains diagnostic provenance: %s", async shape => {
   const previous = loadPipelines();
   const f = await lockedFixture();
   try {
@@ -113,7 +114,24 @@ test.each(["passed", "passed-phases", "privacy", "privacy-partial"])("publicatio
     const limit = 4000 - (earlierPhase ? earlierPhase.length + 3 : 0);
     const padding = limit - marker.length - 1 - ending.length + (shape === "privacy-partial" ? 1 : 0);
     const prefix = earlierPhase ? `${earlierPhase}\n${".".repeat(4000)}\n` : "";
-    const output = `${prefix}${passed ? "(pass) a case: " : "earlier hook output\n"}${marker}\n${".".repeat(padding)}${ending}`;
+    const drift = "pre-push: publication inputs changed during privacy checks; changed components: git config; gate failed";
+    const start = "pre-push: privacy", pass = "PRIVACY GATE: PASS";
+    const completed = `${start}\n${pass}`;
+    const long = "benign diagnostic ".repeat(400);
+    const cases: Record<string, string> = {
+      completed: `${completed}\n${long}\n${drift}`,
+      boundary: `${start}\n${".".repeat(4000)}\n${pass}\n${".".repeat(4000 - pass.length - drift.length - 2)}\n${drift}`,
+      "partial-pass": `${completed}\n${".".repeat(4000 - pass.length - drift.length - 1)}\n${drift}`,
+      "second-start": `${completed}\n${long}\n${start}\n${drift}`,
+      "second-fail": `${completed}\n${start}\n${marker}\n${long}\n${drift}`,
+      "second-pass": `${completed}\n${start}\n${pass}\n${long}\n${drift}`,
+      "quoted-pass": `${start}\n> ${pass}\n${long}\n${drift}`,
+      "quoted-start": `${completed}\n> ${start}\n${long}\n${drift}`,
+      "many-phases": `${completed}\n${Array.from({ length: 20 }, (_, n) => `pre-push: check ${n}`).join("\n")}\n${long}\n${drift}`,
+      "long-fail": `${completed}\n${start}\n${marker}\n${long}\npre-push: no verdict within the push budget of 1499 s: "types"`,
+    };
+    const output = cases[shape] ?? `${prefix}${passed ? "(pass) a case: " : "earlier hook output\n"}${marker}\n${".".repeat(padding)}${ending}`;
+    const expectedPhase = cases[shape] ? publicationFailurePhase({ outputTail: output }) : passed ? "touched tests" : "privacy";
     f.pipeline.delivery = { target: { repository: "fixture", remote, branch: `refs/heads/${f.pipeline.branch}` },
       ownerId: f.pipeline.id, epoch: 1, active: true, disposition: "owner", publish: "enabled", journal: [] };
     f.pipeline.lastPassedCommit = f.pipeline.baseRef;
@@ -128,8 +146,12 @@ test.each(["passed", "passed-phases", "privacy", "privacy-partial"])("publicatio
     const stored = JSON.parse(JSON.stringify(result));
     expect(stored.failure.changedFiles).toBe(0);
     expect(stored.failure.outputTail.length).toBeLessThanOrEqual(4000);
-    expect(publicationFailurePhase(stored.failure)).toBe(passed ? "touched tests" : "privacy");
-    expect(recoverablePublication(stored)).toBe(passed);
+    expect(publicationFailurePhase(stored.failure)).toBe(expectedPhase);
+    expect(recoverablePublication(stored)).toBe(cases[shape] ? expectedPhase !== "privacy" : passed);
+    if (["completed", "boundary", "partial-pass", "second-pass", "quoted-start"].includes(shape)) {
+      expect(stored.failure.outputTail).toContain(pass);
+      expect(stored.failure.outputTail).toContain(drift);
+    }
   } finally { savePipelines(previous); f.close(); }
 }, 30_000);
 
