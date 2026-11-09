@@ -40,7 +40,8 @@ process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 for (const mode of ["startup", "foreground"] as const)
-for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed"] as const) test.skipIf(process.platform === "win32")(`${mode} recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
+for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed",
+  "claim-owner-replaced", "claim-epoch-replaced", "claim-writer-replaced"] as const) test.skipIf(process.platform === "win32")(`${mode} recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
   loadPipelines();
   const cwd = fs.mkdtempSync(path.join(sandbox, "native-reconnect-"));
   const socketDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rpc-"));
@@ -100,6 +101,23 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
   const leaseEntered = Promise.withResolvers<void>();
   const releaseLease = Promise.withResolvers<void>();
   let heldLease: Promise<unknown> | undefined;
+  const write = registry.deliveryWriteOrBusy.bind(registry);
+  let replacement: ReturnType<AgentRegistry["startupHostSnapshot"]>["entries"][string] | undefined;
+  const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, mutate) => {
+    const result = await write(correlation, mutate);
+    if (correlation.label === "registry.reconnect-startup-host" && scenario.startsWith("claim-")) {
+      const current = registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!;
+      replacement = { ...current,
+        claimOwner: scenario === "claim-owner-replaced" ? "replacement-owner" : current.claimOwner,
+        claimEpoch: current.claimEpoch + (scenario === "claim-epoch-replaced" ? 1 : 0),
+        structuredHost: { ...current.structuredHost!, writerClaimEpoch: current.structuredHost!.writerClaimEpoch
+          + (scenario === "claim-writer-replaced" ? 1 : 0) },
+      };
+      registry.upsert(replacement);
+      replacement = registry.startupHostSnapshot(key).entries[`codex:${sessionId}`];
+    }
+    return result;
+  });
   try {
     await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
       watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
@@ -126,6 +144,15 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
       expect(hasStructuredDeliveryHost(key)).toBeFalse();
       return;
     }
+    if (scenario.startsWith("claim-")) {
+      await expect(pending).rejects.toThrow("superseded");
+      expect(adopt).not.toHaveBeenCalled();
+      expect(spawned).toBe(0);
+      expect(ledger.writes).toEqual([]);
+      expect(hasStructuredDeliveryHost(key)).toBe(false);
+      expect(registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]).toEqual(replacement!);
+      return;
+    }
     const result = await pending;
     expect(result?.spawned).toBeFalse();
     if (scenario === "foreign-owner") {
@@ -150,6 +177,7 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
   } finally {
     releaseLease.resolve(); await heldLease;
     adopt.mockRestore();
+    admission.mockRestore();
     await bindStructuredDeliveryQueue([], { client: null });
     await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(socketDirectory, { recursive: true, force: true });

@@ -19,8 +19,47 @@ import {
   structuredDeliveryMcpObservation,
   bindStructuredDeliveryQueue,
   publishStructuredHostProjection,
+  publishStructuredDeliveryHost,
   terminateStructuredDeliveryHost,
 } from "./structuredDeliveryController";
+
+for (const revoked of [false, true]) test(`an addressed startup host retains its dispatch proof when recovery publishes before returning (${revoked})`, async () => {
+  const f = migrationDeliveryFixture();
+  const startup = await import("./startup");
+  const { StructuredRecoveryHeldForUpdateError } = await import("./structuredRecovery");
+  let current = true;
+  const guard = () => { if (!current) throw new StructuredRecoveryHeldForUpdateError("fixture recipient authority changed"); };
+  const prepare = spyOn(startup, "prepareStructuredStartupRecipient").mockImplementation(async () => ({
+    admissionGuard: guard, authorityGuard: guard,
+  }));
+  let recoveries = 0;
+  try {
+    f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status",
+      producer: { kind: "codex-app-server" }, payload: {
+        conversationId: f.conversation.id, sessionKey: f.key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+        provenance: "structured", accountId: null, parentConversationId: null, cwd: f.root,
+        artifactPath: f.conversation.generations.at(-1)!.path, capabilities: { steer: true, structuredAttention: true }, activeTurnId: null,
+      } });
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, deferStartupWork: true,
+      watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0,
+      recover: async () => {
+        recoveries++;
+        await publishStructuredDeliveryHost({ key: f.key, host: f.host });
+        if (revoked) { current = false; guard(); }
+        return { target: null, path: f.conversation.generations.at(-1)!.path, conversationId: f.conversation.id,
+          spawned: true, admissionGuard: guard };
+      },
+    });
+    f.journal.executeOperation({ kind: "send", operationId: "startup-original", idempotencyKey: "startup-original",
+      conversationId: f.conversation.id, text: "original addressed operation", policy: "queue" });
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(recoveries).toBe(1);
+    expect(prepare.mock.calls[0]?.[3]).toBe("startup-original");
+    expect(f.host.ledger.writes).toHaveLength(revoked ? 0 : 1);
+    expect(f.journal.operationResult("startup-original")?.receipt.status).toBe(revoked ? "queued" : "delivered");
+  } finally { prepare.mockRestore(); await f.cleanup(); }
+});
 
 for (const qualified of [false, true]) test(`${qualified ? "qualified" : "unqualified"} termination preserves a replacement host claimed during writer admission`, async () => {
   const f = migrationDeliveryFixture();

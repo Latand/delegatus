@@ -816,6 +816,7 @@ export async function bindStructuredDeliveryQueue(
   // seats instead of attempting competing recovery and terminalizing them.
   let startupPending = dependencies.deferStartupWork === true;
   let startupRecoveryReady = !startupPending;
+  const startupRecipientGuards = new Map<string, () => void>();
   let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
   let requestFailureNotices = () => {};
@@ -841,6 +842,8 @@ export async function bindStructuredDeliveryQueue(
       id => lookup.canonicalConversationId(id as ViewerConversationId));
   };
   const authorizeAccountDispatch = (conversationId: string) => {
+    try { startupRecipientGuards.get(conversationId)?.(); }
+    catch { throw new StructuredDispatchDeferredError("recipient startup authority changed before dispatch"); }
     assertPipelineTurnAllowed(conversationId, registry);
     const conversation = registry.conversation(conversationId as ViewerConversationId);
     try {
@@ -1011,11 +1014,11 @@ export async function bindStructuredDeliveryQueue(
       terminalTurn: (conversationId) => registry.conversation(conversationId as ViewerConversationId)?.turn.state === "terminal",
       deferTarget: (conversationId) => (startupPending
         || (deferredStartupConversations.size > 0
-          && deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))))
+          && deferredStartupConversations.has(registry.canonicalConversationId(conversationId as ViewerConversationId))))
         && hostResolver(registry, hosts)(conversationId) === null,
-      canRecoverDeferredTarget: (conversationId) => startupRecoveryReady
+      canRecoverDeferredTarget: (conversationId) => (startupRecoveryReady || startupPending)
         && (deferredStartupConversations.size === 0
-          || !deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))),
+          || !deferredStartupConversations.has(registry.canonicalConversationId(conversationId as ViewerConversationId))),
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
       /* Off the loop (rule c). The hold is written before the switch is
@@ -1477,6 +1480,17 @@ export async function bindStructuredDeliveryQueue(
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return false;
+      let startupAdmission: Pick<import("./structuredRecovery").StructuredRecoveryRequest, "admissionGuard" | "authorityGuard"> = {};
+      if (startupPending && !startupRecoveryReady) {
+        if (!startupRecipientGuards.has(conversation.id) && startupRecipientGuards.size >= 256) {
+          throw new (await import("./structuredRecovery")).StructuredRecoveryHeldForUpdateError("recipient startup preparations are at capacity");
+        }
+        const { prepareStructuredStartupRecipient } = await import("./startup");
+        const prepared = await prepareStructuredStartupRecipient(registry, conversation.id, undefined, admission.operationId);
+        prepared.admissionGuard();
+        startupAdmission = prepared;
+        startupRecipientGuards.set(conversation.id, prepared.admissionGuard);
+      }
       /* Startup holds this row until its restart cut evidence is decided:
          the message stays queued and recovery is asked again. Recovery
          refuses the row itself for every other caller; this answers the
@@ -1493,11 +1507,15 @@ export async function bindStructuredDeliveryQueue(
         conversationId: conversation.id,
         ...(startupPending ? { reconnectLiveHost: true } : {}),
         ...admission,
+        ...startupAdmission,
       }, {
         registry,
         client,
         requestDeliveryDrain: requestDrain,
       });
+      if (startupPending && recovered?.admissionGuard && (recovered.spawned || recovered.reconnected)) {
+        startupRecipientGuards.set(conversation.id,recovered.admissionGuard);
+      }
       return recovered?.spawned === true || recovered?.reconnected === true;
     },
     (effect, ownership) => applyStructuredReconfigure(effect, {
@@ -2194,6 +2212,7 @@ export async function bindStructuredDeliveryQueue(
   });
   state.stopActive = () => {
     stopped = true;
+    startupRecipientGuards.clear();
     queue.retire();
     drainWake.cancel();
     if (settleTimer) clearInterval(settleTimer);
@@ -2342,6 +2361,7 @@ export async function bindStructuredDeliveryQueue(
       await phase("draining startup delivery queue");
       assertActive();
       startupPending = false;
+      startupRecipientGuards.clear();
       await queue.drain();
     });
     return completion;

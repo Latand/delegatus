@@ -7,9 +7,14 @@ import {
   accountGuardObligationStore,
   interruptionContinuationText,
   interruptionObligationStore,
+  initializeRecipientInterruptionIndex,
+  recipientInterruptionEvidence,
+  recipientInterruptionObligationStore,
   restartCutProposal,
   type InterruptionObligationInput,
 } from "./interruptionObligations";
+
+import { createHash } from "node:crypto";
 
 const permissionRefusals = process.platform !== "win32" && process.getuid?.() !== 0;
 let directory = "";
@@ -35,6 +40,197 @@ const releaseCut: InterruptionObligationInput = {
   seat: null,
   recordedAt: "2026-09-19T11:16:20.000Z",
 };
+
+test("recipient cuts require initialization and read all matching reasons without unrelated records, cold and warm", async () => {
+  const obligations = path.join(directory, "recipient-cuts");
+  const store = interruptionObligationStore(obligations);
+  const own = ["viewer-release", "viewer-restart", "account-guard"].map((reason, n) => store.record({
+    ...releaseCut, reason: reason as InterruptionObligationInput["reason"], turnRef: `own-${n}`, hostKey: `claude:own-${n}`, owner: null,
+  }).obligation);
+  for (let n = 0; n < 49; n++) store.record({ ...releaseCut, conversationId: `conversation_unrelated-${n}`,
+    turnRef: `other-${n}` });
+  expect(() => recipientInterruptionEvidence(obligations, [releaseCut.conversationId])).toThrow("incomplete");
+  await initializeRecipientInterruptionIndex(obligations);
+  const read = fs.readFileSync;
+  const visited: string[] = [];
+  const spy = spyOn(fs, "readFileSync").mockImplementation(((filename: unknown, ...args: unknown[]) => {
+    if (String(filename).startsWith(obligations + path.sep)) visited.push(path.basename(String(filename)));
+    return Reflect.apply(read, fs, [filename, ...args]);
+  }) as typeof read);
+  try {
+    const cold = recipientInterruptionEvidence(obligations, [releaseCut.conversationId]);
+    const warm = recipientInterruptionEvidence(obligations, [releaseCut.conversationId]);
+    expect(cold.records.map(row => row.id).sort()).toEqual(own.map(row => row.id).sort());
+    expect(warm).toEqual(cold);
+    expect(visited.sort()).toEqual(own.flatMap(row => [`${row.id}.json`, `${row.id}.json`]).sort());
+    console.info(JSON.stringify({ case: "recipient cuts", coldRows: 3, warmRows: 3, unrelatedRows: 49 }));
+  } finally { spy.mockRestore(); }
+  // A fresh interpreter consumes the completed artifact without initializing.
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    const { recipientInterruptionEvidence } = await import("./src/lib/runtime/interruptionObligations.ts");
+    console.log(JSON.stringify(recipientInterruptionEvidence(process.argv[1], [process.argv[2]])));
+  `, obligations, releaseCut.conversationId], { cwd: process.cwd(), env: process.env });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString()).records.map((row: { id: string }) => row.id).sort()).toEqual(own.map(row => row.id).sort());
+});
+
+test("recipient cut writers maintain settlement, deletion and guard consumers after initialization", async () => {
+  const obligations = path.join(directory, "recipient-writers");
+  await initializeRecipientInterruptionIndex(obligations);
+  const store = interruptionObligationStore(obligations);
+  const cut = store.record(releaseCut).obligation;
+  const before = recipientInterruptionEvidence(obligations, [cut.conversationId]);
+  store.update(cut.id, { state: "discharged", resolution: "the original message resumed the turn" });
+  const settled = recipientInterruptionEvidence(obligations, [cut.conversationId]);
+  expect(settled.revision).not.toBe(before.revision);
+  expect(settled.records).toMatchObject([{ id: cut.id, state: "discharged" }]);
+  const guard = accountGuardObligationStore(obligations);
+  const guardCut = (await guard.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-recipient" })).obligation;
+  expect((await conversationCuts(guard, cut.conversationId)).map(row => row.id)).toEqual([guardCut.id]);
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toHaveLength(2);
+  await guard.update(guardCut.id, { state: "delivered" });
+  expect(await conversationCuts(guard, cut.conversationId)).toEqual([]);
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toHaveLength(2);
+  expect(store.withdraw(cut.id)).toBe(true);
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records.map(row => row.id)).toEqual([guardCut.id]);
+});
+
+for (const corruption of ["source", "pointer", "manifest", "retarget", "delete", "unknown-state"] as const) test(
+  `recipient cuts refuse ${corruption} evidence and reconcile only through initialization`, async () => {
+    const obligations = path.join(directory, "recipient-incomplete");
+    const cut = interruptionObligationStore(obligations).record(releaseCut).obligation;
+    await initializeRecipientInterruptionIndex(obligations);
+    const file = path.join(obligations, `${cut.id}.json`);
+    const root = `${obligations}.account-guard-pending`;
+    const pointer = path.join(`${root}.conversations`, createHash("sha256").update(cut.conversationId).digest("hex"), `${cut.id}.json`);
+    if (corruption === "source") fs.writeFileSync(file, "{");
+    if (corruption === "pointer") fs.rmSync(pointer);
+    if (corruption === "manifest") fs.writeFileSync(path.join(root, "recipient-ready"), JSON.stringify({ version: 99 }));
+    if (corruption === "retarget") fs.writeFileSync(file, JSON.stringify({ ...cut, conversationId: "conversation_retargeted" }));
+    if (corruption === "delete") fs.rmSync(file);
+    if (corruption === "unknown-state") fs.writeFileSync(file, JSON.stringify({ ...cut, state: "unknown" }));
+    expect(() => recipientInterruptionEvidence(obligations, [cut.conversationId])).toThrow("incomplete");
+    if (corruption === "source" || corruption === "unknown-state") {
+      await expect(initializeRecipientInterruptionIndex(obligations)).rejects.toThrow();
+      fs.writeFileSync(file, JSON.stringify(cut));
+    }
+    await initializeRecipientInterruptionIndex(obligations);
+    expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toHaveLength(
+      corruption === "retarget" || corruption === "delete" ? 0 : 1);
+    if (corruption === "retarget") expect(recipientInterruptionEvidence(obligations, ["conversation_retargeted"]).records).toMatchObject([{ id: cut.id }]);
+  });
+
+test("recipient cut initialization refuses unreadable legacy records and active fallback claims", async () => {
+  const obligations = path.join(directory, "recipient-legacy");
+  const cut = interruptionObligationStore(obligations).record(releaseCut).obligation;
+  const source = path.join(obligations, `${cut.id}.json`);
+  fs.writeFileSync(source, "{");
+  await expect(initializeRecipientInterruptionIndex(obligations)).rejects.toThrow();
+  expect(() => recipientInterruptionEvidence(obligations, [cut.conversationId])).toThrow("incomplete");
+  fs.writeFileSync(source, JSON.stringify(cut));
+  const claim = `${obligations}.pending.jsonl.claim-fixture`;
+  fs.writeFileSync(claim, JSON.stringify(cut) + "\n");
+  await expect(initializeRecipientInterruptionIndex(obligations)).rejects.toThrow("incomplete");
+  fs.rmSync(claim);
+  await initializeRecipientInterruptionIndex(obligations);
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toEqual([cut]);
+});
+
+test("a writer exiting between the durable cut and its pointer leaves recipient reads refused until startup reconciliation", async () => {
+  const obligations = path.join(directory, "recipient-writer-exit");
+  await initializeRecipientInterruptionIndex(obligations);
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    import fs from "node:fs";
+    const { interruptionObligationStore } = await import("./src/lib/runtime/interruptionObligations.ts");
+    const rename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if (String(to).includes(".conversations/")) process.exit(17);
+      return rename(from, to);
+    };
+    interruptionObligationStore(process.argv[1]).record(JSON.parse(process.argv[2]));
+  `, obligations, JSON.stringify(releaseCut)], { cwd: process.cwd(), env: process.env });
+  expect(child.exitCode).toBe(17);
+  expect(() => recipientInterruptionEvidence(obligations, [releaseCut.conversationId])).toThrow("incomplete");
+  await initializeRecipientInterruptionIndex(obligations);
+  expect(recipientInterruptionEvidence(obligations, [releaseCut.conversationId]).records).toMatchObject([{ state: "owed" }]);
+});
+
+test("recipient cut writers never scan unrelated cuts or fallback journals", async () => {
+  const obligations = path.join(directory, "recipient-scoped-writer");
+  const global = interruptionObligationStore(obligations);
+  const other = global.record({ ...releaseCut, conversationId: "conversation_other" }).obligation;
+  await initializeRecipientInterruptionIndex(obligations);
+  const own = recipientInterruptionObligationStore(obligations, [releaseCut.conversationId]);
+  const read = fs.readFileSync;
+  const scan = fs.readdirSync;
+  let unrelatedReads = 0, journalScans = 0;
+  const reader = spyOn(fs, "readFileSync").mockImplementation(((filename: unknown, ...args: unknown[]) => {
+    if (path.basename(String(filename)) === `${other.id}.json`) unrelatedReads++;
+    return Reflect.apply(read, fs, [filename, ...args]);
+  }) as typeof read);
+  const scanner = spyOn(fs, "readdirSync").mockImplementation(((folder, ...args) => {
+    if (String(folder) === obligations || String(folder) === path.dirname(obligations)) journalScans++;
+    return Reflect.apply(scan, fs, [folder, ...args]);
+  }) as typeof scan);
+  try {
+    const cut = own.record(releaseCut).obligation;
+    expect(own.record(releaseCut).created).toBe(false);
+    expect(own.update(cut.id, { state: "submitted" })?.state).toBe("submitted");
+    expect(own.list()).toMatchObject([{ id: cut.id, state: "submitted" }]);
+    expect(own.withdraw(cut.id)).toBe(true);
+    expect(own.list()).toEqual([]);
+    expect(unrelatedReads).toBe(0);
+    expect(journalScans).toBe(0);
+  } finally { reader.mockRestore(); scanner.mockRestore(); }
+});
+
+test("a failed cut update keeps its original record and refuses the incomplete projection", async () => {
+  const obligations = path.join(directory, "recipient-rollback");
+  const store = interruptionObligationStore(obligations);
+  const cut = store.record(releaseCut).obligation;
+  await initializeRecipientInterruptionIndex(obligations);
+  const rename = fs.renameSync;
+  const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (String(to) === path.join(obligations, `${cut.id}.json`)) throw new Error("fixture refused canonical publication");
+    return rename(from, to);
+  });
+  try {
+    expect(() => store.update(cut.id, { state: "delivered" })).toThrow("canonical publication");
+    expect(() => recipientInterruptionEvidence(obligations, [cut.conversationId])).toThrow("incomplete");
+  } finally { spy.mockRestore(); }
+  await initializeRecipientInterruptionIndex(obligations);
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toEqual([cut]);
+});
+
+test("an unrelated write cannot bless a missing recipient pointer", async () => {
+  const obligations = path.join(directory, "recipient-partial-write");
+  const store = interruptionObligationStore(obligations);
+  const cut = store.record(releaseCut).obligation;
+  await initializeRecipientInterruptionIndex(obligations);
+  fs.rmSync(path.join(`${obligations}.account-guard-pending.conversations`,
+    createHash("sha256").update(cut.conversationId).digest("hex"), `${cut.id}.json`));
+  store.record({ ...releaseCut, turnRef: "second-cut", boundary: "second-boundary", owner: { pid: 99, startIdentity: "second" } });
+  expect(() => recipientInterruptionEvidence(obligations, [cut.conversationId])).toThrow("incomplete");
+  await initializeRecipientInterruptionIndex(obligations);
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toHaveLength(2);
+});
+
+test("recipient initialization preserves unreadable journal input and refuses revoked initialization authority", async () => {
+  const obligations = path.join(directory, "recipient-journal");
+  const journal = `${obligations}.pending.jsonl`;
+  fs.writeFileSync(journal, "{\n");
+  await expect(initializeRecipientInterruptionIndex(obligations)).rejects.toThrow();
+  expect(fs.readFileSync(journal, "utf8")).toBe("{\n");
+  fs.rmSync(journal);
+  interruptionObligationStore(obligations).record(releaseCut);
+  let checks = 0;
+  await expect(initializeRecipientInterruptionIndex(obligations, { assertActive: () => {
+    if (++checks >= 4) throw new Error("fixture startup owner replaced");
+  } })).rejects.toThrow("owner replaced");
+  expect(() => recipientInterruptionEvidence(obligations, [releaseCut.conversationId])).toThrow("incomplete");
+  await initializeRecipientInterruptionIndex(obligations);
+  expect(recipientInterruptionEvidence(obligations, [releaseCut.conversationId]).records).toHaveLength(1);
+});
 
 async function conversationCuts(store: ReturnType<typeof accountGuardObligationStore>, conversationId: string) {
   const cuts: import("./interruptionObligations").InterruptionObligation[] = [];
@@ -320,6 +516,7 @@ test.skipIf(!permissionRefusals)("the guard keeps a refused directory cut durabl
     expect(cut.created).toBe(true);
     expect(fs.readFileSync(`${obligations}.pending.jsonl`, "utf8")).toContain(cut.obligation.id);
     expect(await guard.list()).toMatchObject([{ id: cut.obligation.id, state: "owed" }]);
+    expect((await conversationCuts(guard, cut.obligation.conversationId)).map(row => row.id)).toEqual([cut.obligation.id]);
     fs.chmodSync(obligations, 0o700);
     const restarted = accountGuardObligationStore(obligations);
     expect((await restarted.list()).map(row => row.id)).toEqual([cut.obligation.id]);

@@ -476,6 +476,9 @@ async function recoverCandidate(
                 () => registry.releaseStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch));
             };
             try {
+              if (!registry.ownsStructuredHostClaim(current.key, claim.claimOwner, claim.claimEpoch)) {
+                throw new StructuredRecoverySupersededError();
+              }
               request.admissionGuard?.(current.key);
               authorize();
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;

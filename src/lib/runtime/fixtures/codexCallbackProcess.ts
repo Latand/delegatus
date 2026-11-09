@@ -20,11 +20,12 @@ const method = "item/commandExecution/requestApproval";
 
 if (mode === "engine-socket") {
   const config = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+  if (config.threadId) thread = config.threadId;
   const server = http.createServer();
   server.on("connection", connection => connection.on("error", () => {}));
   server.on("error", error => { throw error; });
   const sockets = new WebSocketServer({ server });
-  let pending = true;
+  let pending = !config.recipient;
   let connections = 0;
   sockets.on("connection", socket => {
     const connection = ++connections;
@@ -59,6 +60,17 @@ if (mode === "engine-socket") {
           break;
         case "model/list": reply({ data: [] }); break;
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
+        case "thread/read":
+          reply({ thread: { id: thread, path: config.transcriptPath ?? null, turns: [] } }); break;
+        case "turn/start": {
+          if (!config.recipient) { send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } }); break; }
+          fs.appendFileSync(config.transcriptPath, JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T00:00:00Z",
+            payload: { type: "user_message", id: message.params.clientUserMessageId, input: message.params.input } }) + "\n");
+          reply({ turn: { id: "recipient-turn" } });
+          send({ method: "item/completed", params: { threadId: thread, turnId: "recipient-turn",
+            item: { type: "userMessage", clientId: message.params.clientUserMessageId, content: message.params.input } } });
+          break;
+        }
         case "thread/resume": {
           if (Object.keys(message.params).some(key => key !== "threadId" && key !== "config")) throw new Error("reconnect changed the existing thread policy");
           const restored = message.params.config?.mcp_servers?.viewer;
