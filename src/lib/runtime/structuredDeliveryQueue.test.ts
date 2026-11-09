@@ -2205,7 +2205,7 @@ for (const recoverable of [false, true]) {
     const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
     setSystemTime(admittedAt + 1_000);
     const statuses = new Map<string, string>();
-    const reasons = new Map<string, string | undefined>();
+    const reasons = new Map<string, string | null | undefined>();
     const queue = new StructuredDeliveryQueue({
       deferTarget: () => true,
       canRecoverDeferredTarget: () => recoverable,

@@ -4040,7 +4040,7 @@ for (const retiredAt of ["writer-wait", "after-commit"] as const) {
       return written;
     }) as never);
     const acknowledged: string[] = [];
-    const client = { ...active.client, acknowledgeTerminalProjection: async (ids: readonly string[]) => { acknowledged.push(...ids); } } as RuntimeHostClient;
+    const client = { ...active.client, acknowledgeTerminalProjection: async (ids: readonly string[]) => { acknowledged.push(...ids); return ids.length; } } as RuntimeHostClient;
     let task: Promise<unknown> | undefined;
     let held = false;
     try {
