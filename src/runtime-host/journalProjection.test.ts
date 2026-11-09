@@ -101,6 +101,7 @@ test("a population above the former 8192-row cap rebuilds from one changed row",
     state.db.run("UPDATE entities SET state_json = ? WHERE kind = 'task' AND id = 'task-04500'", [JSON.stringify({ id: "task-4500", text: "changed" })]);
     const second = JSON.parse(journal.snapshotJson());
     expect(journal.snapshotProjectionReads - reads).toBe(1);
+    expect(journal.snapshotEntityEvictions).toBe(0);
     expect(second.tasks.filter((task: { value?: { text: string }; text?: string }) => (task.value ?? task).text === "changed")).toHaveLength(1);
   } finally { journal.close(); }
 });
@@ -149,7 +150,7 @@ test("row and byte limits bound cache registrations across a real-process restar
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
-});
+}, 60_000);
 
 test("a failed snapshot rolls back its cache registrations and retries from committed state", () => {
   const journal = new RuntimeJournal(":memory:", { now: () => now });
