@@ -13,6 +13,7 @@ receipt or provenance.
 | --- | ---: | ---: | --- |
 | Lesson/rewrite rule | 300 (minimum 20) | 240 | Unicode code points after trimming and collapsing whitespace |
 | Lesson/rewrite reason, closing `none` | 160 | 120 | Same normalized code points; rule and reason also need 16 letters or digits after NFKC matching normalization |
+| Curation editorial note | 1000 | 750 | UTF-16 code units after schema trimming; direct domain writers also check raw length |
 | Problem statement / evidence | 300 / 1000 | 240 / 750 | Same normalized code points |
 | Task title/body | 6000 | 4500 | UTF-16 code units after task text normalization |
 | Task note | 280 | 220 | UTF-16 code units after collapsing whitespace and trimming |

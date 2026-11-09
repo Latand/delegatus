@@ -56,6 +56,7 @@ test.each([
   ["seat_tick_settings", "monitorPrompt", 16000, (value: string) => ({ monitorPrompt: value }), unitText],
   ["curate_rules", "rewrite.0.rule", 300, (value: string) => ({ action: "apply", scopes: [{ scope: "machine", revision: 0, order: [] }], rewrite: [{ id: "r_original", rule: value, why: lesson.why, note: "Keep the full invariant." }] }), scalarText],
   ["curate_rules", "rewrite.0.why", 160, (value: string) => ({ action: "apply", scopes: [{ scope: "machine", revision: 0, order: [] }], rewrite: [{ id: "r_original", rule: lesson.rule, why: value, note: "Keep the full invariant." }] }), scalarText],
+  ["curate_rules", "rewrite.0.note", 1000, (value: string) => ({ action: "apply", scopes: [{ scope: "machine", revision: 0, order: [] }], rewrite: [{ id: "r_original", rule: lesson.rule, why: lesson.why, note: value }] }), unitText],
 ] as const)("%s refuses %s one over %i before dispatch and accepts a corrected retry", async (name, field, max, argsFor, text) => {
   await protocol(async (client, dispatched) => {
     const exact = await client.callTool({ name, arguments: { clientRequestId: "exact", ...argsFor(text(max)) } });
