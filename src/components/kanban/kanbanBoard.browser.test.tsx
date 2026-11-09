@@ -43703,3 +43703,234 @@ describe("a task card without inline conversations", () => {
     expect(failures).toEqual([]);
   }, 1_500_000);
 });
+
+describe("cold conversation link", () => {
+  /*
+   * A pasted `#c=` link whose conversation the plain catalog does not carry asks
+   * for a scope of its own, and that cold scope can be the server's controlled
+   * 503 (docs/design/cold-conversation-opening.md). In the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=cold-link`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "cold conversation link"
+   *
+   * Each run opens one link, changes the hash to a second one, and lets the second
+   * scope answer 503 once before it is available: frame 1 is the link opening
+   * (the scope has not answered), frame 2 the link retrying (the 503 arrived),
+   * frame 3 the conversation opened at its latest message. The first link's
+   * scope is released afterwards and must never open or be asked again. The
+   * notice is measured from text ranges against every other text on screen, for
+   * its contrast, and the reader for its scroll position.
+   *
+   * Frames go to `$LLV_EVIDENCE_DIR/cold-conversation-link/`, measurements to
+   * `evidence/cold-conversation-link/rendered.json`. `LLV_COLD_LINK_ONLY` takes a
+   * comma-separated list of run names (`1440x900-en-light`) to rerun some of them.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "cold-conversation-link");
+  const EVIDENCE = path.resolve("evidence/cold-conversation-link");
+  const FIRST = "conversation_cold-link-first";
+  const SECOND = "conversation_cold-link-second";
+  const VIEWPORTS = [
+    { width: 1440, height: 900 },
+    { width: 1200, height: 800 },
+    { width: 1000, height: 700 },
+    { width: 700, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  const MIN_CONTRAST = 4.5;
+
+  type NoticeReading = {
+    state: string | null;
+    text: string;
+    inViewport: boolean;
+    whole: boolean;
+    overlaps: string[];
+    coversBoardText: string[];
+    contrast: number;
+    box: { left: number; top: number; right: number; bottom: number };
+  };
+
+  /** The notice, measured from its text range and its pill, against every other text drawn on screen. */
+  const readNotice = (page: Page, state: "opening" | "retrying") => page.evaluate((expected) => {
+    const host = document.querySelector<HTMLElement>(`[data-link-pending-notice="${expected}"]`);
+    if (!host) return null;
+    const pill = host.firstElementChild as HTMLElement;
+    const pillBox = pill.getBoundingClientRect();
+    const textRange = document.createRange();
+    textRange.selectNodeContents(pill);
+    const textBoxes = [...textRange.getClientRects()].filter((rect) => rect.width > 0);
+    const rgba = (css: string): [number, number, number, number] => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true })!;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = css;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return [r!, g!, b!, a! / 255];
+    };
+    const over = (top: number[], below: number[]) => {
+      const alpha = top[3]! + below[3]! * (1 - top[3]!);
+      return [0, 1, 2].map((i) => (top[i]! * top[3]! + below[i]! * below[3]! * (1 - top[3]!)) / alpha).concat(alpha);
+    };
+    const luminance = (c: number[]) => {
+      const [r, g, b] = c.slice(0, 3).map((v) => { const s = v! / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const style = getComputedStyle(pill);
+    const canvas = rgba(getComputedStyle(document.body).backgroundColor);
+    const backdrop = over(rgba(style.backgroundColor), canvas.some(Number.isNaN) || canvas[3] === 0 ? [255, 255, 255, 1] : canvas);
+    const text = over(rgba(style.color), backdrop);
+    const [hi, lo] = [luminance(text), luminance(backdrop)].sort((a, b) => b - a);
+    /* A toast covers some of the board while it shows, as the deploy pill does. What it may not cover is what names
+       the screen or carries a conversation: the top band (header, search field, phone top bar, window titles), an
+       open conversation's text, or a field. Board and sidebar text it passes over is reported, not failed. */
+    const overlaps: string[] = [];
+    const coversBoardText: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const element = node.parentElement;
+      if (!element || host.contains(element) || !node.textContent?.trim()) continue;
+      if (!element.checkVisibility({ visibilityProperty: true, opacityProperty: true })) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        const x = Math.min(rect.right, pillBox.right) - Math.max(rect.left, pillBox.left);
+        const y = Math.min(rect.bottom, pillBox.bottom) - Math.max(rect.top, pillBox.top);
+        if (rect.width <= 0 || x <= 0.5 || y <= 0.5) continue;
+        const named = rect.top < 120
+          || element.closest("input, textarea, select, [data-agent-window], [data-kanban-reader], [data-log-feed-scroller]") !== null;
+        (named ? overlaps : coversBoardText).push((node.textContent ?? "").trim().slice(0, 40));
+      }
+    }
+    return {
+      state: host.getAttribute("data-link-pending-notice"),
+      text: pill.textContent ?? "",
+      inViewport: pillBox.left >= 0 && pillBox.top >= 0 && pillBox.right <= innerWidth && pillBox.bottom <= innerHeight,
+      whole: textBoxes.length > 0 && textBoxes.every((rect) => rect.left >= pillBox.left - 0.5 && rect.right <= pillBox.right + 0.5 && rect.top >= pillBox.top - 0.5 && rect.bottom <= pillBox.bottom + 0.5),
+      overlaps: [...new Set(overlaps)],
+      coversBoardText: [...new Set(coversBoardText)],
+      contrast: Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100,
+      box: { left: Math.round(pillBox.left), top: Math.round(pillBox.top), right: Math.round(pillBox.right), bottom: Math.round(pillBox.bottom) },
+    };
+  }, state) as Promise<NoticeReading | null>;
+
+  /** The opened conversation's reader: its latest message is on screen and the feed rests at its end. */
+  const readOpened = (page: Page) => page.evaluate(() => {
+    const scrollers = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")]
+      .filter((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? ""));
+    const scroller = scrollers.find((element) => element.checkVisibility({ visibilityProperty: true })) ?? null;
+    if (!scroller) return { scrollers: scrollers.length, visible: false, atEnd: false, latestInView: false, gap: -1 };
+    const frame = scroller.getBoundingClientRect();
+    const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    let latest: DOMRect | null = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!/Latest message|Останнє повідомлення/.test(node.textContent ?? "")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      latest = range.getBoundingClientRect();
+    }
+    const gap = Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop);
+    return {
+      scrollers: scrollers.length,
+      visible: frame.width > 0 && frame.height > 0 && frame.bottom > 0 && frame.top < innerHeight,
+      atEnd: gap <= 2,
+      latestInView: Boolean(latest && latest.top >= Math.max(frame.top, 0) - 1 && latest.bottom <= Math.min(frame.bottom, innerHeight) + 1),
+      gap,
+    };
+  });
+
+  const coldLink = (page: Page) => page.evaluate(() => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls);
+  const pass = (page: Page, call: "fail" | "release", id: string) => page.evaluate(([name, target]) => (window as unknown as { __coldLink: Record<string, (id: string) => void> }).__coldLink[name!]!(target!), [call, id]);
+  const scopeCalls = (calls: string[], id: string) => calls.filter((call) => call.includes(`path=${id}`));
+
+  browserTest("a link whose scope is unavailable shows opening, retrying, then the conversation, in every width, language and theme", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "cold-link-"));
+    const server = await serveEvidenceFixture(bundle);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const key = `${viewport.width}x${viewport.height}-${lang}-${scheme}`;
+        if (process.env.LLV_COLD_LINK_ONLY && !process.env.LLV_COLD_LINK_ONLY.split(",").includes(key)) continue;
+        let step = "opening the first link";
+        const fail = (message: string) => failures.push(`${key}: ${message}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cold-link#c=${FIRST}`, viewport, scheme, lang, "no-preference", viewport.width === 390);
+        const reading: Record<string, unknown> = {};
+        const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
+        try {
+          await page.waitForFunction((id) => (window as unknown as { __coldLink?: { calls: string[] } }).__coldLink?.calls.some((call) => call.includes(`path=${id}`)), FIRST, { timeout: 30_000 });
+          step = "changing the hash to the second link";
+          const changedAt = (await coldLink(page)).length;
+          await page.evaluate((id) => { location.hash = `#c=${id}`; }, SECOND);
+          await page.waitForFunction((id) => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls.some((call) => call.includes(`path=${id}`)), SECOND, { timeout: 30_000 });
+
+          /* Frame 1: the scope has not answered; the link says it is opening. */
+          step = "waiting for the opening notice";
+          await page.waitForSelector('[data-link-pending-notice="opening"]', { timeout: 15_000 });
+          const opening = await readNotice(page, "opening");
+          reading.opening = opening;
+          await shot("1-opening");
+
+          /* Frame 2: the server's first 503 for the link's scope has arrived. */
+          step = "waiting for the retrying notice";
+          await pass(page, "fail", SECOND);
+          await page.waitForSelector('[data-link-pending-notice="retrying"]', { timeout: 15_000 });
+          const retrying = await readNotice(page, "retrying");
+          reading.retrying = retrying;
+          await shot("2-retrying");
+          for (const [name, notice] of [["opening", opening], ["retrying", retrying]] as const) {
+            if (!notice) { fail(`the ${name} notice was not drawn`); continue; }
+            if (!notice.text.trim()) fail(`the ${name} notice has no text`);
+            if (!notice.inViewport) fail(`the ${name} notice leaves the viewport ${JSON.stringify(notice.box)}`);
+            if (!notice.whole) fail(`the ${name} notice's text leaves its pill`);
+            if (notice.overlaps.length) fail(`the ${name} notice covers text: ${notice.overlaps.join(" | ")}`);
+            if (notice.contrast < MIN_CONTRAST) fail(`the ${name} notice reads ${notice.contrast}:1`);
+          }
+          if (opening && retrying && opening.text === retrying.text) fail("opening and retrying read the same");
+
+          /* The first link is released while the second is pending: it never opens and is never asked again. */
+          await pass(page, "release", FIRST);
+          await page.waitForTimeout(2_500);
+          const onFirst = await page.locator(`[data-kanban-reader="${FIRST}"]`).count();
+          if (onFirst) fail("the replaced link opened after its scope became available");
+          const afterChange = (await coldLink(page)).slice(changedAt);
+          if (scopeCalls(afterChange, FIRST).length) fail(`the replaced link's scope was asked again: ${scopeCalls(afterChange, FIRST).join(" ")}`);
+
+          /* Frame 3: the second scope answers; the conversation opens at its latest message. */
+          step = "waiting for the conversation to open";
+          await pass(page, "release", SECOND);
+          await page.waitForFunction(() => document.querySelector("[data-link-pending-notice]") === null
+            && [...document.querySelectorAll("[data-log-feed-scroller]")].some((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? "")), undefined, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const opened = await readOpened(page);
+          reading.opened = opened;
+          await shot("3-opened");
+          if (!opened.visible) fail("the opened conversation's reader is not on screen");
+          if (!opened.atEnd) fail(`the reader does not rest at its latest message (${opened.gap} px short)`);
+          if (!opened.latestInView) fail("the latest message is not in view");
+          const hash = await page.evaluate(() => location.hash);
+          if (hash !== `#c=${SECOND}`) fail(`the hash is ${hash}`);
+          const calls = await coldLink(page);
+          reading.calls = calls.length;
+          if (calls.some((call) => call.includes("path=%2F"))) fail(`a request pinned a transcript path: ${calls.filter((call) => call.includes("path=%2F")).join(" ")}`);
+          if (await page.locator("[data-stale-focus-notice]").count()) fail("the not-found notice appeared");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(`${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+          await page.screenshot({ path: path.join(OUT, `${key}-failed.png`) }).catch(() => {});
+          reading.calls = await coldLink(page).catch(() => null);
+        } finally { await context.close(); }
+        readings[key] = reading;
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.rmSync(bundle, { recursive: true, force: true });
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=cold-link", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});

@@ -5,7 +5,7 @@ import { parseConversationHash } from "@/lib/accounts/identity";
 import type { FileEntry } from "@/lib/types";
 
 import { OVERVIEW } from "./projectModel";
-import { catalogHoldsWithoutPin, filesRequestPin, initialProjectFromState, recognizedFragment, reduceCatalogPin } from "./Viewer";
+import { catalogHoldsWithoutPin, filesRequestPin, initialProjectFromState, recognizedFragment, reduceCatalogPin, retainedCatalogPin } from "./Viewer";
 
 test("initialProjectFromState reads a direct project hash before polling", () => {
   expect(initialProjectFromState("#p=example-dispatcher", null)).toBe("example-dispatcher");
@@ -75,9 +75,9 @@ test("an open conversation the plain catalog holds is not pinned", () => {
   expect(catalogHoldsWithoutPin({ ...held, path: "/sessions/beyond-the-cap.jsonl" } as FileEntry, unpinned)).toBeFalse();
 
   let state = reduceCatalogPin(null, { kind: "resolve", path: held.path, conversationId: held.conversationId, unpinned: true });
-  expect(state).toEqual({ path: held.path, hydrated: true, conversationId: "conversation-held", requested: false });
+  expect(state).toEqual({ path: held.path, hydrated: true, conversationId: "conversation-held", requested: false, pin: null });
   /* What the catalog request names is what the pin asks for, nothing else. */
-  expect(filesRequestPin(null, state?.requested ? state.path : null)).toBeNull();
+  expect(filesRequestPin(null, retainedCatalogPin(state))).toBeNull();
 
   state = reduceCatalogPin(state, { kind: "files", paths: new Set([held.path]), pending: false });
   expect(state?.requested).toBeFalse();
@@ -87,8 +87,8 @@ test("a conversation that drops out of a confirmed catalog asks for itself once,
   const path = "/sessions/aged-out.jsonl";
   let state = reduceCatalogPin(null, { kind: "resolve", path, conversationId: "conversation-aged", unpinned: true });
   state = reduceCatalogPin(state, { kind: "files", paths: new Set(["/sessions/other.jsonl"]), pending: false });
-  expect(state).toEqual({ path, hydrated: true, conversationId: "conversation-aged", requested: true });
-  expect(filesApiUrl(null, filesRequestPin(null, state?.requested ? state.path : null))).toBe(`/api/files?view=summary&path=${encodeURIComponent(path)}`);
+  expect(state).toEqual({ path, hydrated: true, conversationId: "conversation-aged", requested: true, pin: null });
+  expect(filesApiUrl(null, filesRequestPin(null, retainedCatalogPin(state)))).toBe(`/api/files?view=summary&path=${encodeURIComponent(path)}`);
   /* The pinned payload still lacks it: gone for good. */
   expect(reduceCatalogPin(state, { kind: "files", paths: new Set(["/sessions/other.jsonl"]), pending: false })).toBeNull();
   /* The pinned payload carries it: it stays. */
@@ -98,9 +98,9 @@ test("a conversation that drops out of a confirmed catalog asks for itself once,
 test("catalog pin lifecycle releases on close and on disappearance after hydration", () => {
   const path = "/sessions/capped-out.jsonl";
   let state = reduceCatalogPin(null, { kind: "open", path });
-  expect(state).toEqual({ path, hydrated: false, conversationId: null, requested: true });
+  expect(state).toEqual({ path, hydrated: false, conversationId: null, requested: true, pin: null });
   state = reduceCatalogPin(state, { kind: "resolve", path });
-  expect(state).toEqual({ path, hydrated: true, conversationId: null, requested: true });
+  expect(state).toEqual({ path, hydrated: true, conversationId: null, requested: true, pin: null });
   expect(reduceCatalogPin(state, { kind: "release", path })).toBeNull();
 
   state = reduceCatalogPin(state, { kind: "files", paths: new Set(), pending: false });
@@ -118,8 +118,25 @@ test("a migrated catalog pin follows the current generation and releases from it
     currentPath: successor,
   });
 
-  expect(state).toEqual({ path: successor, hydrated: true, conversationId: "conversation-1", requested: true });
+  expect(state).toEqual({ path: successor, hydrated: true, conversationId: "conversation-1", requested: true, pin: null });
   expect(reduceCatalogPin(state, { kind: "release", path: successor })).toBeNull();
+});
+
+test("a resolved link keeps requesting the scope that resolved it, through a generation move", () => {
+  const first = "/sessions/first-generation.jsonl";
+  const second = "/sessions/second-generation.jsonl";
+  const link = parseConversationHash("#c=conversation-1");
+  let state = reduceCatalogPin(null, { kind: "resolve", path: first, conversationId: "conversation-1", pin: "conversation-1" });
+  expect(state).toEqual({ path: first, hydrated: true, conversationId: "conversation-1", requested: true, pin: "conversation-1" });
+  expect(filesApiUrl(null, filesRequestPin(null, retainedCatalogPin(state)))).toBe("/api/files?view=summary&path=conversation-1");
+  state = reduceCatalogPin(state, { kind: "files", paths: new Set([first, second]), pending: false, currentPath: second });
+  expect(state).toEqual({ path: second, hydrated: true, conversationId: "conversation-1", requested: true, pin: "conversation-1" });
+  expect(filesApiUrl(null, filesRequestPin(null, retainedCatalogPin(state)))).toBe("/api/files?view=summary&path=conversation-1");
+  /* The link itself still asks for its own identity while it is pending. */
+  expect(filesRequestPin(link, null, true)).toBe("conversation-1");
+  /* A row opened from the catalog list passes no pin and keeps its path. */
+  state = reduceCatalogPin(null, { kind: "open", path: first, conversationId: "conversation-1" });
+  expect(filesApiUrl(null, filesRequestPin(null, retainedCatalogPin(state)))).toBe(`/api/files?view=summary&path=${encodeURIComponent(first)}`);
 });
 
 test("REGRESSION: the Viewer renders no operator ceremony — no gate, no paste field, no unlock", async () => {

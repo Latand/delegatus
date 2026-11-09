@@ -1,0 +1,871 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=cold-link",
+  "readings": {
+    "1440x900-en-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "(a hint line that wraps on uk)."
+        ],
+        "contrast": 16.7,
+        "box": {
+          "left": 1200,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "#2160",
+          "(a hint line that wraps on uk).",
+          "Waiting",
+          "Done"
+        ],
+        "contrast": 5.17,
+        "box": {
+          "left": 1063,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1440x900-en-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "(a hint line that wraps on uk)."
+        ],
+        "contrast": 14.06,
+        "box": {
+          "left": 1200,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "#2160",
+          "(a hint line that wraps on uk).",
+          "Waiting",
+          "Done"
+        ],
+        "contrast": 7.63,
+        "box": {
+          "left": 1063,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1440x900-uk-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "(a hint line that wraps on uk)."
+        ],
+        "contrast": 16.7,
+        "box": {
+          "left": 1176,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "#2160",
+          "(a hint line that wraps on uk).",
+          "Очікують",
+          "Готові"
+        ],
+        "contrast": 5.17,
+        "box": {
+          "left": 1015,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1440x900-uk-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "(a hint line that wraps on uk)."
+        ],
+        "contrast": 14.06,
+        "box": {
+          "left": 1176,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          ": APPROVE. The fix for the stuck compose",
+          "#2160",
+          "(a hint line that wraps on uk).",
+          "Очікують",
+          "Готові"
+        ],
+        "contrast": 7.63,
+        "box": {
+          "left": 1015,
+          "top": 856,
+          "right": 1428,
+          "bottom": 888
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 7
+    },
+    "1200x800-en-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Waiting",
+          "Done"
+        ],
+        "contrast": 16.7,
+        "box": {
+          "left": 960,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Nothing in progress",
+          "Waiting",
+          "Done"
+        ],
+        "contrast": 5.17,
+        "box": {
+          "left": 823,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1200x800-en-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Waiting",
+          "Done"
+        ],
+        "contrast": 14.06,
+        "box": {
+          "left": 960,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Nothing in progress",
+          "Waiting",
+          "Done"
+        ],
+        "contrast": 7.63,
+        "box": {
+          "left": 823,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1200x800-uk-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Очікують",
+          "Готові"
+        ],
+        "contrast": 16.7,
+        "box": {
+          "left": 936,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Нічого в роботі",
+          "Очікують",
+          "Готові"
+        ],
+        "contrast": 5.17,
+        "box": {
+          "left": 775,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1200x800-uk-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Очікують",
+          "Готові"
+        ],
+        "contrast": 14.06,
+        "box": {
+          "left": 936,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [
+          "Нічого в роботі",
+          "Очікують",
+          "Готові"
+        ],
+        "contrast": 7.63,
+        "box": {
+          "left": 775,
+          "top": 756,
+          "right": 1188,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1000x700-en-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 16.7,
+        "box": {
+          "left": 760,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 5.17,
+        "box": {
+          "left": 623,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1000x700-en-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 14.06,
+        "box": {
+          "left": 760,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 7.63,
+        "box": {
+          "left": 623,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1000x700-uk-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 16.7,
+        "box": {
+          "left": 736,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 5.17,
+        "box": {
+          "left": 575,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "1000x700-uk-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 14.06,
+        "box": {
+          "left": 736,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 7.63,
+        "box": {
+          "left": 575,
+          "top": 656,
+          "right": 988,
+          "bottom": 688
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "700x800-en-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 16.7,
+        "box": {
+          "left": 460,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 5.17,
+        "box": {
+          "left": 323,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "700x800-en-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 14.06,
+        "box": {
+          "left": 460,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 7.63,
+        "box": {
+          "left": 323,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "700x800-uk-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 16.7,
+        "box": {
+          "left": 436,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 5.17,
+        "box": {
+          "left": 275,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "700x800-uk-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 14.06,
+        "box": {
+          "left": 436,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 7.63,
+        "box": {
+          "left": 275,
+          "top": 756,
+          "right": 688,
+          "bottom": 788
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "390x844-en-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 16.7,
+        "box": {
+          "left": 81,
+          "top": 736,
+          "right": 309,
+          "bottom": 768
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 5.17,
+        "box": {
+          "left": 12,
+          "top": 736,
+          "right": 378,
+          "bottom": 768
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "390x844-en-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Opening the linked conversation…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 14.06,
+        "box": {
+          "left": 81,
+          "top": 736,
+          "right": 309,
+          "bottom": 768
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "The linked conversation has not loaded yet. Trying again…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 7.63,
+        "box": {
+          "left": 12,
+          "top": 736,
+          "right": 378,
+          "bottom": 768
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "390x844-uk-light": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 16.7,
+        "box": {
+          "left": 69,
+          "top": 736,
+          "right": 321,
+          "bottom": 768
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 5.17,
+        "box": {
+          "left": 12,
+          "top": 718,
+          "right": 378,
+          "bottom": 768
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    },
+    "390x844-uk-dark": {
+      "opening": {
+        "state": "opening",
+        "text": "Відкриваю розмову за посиланням…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 14.06,
+        "box": {
+          "left": 69,
+          "top": 736,
+          "right": 321,
+          "bottom": 768
+        }
+      },
+      "retrying": {
+        "state": "retrying",
+        "text": "Розмова за посиланням ще не завантажилася. Пробую ще раз…",
+        "inViewport": true,
+        "whole": true,
+        "overlaps": [],
+        "coversBoardText": [],
+        "contrast": 7.63,
+        "box": {
+          "left": 12,
+          "top": 718,
+          "right": 378,
+          "bottom": 768
+        }
+      },
+      "opened": {
+        "scrollers": 1,
+        "visible": true,
+        "atEnd": true,
+        "latestInView": true,
+        "gap": 0
+      },
+      "calls": 6
+    }
+  },
+  "failures": []
+}

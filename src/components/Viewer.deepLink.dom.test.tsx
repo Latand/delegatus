@@ -206,17 +206,31 @@ afterEach(() => {
 /** `/api/files` serves `filesByPin` keyed by the request's `path` param
     (`""` = the unpinned global scope); `/api/board` is a real in-memory board
     so the focus request can actually place its card. Everything else 404s. */
-function stubFetch(filesByPin: (pin: string) => FileEntry[], delayByPin?: (pin: string) => number) {
+function stubFetch(
+  filesByPin: (pin: string) => FileEntry[],
+  delayByPin?: (pin: string) => number,
+  /** `unavailable`: the server's controlled 503 for a scope it cannot build
+      right now. `overlay`: the rows only a pin admitted, as production names
+      them in `pinOverlayPaths`. */
+  scopes: { unavailable?: (pin: string) => boolean; overlay?: (pin: string) => string[] } = {},
+) {
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     requestLog.push(url);
     if (url.startsWith("/api/files")) {
       const pin = new URL(url, "http://localhost").searchParams.get("path") ?? "";
+      const down = scopes.unavailable?.(pin) ?? false;
       /* A per-scope delay models a pinned fetch slower than the global one. */
       const delay = delayByPin?.(pin) ?? 0;
       if (delay > 0) await Bun.sleep(delay);
+      if (down) {
+        return Response.json(
+          { error: "files projection unavailable", code: "files_projection_unavailable", reason: "expired" },
+          { status: 503, headers: { "cache-control": "no-store" } },
+        );
+      }
       return new Response(
-        JSON.stringify({ files: filesByPin(pin), projectCatalog }),
+        JSON.stringify({ files: filesByPin(pin), projectCatalog, pinOverlayPaths: scopes.overlay?.(pin) ?? [] }),
         { headers: { "content-type": "application/json" } },
       );
     }
@@ -660,4 +674,114 @@ test("#f= naming a report file (anchor glued on as %23) opens the file preview, 
   await act(async () => { await Bun.sleep(9_000); });
   expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
   expect(host.textContent).not.toContain(en["viewer.staleFocusEntry"]);
+}, 20_000);
+
+/* A cold scope the server cannot build in time answers 503 and nothing else.
+   The link keeps the scope that asked for it, says it is opening, and opens
+   when that scope answers. */
+const OTHER_ID = "conversation_second-target";
+const OTHER_PATH = "/sessions/second-target.jsonl";
+const secondRow = fileEntry({ path: OTHER_PATH, name: "second-target.jsonl", project: TARGET_PROJECT, title: "The second conversation", conversationId: OTHER_ID });
+const pinnedOverlay = (pin: string) => (pin === CONVERSATION_ID ? [TARGET_PATH] : pin === OTHER_ID ? [OTHER_PATH] : []);
+const pathScopeRequests = (path: string) => requestLog.filter((url) => url.startsWith("/api/files") && url.includes(`path=${encodeURIComponent(path)}`));
+const filesScopeRequests = (id: string) => requestLog.filter((url) => url.startsWith("/api/files") && url.includes(`path=${id}`));
+
+test("a resolved #c= keeps the scope that resolved it and never asks for the transcript path", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID || pin === TARGET_PATH ? [otherRow, targetRow] : [otherRow]),
+    undefined,
+    { unavailable: (pin) => pin === TARGET_PATH, overlay: pinnedOverlay },
+  );
+
+  const host = await mountViewer();
+
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  await act(async () => { await Bun.sleep(1_200); });
+  expect(openOnBoard(host, TARGET_PATH)).not.toBeNull();
+  expect(pathScopeRequests(TARGET_PATH)).toEqual([]);
+  expect(filesScopeRequests(CONVERSATION_ID).length).toBeGreaterThan(0);
+  expect(host.textContent).not.toContain("reconnecting");
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  await expectNavigationQuiescence();
+}, 15_000);
+
+test("a link whose scope is unavailable says it is opening, then retrying, and opens when the scope answers", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  let calls = 0;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID ? [otherRow, targetRow] : [otherRow]),
+    /* The first answer is slow enough for the pending notice to show first. */
+    (pin) => (pin === CONVERSATION_ID && calls === 1 ? 1_500 : 0),
+    { unavailable: (pin) => pin === CONVERSATION_ID && ++calls <= 2, overlay: pinnedOverlay },
+  );
+
+  const host = await mountViewer();
+
+  expect(await waitFor(() => host.querySelector('[data-link-pending-notice="opening"]') !== null, 4_000)).toBe(true);
+  expect(host.textContent).toContain(en["viewer.linkOpening"]);
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+  expect(await waitFor(() => host.querySelector('[data-link-pending-notice="retrying"]') !== null, 4_000)).toBe(true);
+  expect(host.textContent).toContain(en["viewer.linkRetrying"]);
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null, 8_000)).toBe(true);
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  expect(dom.location.hash).toBe(`#c=${encodeURIComponent(CONVERSATION_ID)}`);
+  expect(pathScopeRequests(TARGET_PATH)).toEqual([]);
+  await expectNavigationQuiescence();
+}, 25_000);
+
+test("a link that opens at once never flashes the pending notice", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(() => [otherRow, targetRow]);
+
+  const host = await mountViewer();
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  await act(async () => { await Bun.sleep(1_200); });
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+});
+
+test("a new link replaces one that is still pending, and the old scope is never asked again", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID ? [otherRow, targetRow] : pin === OTHER_ID ? [otherRow, secondRow] : [otherRow]),
+    undefined,
+    { unavailable: (pin) => pin === CONVERSATION_ID, overlay: pinnedOverlay },
+  );
+
+  const host = await mountViewer();
+  expect(await waitFor(() => filesScopeRequests(CONVERSATION_ID).length > 0)).toBe(true);
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+
+  const changedAt = requestLog.length;
+  await act(async () => { dom.location.hash = `#c=${encodeURIComponent(OTHER_ID)}`; });
+
+  expect(await waitFor(() => openOnBoard(host, OTHER_PATH) !== null)).toBe(true);
+  await act(async () => { await Bun.sleep(2_500); });
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+  expect(dom.location.hash).toBe(`#c=${encodeURIComponent(OTHER_ID)}`);
+  expect(requestLog.slice(changedAt).filter((url) => url.startsWith("/api/files") && url.includes(`path=${CONVERSATION_ID}`))).toEqual([]);
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+}, 20_000);
+
+test("navigating away from a pending link clears its notice and stops asking for its scope", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID ? [otherRow, targetRow] : [otherRow]),
+    undefined,
+    { unavailable: (pin) => pin === CONVERSATION_ID, overlay: pinnedOverlay },
+  );
+
+  const host = await mountViewer();
+  expect(await waitFor(() => host.querySelector("[data-link-pending-notice]") !== null, 4_000)).toBe(true);
+
+  await act(async () => { dom.location.hash = "#p=other-project"; });
+  expect(await waitFor(() => host.querySelector("[data-link-pending-notice]") === null)).toBe(true);
+  const settled = requestLog.length;
+  await act(async () => { await Bun.sleep(2_500); });
+  expect(requestLog.slice(settled).filter((url) => url.includes(`path=${CONVERSATION_ID}`))).toEqual([]);
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
 }, 20_000);

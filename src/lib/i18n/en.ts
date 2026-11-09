@@ -4107,6 +4107,8 @@ export const en = {
   // Viewer
   "viewer.closeProjects": "Close the project list",
   "viewer.agentWaiting": "Agent is waiting for a reply",
+  "viewer.linkOpening": "Opening the linked conversation…",
+  "viewer.linkRetrying": "The linked conversation has not loaded yet. Trying again…",
   "viewer.staleFocusEntry": "That conversation is no longer available",
   "viewer.unknownFragment": "This link names nothing Delegatus recognizes",
   "viewer.closeNotification": "Close the notification",
