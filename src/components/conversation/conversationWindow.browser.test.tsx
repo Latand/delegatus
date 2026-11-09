@@ -3262,9 +3262,13 @@ describe("a consumed queued send leaves the composer by its own id", () => {
              (the first card is cut by that frame, never by the region's edge,
              under its Retry and Discard); its message and sentence stay
              reachable by the list's own scroll, asserted above. */
-          if (viewport.touch) for (const [phase, state] of [["before", before], ["after", after]] as const) {
+          if (viewport.touch) for (const [phase, state] of [["before", before], ["after", after], ["refused", refusedList]] as const) {
             expect({ key, phase, regionOverflow: state.panels.regionOverflow }).toEqual({ key, phase, regionOverflow: 0 });
             expect({ key, phase, listFrameInRegion: state.panels.listFrameInRegion }).toEqual({ key, phase, listFrameInRegion: true });
+            /* The queue panel's header and the staged tile sit whole where they
+               stand, not only after the region is scrolled to them. */
+            expect({ key, phase, queueHeaderPlaced: state.panels.queueHeaderPlaced }).toEqual({ key, phase, queueHeaderPlaced: true });
+            expect({ key, phase, tileWhole: state.panels.tileWhole }).toEqual({ key, phase, tileWhole: true });
           }
           expect(before.images).toBe(1);
           expect(after.images).toBe(1);

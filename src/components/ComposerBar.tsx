@@ -788,6 +788,44 @@ export function ComposerBar({
     observer.observe(region);
     return () => observer.disconnect();
   }, [controlsFloorWanted, receiptsMinHeight, regionShown, hasQueuePanel]);
+  /* On the phone a line drawn below the field (a refusal) takes its height
+     from a region whose floors already fill it: the queue's header line, the
+     staged row of tiles and the open list's first card with its status and
+     controls. When those floors no longer fit, the list gives up the one thing
+     above that card, its own header line, and nothing else: the header is left
+     to the list's scroll, one swipe up, and the first card, its status and
+     controls, keep the room the floor guarantees. The queue header, the tile and
+     the line stay whole and the region has nothing to scroll. Decided from the
+     region's own height against the floors, so it does not flip as the list
+     shrinks. */
+  const [headerYield, setHeaderYield] = useState(0);
+  const listFloor = receiptsMinHeight ? receiptsMinHeight - RECEIPTS_FIRST_ROW_CLOSING + RECEIPTS_FIRST_ROW_CLOSING_PHONE : 0;
+  useLayoutEffect(() => {
+    const region = accessoriesRef.current;
+    if (!region || !yieldingFloors || !lineBelowField || !listFloor) { setHeaderYield(0); return; }
+    const measure = () => {
+      const header = region.querySelector<HTMLElement>("[data-runtime-receipt-stack] > summary");
+      const kids = Array.from(region.children).filter((kid) => kid.getClientRects().length > 0) as HTMLElement[];
+      const gap = parseFloat(window.getComputedStyle(region).rowGap) || 0;
+      const need = kids.reduce((sum, kid) => sum + (kid.matches('[data-testid="composer-receipts"]') ? listFloor
+        : kid.matches('[data-testid="native-queue-panel"], [data-testid="attachment-tray"]') ? parseFloat(window.getComputedStyle(kid).minHeight) || kid.offsetHeight
+        : kid.offsetHeight), 0) + gap * Math.max(0, kids.length - 1);
+      setHeaderYield(header && need > region.clientHeight + 0.5 ? Math.ceil(header.getBoundingClientRect().height) : 0);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(region);
+    return () => observer.disconnect();
+  }, [yieldingFloors, lineBelowField, listFloor, regionShown, hasQueuePanel]);
+  /* While the header is given up, the list is scrolled to its first card once,
+     and put back at the top when the room returns. */
+  useLayoutEffect(() => {
+    const stack = accessoriesRef.current?.querySelector<HTMLElement>("[data-runtime-receipt-stack]");
+    if (!stack || !headerYield) return;
+    stack.scrollTop = headerYield;
+    return () => { stack.scrollTop = 0; };
+  }, [headerYield]);
   return (
     <>
       {regionShown || receipts ? (
@@ -824,7 +862,7 @@ export function ComposerBar({
               region: a run of failed or uncertain deliveries wraps into rows of
               chips, and each chip carries the controls that settle it. */}
           {receipts ? (
-            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsListHoldsRoom ? { minHeight: yieldingFloors ? receiptsMinHeight! - RECEIPTS_FIRST_ROW_CLOSING + RECEIPTS_FIRST_ROW_CLOSING_PHONE : receiptsMinHeight! } : undefined} className="flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain">{receipts}</div>
+            <div data-testid="composer-receipts" hidden={receiptsHidden} style={receiptsListHoldsRoom ? { minHeight: yieldingFloors ? listFloor - headerYield : receiptsMinHeight! } : undefined} className={`flex min-h-0 flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain${headerYield ? " [&_summary]:static" : ""}`}>{receipts}</div>
           ) : null}
         </div>
       ) : null}

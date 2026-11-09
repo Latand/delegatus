@@ -39,8 +39,8 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
@@ -61,7 +61,7 @@
         "first": {
           "whyReachable": true,
           "fadeOverText": false,
-          "operation": "unknown-send",
+          "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
           "whyWhole": true,
@@ -107,8 +107,8 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
@@ -960,8 +960,8 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "unknown-send",
-          "consumed-tick"
+          "consumed-tick",
+          "unknown-send"
         ],
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
@@ -1574,8 +1574,8 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
@@ -2520,7 +2520,7 @@
         "first": {
           "whyReachable": true,
           "fadeOverText": false,
-          "operation": "consumed-tick",
+          "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
           "whyWhole": false,
@@ -2566,8 +2566,8 @@
         "notice": "1 message is waiting for Codex to acknowledge it.",
         "count": "2 messages",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
@@ -2710,7 +2710,7 @@
         "chipWhole": true,
         "headerCount": {
           "text": "Unconfirmed: 1",
-          "whole": true
+          "whole": false
         },
         "first": {
           "whyReachable": true,
@@ -2731,8 +2731,8 @@
           ]
         },
         "panels": {
-          "queueHeight": 26,
-          "queueHeaderPlaced": false,
+          "queueHeight": 28.7,
+          "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
@@ -2740,9 +2740,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "regionOverflow": 36,
-          "listFrameInRegion": false,
-          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-688.0 scroll 0/0; header 508.0-532.0; list floor 79px; kids native-queue-panel 28.7, attachment-tray 58.7, composer-receipts 81.7"
         },
         "active": "button",
         "listOpen": true,
@@ -3026,7 +3026,7 @@
         "chipWhole": true,
         "headerCount": {
           "text": "Unconfirmed: 1",
-          "whole": true
+          "whole": false
         },
         "first": {
           "whyReachable": true,
@@ -3047,8 +3047,8 @@
           ]
         },
         "panels": {
-          "queueHeight": 26,
-          "queueHeaderPlaced": false,
+          "queueHeight": 28.7,
+          "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
@@ -3056,9 +3056,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "regionOverflow": 36,
-          "listFrameInRegion": false,
-          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-688.0 scroll 0/0; header 508.0-532.0; list floor 79px; kids native-queue-panel 28.7, attachment-tray 58.7, composer-receipts 81.7"
         },
         "active": "button",
         "listOpen": true,
@@ -3342,7 +3342,7 @@
         "chipWhole": true,
         "headerCount": {
           "text": "Не підтверджено: 1",
-          "whole": true
+          "whole": false
         },
         "first": {
           "whyReachable": true,
@@ -3363,8 +3363,8 @@
           ]
         },
         "panels": {
-          "queueHeight": 26,
-          "queueHeaderPlaced": false,
+          "queueHeight": 28.7,
+          "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
@@ -3372,9 +3372,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "regionOverflow": 36,
-          "listFrameInRegion": false,
-          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-688.0 scroll 0/0; header 508.0-532.0; list floor 79px; kids native-queue-panel 28.7, attachment-tray 58.7, composer-receipts 81.7"
         },
         "active": "button",
         "listOpen": true,
@@ -3658,7 +3658,7 @@
         "chipWhole": true,
         "headerCount": {
           "text": "Не підтверджено: 1",
-          "whole": true
+          "whole": false
         },
         "first": {
           "whyReachable": true,
@@ -3679,8 +3679,8 @@
           ]
         },
         "panels": {
-          "queueHeight": 26,
-          "queueHeaderPlaced": false,
+          "queueHeight": 28.7,
+          "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
@@ -3688,9 +3688,9 @@
           "tileHeight": 48,
           "queueControlsWhole": false,
           "overlaps": false,
-          "regionOverflow": 36,
-          "listFrameInRegion": false,
-          "geometry": "region 507.0-688.0 scroll 32/36; header 476.0-500.0; list floor 123px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 123.0"
+          "regionOverflow": 0,
+          "listFrameInRegion": true,
+          "geometry": "region 507.0-688.0 scroll 0/0; header 508.0-532.0; list floor 79px; kids native-queue-panel 28.7, attachment-tray 58.7, composer-receipts 81.7"
         },
         "active": "button",
         "listOpen": true,
