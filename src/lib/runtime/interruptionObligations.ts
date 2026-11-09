@@ -8,8 +8,11 @@ import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migratio
 import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
+import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { writeJsonDurably, fsyncPath } from "@/lib/state/durableJson";
+import { withFileTransaction, withFileTransactionAsync, withFileTransactionAttempt, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
 
@@ -134,6 +137,268 @@ const RESOLVED_RETENTION_MS = 7 * 24 * 3_600_000;
     left by an import that died. */
 const ABANDONED_CLAIM_MS = 60_000;
 
+const RECIPIENT_RECORD_LIMIT = 256;
+const obligationFilename = (name: string) => /^interruption-continuation-[0-9a-f]{32}\.json$/.test(name);
+const recipientIndexRoot = (directory: string) => `${accountGuardIndexDirectory(directory)}.conversations`;
+const recipientDirectory = (directory: string, id: string) => path.join(recipientIndexRoot(directory),
+  crypto.createHash("sha256").update(id).digest("hex"));
+const digest = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
+
+interface CutSource {
+  format: "interruption-sqlite-v2";
+  epoch: string;
+  collection: string;
+  databaseIdentity: string;
+  pendingStamp: string;
+  backup: string;
+}
+const sourceIntent = (directory: string) => `${directory}.source.json`;
+const cutDatabase = (directory: string) => path.join(path.dirname(directory), "state.sqlite");
+const cutCollection = (directory: string) => `interruption_obligations:${path.basename(directory)}`;
+
+/** The marker occupies the old directory itself. A legacy per-record writer
+ * cannot reach a canonical payload through that path after cutover. Pending
+ * journals remain canonical fallback inputs and invalidate recipient reads. */
+function cutSource(directory: string): CutSource | null {
+  let stat: fs.Stats | undefined;
+  try { stat = fs.statSync(directory); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (!stat || stat.isDirectory()) {
+    if (fs.existsSync(sourceIntent(directory))) unavailableRecipientCuts();
+    return null;
+  }
+  const source = JSON.parse(fs.readFileSync(directory, "utf8")) as CutSource;
+  if (source.format !== "interruption-sqlite-v2" || typeof source.epoch !== "string"
+    || source.collection !== cutCollection(directory) || typeof source.backup !== "string"
+    || source.databaseIdentity !== databaseFileIdentity(cutDatabase(directory))) unavailableRecipientCuts();
+  return source;
+}
+
+function cutRows(directory: string): SqliteStateCollection<InterruptionObligation> {
+  return new SqliteStateCollection(cutDatabase(directory), {
+    collection: cutCollection(directory), schemaVersion: 2, readOnlyOpen: true,
+    busyMessage: "interruption source is busy", key: record => record.id,
+    decode: value => completeObligation(value) ? value : null,
+    clone: record => structuredClone(record), strictDecode: true,
+    validate: record => { if (!completeObligation(record)) unavailableRecipientCuts(); },
+  });
+}
+function withCutRows<T>(directory: string, read: (rows: SqliteStateCollection<InterruptionObligation>) => T): T {
+  const rows = cutRows(directory);
+  try { return read(rows); } finally { rows.close(); }
+}
+
+function fileStamp(filename: string): string | null {
+  try {
+    const stat = fs.statSync(filename, { bigint: true });
+    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+
+/** Never replace a fallback a legacy writer appended during cutover/import.
+ * An exclusive empty file is also a durable witness for any later rename. */
+function createEmptyPending(directory: string): string {
+  const pending = `${directory}.pending.jsonl`;
+  const descriptor = fs.openSync(pending, "wx", 0o600);
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  fsyncPath(path.dirname(directory));
+  const stat = fs.statSync(pending, { bigint: true });
+  if (stat.size !== BigInt(0)) unavailableRecipientCuts();
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function unavailableRecipientCuts(): never {
+  throw new Error("recipient interruption evidence is unavailable or incomplete");
+}
+
+/** Reads only the selected conversations, including resolved cuts used to
+ * recognize a repeated restart. A persisted completeness witness is mandatory;
+ * a cold recipient never imports journals or backfills other conversations. */
+function readRecipientInterruptionEvidence(directory: string, conversationIds: Iterable<string>) {
+  const source = cutSource(directory);
+  if (!source || fileStamp(`${directory}.pending.jsonl`) !== source.pendingStamp) unavailableRecipientCuts();
+  const records = withCutRows(directory, rows => rows.interruptionRecipients([...new Set(conversationIds)], RECIPIENT_RECORD_LIMIT));
+  if (JSON.stringify(cutSource(directory)) !== JSON.stringify(source)
+    || fileStamp(`${directory}.pending.jsonl`) !== source.pendingStamp) unavailableRecipientCuts();
+  return { records, revision: digest(JSON.stringify([source.epoch, source.databaseIdentity, records])) };
+}
+
+export function recipientInterruptionEvidence(directory: string, conversationIds: Iterable<string>) {
+  try {
+    return withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () =>
+      readRecipientInterruptionEvidence(directory, conversationIds));
+  } catch (error) {
+    throw new Error("recipient interruption evidence is unavailable or incomplete", { cause: error });
+  }
+}
+
+/** The same writers and journal fence, with deduplication restricted to the
+ * complete recipient view. Complete evidence contains no fallback journal work;
+ * a missing or changed witness refuses before any writer runs. */
+export function recipientInterruptionObligationStore(directory: string, conversationIds: Iterable<string>): InterruptionObligationStore {
+  const ids = new Set(conversationIds);
+  const run = <T>(operation: (store: ReturnType<typeof createInterruptionObligationStore>, records: InterruptionObligation[]) => T) =>
+    withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () => {
+      const { records } = readRecipientInterruptionEvidence(directory, ids);
+      const store = createInterruptionObligationStore(directory, {}, true, false, records);
+      return store.mutation(() => operation(store, records));
+    });
+  return {
+    list: () => recipientInterruptionEvidence(directory, ids).records,
+    record: input => run(store => {
+      if (!ids.has(input.conversationId)) unavailableRecipientCuts();
+      return store.record(input);
+    }),
+    update: (id, patch) => run((store, records) => records.some(record => record.id === id) ? store.update(id, patch) : null),
+    withdraw: id => run((store, records) => records.some(record => record.id === id) ? store.withdraw(id) : false),
+  };
+}
+
+/** The startup owner seals the canonical source under the journal fence.
+ * Incomplete cutovers refuse until this owner accounts for all legacy records
+ * and claims. A sealed source keeps its transactionally maintained index. */
+export async function initializeRecipientInterruptionIndex(directory: string, options: {
+  signal?: AbortSignal; assertActive?: () => void;
+} = {}): Promise<void> {
+  const check = () => {
+    options.signal?.throwIfAborted(); options.assertActive?.();
+    assertStateStartupMutation(directory, "initialize recipient interruption index");
+  };
+  check();
+  let complete = false;
+  try { readRecipientInterruptionEvidence(directory, []); complete = true; }
+  catch { /* Incomplete sources enter the fenced initializer below. */ }
+  if (complete) {
+    // A complete source needs no asynchronous admission or filesystem read.
+    // Revalidate under the shared fence; a synchronous callback releases it
+    // before an in-process global consumer can inspect the same obligations.
+    return withFileTransaction(`${directory}.pending.jsonl`, "interruption index initialization is busy", () => {
+      check();
+      readRecipientInterruptionEvidence(directory, []);
+      writeJsonDurably(sourceIntent(directory), { ...cutSource(directory)!, sealed: true });
+    });
+  }
+  await withFileTransactionAsync(`${directory}.pending.jsonl`, "interruption index initialization is busy", async () => {
+    check();
+    const pending = `${directory}.pending.jsonl`;
+    const claimPrefix = `${path.basename(pending)}.claim-`;
+    const claims = () => fs.readdirSync(path.dirname(directory)).filter(name =>
+      name.startsWith(claimPrefix) && !name.endsWith(".lock"));
+    if (fs.existsSync(directory) && fs.statSync(directory).isFile()) {
+      const sealed = cutSource(directory)!;
+      if (fileStamp(pending) === sealed.pendingStamp && claims().length === 0) {
+        try { withCutRows(directory, rows => rows.interruptionRecipients([], RECIPIENT_RECORD_LIMIT)); }
+        catch {
+          // Constructor admission proves the canonical collection exists;
+          // this repair may restore its derived index, never seed an empty one.
+          withCutRows(directory, () => {});
+          check();
+          initializeStateCollections(cutDatabase(directory), [{
+            collection: cutCollection(directory), schemaVersion: 2, migrationId: "interruption-source-v2", loadRecords: () => [], key: record => (record as InterruptionObligation).id,
+          }]);
+          withCutRows(directory, rows => rows.interruptionRecipients([], RECIPIENT_RECORD_LIMIT));
+        }
+        check();
+        writeJsonDurably(sourceIntent(directory), { ...cutSource(directory)!, sealed: true });
+        return;
+      }
+    }
+    for (const name of [path.basename(pending), ...claims()]) {
+      let text: string;
+      try { text = await fs.promises.readFile(path.join(path.dirname(directory), name), "utf8"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+      check();
+      for (const line of text.split("\n")) if (line.trim() && !completeObligation(JSON.parse(line))) unavailableRecipientCuts();
+    }
+    // The marker is the cutover point. A durable intent blocks normal readers
+    // and writers if the process dies between importing and sealing the path.
+    let intent: CutSource | null = null;
+    try { intent = JSON.parse(fs.readFileSync(sourceIntent(directory), "utf8")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    let stat: fs.Stats | undefined;
+    try { stat = fs.statSync(directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (stat?.isFile()) {
+      cutSource(directory);
+      // A completed source can repair a derived index, never recreate a
+      // missing canonical collection as empty.
+      withCutRows(directory, rows => rows.snapshot());
+      initializeStateCollections(cutDatabase(directory), [{
+        collection: cutCollection(directory), schemaVersion: 2, migrationId: "interruption-source-v2", loadRecords: () => [], key: record => (record as InterruptionObligation).id,
+      }]);
+      const store = createInterruptionObligationStore(directory, {}, true);
+      store.importPending();
+      if (fileStamp(pending) !== cutSource(directory)!.pendingStamp || claims().length) unavailableRecipientCuts();
+      // Check every row only in this fenced initializer. Recipient readers use
+      // the expression index's bounded unknown bucket instead.
+      withCutRows(directory, rows => rows.interruptionRecipients([], RECIPIENT_RECORD_LIMIT));
+      check();
+      writeJsonDurably(sourceIntent(directory), { ...cutSource(directory)!, sealed: true });
+      return;
+    }
+    if (intent) {
+      if (intent.format !== "interruption-sqlite-v2" || intent.collection !== cutCollection(directory)
+        || path.basename(intent.backup) !== intent.backup || !intent.backup.startsWith(`${path.basename(directory)}.legacy-`)
+        || (intent as CutSource & { sealed?: boolean }).sealed) unavailableRecipientCuts();
+      const backup = path.join(path.dirname(directory), intent.backup);
+      if (!stat) {
+        fs.renameSync(backup, directory);
+        fsyncPath(path.dirname(directory));
+      } else if (fs.existsSync(backup)) unavailableRecipientCuts();
+    }
+    // Importers below operate under the journal fence. Temporarily admit only
+    // this initializer to the pre-cutover source while the intent remains.
+    const store = createInterruptionObligationStore(directory, {}, true, false, undefined, true);
+    store.importPending();
+    if (fs.existsSync(pending) || claims().length) unavailableRecipientCuts();
+    fs.mkdirSync(directory, { recursive: true });
+    const records: InterruptionObligation[] = [];
+    const directoryStamp = fileStamp(directory);
+    const files: [string, string | null][] = [];
+    for await (const entry of await fs.promises.opendir(directory)) {
+      check();
+      if (!entry.name.startsWith(OBLIGATION_PREFIX) || !entry.name.endsWith(".json")) continue;
+      const filename = path.join(directory, entry.name);
+      const before = fileStamp(filename);
+      const record = JSON.parse(await fs.promises.readFile(filename, "utf8"));
+      check();
+      if (before !== fileStamp(filename)) unavailableRecipientCuts();
+      files.push([filename, before]);
+      if (!obligationFilename(entry.name) || !completeObligation(record) || `${record.id}.json` !== entry.name) unavailableRecipientCuts();
+      records.push(record);
+    }
+    check();
+    if (fileStamp(directory) !== directoryStamp || files.some(([filename, stamp]) => fileStamp(filename) !== stamp)) unavailableRecipientCuts();
+    const epoch = intent?.epoch ?? crypto.randomUUID();
+    const backup = intent?.backup ?? `${path.basename(directory)}.legacy-${epoch}`;
+    // Intent precedes the SQLite import and every source rename. No missing
+    // marker can silently revert an admitted SQLite source to legacy JSON.
+    const preparing = { format: "interruption-sqlite-v2", epoch, collection: cutCollection(directory), backup };
+    writeJsonDurably(sourceIntent(directory), preparing);
+    initializeStateCollections(cutDatabase(directory), [{
+      collection: cutCollection(directory), schemaVersion: 2, migrationId: "interruption-source-v2",
+      loadRecords: () => records, key: record => (record as InterruptionObligation).id,
+    }]);
+    withCutRows(directory, rows => rows.replaceSync(records));
+    // Existing guard consumers keep their native cursors and cut pointers.
+    // Publish those before the source marker, under the same journal fence.
+    for (const record of records) store.prepareIndex(record);
+    check();
+    const backupDirectory = path.join(path.dirname(directory), backup);
+    fs.renameSync(directory, backupDirectory);
+    fsyncPath(path.dirname(directory));
+    const names = fs.readdirSync(backupDirectory).filter(name => name.startsWith(OBLIGATION_PREFIX) && name.endsWith(".json")).sort();
+    if (JSON.stringify(names) !== JSON.stringify(records.map(record => `${record.id}.json`).sort())
+      || files.some(([filename, stamp]) => fileStamp(path.join(backupDirectory, path.basename(filename))) !== stamp)) unavailableRecipientCuts();
+    check();
+    const pendingStamp = createEmptyPending(directory);
+    if (claims().length) unavailableRecipientCuts();
+    const source: CutSource = { ...preparing, format: "interruption-sqlite-v2", databaseIdentity: databaseFileIdentity(cutDatabase(directory))!, pendingStamp };
+    writeJsonDurably(directory, source);
+    writeJsonDurably(sourceIntent(directory), { ...source, sealed: true });
+  });
+}
+
 export function interruptionObligationId(input: Pick<InterruptionObligation,
   "conversationId" | "hostKey" | "owner" | "turnRef" | "boundary">): string {
   const digest = crypto.createHash("sha256").update(JSON.stringify([
@@ -239,6 +504,24 @@ function isObligation(value: unknown): value is InterruptionObligation {
     && typeof record.state === "string";
 }
 
+function completeObligation(value: unknown): value is InterruptionObligation {
+  if (!isObligation(value)) return false;
+  return ["viewer-release", "viewer-restart", "account-guard"].includes(value.reason)
+    && ["owed", "submitted", "delivered", "discharged", "failed"].includes(value.state)
+    && typeof value.boundary === "string"
+    && (value.claimEpoch === null || Number.isSafeInteger(value.claimEpoch) && value.claimEpoch >= 0)
+    && (value.turnRef === null || typeof value.turnRef === "string")
+    && (value.owner === null || !!value.owner && Number.isSafeInteger(value.owner.pid) && value.owner.pid > 0
+      && (value.owner.startIdentity === null || typeof value.owner.startIdentity === "string"))
+    && !!value.checkpoint && (value.checkpoint.lastEventAt === null || Number.isFinite(value.checkpoint.lastEventAt))
+    && (value.checkpoint.lastEventKind === null || typeof value.checkpoint.lastEventKind === "string")
+    && (value.seat === null || !!value.seat && typeof value.seat.project === "string" && Number.isSafeInteger(value.seat.seatEpoch))
+    && (value.operationId === null || typeof value.operationId === "string")
+    && Number.isSafeInteger(value.attempts) && value.attempts >= 0
+    && (value.resolvedAt === null || typeof value.resolvedAt === "string")
+    && (value.resolution === null || typeof value.resolution === "string");
+}
+
 /** Appends one line and syncs it: the fallback a release writes when the
     obligation directory refuses the record. */
 function appendDurably(filename: string, line: string): void {
@@ -251,18 +534,19 @@ function appendDurably(filename: string, line: string): void {
   }
 }
 
-/** One file per obligation, so the incumbent recording at release and the
-    successor reading at boot never rewrite each other's records.
+/** The shared adapter reads legacy per-record files until fenced startup
+    seals their SQLite source. Global consumers and recipient writers keep the
+    same cut identity, settlement and withdrawal semantics across that cutover.
 
     A release that cannot write the record, even on a second try, appends it
-    to a pending journal beside the directory instead. Every read merges that
-    journal and imports its records into the directory once it accepts them,
-    so the successor sees the obligation either way.
+    to the existing pending journal. Global reads import those records into
+    the current canonical source once it accepts them; recipient reads refuse
+    until that fallback work is accounted for.
 
     The incumbent may append while the successor imports, so an import first
     takes the journal by renaming it to a claim of its own and deletes only
     that claim: an append after the rename starts a fresh journal. Records the
-    directory still refuses go back to the live journal. A claim left by an
+    canonical source still refuses go back to the live journal. A claim left by an
     import that died midway is taken over once it has sat untouched long
     enough that no import can still be working on it. */
 function createInterruptionObligationStore(
@@ -273,24 +557,45 @@ function createInterruptionObligationStore(
   } = {},
   admitted = false,
   guardOnly = false,
+  recipientRecords?: InterruptionObligation[],
+  initializing = false,
 ) {
   const fileFor = (id: string) => path.join(directory, `${id}.json`);
+  const source = () => initializing ? null : cutSource(directory);
+  const exists = (id: string) => source() ? withCutRows(directory, rows => rows.get(id)) !== null : fs.existsSync(fileFor(id));
+  const remove = (id: string) => {
+    if (source()) withCutRows(directory, rows => rows.patchSync(() => ({ records: [], deleteKeys: [id] })));
+    else fs.rmSync(fileFor(id), { force: true });
+  };
   const pendingFile = `${directory}.pending.jsonl`;
   const claimPrefix = `${path.basename(pendingFile)}.claim-`;
   let held = admitted;
+  let healthy = true;
+  const mutation = <T>(operation: () => T): T => {
+    const sealed = source();
+    healthy = true;
+    const result = operation();
+    if (sealed && healthy && !fs.existsSync(pendingFile) && activeClaims().length === 0) {
+      const pendingStamp = createEmptyPending(directory);
+      writeJsonDurably(directory, { ...sealed, pendingStamp });
+    }
+    return result;
+  };
   const transaction = <T>(operation: () => T): T => {
     if (held) return operation();
     return withFileTransactionSync(pendingFile, "interruption obligation import is busy", () => {
       held = true;
-      try { return operation(); } finally { held = false; }
+      try { return mutation(operation); } finally { held = false; }
     });
   };
   const indexDirectory = accountGuardIndexDirectory(directory);
   const indexFile = (id: string) => path.join(indexDirectory, `${id}.json`);
-  const conversationDirectory = (conversationId: string) => path.join(`${indexDirectory}.conversations`,
-    crypto.createHash("sha256").update(conversationId).digest("hex"));
+  const conversationDirectory = (conversationId: string) => recipientDirectory(directory, conversationId);
   const conversationIndexFile = (obligation: InterruptionObligation) =>
     path.join(conversationDirectory(obligation.conversationId), `${obligation.id}.json`);
+  const removeRecipientPointer = (obligation: InterruptionObligation) => {
+    fs.rmSync(conversationIndexFile(obligation), { force: true });
+  };
   const cutIndexFile = (cut: InterruptionObligationInput) => cut.owner ? path.join(`${indexDirectory}.cuts`,
     `${crypto.createHash("sha256").update(JSON.stringify([cut.conversationId, cut.hostKey,
       cut.owner.pid, cut.owner.startIdentity, cut.turnRef])).digest("hex")}.json`) : null;
@@ -309,7 +614,8 @@ function createInterruptionObligationStore(
     if (!filename) return null;
     const id = cutPointerId(filename);
     if (!id) return null;
-    const existing = read(fileFor(id)) ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find(item => item.id === id);
+    const existing = recipientRecords ? recipientRecords.find(item => item.id === id)
+      : read(fileFor(id)) ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find(item => item.id === id);
     return existing?.reason === "account-guard" && interruptionObligationUnresolved(existing)
       && coversSameCut(existing, cut) ? existing : null;
   };
@@ -328,11 +634,15 @@ function createInterruptionObligationStore(
   };
   const write = (obligation: InterruptionObligation): void => {
     prepareIndex(obligation);
-    writeJsonDurably(fileFor(obligation.id), obligation);
+    if (source()) {
+      withCutRows(directory, rows => rows.patchSync(() => ({ records: [obligation] })));
+      writeJsonDurably(conversationIndexFile(obligation), { id: obligation.id });
+    } else {
+      writeJsonDurably(fileFor(obligation.id), obligation);
+    }
     if (obligation.reason === "account-guard") changedGuardObligations(directory);
     if (!interruptionObligationUnresolved(obligation)) {
       fs.rmSync(indexFile(obligation.id), { force: true });
-      fs.rmSync(conversationIndexFile(obligation), { force: true });
       removeCutPointer(obligation);
     }
   };
@@ -342,6 +652,7 @@ function createInterruptionObligationStore(
       text = fs.readFileSync(filename, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      healthy = false;
       console.error("[interruption recovery] unreadable pending obligations", { filename, error });
       return [];
     }
@@ -349,8 +660,11 @@ function createInterruptionObligationStore(
       if (!line.trim()) return [];
       try {
         const parsed = JSON.parse(line) as unknown;
-        return isObligation(parsed) ? [parsed] : [];
+        if (isObligation(parsed)) return [parsed];
+        healthy = false;
+        return [];
       } catch {
+        healthy = false;
         return [];
       }
     });
@@ -374,6 +688,7 @@ function createInterruptionObligationStore(
     try {
       names = fs.readdirSync(path.dirname(pendingFile));
     } catch {
+      healthy = false;
       return [];
     }
     return names.filter((name) => name.startsWith(claimPrefix) && !name.endsWith(".lock")).map((name) =>
@@ -393,6 +708,8 @@ function createInterruptionObligationStore(
   /* Moves pending records into the directory. Records still waiting remain
      in a claim or go back to the live journal. */
   const importPending = (): void => {
+    const sealed = source();
+    if (sealed && sealed.pendingStamp === fileStamp(pendingFile)) return;
     const claims = transaction(() => [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []));
     if (claims.length === 0) return;
     claims.forEach(readJournal);
@@ -400,17 +717,24 @@ function createInterruptionObligationStore(
     /* Claim takeover, publication and withdrawal use one fence whose name
        survives every rename. No hook or awaited read holds it. */
     transaction(() => {
+      if (sealed) {
+        const current = source();
+        if (!current || current.epoch !== sealed.epoch || current.databaseIdentity !== sealed.databaseIdentity) unavailableRecipientCuts();
+      }
       for (const claimed of claims) {
         try {
           /* A withdrawal may have consumed this claim while the import was
              reading. Only the records still on disk can be published. */
           const waiting: InterruptionObligation[] = [];
-          for (const obligation of readJournal(claimed)) {
-            if (fs.existsSync(fileFor(obligation.id))) continue;
+          const journalRecords = readJournal(claimed);
+          if (sealed && !healthy) continue;
+          for (const obligation of journalRecords) {
+            if (exists(obligation.id)) continue;
             if (waiting.some((record) => record.id === obligation.id)) continue;
             try {
               write(obligation);
             } catch (error) {
+              healthy = false;
               console.error("[interruption recovery] pending obligation is not importable yet", { obligation: obligation.id, error });
               waiting.push(obligation);
             }
@@ -420,28 +744,40 @@ function createInterruptionObligationStore(
           }
           fs.rmSync(claimed, { force: true });
         } catch (error) {
+          healthy = false;
           /* The claim stays on disk; a later read takes it over. */
           console.error("[interruption recovery] pending obligations could not finish importing", { claimed, error });
         }
+      }
+      if (sealed && !fs.existsSync(pendingFile) && activeClaims().length === 0 && healthy) {
+        const pendingStamp = createEmptyPending(directory);
+        writeJsonDurably(directory, { ...sealed, pendingStamp });
       }
     });
   };
   const read = (filename: string): InterruptionObligation | null => {
     try {
+      if (source()) return withCutRows(directory, rows => rows.get(path.basename(filename).slice(0, -5)));
       const parsed = JSON.parse(fs.readFileSync(filename, "utf8")) as unknown;
-      return isObligation(parsed) ? parsed : null;
+      if (isObligation(parsed)) return parsed;
+      healthy = false;
+      return null;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      healthy = false;
       console.error("[interruption recovery] unreadable obligation record", { filename, error });
       return null;
     }
   };
   const list = (page?: { after: string; limit: number; nextCursor: string | null; names?: string[] }): InterruptionObligation[] => {
+    if (recipientRecords) return recipientRecords;
     importPending();
     return transaction(() => {
       let names: string[];
       try {
-        names = page?.names ?? fs.readdirSync(guardOnly ? indexDirectory : directory);
+        names = page?.names ?? (!guardOnly && source()
+          ? withCutRows(directory, rows => rows.snapshot().map(record => `${record.id}.json`))
+          : fs.readdirSync(guardOnly ? indexDirectory : directory));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         names = [];
@@ -464,7 +800,7 @@ function createInterruptionObligationStore(
           if (guardOnly && !pending.some(item => `${item.id}.json` === name)) {
             // A failed read can be temporary. Only a proven absent canonical
             // file makes this a pointer left before publication.
-            try { fs.lstatSync(path.join(directory, name)); }
+            try { if (!exists(name.slice(0, -5))) throw Object.assign(new Error("missing cut"), { code: "ENOENT" }); }
             catch (error) {
               if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
               fs.rmSync(path.join(indexDirectory, name), { force: true });
@@ -476,12 +812,12 @@ function createInterruptionObligationStore(
         const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
         if (guardOnly && (obligation.reason !== "account-guard" || !interruptionObligationUnresolved(obligation))) {
           fs.rmSync(path.join(indexDirectory, name), { force: true });
-          fs.rmSync(conversationIndexFile(obligation), { force: true });
           removeCutPointer(obligation);
           continue;
         }
         if (!guardOnly && !interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS) {
-          fs.rmSync(path.join(directory, name), { force: true });
+          removeRecipientPointer(obligation);
+          remove(name.slice(0, -5));
           continue;
         }
         if (guardOnly) prepareIndex(obligation);
@@ -504,11 +840,12 @@ function createInterruptionObligationStore(
     list,
     importPending,
     prepareIndex,
+    mutation,
     conversationPage(conversationId: string, names: string[]) {
       const records = list({ names, after: "", limit: 64, nextCursor: null });
       const kept = new Set(records.map(record => `${record.id}.json`));
       for (const name of names) if (!kept.has(name)) {
-        try { fs.lstatSync(path.join(directory, name)); }
+        try { if (!exists(name.slice(0, -5))) throw Object.assign(new Error("missing cut"), { code: "ENOENT" }); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") fs.rmSync(path.join(conversationDirectory(conversationId), name), { force: true }); }
       }
       return records.filter(record => record.conversationId === conversationId);
@@ -562,13 +899,14 @@ function createInterruptionObligationStore(
           resolution: input.answeredBy ?? null,
         };
         if (input.answeredBy) obligation.resolvedAt = obligation.recordedAt;
-        prepareIndex(obligation);
+            prepareIndex(obligation);
         try {
           write(obligation);
         } catch (first) {
           try {
             write(obligation);
           } catch (second) {
+            healthy = false;
             console.error("[interruption recovery] obligation directory refused the record; appending it to the pending journal", {
               obligation: id, first, second,
             });
@@ -582,6 +920,16 @@ function createInterruptionObligationStore(
     withdraw(id: string) {
       try {
         return transaction(() => {
+          if (recipientRecords) {
+            const current = recipientRecords.find(record => record.id === id);
+            if (!current) return false;
+            removeRecipientPointer(current);
+            removeCutPointer(current);
+            remove(id);
+            fs.rmSync(indexFile(id), { force: true });
+            changedGuardObligations(directory);
+            return true;
+          }
           /* Withdrawal consumes fresh claims too, so an importer paused
              before publication cannot restore this record. Other records
              go back to the live journal before any claim is removed. */
@@ -592,11 +940,11 @@ function createInterruptionObligationStore(
           if (kept.length > 0) appendDurably(pendingFile, kept.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
           for (const claimed of claims) fs.rmSync(claimed, { force: true });
           let removed = kept.length < pending.length;
-          for (const current of pending) if (current.id === id) { fs.rmSync(conversationIndexFile(current), { force: true }); removeCutPointer(current); }
-          if (fs.existsSync(fileFor(id))) {
+          for (const current of pending) if (current.id === id) { removeRecipientPointer(current); removeCutPointer(current); }
+          if (exists(id)) {
             const current = read(fileFor(id));
-            if (current) { fs.rmSync(conversationIndexFile(current), { force: true }); removeCutPointer(current); }
-            fs.rmSync(fileFor(id), { force: true });
+            if (current) { removeRecipientPointer(current); removeCutPointer(current); }
+            remove(id);
             removed = true;
           }
           fs.rmSync(indexFile(id), { force: true });
@@ -611,7 +959,7 @@ function createInterruptionObligationStore(
     update(id: string, patch: Parameters<InterruptionObligationStore["update"]>[1]) {
       return transaction(() => {
         const current = read(fileFor(id))
-          ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find((pending) => pending.id === id) ?? null;
+          ?? (recipientRecords ? undefined : [...readPending(), ...activeClaims().flatMap(readJournal)].find((pending) => pending.id === id)) ?? null;
         if (!current) return null;
         const next = { ...current, ...patch };
         if (JSON.stringify(current) === JSON.stringify(next)) return current;
@@ -656,7 +1004,7 @@ export function accountGuardObligationStore(directory: string) {
   const store = createInterruptionObligationStore(directory, {}, true, true);
   const transaction = <T>(operation: () => T) => withViewerOperation("account-credit-guard.store", () =>
     withWaitCorrelation({ label: "account-credit-guard.obligations" }, () =>
-      withFileTransaction(pendingFile, "account guard obligations are busy", operation)));
+      withFileTransaction(pendingFile, "account guard obligations are busy", () => store.mutation(operation))));
   const initialize = async () => {
     let indexed = false;
     try {
@@ -666,6 +1014,13 @@ export function accountGuardObligationStore(directory: string) {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     // Import journal fallbacks under the same asynchronously acquired fence.
     await transaction(() => store.importPending());
+    if (cutSource(directory)) {
+      await transaction(() => {
+        for (const record of withCutRows(directory, rows => rows.snapshot())) store.prepareIndex(record);
+        writeJsonDurably(ready, { version: 2 });
+      });
+      return;
+    }
     let entries: fs.Dir;
     // The existing pending index already excludes settled history. Upgrading
     // its conversation index never revisits every historical cut.
@@ -688,7 +1043,9 @@ export function accountGuardObligationStore(directory: string) {
           if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return;
           throw error;
         }
-        if (isObligation(obligation) && obligation.reason === "account-guard") store.prepareIndex(obligation);
+        if (isObligation(obligation) && obligation.reason === "account-guard") {
+          store.prepareIndex(obligation);
+        }
         if (isObligation(obligation) && obligation.reason === "account-guard" && interruptionObligationUnresolved(obligation)) {
           writeJsonDurably(path.join(indexDirectory, `${obligation.id}.json`), { id: obligation.id });
         }

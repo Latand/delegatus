@@ -3,10 +3,10 @@ import type { KeyId } from "@/lib/keys/shared";
 /*
  * «Open Keys on this key» (docs/design/keys-settings.md §4): the places that
  * asked for a key on their own (memory, the setup guide's voice step, the
- * voice companion dialog) open the header menu's «Keys» page on that key
- * instead. One window event; the menu that is on screen answers it. A menu
- * that is not mounted yet (the desktop rail put away, the phone sheet closed)
- * is opened by the Viewer and reads the request when it mounts.
+ * voice companion dialog) open the Settings window's «Keys» section on that
+ * key instead. One window event; the window that is on screen answers it. A
+ * window that is not open yet is opened by the Viewer and reads the request
+ * when it mounts.
  */
 
 export const OPEN_KEYS_EVENT = "delegatus:open-keys";

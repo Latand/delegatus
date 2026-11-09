@@ -1,7 +1,7 @@
 # Weekly swarm pack pass
 
 Swarm rules ship in `src/lib/memory/swarmRules.json` with a release. Receiving
-is off by default. Settings → Install ping → Swarm rules enables the public
+is off by default. Settings → Privacy → Swarm rules enables the public
 scope for eligible roles. The same choice will enable anonymous daily
 usefulness counts when that feature ships. This release sends no swarm counts
 or proposals. The initial pack is empty; no local lesson text was published.

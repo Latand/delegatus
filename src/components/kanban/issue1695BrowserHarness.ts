@@ -11,6 +11,7 @@ import sharp from "sharp";
 
 import { translate } from "@/lib/i18n";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
+import { stubVoiceDevices as stubVoiceDevicesForSettings } from "@/test-helpers/voiceDevicesStub";
 import { createGateSandbox } from "../../../scripts/local-gate";
 
 /** Chrome's singleton socket must fit the platform's short Unix socket path. */
@@ -729,7 +730,7 @@ export async function captureDoneFrames(browser: Browser, phone: boolean) {
   return failures;
 }
 
-type WorkersRowReading = { icon: number; titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
+type WorkersRowReading = { titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
   inputWeight: number; inputAlign: string; inputX: number; inputY: number; inputH: number; stateRight: number; stateTop: number; stateBottom: number };
 
 /** Worker-limit frames shared by the board and phone drivers. The fixture
@@ -788,11 +789,11 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
         if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
       }
-      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]"), iconEl = element.querySelector("[data-worker-limit-icon]");
-      const row = titleEl && stateEl && iconEl && input ? (() => {
+      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]");
+      const row = titleEl && stateEl && input ? (() => {
         const title = getComputedStyle(titleEl), state = getComputedStyle(stateEl), field = getComputedStyle(input);
         const stateBox = stateEl.getBoundingClientRect(), inputBox = input.getBoundingClientRect();
-        return { icon: iconEl.getBoundingClientRect().width, titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
+        return { titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
           titleX: titleEl.getBoundingClientRect().left - box.left, stateWeight: Number(state.fontWeight), stateColor: state.color,
           inputWeight: Number(field.fontWeight), inputAlign: field.textAlign, inputX: inputBox.left, inputY: inputBox.top, inputH: inputBox.height,
           stateRight: stateBox.right, stateTop: stateBox.top, stateBottom: stateBox.bottom };
@@ -818,10 +819,10 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
     if (selector === "[data-header-menu-workers]") {
       if (Math.abs((measurement.inputWidth ?? 0) - 48) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
       const row = measurement.row as WorkersRowReading | null;
-      const want = phone ? { icon: 18, title: 13, titleX: 46, stateWeight: 500 } : { icon: 16, title: 12, titleX: 32, stateWeight: 500 };
+      /* The Settings window's row recipe: no icon, a 13 px title at the rows' inset, the muted line in the body weight. */
+      const want = phone ? { title: 13, titleX: 16, stateWeight: 400 } : { title: 13, titleX: 20, stateWeight: 400 };
       if (!row) failures.push(`${name}: row geometry missing`);
       else {
-        if (Math.abs(row.icon - want.icon) > .5) failures.push(`${name}: icon ${row.icon}px, siblings ${want.icon}px`);
         if (Math.abs(row.titleSize - want.title) > .5 || row.titleWeight !== 600) failures.push(`${name}: title ${row.titleSize}px/${row.titleWeight}`);
         if (Math.abs(row.titleX - want.titleX) > .5) failures.push(`${name}: label x ${row.titleX}, siblings ${want.titleX}`);
         if (row.stateWeight !== want.stateWeight || row.stateColor === row.titleColor) failures.push(`${name}: state line ${row.stateWeight}/${row.stateColor} is not the muted sibling word`);
@@ -887,15 +888,16 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         await page.locator("[data-rail-menu]").first().click();
         await page.locator("[data-rail-menu-settings]").click();
       }
+      await page.locator('[data-settings-section-row="roles"]').click();
       await page.locator("[data-header-menu-workers] input").waitFor();
       await frame(page, "[data-header-menu-workers]", `${name}-settings-row`);
-      /* The 232 px panel wraps the override line («7 here (own limit 10) · 19 on machine») onto a second state line: 14 px more than the machine scene. */
-      await frame(page, phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]", `${name}-settings`, phone ? 743 : 436);
+      await frame(page, phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]", `${name}-settings`);
       if (!phone && scene === "machine") {
         await page.keyboard.press("Escape");
         await page.locator("[data-rail-overview]").click();
         await page.locator("[data-rail-menu]").first().click();
         await page.locator("[data-rail-menu-settings]").click();
+        await page.locator('[data-settings-section-row="roles"]').click();
         await page.locator("[data-header-menu-workers] input").waitFor();
         await frame(page, "[data-header-menu-workers]", `${name}-overview`);
       }
@@ -905,6 +907,7 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         await page.locator("[data-mobile2-project='__overview__']").click();
         await page.locator("[data-mobile2-open='menu']").first().click();
         await page.locator("[data-mobile2-menu-row='settings']").click();
+        await page.locator('[data-settings-section-row="roles"]').click();
         await page.locator("[data-header-menu-workers] input").waitFor();
         const overview = await frame(page, "[data-header-menu-workers]", `${name}-overview`);
         if (overview.text?.includes(lang === "en" ? " here" : " тут")) failures.push(`${name}: overview names a project's running count`);
@@ -1852,6 +1855,7 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
     for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
       for (const scene of ["multi-one", "multi-kicked", "multi-refused", "multi-ready"]) {
         const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        let railDot: { dot: number[]; opens: boolean } | null = null;
         try {
           await context.addInitScript(({ lang, scheme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv_theme", scheme); }, { lang, scheme });
           const page = await context.newPage();
@@ -1860,31 +1864,28 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             await page.locator('[data-mobile2-open="menu"]').first().click();
             await page.locator('[data-mobile2-menu-row="accounts"]').click();
             await page.locator("[data-mobile2-telegram] button").first().click();
+            /* The panel's status dot is a 44 px target of its own, and a tap on the row's button still reaches the button. */
+            await page.locator("[data-telegram-bot-entry] [data-settings-dot]").waitFor();
+            const entry = await page.locator("[data-telegram-bot-entry]").evaluate((section) => {
+              const dot = section.querySelector<HTMLElement>("[data-settings-dot]")!.getBoundingClientRect();
+              const open = section.querySelector<HTMLElement>("[data-telegram-bot-open]")!;
+              const box = open.getBoundingClientRect();
+              return { dot: [Math.round(dot.width), Math.round(dot.height)], opens: open.contains(document.elementFromPoint(box.left + 4, box.top + box.height / 2)) };
+            });
+            if (entry.dot[0]! < 44 || entry.dot[1]! < 44 || !entry.opens) throw new Error(`rail Telegram dot ${JSON.stringify(entry)}`);
+            railDot = entry;
           } else {
             const footer = page.locator("[data-rail-footer]").first();
             await footer.waitFor();
             if (await footer.getAttribute("data-rail-footer") === "folded") await page.click("[data-rail-footer-toggle]");
             await page.locator(`button[aria-label="${lang === "uk" ? "Підключення Telegram" : "Telegram connection"}"]`).click();
           }
-          const panel = page.locator(`[role="dialog"][aria-label="Telegram"] section[aria-label="${lang === "uk" ? "Бот" : "Bot"}"]`);
-          await panel.waitFor();
-          const add = panel.locator("details").filter({ has: page.locator("summary", { hasText: lang === "uk" ? "Додати ще одного бота" : "Add another bot" }) });
-          const row = panel.locator("li").filter({ hasText: "Team Reports" }).first();
+          /* The panel's bot row opens the Settings window on Telegram; a chat's bots are on its page. */
+          await page.locator("[data-telegram-bot-open]").click();
+          const panel = page.locator("[data-settings-window], [data-mobile2-sheet='settings']");
+          await panel.locator("[data-telegram-settings]").waitFor();
+          const row = panel.locator("[data-telegram-chat-row]").filter({ hasText: "Team Reports" }).first();
           await row.waitFor();
-          await row.scrollIntoViewIfNeeded();
-          if (scene === "multi-kicked") {
-            const states = await row.locator("[data-telegram-bot-posting-state]").allTextContents();
-            const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
-            const mayPost = lang === "uk" ? "Агентам можна писати" : "Agents may post";
-            const frame = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}`;
-            if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) {
-              throw new Error(`${frame}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
-            }
-            const overflow = await row.evaluate(el => el.scrollWidth > el.clientWidth
-              || [...el.querySelectorAll<HTMLElement>("[data-telegram-bot-posting-state]")].some(state => state.getBoundingClientRect().right > el.getBoundingClientRect().right + 1));
-            if (overflow) throw new Error(`${frame}: bot posting states overflow the chat row`);
-          }
-          if (scene === "multi-refused" && !await row.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
           const key = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}-${scene}`;
           const frames: string[] = [];
           const capture = async (suffix = "") => {
@@ -1892,44 +1893,569 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             await page.screenshot({ path: path.join(out, name) });
             frames.push(name);
           };
+          await capture();
           const before = await panel.evaluate(el => ({ panelWidth: el.getBoundingClientRect().width, overflow: el.scrollWidth - el.clientWidth,
             controls: [...el.querySelectorAll<HTMLElement>("button,input,select")].map(c => ({ label: c.getAttribute("aria-label"), disabled: (c as HTMLButtonElement).disabled })) }));
-          if (before.overflow > 1) throw new Error(`${key}: panel overflows horizontally`);
-          const clipping = await row.evaluate(el => {
-            const card = el.getBoundingClientRect();
-            const dialog = el.closest('[role="dialog"]')!.getBoundingClientRect();
-            return card.top < dialog.top || card.bottom > dialog.bottom || card.left < dialog.left || card.right > dialog.right;
-          });
-          if (clipping) throw new Error(`${key}: chat card is clipped`);
-          await capture();
-          if (scene === "multi-ready") {
-            await row.locator("select").selectOption("release_fixture_bot");
-            await page.waitForFunction(() => (document.querySelector('select[aria-label$=": Team Reports"]') as HTMLSelectElement)?.value === "release_fixture_bot");
-            const remove = panel.getByRole("button", { name: lang === "uk" ? "Видалити" : "Remove", exact: true }).first();
-            await remove.click();
-            const confirm = panel.getByRole("button", { name: lang === "uk" ? "Підтвердити" : "Confirm", exact: true });
-            await confirm.locator("..").scrollIntoViewIfNeeded();
-            const confirmationOverflows = await confirm.evaluate(el => [...el.parentElement!.children].some(child => child.scrollWidth > child.clientWidth + 1));
-            if (confirmationOverflows) throw new Error(`${key}: remove confirmation overflows`);
-            await capture("-remove");
-            await confirm.click();
-            await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "remove_bot"));
-          }
+          if (before.overflow > 1) throw new Error(`${key}: window overflows horizontally`);
           if (scene === "multi-one") {
-            await add.locator("summary").click();
-            await add.scrollIntoViewIfNeeded();
+            await panel.locator("[data-telegram-add-bot] [data-settings-row='link']").click();
+            await panel.locator("[data-telegram-add-bot-page]").waitFor();
             await capture("-add");
-            await add.locator('input[type="password"]').fill("12345:" + "not-a-real-token-".repeat(2) + "fake");
-            await add.locator('button[type="submit"]').click();
+            await panel.locator('input[type="password"]').fill("12345:" + "not-a-real-token-".repeat(2) + "fake");
+            await panel.locator('button[type="submit"]').click();
             await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "add_bot"));
+          } else {
+            await row.locator("[data-settings-row='link']").first().click();
+            await panel.locator("[data-telegram-chat-page]").waitFor();
+            await capture("-chat");
+            if (scene === "multi-kicked") {
+              const states = await panel.locator("[data-telegram-bot-posting-state]").allTextContents();
+              const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
+              const mayPost = translate(lang, "settings.telegram.bot.canPost");
+              if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) throw new Error(`${key}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
+            }
+            if (scene === "multi-refused" && !await panel.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
+            if (scene === "multi-ready") {
+              await panel.locator("[data-telegram-posts-as]").selectOption("release_fixture_bot");
+              await page.waitForFunction(() => (document.querySelector("[data-telegram-posts-as]") as HTMLSelectElement)?.value === "release_fixture_bot");
+              await page.locator("[data-settings-back]").click();
+              await panel.locator("[data-telegram-sending-bot] [data-settings-row='link']").first().click();
+              await panel.getByRole("button", { name: lang === "uk" ? "Видалити" : "Remove", exact: true }).click();
+              const confirm = panel.getByRole("button", { name: lang === "uk" ? "Підтвердити" : "Confirm", exact: true });
+              await capture("-remove");
+              await confirm.click();
+              await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "remove_bot"));
+            }
           }
           const actions = await page.evaluate(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.map(p => p.action));
-          readings.push({ key, width, height, ...before, actions, frames });
+          readings.push({ key, width, height, ...before, actions, frames, ...(railDot ? { railDot } : {}) });
         } finally { await context.close(); }
       }
     }
   }
   return readings;
+}
+
+/* ---- The one Settings window (docs/design/settings-redo/build-brief.md §7) ---- */
+
+type SettingsSurfaceName = "window" | "privacy" | "telegram" | "voice";
+interface SettingsFrame {
+  surface: SettingsSurfaceName;
+  name: string;
+  /** `?settings=<scene>` on the fixture; `&dev=` picks the voice devices. */
+  scene: string;
+  query?: string;
+  section?: string;
+  /** The row to press, then what else to do: every step runs through the product's own controls. */
+  steps?: (page: Page, phone: boolean) => Promise<unknown>;
+  /** The state's defining element, in view at the frame. */
+  defining?: string;
+  details?: boolean;
+  /** Text that must be absent from the surface, Details opened. */
+  absent?: RegExp;
+  /** The window scrolled itself to this state: where it stopped falls between lines too. */
+  landed?: boolean;
+  desktopOnly?: boolean;
+  phoneOnly?: boolean;
+}
+
+const rowButton = (page: Page, attr: string) => page.locator(`[${attr}] [data-settings-row="link"]`).first();
+const pressRow = async (page: Page, attr: string) => { await rowButton(page, attr).scrollIntoViewIfNeeded(); await rowButton(page, attr).click(); };
+const openDot = async (page: Page, attr: string) => {
+  const dot = page.locator(`[${attr}] [data-settings-dot]`).first();
+  await dot.scrollIntoViewIfNeeded();
+  await dot.click();
+  await page.locator("[data-settings-dot-popover]").waitFor();
+};
+const NO_KEY_OR_SPEND = /\bkeys?\b|\bcap\b|spend|\$|ключ|витрат|межа/i;
+const OPEN_MENU = async (page: Page, phone: boolean) => {
+  await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+  await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+};
+const toolPage = (name: string) => async (page: Page) => pressRow(page, `data-voice-tool-server="${name}"`);
+const openFeature = (feature: string) => async (page: Page) => {
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } })));
+  const row = page.locator(`[data-openai-service="${feature}"]`);
+  await row.scrollIntoViewIfNeeded();
+  await row.click();
+  await page.locator(`[data-openai-feature-page="${feature}"]`).waitFor();
+};
+const removeTool = (name: string) => async (page: Page) => {
+  await toolPage(name)(page);
+  await page.locator("[data-voice-tool-action='remove']").click();
+  await page.waitForFunction(() => document.activeElement?.matches("[data-voice-tools]"), undefined, { timeout: 10_000 });
+};
+
+const SETTINGS_FRAMES: SettingsFrame[] = [
+  /* The window. */
+  { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
+  { surface: "window", name: "keys-on-key", scene: "voice-file", steps: async (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } }))), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
+  /* A feature the OpenAI key serves, opened from its row under «Keys»: its choices are rows of the page, with no box around them. */
+  { surface: "window", name: "keys-feature", scene: "voice-file", steps: openFeature("dictation"), defining: "[data-openai-feature-page='dictation'] [role=radiogroup]", absent: /Now [A-Z]|Зараз / },
+  { surface: "window", name: "keys-feature-no-key", scene: "voice-missing", steps: openFeature("read"), defining: "[data-openai-feature-page='read'] [data-openai-add-key]" },
+  /* An option without its key lands on that key, whichever key it is. */
+  { surface: "window", name: "keys-feature-add-soniox", scene: "voice-missing", steps: async (page) => { await openFeature("read")(page); await page.locator("[data-openai-add-key='soniox']").click(); }, defining: "[data-header-menu-page='keys'] [data-keys-row='soniox']" },
+  { surface: "window", name: "keys-feature-chosen", scene: "voice-file", steps: async (page) => { await openFeature("memory")(page); await page.locator("[data-openai-option='openai'] input").check(); }, defining: "[data-openai-option='openai'][data-selected]" },
+  { surface: "window", name: "notice-opens-privacy", scene: "privacy-notice", steps: async (page) => { await page.locator("[data-telemetry-notice] button").first().click(); }, defining: "[data-telemetry-settings]" },
+  /* First run: the setup guide fills the screen, and the install notice's button still opens a window a person can reach. */
+  { surface: "window", name: "over-onboarding", scene: "privacy-notice", steps: async (page) => {
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: null } })));
+    await page.locator("[data-onboarding-dialog]").waitFor();
+    await page.locator("[data-telemetry-notice] button").first().click();
+  }, defining: "[data-telemetry-settings]" },
+  { surface: "window", name: "memory", scene: "telegram-rest", section: "memory", defining: "[data-memory-page]" },
+  { surface: "window", name: "roles", scene: "telegram-rest", section: "roles", defining: "[data-header-menu-workers]" },
+  { surface: "window", name: "general", scene: "telegram-rest", section: "general", defining: "[data-header-menu-page='settings']" },
+  { surface: "window", name: "back-from-page", scene: "telegram-rest", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-settings-back]").click(); }, defining: '[data-telegram-chat-row="-1000000000101"]' },
+  /* Privacy. */
+  { surface: "privacy", name: "rest", scene: "privacy-rest", section: "privacy", defining: "[data-swarm-setting]" },
+  { surface: "privacy", name: "swarm-on", scene: "privacy-swarm", section: "privacy", defining: "[data-swarm-setting] [role=switch][aria-checked=true]" },
+  { surface: "privacy", name: "locked", scene: "privacy-locked", section: "privacy", defining: "[data-telemetry-ping]:disabled" },
+  { surface: "privacy", name: "consent-failed", scene: "privacy-consent-failed", section: "privacy", defining: "[data-subscription-api-retry]" },
+  /* From the read failure one control reads the setting again. */
+  { surface: "privacy", name: "consent-retry", scene: "privacy-consent-failed", section: "privacy", steps: async (page) => { await page.locator("[data-subscription-api-retry]").click(); }, defining: "[data-subscription-api-retry]" },
+  { surface: "privacy", name: "ping-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-telemetry-ping]").click(), defining: "[role=alert]" },
+  { surface: "privacy", name: "direct-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-subscription-api] [role=switch]").click(), defining: "[data-subscription-api] [role=alert]" },
+  { surface: "privacy", name: "swarm-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-swarm-setting] [role=switch]").click(), defining: "[data-swarm-setting] [role=alert]" },
+  { surface: "privacy", name: "details", scene: "privacy-rest", section: "privacy", details: true, defining: "[data-settings-details]" },
+  /* Telegram. */
+  { surface: "telegram", name: "no-bot", scene: "telegram-none", section: "telegram", defining: "[data-telegram-bot-token='missing']" },
+  { surface: "telegram", name: "clone-only", scene: "telegram-clone", section: "telegram", defining: '[data-telegram-chat-row="-1000000000202"]' },
+  { surface: "telegram", name: "rest", scene: "telegram-rest", section: "telegram", defining: "[data-telegram-bot-row]" },
+  { surface: "telegram", name: "popover-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, "data-telegram-bot-row"), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "popover-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "popover-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "bot-page", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='saved']", absent: /Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки|Last checked|Перевірено/ },
+  { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']", absent: /Atlas team|Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки|Last checked|Перевірено/ },
+  { surface: "telegram", name: "webhook-elsewhere", scene: "telegram-webhook", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-page] [role=status]" },
+  { surface: "telegram", name: "sending-rejected", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"'), defining: "[data-telegram-sending-bot-page] [role=status]" },
+  /* A sender removed from its own page: the section again, and the keyboard on its first control. */
+  { surface: "telegram", name: "sender-removed", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => {
+    await pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"');
+    const actions = page.locator("[data-telegram-sending-bot-page] [data-settings-row='actions'] button");
+    await actions.first().click();
+    await actions.first().click();
+    await page.waitForFunction(() => document.activeElement?.closest("[data-settings-scroller], [data-mobile2-sheet-body]") && !document.querySelector("[data-settings-back]")?.textContent?.includes("Atlas Reports"), undefined, { timeout: 10_000 });
+  }, defining: "[data-telegram-bot-row]", absent: /atlas_reports_bot/ },
+  { surface: "telegram", name: "nine-bots", scene: "telegram-nine", section: "telegram", defining: '[data-telegram-sending-bot="atlas_sender_8_bot"]' },
+  { surface: "telegram", name: "add-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-add-bot"), defining: "[data-telegram-add-bot-page] input[type=password]" },
+  { surface: "telegram", name: "chat-ok", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-posts-as]" },
+  { surface: "telegram", name: "chat-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-telegram-delivery='refused']", absent: /switch posting on|увімкніть дописи/ },
+  { surface: "telegram", name: "chat-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-telegram-chat-bot='Nova']" },
+  { surface: "telegram", name: "chat-no-suggestion", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000505"'), defining: "[data-telegram-chat-alias]" },
+  { surface: "telegram", name: "chat-post-refused", scene: "telegram-rest", query: "refuse=1", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-telegram-chat-test]").click(); }, defining: "[data-telegram-failure]" },
+  { surface: "telegram", name: "chat-long-title", scene: "telegram-long", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-chat-name]" },
+  { surface: "telegram", name: "add-chat", scene: "telegram-rest", section: "telegram", steps: async (page) => { await pressRow(page, "data-telegram-add-chat-row"); await page.locator("[data-telegram-add-chat-input]").fill("-1000000000808"); await page.locator("[data-telegram-add-chat-submit]").click(); await page.locator("[data-telegram-add-chat-added]").waitFor(); }, defining: "[data-telegram-add-chat-added]" },
+  { surface: "telegram", name: "inactive-fold", scene: "telegram-rest", section: "telegram", steps: async (page) => { await page.locator("[data-telegram-inactive-fold]").scrollIntoViewIfNeeded(); await page.locator("[data-telegram-inactive-fold]").click(); }, defining: '[data-telegram-chat-row="-1000000000606"]' },
+  { surface: "telegram", name: "reports", scene: "telegram-rest", section: "telegram", steps: async (page) => page.locator("[data-telegram-project-reports-warning]").scrollIntoViewIfNeeded(), defining: "[data-telegram-project-reports-warning]" },
+  { surface: "telegram", name: "reports-name-needed", scene: "telegram-rest", section: "telegram", steps: async (page) => { await page.locator('[data-telegram-project-report="forge"] select').selectOption("atlas-team"); }, defining: '[data-telegram-project-report="forge"] input' },
+  { surface: "telegram", name: "reports-link-error", scene: "telegram-rest", section: "telegram", steps: async (page) => { const row = page.locator('[data-telegram-project-report="atlas"]'); await row.locator("select").waitFor({ state: "attached" }); await row.locator("select").selectOption({ index: (await row.locator("option").count()) - 1 }); await row.locator("input").first().fill("https://t.me/bad"); await row.locator("button[type=submit]").click(); await row.locator("[role=alert]").waitFor(); }, defining: '[data-telegram-project-report="atlas"] [role=alert]' },
+  { surface: "telegram", name: "folders-custom", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-folders-row"), defining: "[data-telegram-document-root] [data-settings-literal]" },
+  { surface: "telegram", name: "folders-default", scene: "telegram-default-folder", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-folders-row"), defining: "[data-telegram-document-root]" },
+  { surface: "telegram", name: "details", scene: "telegram-rest", section: "telegram", details: true, defining: "[data-settings-details]" },
+  { surface: "telegram", name: "chat-details", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), details: true, defining: "[data-settings-details]" },
+  /* Voice. */
+  { surface: "voice", name: "off", scene: "voice-off", section: "voice", query: "dev=default", defining: "[data-voice-companion-enable][aria-checked=false]" },
+  { surface: "voice", name: "codex-plan", scene: "voice-codex", section: "voice", query: "dev=chosen", defining: "[data-voice-companion-plan]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-details", scene: "voice-codex", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-no-call", scene: "voice-nocall", section: "voice", query: "dev=default", defining: "[data-voice-companion-codex]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-limit", scene: "voice-limit", section: "voice", query: "dev=default", defining: "[data-voice-companion-plan]" },
+  { surface: "voice", name: "api-file", scene: "voice-file", section: "voice", query: "dev=default", defining: "[data-voice-companion-key]" },
+  { surface: "voice", name: "api-env", scene: "voice-env", section: "voice", query: "dev=default", defining: "[data-key-source='env']" },
+  { surface: "voice", name: "api-missing", scene: "voice-missing", section: "voice", query: "dev=default", defining: "[data-key-source='missing']" },
+  { surface: "voice", name: "popover-key", scene: "voice-missing", section: "voice", query: "dev=default", steps: async (page) => openDot(page, "data-voice-companion-key"), defining: "[data-settings-dot-popover]" },
+  { surface: "voice", name: "cap-usage", scene: "voice-file", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-reserved", scene: "voice-reserved", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-reached", scene: "voice-reached", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-incomplete", scene: "voice-incomplete", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-last-call]" },
+  { surface: "voice", name: "cap-refused", scene: "voice-file", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await pressRow(page, "data-voice-companion-cap-row"); const field = page.locator("[data-voice-companion-cap-input]"); await field.fill("35"); await field.press("Enter"); }, defining: "[data-voice-companion-setting-error]" },
+  { surface: "voice", name: "held", scene: "voice-held", section: "voice", query: "dev=default", defining: "[data-voice-companion-stay]" },
+  /* The held line's key action lands on «Keys» at the OpenAI key. */
+  { surface: "voice", name: "held-opens-keys", scene: "voice-held", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-companion-held-key]").click(), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
+  { surface: "voice", name: "uncertain", scene: "voice-uncertain", section: "voice", query: "dev=default", defining: "[data-voice-companion-uncertain]" },
+  { surface: "voice", name: "devices-permission", scene: "voice-codex", section: "voice", query: "dev=noperm", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-devices-allow]" },
+  { surface: "voice", name: "devices-denied", scene: "voice-codex", section: "voice", query: "dev=denied", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='input']" },
+  { surface: "voice", name: "devices-missing", scene: "voice-codex", section: "voice", query: "dev=gone", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-device-state='missing']" },
+  /* A chosen device's long name reads whole: in the window's wide select, and on the sheet in the line under it. */
+  { surface: "voice", name: "devices-chosen", scene: "voice-codex", section: "voice", query: "dev=chosen", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device='input'] select" },
+  { surface: "voice", name: "devices-no-speakers", scene: "voice-codex", section: "voice", query: "dev=nosink", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='output']" },
+  { surface: "voice", name: "timer-on", scene: "voice-timer", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-timer-telegram]").scrollIntoViewIfNeeded(), defining: "[data-timer-telegram] [role=switch][aria-checked=true]" },
+  { surface: "voice", name: "memory-empty", scene: "voice-codex", section: "voice", query: "dev=default&calls=empty", steps: async (page) => page.locator("[data-call-memory-row-open]").scrollIntoViewIfNeeded(), defining: "[data-call-memory-row-open]" },
+  { surface: "voice", name: "memory-list", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-call-memory-row-open"), defining: "[data-call-memory-list]" },
+  { surface: "voice", name: "memory-error", scene: "voice-memory-error", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-call-memory-status]").scrollIntoViewIfNeeded(), defining: "[data-call-memory-status]" },
+  { surface: "voice", name: "tools-empty", scene: "voice-tools-empty", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-add]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-load-error", scene: "voice-tools-error", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-sign-in", scene: "voice-tools-signin", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-list", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-add]").scrollIntoViewIfNeeded(), defining: "[data-voice-tool-add]" },
+  /* A tool whose dry run passed is told in words from one still waiting. */
+  { surface: "voice", name: "tools-ready-word", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-ready]").first().scrollIntoViewIfNeeded(), defining: "[data-voice-tool-ready]" },
+  { surface: "voice", name: "popover-tool", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => openDot(page, 'data-voice-tool-server="calendar"'), defining: "[data-settings-dot-popover]" },
+  { surface: "voice", name: "tool-pending-secret", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-needs"), defining: "[data-voice-tool-reference]" },
+  { surface: "voice", name: "tool-containment", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), defining: "[data-voice-tool-uncontained]" },
+  { surface: "voice", name: "tool-passed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-passed"), defining: "[data-voice-tool-action='approve']:enabled" },
+  { surface: "voice", name: "tool-enabled-filter", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("calendar"), defining: "[data-voice-tool-filter]" },
+  { surface: "voice", name: "tool-filter-empty", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-filter]").fill("zzzz-no-such-tool"); }, defining: "[data-voice-tool-filter-none]" },
+  { surface: "voice", name: "tool-changed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("notes"), defining: "[data-voice-tool-state='changed']" },
+  { surface: "voice", name: "tool-rejected", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("drive"), defining: "[data-voice-tool-state='rejected']" },
+  { surface: "voice", name: "tool-refused", scene: "voice-codex", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-ask]").click(); }, defining: "[data-voice-tools-refused]" },
+  { surface: "voice", name: "tool-details", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), details: true, defining: "[data-settings-details]" },
+  /* Remove on a tool's page: the section again, the list without the tool or its «No tools» line, and the keyboard on it. */
+  { surface: "voice", name: "tool-removed", scene: "voice-codex", section: "voice", query: "dev=default", steps: removeTool("drive"), landed: true, defining: "[data-voice-tools-list]", absent: /Reads shared files|Читає спільні файли/ },
+  { surface: "voice", name: "tool-removed-last", scene: "voice-tools-one", section: "voice", query: "dev=default", steps: removeTool("drive"), landed: true, defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "details-api", scene: "voice-file", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]" },
+];
+
+const SETTINGS_COMBOS = [
+  { lang: "uk", theme: "light" }, { lang: "en", theme: "dark" }, { lang: "en", theme: "light" }, { lang: "uk", theme: "dark" },
+] as const;
+/* A landscape phone is short: the sheet opens there too (MOBILE_LAYOUT_QUERY), with the sheet's 44 px targets. */
+const SETTINGS_DEVICES = { desktop: { width: 1440, height: 900 }, mid: { width: 900, height: 800 }, short: { width: 1000, height: 700 }, phone: { width: 390, height: 844 }, landscape: { width: 844, height: 390 } } as const;
+
+/** Measures the open surface: the brief's §5 numbers, the rules of a settings surface, and what a person would see cut. */
+function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null; landed: boolean }) {
+  const { phone, defining, absent, landed } = args;
+  const failures: string[] = [];
+  const surface = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']");
+  if (!surface) return { failures: ["no settings surface"], end: null, scrolls: false };
+  const scroller = surface.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!;
+  const vw = innerWidth, vh = innerHeight;
+  const inView = (r: DOMRect) => r.width > 0 && r.height > 0 && r.left >= -0.5 && r.right <= vw + 0.5 && r.top >= -0.5 && r.bottom <= vh + 0.5;
+  /* The title and × stay on screen. */
+  const close = surface.querySelector<HTMLElement>("[data-settings-close], [data-mobile2-close]");
+  if (!close || !inView(close.getBoundingClientRect())) failures.push("close is off the screen");
+  /* Nothing lies over the window: a press on its × reaches it. */
+  else {
+    const box = close.getBoundingClientRect();
+    if (!surface.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) failures.push("the window is covered");
+  }
+  /* The defining element is on the first screen or scrolled whole. */
+  if (defining) {
+    const element = document.querySelector<HTMLElement>(defining);
+    /* Its top and bottom are read from its text where it has any, so a padding above the first line is no cut line; its sides
+       from its box, since a truncated line's range runs past the clip. */
+    const textBox = (target: HTMLElement): DOMRect => {
+      const rects: DOMRect[] = [];
+      const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+      for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+        if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
+      }
+      const own = target.getBoundingClientRect();
+      if (!rects.length) return own;
+      const top = Math.min(...rects.map((rect) => rect.top));
+      return new DOMRect(own.left, top, own.width, Math.max(...rects.map((rect) => rect.bottom)) - top);
+    };
+    const box = element ? textBox(element) : undefined;
+    const scrollerBox = scroller.getBoundingClientRect();
+    /* One about as tall as the scroller (a short landscape sheet) cannot stand whole, since the end of the scroll starts on a row's
+       top and keeps up to 64 px under the last row: its start or its end is on the screen, or it fills it. */
+    const tall = scroller.contains(element!) && box !== undefined && box.height > scrollerBox.height - 64;
+    const fills = tall && box!.top <= scrollerBox.top + 1 && box!.bottom >= scrollerBox.bottom - 1;
+    const starts = tall && ((box!.top >= scrollerBox.top - 1 && box!.top < scrollerBox.bottom - 16) || (box!.bottom <= scrollerBox.bottom + 1 && box!.bottom > scrollerBox.top + 16));
+    if (!box) failures.push(`defining element missing: ${defining}`);
+    else if (tall ? !(fills || starts) || box.left < -0.5 || box.right > vw + 0.5 : !inView(box) || (scroller.contains(element!) && (box.top < scrollerBox.top - 1 || box.bottom > scrollerBox.bottom + 1))) failures.push(`defining element not in view: ${defining} at ${Math.round(box.top)}-${Math.round(box.bottom)}, scroller ${Math.round(scrollerBox.top)}-${Math.round(scrollerBox.bottom)}`);
+  }
+  /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
+  for (const element of scroller.querySelectorAll<HTMLElement>("*")) {
+    if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-memory-page], [data-header-menu-workers]")) continue;
+    const style = getComputedStyle(element);
+    if (["Top", "Right", "Bottom", "Left"].every((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0) && element.getBoundingClientRect().height > 44) failures.push(`bordered box: ${element.tagName} ${element.className}`);
+  }
+  if (surface.querySelector("button button, button a, a button, button input, button select, label button")) failures.push("a control inside a control");
+  /* Text is never cut sideways, and no line stands apart from its name. */
+  const ranges: { text: string; rects: DOMRect[]; face: boolean }[] = [];
+  const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    /* A select's face truncates as a native select does; the row's own line names the device whole. */
+    ranges.push({ text: (node.textContent ?? "").trim().slice(0, 48), rects: [...range.getClientRects()], face: Boolean(node.parentElement?.closest("[data-settings-choice-face], .truncate")) });
+  }
+  const scrollerBox = scroller.getBoundingClientRect();
+  for (const { text, rects, face } of ranges) if (!face) for (const rect of rects) if (rect.right > scrollerBox.right + 0.5 || rect.left < scrollerBox.left - 0.5) failures.push(`cut sideways: ${text}`);
+  /* In the window a select's chosen value reads whole: its text fits inside the face beside the native arrow. */
+  if (!phone) {
+    const context = document.createElement("canvas").getContext("2d")!;
+    for (const select of scroller.querySelectorAll<HTMLSelectElement>("[data-settings-row='choice'] select")) {
+      const text = select.selectedOptions[0]?.textContent ?? "";
+      const style = getComputedStyle(select);
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+      const needs = context.measureText(text).width;
+      if (needs > room) failures.push(`select cuts its value: ${text.slice(0, 48)} needs ${Math.ceil(needs)} px, has ${Math.floor(room)}`);
+    }
+  }
+  /* A landscape phone's wide select reads the device whole. */
+  if (phone && vw > vh) for (const face of scroller.querySelectorAll<HTMLElement>("[data-voice-device] [data-settings-choice-face]")) if (face.scrollWidth > face.clientWidth) failures.push(`device select cuts: ${face.textContent}`);
+  /* A select drawn over its face stays invisible, disabled or not: the face alone shows the value once. */
+  for (const select of scroller.querySelectorAll<HTMLSelectElement>("[data-settings-choice-face]")) {
+    const native = select.parentElement?.querySelector("select");
+    if (native && getComputedStyle(native).opacity !== "0") failures.push(`native select is painted over its face (opacity ${getComputedStyle(native).opacity}): ${select.textContent}`);
+  }
+  /* A hint's lines keep the muted line's step, whatever stands inline in them: a link does not grow its line. */
+  for (const hint of scroller.querySelectorAll<HTMLElement>("[data-voice-device-hint]")) {
+    const tops: number[] = [];
+    const lineWalk = document.createTreeWalker(hint, NodeFilter.SHOW_TEXT);
+    for (let node = lineWalk.nextNode(); node; node = lineWalk.nextNode()) {
+      if (!(node.textContent ?? "").trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 0 && !tops.some((top) => Math.abs(top - rect.top) < 2)) tops.push(rect.top);
+    }
+    tops.sort((a, b) => a - b);
+    for (let index = 1; index < tops.length; index += 1) if (tops[index] - tops[index - 1] > 18.5) failures.push(`hint line step ${(tops[index] - tops[index - 1]).toFixed(1)} px: ${hint.getAttribute("data-voice-device-hint")}`);
+  }
+  /* A name field and its Save button beside a select wear that select's height and type. */
+  for (const report of scroller.querySelectorAll<HTMLElement>("[data-telegram-project-report]")) {
+    const face = report.querySelector<HTMLElement>("[data-settings-choice-face]")?.parentElement;
+    if (!phone || !face) continue;
+    const reference = face.getBoundingClientRect().height;
+    const field = report.querySelector<HTMLElement>("form [data-settings-field-face]");
+    if (field && Math.abs(field.getBoundingClientRect().height - reference) > 2) failures.push(`reports field ${field.getBoundingClientRect().height} px beside a select ${reference} px`);
+    const save = report.querySelector<HTMLElement>("form [data-settings-button-face]");
+    if (save && Math.abs(save.getBoundingClientRect().height - reference) > 2) failures.push(`reports Save ${save.getBoundingClientRect().height} px beside a select ${reference} px`);
+    const faceSize = parseFloat(getComputedStyle(face).fontSize);
+    if (save && Math.abs(parseFloat(getComputedStyle(save).fontSize) - faceSize) > 0.5) failures.push(`reports Save type ${getComputedStyle(save).fontSize} beside a select's ${faceSize}px`);
+  }
+  /* A chat page's field and select wear one height, and what stands under a field is the field's own. */
+  const field = scroller.querySelector<HTMLElement>("[data-settings-field-face]");
+  const choice = scroller.querySelector<HTMLElement>("[data-settings-row='choice'] [data-settings-choice-face]")?.parentElement;
+  if (field && choice && Math.abs(field.getBoundingClientRect().height - choice.getBoundingClientRect().height) > 2) failures.push(`field ${field.getBoundingClientRect().height} px beside a select ${choice.getBoundingClientRect().height} px`);
+  if (scroller.querySelector("[data-telegram-chat-page] [data-settings-row='field'] + [data-settings-row='text']")) failures.push("a line stands under the alias as its hint");
+  /* The reset's words stay with its date. */
+  for (const reset of scroller.querySelectorAll<HTMLElement>("[data-plan-reset]")) if (new Set([...reset.getClientRects()].map((rect) => Math.round(rect.top))).size > 1) failures.push(`plan reset splits: ${reset.textContent}`);
+  if (scroller.querySelector("[data-voice-companion-settings]") && /·\s\d+:\d{2}/.test(scroller.innerText)) failures.push("a duration reads as a clock time");
+  /* The cap once on its row, and one red line at the cap. */
+  const capRow = scroller.querySelector<HTMLElement>("[data-voice-companion-cap-row]");
+  if (capRow && (capRow.innerText.match(/\$20\.00/g) ?? []).length > 1) failures.push("the cap reads twice on its row");
+  const capPage = scroller.querySelector<HTMLElement>("[data-voice-companion-cap]");
+  if (capPage && capPage.querySelectorAll(".text-danger, [style*='danger']").length > 1) failures.push("two red lines on the cap page");
+  /* One main action in the held state. */
+  const heldKey = scroller.querySelector<HTMLElement>("[data-voice-companion-held-key]");
+  const stay = scroller.querySelector<HTMLElement>("[data-voice-companion-stay]");
+  if (heldKey && stay && getComputedStyle(heldKey).backgroundColor === getComputedStyle(stay).backgroundColor) failures.push("the held state's two actions look alike");
+  /* Neighbouring tool states differ in words. */
+  const ready = scroller.querySelector("[data-voice-tool-ready]")?.textContent;
+  const waiting = scroller.querySelector("[data-voice-tool-state='pending']:not([data-voice-tool-ready])")?.textContent;
+  if (ready && ready === waiting) failures.push("a passed tool and a waiting one read alike");
+  /* A literal breaks only between its parts. */
+  for (const part of scroller.querySelectorAll<HTMLElement>("[data-settings-literal] > span.whitespace-nowrap")) {
+    const tops = new Set([...part.getClientRects()].map((rect) => Math.round(rect.top)));
+    if (tops.size > 1) failures.push(`literal part broken: ${part.textContent}`);
+  }
+  /* The first screen and the end of the scroll fall between lines. */
+  const cutByEdge = () => {
+    const box = scroller.getBoundingClientRect();
+    const cut: string[] = [];
+    const walk = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+      if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select, [data-settings-dot-popover]")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if ((rect.top < box.top - 0.5 && rect.bottom > box.top + 0.5) || (rect.top < box.bottom - 0.5 && rect.bottom > box.bottom + 0.5)) cut.push((node.textContent ?? "").trim().slice(0, 40));
+    }
+    return [...new Set(cut)];
+  };
+  const held = scroller.scrollTop;
+  if (landed) for (const text of cutByEdge()) failures.push(`where it landed cuts: ${text}`);
+  scroller.scrollTop = 0;
+  for (const text of cutByEdge()) failures.push(`first screen cuts: ${text}`);
+  const scrolls = scroller.scrollHeight > scroller.clientHeight + 1;
+  /* While more follows, the hairline stands above the window's own edge; a landscape phone keeps no wide blank band under it. */
+  if (scrolls) {
+    const band = Math.min(surface.getBoundingClientRect().bottom, vh) - scroller.getBoundingClientRect().bottom;
+    if (band < (phone && vw > vh ? 3.5 : 8)) failures.push(`hairline ${band.toFixed(1)} px above the window's edge`);
+    if (phone && vw > vh && band >= 48) failures.push(`blank band of ${Math.round(band)} px under the first screen`);
+  }
+  scroller.scrollTop = scroller.scrollHeight;
+  for (const text of cutByEdge()) failures.push(`end of scroll cuts: ${text}`);
+  /* The foot under the last text at the end of a surface. */
+  let lastBottom = 0;
+  const foot = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+  for (let node = foot.nextNode(); node; node = foot.nextNode()) {
+    if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) lastBottom = Math.max(lastBottom, rect.bottom);
+  }
+  const under = scroller.getBoundingClientRect().bottom - lastBottom;
+  const details = scroller.querySelector("[data-settings-details]");
+  if (details && under < 16 - 0.5 && scroller.scrollHeight > scroller.clientHeight) failures.push(`foot under open Details is ${under.toFixed(1)} px`);
+  /* One right edge at 390: a switch's track, a select's face, a chevron. */
+  if (phone) {
+    const edges = new Set<number>();
+    for (const track of scroller.querySelectorAll<HTMLElement>("[data-settings-row='switch'] [role=switch] > span")) edges.add(Math.round(track.getBoundingClientRect().right));
+    for (const face of scroller.querySelectorAll<HTMLElement>("[data-settings-row='choice'] select")) edges.add(Math.round(face.getBoundingClientRect().right));
+    for (const chevron of scroller.querySelectorAll<SVGElement>("[data-settings-chevron]")) edges.add(Math.round(chevron.getBoundingClientRect().right));
+    const list = [...edges];
+    if (list.length && Math.max(...list) - Math.min(...list) > 1) failures.push(`right edges differ: ${list.join(",")}`);
+    /* A 44 px target for each control, read from the point a thumb lands on. */
+    scroller.scrollTop = held;
+    for (const control of surface.querySelectorAll<HTMLElement>("button, select, input")) {
+      /* A radio's target is the label it sits in. */
+      const box = (control.matches("input[type=radio]") ? control.closest("label") ?? control : control).getBoundingClientRect();
+      /* Keys, Memory and the worker limit are hosted unchanged, with their own recipes. */
+      if (box.width === 0 || control.closest("[data-keys-page], [data-memory-page], [data-telegram-add-chat], [data-header-menu-workers]")) continue;
+      if (box.height < 43.5 || (box.width < 43.5 && !control.matches("input"))) {
+        /* A button may draw a smaller face over a 44 px target (a pseudo-element around it): the target is proven from the points a thumb lands on, 44 by 44 around its centre. */
+        let missed = "";
+        if (control.matches("button")) {
+          control.scrollIntoView({ block: "center" });
+          const now = control.getBoundingClientRect();
+          const cx = now.left + now.width / 2, cy = now.top + now.height / 2;
+          const reach = (dx: number, dy: number) => { let n = 0; while (n < 40 && control.contains(document.elementFromPoint(cx + dx * (n + 1), cy + dy * (n + 1)))) n += 1; return n; };
+          const tall = reach(0, -1) + reach(0, 1) + 1, wide = reach(-1, 0) + reach(1, 0) + 1;
+          if (tall < 43.5 || wide < 43.5) missed = ` (a thumb reaches it over ${tall}x${wide} px)`;
+        } else missed = " ";
+        if (missed) failures.push(`target ${Math.round(box.width)}x${Math.round(box.height)}: ${control.getAttribute("aria-label") ?? control.textContent?.slice(0, 30)}${missed}`);
+      }
+    }
+    scroller.scrollTop = held;
+    for (const dot of surface.querySelectorAll<HTMLElement>("[data-settings-dot]")) {
+      const box = dot.getBoundingClientRect();
+      const scrollBox = scroller.getBoundingClientRect();
+      if (box.top < scrollBox.top || box.bottom > scrollBox.bottom) continue;
+      /* Three pixels in from each corner, inside the button's rounding. */
+      for (const [x, y] of [[box.left + 3, box.top + 3], [box.right - 3, box.top + 3], [box.left + 3, box.bottom - 3], [box.right - 3, box.bottom - 3]]) {
+        const hit = document.elementFromPoint(x, y);
+        /* An open popover may lie over a target's corners: the glyph stays pressable, and a press outside it closes it. */
+        if (!dot.contains(hit) && !hit?.closest("[data-settings-dot-popover]")) failures.push(`dot's target covered at ${Math.round(x)},${Math.round(y)} by ${hit?.tagName} ${hit?.getAttribute("class")?.slice(0, 60)}`);
+      }
+    }
+  }
+  scroller.scrollTop = held;
+  /* The popover stays inside the window and leaves its dot in view. */
+  const popover = document.querySelector<HTMLElement>("[data-settings-dot-popover]");
+  if (popover) {
+    const box = popover.getBoundingClientRect();
+    if (!inView(box)) failures.push("popover leaves the window");
+    const own = document.querySelector<HTMLElement>("[data-settings-dot][aria-expanded=true]")?.closest<HTMLElement>("[data-settings-unit]");
+    const ownBox = own?.getBoundingClientRect();
+    /* Wider than its 240 px only to lie over its own row's muted line. */
+    if (box.width > 241 && !(ownBox && box.left >= ownBox.left && box.right <= ownBox.right)) failures.push(`popover is ${Math.round(box.width)} px wide`);
+    const lines = new Set<number>();
+    for (const node of popover.childNodes) { const range = document.createRange(); range.selectNodeContents(node); for (const rect of range.getClientRects()) lines.add(Math.round(rect.top)); }
+    if (lines.size > 2) failures.push(`popover takes ${lines.size} lines`);
+    const background = getComputedStyle(popover).backgroundColor;
+    if (/rgba\(.*, 0\)|transparent/.test(background)) failures.push("popover is not opaque");
+    /* It covers no words of another row, and of its own row a line whole or not at all. */
+    const under: string[] = [];
+    const cutWords: string[] = [];
+    if (own) {
+      const ownWords = document.createTreeWalker(own, NodeFilter.SHOW_TEXT);
+      for (let node = ownWords.nextNode(); node; node = ownWords.nextNode()) {
+        if (!(node.textContent ?? "").trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          const touches = rect.width > 0 && rect.left < box.right - 0.5 && rect.right > box.left + 0.5 && rect.top < box.bottom - 0.5 && rect.bottom > box.top + 0.5;
+          const whole = rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5;
+          if (touches && !whole) cutWords.push((node.textContent ?? "").trim().slice(0, 40));
+        }
+      }
+    }
+    if (cutWords.length) failures.push(`popover leaves a fragment of its own row: ${[...new Set(cutWords)].join(" | ")}`);
+    /* It says what the row does not. */
+    const word = own?.querySelector("[data-settings-row-value]")?.textContent?.trim().toLowerCase();
+    if (word && (popover.textContent ?? "").toLowerCase().includes(word)) failures.push(`popover repeats its row's word: ${word}`);
+    const words = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = words.nextNode(); node; node = words.nextNode()) {
+      if (!(node.textContent ?? "").trim() || own?.contains(node) || node.parentElement?.closest("option, select")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 0 && rect.left < box.right - 0.5 && rect.right > box.left + 0.5 && rect.top < box.bottom - 0.5 && rect.bottom > box.top + 0.5) under.push((node.textContent ?? "").trim().slice(0, 40));
+    }
+    if (under.length) failures.push(`popover covers another row's words: ${[...new Set(under)].join(" | ")}`);
+  }
+  /* What a page must not mention. */
+  if (absent) {
+    const pattern = new RegExp(absent, "i");
+    const text = scroller.innerText ?? "";
+    const hit = text.match(pattern);
+    if (hit) failures.push(`mentions "${text.slice(Math.max(0, hit.index! - 40), hit.index! + 40)}"`);
+  }
+  return { failures: [...new Set(failures)], end: under, scrolls };
+}
+
+export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean, only?: (frame: string) => boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const devices = (phone ? ["phone", "landscape"] : ["desktop", "mid", "short"]) as (keyof typeof SETTINGS_DEVICES)[];
+  const jobs: { frame: SettingsFrame; device: keyof typeof SETTINGS_DEVICES; lang: "en" | "uk"; theme: "light" | "dark"; key: string }[] = [];
+  for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of SETTINGS_FRAMES) {
+    /* Every state in all four combinations at the named widths; the between and short heights read in two, at rest and with Details open. */
+    if ((device === "mid" || device === "short" || device === "landscape") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
+    const key = `${frame.surface}-${device}-${frame.name}-${lang}-${theme}`;
+    if (only && !only(key)) continue;
+    jobs.push({ frame, device, lang, theme, key });
+  }
+  const readings: { key: string; failures: string[]; end: number | null; scrolls: boolean; frames: string[] }[] = [];
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const job = jobs[next++];
+      if (!job) return;
+      const { frame, device, lang, theme, key } = job;
+      const url = `${base}?settings=${frame.scene}${frame.query ? `&${frame.query}` : ""}#p=atlas`;
+      const context = await browser.newContext({ viewport: SETTINGS_DEVICES[device], colorScheme: theme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+      const reading: (typeof readings)[number] = { key, failures: [], end: null, scrolls: false, frames: [] };
+      try {
+        await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv_theme", theme); }, { lang, theme });
+        await context.addInitScript(stubVoiceDevicesForSettings);
+        const page = await context.newPage();
+        page.on("pageerror", (error) => reading.failures.push(`page error: ${error.message}`));
+        await page.goto(url);
+        await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor({ timeout: 120_000 });
+        if (frame.section) {
+          await page.evaluate((section) => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section } })), frame.section);
+          await page.locator("[data-settings-window], [data-mobile2-sheet='settings']").waitFor();
+        }
+        if (frame.steps) await frame.steps(page, phone);
+        if (frame.details) {
+          const toggle = page.locator("[data-settings-details-toggle]").last();
+          await toggle.scrollIntoViewIfNeeded();
+          await toggle.click();
+          await page.locator("[data-settings-details]").waitFor();
+          await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+        }
+        if (frame.defining) await page.locator(frame.defining).first().waitFor({ timeout: 20_000 }).catch(() => reading.failures.push(`never appeared: ${frame.defining}`));
+        await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+        /* The fold's own height moved the scroller's end, and the whole-rows fit can answer after the first scroll: the frame reads the end as it settled. */
+        if (frame.details) await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+        /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it; where the
+           window scrolled itself, the frame reads the screen it landed on. */
+        if (frame.defining && !frame.details && !frame.landed) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
+        const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null, landed: frame.landed === true });
+        reading.failures.push(...read.failures);
+        reading.end = read.end;
+        reading.scrolls = read.scrolls;
+        await page.screenshot({ path: path.join(out, `${key}.png`) });
+        reading.frames.push(`${key}.png`);
+        /* Scrolled to its end, the page's last screen. */
+        if (read.scrolls && !frame.details && !page.isClosed()) {
+          await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+          await page.screenshot({ path: path.join(out, `${key}-end.png`) });
+          reading.frames.push(`${key}-end.png`);
+        }
+      } catch (error) {
+        reading.failures.push(`driver: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+      readings.push(reading);
+    }
+  };
+  await Promise.all(Array.from({ length: Number(process.env.LLV_SETTINGS_WINDOW_PAGES ?? 4) }, worker));
+  readings.sort((a, b) => a.key.localeCompare(b.key));
+  const failures = readings.flatMap((reading) => reading.failures.map((failure) => `${reading.key}: ${failure}`));
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2));
+  /* The record: how many frames were read, what failed, and the shallowest foot under an open «Details». */
+  const feet = readings.filter((reading) => reading.key.includes("details") && reading.scrolls && reading.end !== null).map((reading) => reading.end!);
+  fs.mkdirSync("evidence/settings-window", { recursive: true });
+  fs.writeFileSync(`evidence/settings-window/${phone ? "phone" : "desktop"}.json`, `${JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", states: SETTINGS_FRAMES.length, frames: readings.flatMap((reading) => reading.frames).length, readings: readings.length, failures, shallowestFootUnderDetails: feet.length ? Math.min(...feet) : null }, null, 2)}\n`);
+  return { readings, failures };
 }
 
 /** The setup states the evidence fixture draws, and what each must read. */
