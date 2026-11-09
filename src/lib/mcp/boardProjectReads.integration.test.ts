@@ -310,6 +310,13 @@ function setBoardAliases(aliases: Record<string, string>) {
   }));
 }
 
+const SHORT_ALIAS_SOURCE = "repo-33333333333333333333333333333333";
+function setBoardDisplayNames(displayNames: Record<string, string>) {
+  projectAliasStore.mutate(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), current => ({
+    next: { ...current, displayNames: { ...current.displayNames, ...displayNames } }, result: undefined,
+  }));
+}
+
 for (const tool of TOOLS) for (const workspace of [false, true]) {
   test(`${tool}: alias-chain proof allows unrelated alias changes workspace=${workspace}`, async () => {
     const h = await harness(workspace);
@@ -317,12 +324,14 @@ for (const tool of TOOLS) for (const workspace of [false, true]) {
     h.atSdkReturn(() => setBoardAliases({ "unrelated-alias": FOREIGN }));
     expect(await h.call(tool, { project: "outer-alias" })).toMatchObject({ ok: true, total: 1 });
   });
-  for (const spelling of ["outer-alias", "legacy_board"]) {
+  for (const spelling of ["outer-alias", "legacy_board", "repo-33333333", "Historic Board"]) {
     for (const form of ["fresh", "keyed", "replay"] as const) {
       for (const change of ["unchanged", "redirect", "revoke", "rewire"] as const) {
         test(`${tool}: alias-chain SDK return ${spelling} ${form} ${change} workspace=${workspace}`, async () => {
           const h = await harness(workspace);
-          setBoardAliases({ "outer-alias": "middle-alias", "middle-alias": OWN, "legacy-board": "middle-alias", "other-middle": OWN });
+          setBoardAliases({ "outer-alias": "middle-alias", "middle-alias": OWN, "legacy-board": "middle-alias",
+            [SHORT_ALIAS_SOURCE]: "middle-alias", "other-middle": OWN });
+          setBoardDisplayNames({ [SHORT_ALIAS_SOURCE]: "Historic Board" });
           const args = { project: spelling, ...(form === "fresh" ? {} : { clientRequestId: `chain-${form}` }) };
           if (form === "replay") expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1 });
           const db = new Database(h.filename);
@@ -355,10 +364,12 @@ for (const tool of TOOLS) for (const workspace of [false, true]) {
   }
 }
 
-for (const workspace of [false, true]) for (const spelling of ["outer-alias", "legacy_board"]) {
+for (const workspace of [false, true]) for (const spelling of ["outer-alias", "legacy_board", "repo-33333333", "Historic Board"]) {
   for (const changed of [false, true]) test(`list_pipelines: alias-chain page await ${spelling} changed=${changed} workspace=${workspace}`, async () => {
     const h = await harness(workspace); h.many();
-    setBoardAliases({ "outer-alias": "middle-alias", "middle-alias": OWN, "legacy-board": "middle-alias" });
+    setBoardAliases({ "outer-alias": "middle-alias", "middle-alias": OWN, "legacy-board": "middle-alias",
+      [SHORT_ALIAS_SOURCE]: "middle-alias" });
+    setBoardDisplayNames({ [SHORT_ALIAS_SOURCE]: "Historic Board" });
     const first = await h.call("list_pipelines", { project: spelling, limit: 1 });
     expect(first).toMatchObject({ ok: true, total: 251, hasMore: true });
     h.onRows(() => { queueMicrotask(() => { if (changed) setBoardAliases({ "middle-alias": FOREIGN }); }); });

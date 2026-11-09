@@ -110,7 +110,8 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
       const named = typeof input.project === "string" ? input.project.trim() : "";
-      const aliases = boardRead ? projectAliasSnapshot({ strict: true }).aliases : {};
+      const aliasSnapshot = boardRead ? projectAliasSnapshot({ strict: true }) : { aliases: {}, displayNames: {} };
+      const aliases = aliasSnapshot.aliases;
       const projectRefusal = (details: Record<string, unknown>) => {
         const permitted = (value: unknown): value is { project: string; name: string } => Boolean(value && typeof value === "object"
           && typeof (value as { project?: unknown }).project === "string" && typeof (value as { name?: unknown }).name === "string"
@@ -139,7 +140,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       }
       if (boardRead && typeof args.project === "string" && !args.project.trim()) args.project = project;
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
-      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases) : undefined;
+      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases, aliasSnapshot.displayNames) : undefined;
       const checks: (() => string | null | undefined)[] = [() => project];
       const task = (id: string) => {
         const source = dependencies.taskSelectionSource?.();

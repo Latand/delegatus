@@ -6371,12 +6371,30 @@ export function captureBoardCaller(dependencies: ViewerMcpDomainDependencies, co
 }
 
 /** Pin alias edges without resolving the selected board again after an await. */
-export function captureBoardAliasProof(named: string, project: string, aliases: Readonly<Record<string, string>>): () => boolean {
+export function captureBoardAliasProof(
+  named: string,
+  project: string,
+  aliases: Readonly<Record<string, string>>,
+  displayNames: Readonly<Record<string, string>> = {},
+): () => boolean {
   // Match the spelling vocabulary accepted by the shared named-project resolver.
   const normalize = (value: string) => value.trim().toLowerCase().replace(/[._/\\-]+/gu, "-").replace(/^-|-$/gu, "");
   const spelling = normalize(named);
-  const matchingKeys = (current: Readonly<Record<string, string>>) => Object.keys(current).filter(key => spelling && normalize(key) === spelling).sort();
-  const keys = matchingKeys(aliases);
+  const matchingKeys = (current: Readonly<Record<string, string>>, currentNames: Readonly<Record<string, string>>) => {
+    const resolvesToProject = (start: string) => {
+      let key = start;
+      const seen = new Set<string>();
+      while (Object.hasOwn(current, key) && current[key] && !seen.has(key)) { seen.add(key); key = current[key]!; }
+      return !seen.has(key) && key === project;
+    };
+    const prefix = /^(repo|dir)-[a-f0-9]{7,31}$/i.test(named.trim()) ? named.trim().toLowerCase() : "";
+    return Object.keys(current).filter(key => spelling && (normalize(key) === spelling
+      || prefix && key.toLowerCase().startsWith(prefix) && resolvesToProject(key)
+      || normalize(currentNames[key] ?? "") === spelling && resolvesToProject(key))).sort();
+  };
+  const keys = matchingKeys(aliases, displayNames);
+  const displayProof = new Map(keys.filter(key => normalize(displayNames[key] ?? "") === spelling)
+    .map(key => [key, displayNames[key]]));
   const proof = new Map<string, string | undefined>();
   for (const start of [project, named, ...keys]) {
     let key = start;
@@ -6389,9 +6407,10 @@ export function captureBoardAliasProof(named: string, project: string, aliases: 
     }
   }
   return () => {
-    const current = projectAliasSnapshot({ strict: true }).aliases;
-    return JSON.stringify(matchingKeys(current)) === JSON.stringify(keys)
-      && [...proof].every(([key, target]) => (Object.hasOwn(current, key) ? current[key] : undefined) === target);
+    const current = projectAliasSnapshot({ strict: true });
+    return JSON.stringify(matchingKeys(current.aliases, current.displayNames)) === JSON.stringify(keys)
+      && [...displayProof].every(([key, name]) => current.displayNames[key] === name)
+      && [...proof].every(([key, target]) => (Object.hasOwn(current.aliases, key) ? current.aliases[key] : undefined) === target);
   };
 }
 
@@ -6410,11 +6429,12 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   if (resolved !== undefined && named !== resolved) {
     throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
   }
-  const aliases = projectAliasSnapshot({ strict: true }).aliases;
+  const aliasSnapshot = projectAliasSnapshot({ strict: true });
+  const aliases = aliasSnapshot.aliases;
   const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
     : resolved !== undefined ? resolved : named ? resolveBoardProject(named, dependencies) : "";
   const project = boardReadProject(requested, dependencies);
-  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases);
+  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases, aliasSnapshot.displayNames);
   return { project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([project, caller.fingerprint])).digest("hex")}`, assert() {
     assertWorkspaceMcpCall();
     caller.assert();
