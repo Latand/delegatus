@@ -215,20 +215,32 @@ test("v2 overlays remain separate and persisted versions negotiate through resta
   } finally { cache.dispose(); }
 });
 
-test("unknown protocol responses trigger one legacy read while auth refusal preserves the last live board", async () => {
-  const { seen, fetcher } = scripted([
-    boardFull({ ...representation("good"), boardProtocol: 2 }, "good"),
-    () => new Response(null, { status: 304, headers: { "x-llv-board-protocol": "3" } }),
-    full(representation("legacy"), "legacy"),
-    () => new Response("denied", { status: 403 }),
-  ]);
-  const cache = createFilesClientCache(fetcher);
-  try {
-    await cache.revalidate();
-    await cache.revalidate();
-    expect(seen).toHaveLength(3);
-    expect(seen[2].headers["x-llv-board-protocol"]).toBeUndefined();
-    await expect(cache.revalidate()).rejects.toThrow("403");
-    expect(cache.read().files).toEqual(representation("legacy").files as never);
-  } finally { cache.dispose(); }
-});
+for (const status of [401, 403]) {
+  test(`unknown protocol responses trigger one legacy read while auth refusal ${status} clears the board and its delta base`, async () => {
+    const { seen, fetcher } = scripted([
+      boardFull({ ...representation("good"), boardProtocol: 2 }, "good"),
+      () => new Response(null, { status: 304, headers: { "x-llv-board-protocol": "3" } }),
+      full(representation("legacy"), "legacy"),
+      () => new Response("denied", { status }),
+      boardFull({ ...representation("recovered"), boardProtocol: 2 }, "recovered"),
+    ]);
+    const cache = createFilesClientCache(fetcher);
+    try {
+      await cache.revalidate();
+      await cache.revalidate();
+      expect(seen).toHaveLength(3);
+      expect(seen[2].headers["x-llv-board-protocol"]).toBeUndefined();
+      expect(cache.read().files).toEqual(representation("legacy").files as never);
+      await expect(cache.revalidate()).rejects.toThrow(String(status));
+      expect(seen).toHaveLength(4);
+      expect(cache.read().files).toEqual([]);
+      expect(cache.read().pipelines).toEqual([]);
+      await cache.revalidate();
+      expect(seen).toHaveLength(5);
+      expect(seen[4].headers["if-none-match"]).toBeUndefined();
+      expect(seen[4].headers["x-llv-files-delta"]).toBeUndefined();
+      expect(cache.read().files).toEqual(representation("recovered").files as never);
+      expect(cache.read().pipelines).toEqual(representation("recovered").pipelines as never);
+    } finally { cache.dispose(); }
+  });
+}

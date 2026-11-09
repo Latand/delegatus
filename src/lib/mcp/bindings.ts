@@ -1,3 +1,5 @@
+import { AsyncResource } from "node:async_hooks";
+import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { assertWorkspaceMcpCall, workspaceGuardedBindings } from "./workspaceFence";
@@ -45,7 +47,7 @@ import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMai
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { curatorCallerOf } from "@/lib/memory/curation/guard";
-import { applyCuration, type CurationApply } from "@/lib/memory/curation/apply";
+import { applyCuration, readCurationOperation, curationOperationResult, completeCurationMaintenance, type CurationOperationContext, type CurationApply } from "@/lib/memory/curation/apply";
 import { readCuration } from "@/lib/memory/curation/read";
 import { isMutatingMcpTool } from "./server";
 import { permitIssueReporterTool, permitMaintainerTool, permitCuratorTool } from "./toolAllowlist";
@@ -90,6 +92,7 @@ import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/a
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -181,7 +184,7 @@ import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
-import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, forgetSeatDeploymentRequest, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
@@ -377,6 +380,7 @@ const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
 // operation the MCP call's remaining budget, including the settlement reserve.
 const PROTOTYPE_CONTROL_BUDGET_MS = 30_000;
 const CONTROL_DEADLINE_RESERVE_MS = 250;
+const DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS = 1_500;
 const CONTROL_RETRY_BASE_MS = 100;
 const CONTROL_RETRY_MAX_MS = 1_000;
 const TRANSIENT_CONTROL_STATUSES = new Set([502, 504]);
@@ -464,6 +468,7 @@ async function requestViewerControl(
     });
     try {
       const headers = controlRequestHeaders(init.headers, token);
+      if (pathname === "/api/attention/needs-you") headers.set("x-llv-read-deadline", String(Math.min(expiresAt - 300, now + 3500)));
       if (init.method === "POST") {
         headers.set("origin", baseUrl);
         headers.set("sec-fetch-site", "same-origin");
@@ -577,6 +582,10 @@ async function postViewerControl(
   /* Every control mutation carries its endpoint's idempotency identity
      (clientAttemptId, clientMessageId or clientRequestId). Repeating the same
      request after a lost transport answer therefore asks for its receipt. */
+  const deployment = pathname === "/api/runtime/deployments" || pathname === "/api/runtime/deployments/reconcile";
+  if (deployment && body.reconcileOnly === true) {
+    context = { ...context, deadlineAt: Math.min(context.deadlineAt ?? Infinity, Date.now() + 5000) };
+  }
   let answer: Awaited<ReturnType<typeof requestViewerControl>>;
   try {
     answer = await requestViewerControl(pathname, {
@@ -610,7 +619,12 @@ async function postViewerControl(
     // so the tool caller can read its revision and choose a new request.
     return { conflict: true, binding: result.binding };
   }
-  if (pathname === "/api/runtime/deployments" && uncertainPriorPost && !response.ok) {
+  if (deployment && result.code === "deploy_not_admitted" && response.status === 409) {
+    throw new McpToolRefusal("Deployment was not admitted; this request key is permanently closed.", {
+      code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false,
+    });
+  }
+  if (deployment && uncertainPriorPost && !response.ok) {
     throw new McpDeploymentPendingError(`${controlFailureMessage(response.status, result.error)} after an earlier deploy request may have reached admission`);
   }
   if (pathname === "/api/prototype-reviews" && response.ok
@@ -1892,7 +1906,7 @@ async function sendMessage(
   const message = requiredMessageText(args);
   let outcome: Record<string, unknown>;
   try {
-    outcome = await dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", {
+    const body = {
       pid: null,
       path: transcriptPath,
       ...(conversationId ? { conversationId } : {}),
@@ -1904,7 +1918,10 @@ async function sendMessage(
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
       ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
-    }, callerCapabilityHeaders());
+    };
+    outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
+      headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", body,
+        { ...callerCapabilityHeaders(), ...headers }));
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
        anything. Nothing exists under the downstream key, so the send settles
@@ -3869,24 +3886,45 @@ async function deployExactSha(
     throw error;
   }
   assertSeat();
-  if (callContext.priorAttemptUncertain) {
-    try {
-      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-        dependencies.recordSeatDeployment);
-      const recovered = seatDeploymentForRequestKey(idempotencyKey);
-      if (recovered) {
-        if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
-          || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
-          throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
-            code: "deploy_request_key_conflict", retryable: false,
-          });
+  let recoveredReceipt: Record<string, unknown> | null = null;
+  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)
+    && dependencies.findDeploymentByIdempotencyKey) {
+    const remainingMs = callContext.deadlineAt === undefined
+      ? DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS
+      : Math.min(DEPLOYMENT_RECEIPT_LOOKUP_BUDGET_MS, callContext.deadlineAt - Date.now() - CONTROL_DEADLINE_RESERVE_MS);
+    if (remainingMs > 0) {
+      const lookupDeadlineAt = Date.now() + remainingMs;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const timeout = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), remainingMs); });
+        const lookup = Promise.resolve().then(() => dependencies.findDeploymentByIdempotencyKey!(idempotencyKey));
+        const found = await Promise.race([lookup, timeout]);
+        if (Date.now() < lookupDeadlineAt && found && found.idempotencyKey === idempotencyKey
+          && typeof found.deploymentId === "string" && found.deploymentId
+          && typeof found.revision === "string" && found.revision.toLowerCase().startsWith(revision.toLowerCase())
+          && typeof found.requestedRevision === "string" && found.requestedRevision.toLowerCase() === revision.toLowerCase()) {
+          recoveredReceipt = { state: "accepted", deploymentId: found.deploymentId,
+            revision: found.revision, replayed: true };
         }
-      } else {
-        throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
+      } catch {
+        // The read-only receipt source can be unavailable; reconciliation below
+        // remains the durable admission fence for a receiver that supports it.
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
+    }
+  }
+  let reconciledReceipt: Record<string, unknown> | null = null;
+  if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey) && !recoveredReceipt) {
+    try {
+      // The backend settles under its admission lock, bypassing target resolution.
+      // No read of an eventually visible ledger can prove non-admission.
+      assertSeat();
+      reconciledReceipt = await control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true });
+      assertSeat();
     } catch (error) {
-      if (error instanceof McpToolRefusal || error instanceof McpDeploymentPendingError) throw error;
-      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because its receipt store is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof McpToolRefusal) throw error;
+      throw new McpDeploymentPendingError(`deployment reconciliation is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const admittedReceipt = (): Record<string, unknown> | null => {
@@ -3902,20 +3940,36 @@ async function deployExactSha(
     return { state: "accepted", deploymentId: priorAdmission.deploymentId,
       revision: priorAdmission.revision, replayed: true };
   };
-  let receipt = admittedReceipt();
+  let receipt = admittedReceipt() ?? recoveredReceipt ?? reconciledReceipt;
   if (!receipt) try {
+    const refuseUnfencedAdmission = async (message: string, code: string): Promise<never> => {
+      let cleanupFailure = "";
+      try { await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId); }
+      catch (error) { cleanupFailure = `; pending attribution cleanup failed: ${error instanceof Error ? error.message : String(error)}`; }
+      throw new McpToolRefusal(`${message}${cleanupFailure}`, {
+        code, outcome: "not-executed", evidence: "not-admitted", retryable: false,
+      });
+    };
+    if (control.get) {
+      let capabilities: Record<string, unknown>;
+      try {
+        capabilities = await control.get("/api/runtime/deployments/capabilities/v1", callContext);
+      } catch (error) {
+        return await refuseUnfencedAdmission(`durable deployment admission fencing could not be verified; no deployment request was sent (${error instanceof Error ? error.message : String(error)})`,
+          "deploy_admission_fence_unavailable");
+      }
+      if (capabilities.capability !== "viewer-deployments" || capabilities.version !== 1
+        || capabilities.admissionFence !== true) {
+        await refuseUnfencedAdmission("the Viewer does not advertise durable deployment admission fencing; no deployment request was sent",
+          "deploy_admission_fence_unsupported");
+      }
+    }
     assertSeat();
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
     if (error instanceof McpToolRefusal) {
       await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       throw error;
-    }
-    try {
-      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-        dependencies.recordSeatDeployment);
-    } catch (recoveryError) {
-      throw new McpDeploymentPendingError(`deployment admission may have completed, and its receipt could not be reconciled: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`);
     }
     receipt = admittedReceipt();
     if (!receipt) throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
@@ -5215,7 +5269,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
-    ...(verbose || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
+    ...("status" in curation ? { partial: true, omissions: ["curation"] } : {}),
+    ...(verbose || "status" in curation || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
@@ -5235,7 +5290,8 @@ async function readSeatCuration(project: string, initial: SeatTickSettings,
   readSettings: (project: string) => SeatTickSettings, context: McpToolCallContext) {
   throwIfCallEnded(context);
   const timeout = new AbortController();
-  const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now()));
+  const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now() - 500));
+  const panelDeadlineAt = Date.now() + budget;
   const timer = setTimeout(() => timeout.abort(budget < 5000
     ? new DeadlineExceededError("MCP tool deadline exceeded", 0) : Error("curation panel read timed out")), budget);
   const signal = context.signal ? AbortSignal.any([context.signal, timeout.signal]) : timeout.signal;
@@ -5244,16 +5300,26 @@ async function readSeatCuration(project: string, initial: SeatTickSettings,
     for (let attempt = 0; attempt < 3; attempt++) {
       throwIfCallEnded(context);
       signal.throwIfAborted();
+      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
       const now = Date.now(), revision = recordRevision(settings);
       const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
       const curation = await curationAnswerCooperatively(project, effective, now, signal);
       throwIfCallEnded(context);
       signal.throwIfAborted();
+      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
       const fresh = readSettings(project);
       if (recordRevision(fresh) === revision) return { settings, now, effective, curation };
       settings = fresh;
     }
     throw Error("seat tick settings changed while being read");
+  } catch (error) {
+    throwIfCallEnded(context);
+    const now = Date.now();
+    const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+    return { settings, now, effective, curation: {
+      status: "unavailable" as const, lastRun: null, live: null,
+      runsError: redactMonitorText(error instanceof Error ? error.message : "curation panel unavailable").slice(0, 300),
+    } };
   } finally { clearTimeout(timer); }
 }
 
@@ -7283,6 +7349,8 @@ async function agentActivity(
       ? { [snapshot.selection.scope === "targeted" ? "undescribedTargetCount" : "undescribedHostCount"]: snapshot.selection.recoveryPending }
       : {};
     return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(projectReadText(filtered, context))), journaled: journal.appended,
+      deliveryEvidence: "not_checked",
+      deliveryNote: "Lifecycle and verified describe host and turn observations. A waiting conversation can still fail delivery or recovery; read message_receipt for the send outcome.",
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
       /* Every projection says what it could not confirm. `pending`: no
@@ -8120,6 +8188,7 @@ function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
 /** Seats, the gateway and live owner relay agents can message a seat.
     Auto-creation still goes through the unchanged operator-only seat route. */
 function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
+  nativeOrchestratorRelayCaller()?.();
   const caller = attributionOf(dependencies);
   if (caller.kind === "gateway" || ownerRelayCaller(dependencies)) return;
   if (caller.conversationId && !caller.via) {
@@ -8128,6 +8197,41 @@ function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencie
   }
   throw new McpToolRefusal("only a designated orchestrator seat, the voice gateway or a verified owner relay may relay to an orchestrator; continue the requested work with your tools, or explain the failure and the owner's next action", {
     code: "orchestrator_relay_refused", retryable: false,
+  });
+}
+
+/** Pin the real peer's identity before the first project-resolution await.
+ * Never derive this handoff from tool arguments or injected attribution. Each
+ * use resolves authority afresh, outside the tool's memoized attribution. */
+function nativeOrchestratorRelayCaller(): (() => string) | null {
+  if (!currentMcpHttpCaller()?.nativePeer || callerCapability() !== undefined) return null;
+  return resolveMcpCallerValue(productionDomainDependencies, "native-orchestrator-relay", () => {
+    const authority = () => attentionCallerAuthority(attentionCallerSources());
+    const original = authority();
+    const refused = () => { throw new McpDispatchNotExecutedError("the native relay caller changed or could not be verified", { code: "orchestrator_relay_refused" }); };
+    if (original.kind === "unidentified" || !original.conversationId) return refused();
+    const id = original.conversationId;
+    const generation = () => {
+      const conversation = agentRegistry().conversation(id as `conversation_${string}`);
+      const current = conversation?.generations.at(-1);
+      return conversation && !conversation.supersededBy && current && current.archivedAt == null
+        ? JSON.stringify([current.id, current.path, conversation.projectOwnership]) : null;
+    };
+    const pinned = generation();
+    const seat = authorizedManagerSeats(productionManagerAuthoritySources()).find(candidate => candidate.conversationId === id);
+    // This handoff repairs designated-seat relays only. Other relay producers
+    // retain their existing authenticated capability and operator paths.
+    if (!pinned || !seat?.project) return refused();
+    const project = seat.project;
+    const epoch = orchestratorSeatFor(project).active?.seatEpoch;
+    return () => {
+      const current = authority();
+      if (current.kind === "unidentified" || current.conversationId !== id
+        || current.nativeProof !== original.nativeProof || generation() !== pinned
+        || orchestratorSeatFor(project).active?.seatEpoch !== epoch
+        || !authorizedManagerSeats(productionManagerAuthoritySources()).some(candidate => candidate.conversationId === id && candidate.project === project)) return refused();
+      return id;
+    };
   });
 }
 
@@ -8522,6 +8626,47 @@ export function viewerReadTools(
   };
 }
 
+/** Pin the original pass before awaited work; a later pass cannot substitute
+ * for it at commit or disclosure. The operation context never comes from args. */
+async function curatorApplyAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies) {
+  const translate = (error: unknown): never => {
+    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409, retryable: false });
+    if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409, retryable: false });
+    throw error;
+  };
+  try {
+    const conversationId = attributionOf(dependencies).conversationId;
+    const initial = dependencies.attentionAuthority();
+    if (initial.kind === "unidentified") throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller is unavailable");
+    const snapshot = () => dependencies.curatorSnapshot && conversationId ? dependencies.curatorSnapshot(conversationId) : dependencies.registrySnapshot();
+    const pass = curatorCallerOf(conversationId, snapshot());
+    const project = canonicalProject(pass.project);
+    const admission = await dependencies.curatorAdmission?.(conversationId);
+    const assertCurrent = AsyncResource.bind(() => {
+      try {
+        if (typeof admission === "function") admission();
+        const current = dependencies.attentionAuthority();
+        if (!conversationId || current.kind === "unidentified" || current.conversationId !== initial.conversationId
+          || current.conversationId !== conversationId || current.nativeProof !== initial.nativeProof) {
+          throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller changed during this operation");
+        }
+        const owner = curatorCallerOf(conversationId, snapshot());
+        if (owner.id !== pass.id || owner.conversationId !== conversationId || canonicalProject(owner.project) !== project) {
+          throw new RoleMemoryRefusal("CURATE_CALLER", "the original curator pass no longer authorizes this operation");
+        }
+        assertWorkspaceMcpCall(project);
+      } catch (error) { translate(error); }
+    });
+    assertCurrent();
+    const operation: CurationOperationContext = { pass: pass.id, conversationId: conversationId!, project,
+      requestId: requestId(args), digest: requestDigest("curate_rules", args), assertCurrent };
+    return { pass, operation, assertCurrent, recoverCommitted: () => {
+      try { const row = readCurationOperation(operation); return row ? curationOperationResult(row) : null; }
+      catch (error) { return translate(error); }
+    } };
+  } catch (error) { return translate(error); }
+}
+
 export function viewerMcpBindings(
   linkTaskDependencies: LinkTaskToPipelineDependencies = productionLinkTaskDependencies,
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
@@ -8611,33 +8756,43 @@ export function viewerMcpBindings(
       return capability;
     } }),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
-    curate_rules: Object.assign(async (args: McpToolArgs) => {
+    curate_rules: Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
       try {
-        const conversationId = attributionOf(domainDependencies).conversationId;
-        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
-        if (typeof assertAdmission === "function") assertAdmission();
-        const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        const authority = await curatorApplyAuthority(args, domainDependencies);
+        const pass = authority.pass;
+        if (context?.curatorResponse) context.curatorResponse.assertCurrent = authority.assertCurrent;
+        context?.assertCaller?.();
         if (args.action !== "read") {
-          const result = await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
-            if (typeof assertAdmission === "function") assertAdmission();
-            const fresh = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-            return applyCuration(fresh, args as unknown as CurationApply, undefined, { refreshKnownValues: !fresh.importBatch });
+          const assertCurrent = () => { context?.assertCaller?.(); authority.assertCurrent(); };
+          const operation = { ...authority.operation, assertCurrent };
+          assertCurrent();
+          const saved = readCurationOperation(operation);
+          if (saved) return curationOperationResult(saved);
+          await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
+            assertCurrent();
+            return applyCuration(authority.pass, args as unknown as CurationApply, undefined, { refreshKnownValues: false, operation });
           }));
-          if (pass.importBatch) await refreshCurationKnownValuesAsync();
-          if (typeof assertAdmission === "function") assertAdmission();
-          curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-          return result;
+          assertCurrent();
+          // Ancillary maintenance is attempted once, outside the apply retry.
+          // Its failure never turns a committed editorial write into a refusal.
+          try {
+            await refreshCurationKnownValuesAsync();
+            assertCurrent();
+            completeCurationMaintenance(operation, { knownValues: "complete" });
+          } catch { /* The witness retains pending until completion is recorded. */ }
+          assertCurrent();
+          return curationOperationResult(readCurationOperation(operation)!);
         }
         const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
-        if (typeof assertAdmission === "function") assertAdmission();
-        curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        context?.assertCaller?.();
+        authority.assertCurrent();
         return result;
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
         if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
         throw error;
       }
-    }, { authorizeReceipt: async () => {
+    }, { curatorApplyRecovery: (args: McpToolArgs) => curatorApplyAuthority(args, domainDependencies), authorizeReceipt: async () => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);

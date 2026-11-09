@@ -1,4 +1,5 @@
 import { MeasuredCache } from "@/lib/cacheTelemetry";
+import { PrivacyWorkError, privacyFailureOf } from "./privacyFailure";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -18,8 +19,9 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
+import type { ProfileRulesView } from "./profile";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
 import { deliveredRuleIds } from "./deliveryLedger";
@@ -156,7 +158,7 @@ export function readableScopes(project: string, roleId: string | null): string[]
 }
 
 export class RoleMemoryRefusal extends Error {
-  constructor(readonly code: string, message: string) { super(message); }
+  constructor(readonly code: string, message: string, options?: ErrorOptions) { super(message, options); }
 }
 
 export const ROLE_MEMORY_CHANGED_MESSAGE = "Role-memory privacy changed; retrying before dispatch";
@@ -170,11 +172,11 @@ export function roleMemoryRevisionToken(): string {
     into the project's current key, in one transaction: the active rules of
     both in the order they were written, a word-for-word repeat merged into
     the earlier rule, with the same curation order and bound as every writer. Both histories stay, with one entry that records the join. */
-export function joinMovedScopes(now = new Date().toISOString()): void {
+export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () => string[] = roleScopeKeys): void {
   const held = roleMemoryCollection();
   if (!held) return;
   const resolve = scopeResolver();
-  const moved = roleScopeKeys().filter(scope => resolve(scope) !== scope);
+  const moved = scopeKeys().filter(scope => resolve(scope) !== scope);
   if (!moved.length) return;
   const policies = new Map(moved.map(scope => {
     const into = resolve(scope);
@@ -616,16 +618,53 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
   return withViewerOperation("role-memory.view", () => performanceSpans.sync("memory.project-view", () => projectViewMemo(project, now)));
 }
 
+/** Read the saved profile against current active ids without constructing the
+ * rule window's provenance, retired rules, task counts or curator history. */
+export function projectProfileView(project: string, now = Date.now()): ProfileRulesView {
+  // The full view memo and its reader can belong to an in-flight history
+  // snapshot. Derive this basis independently, including the scope keys.
+  const context = projectViewContext(project, now, false);
+  const memo = profileBases.get(context.memoKey);
+  if (memo?.stamp === context.version().stamp) {
+    profileBases.delete(context.memoKey); profileBases.set(context.memoKey, memo);
+    return memo.value;
+  }
+  joinMovedScopes(undefined, profileScopeKeys);
+  const before = context.version().stamp;
+  const wanted = [...profileScopeKeys().filter(scope => (scopeProject(scope) === context.canonical || isCrossProjectRoleScope(scope)) && scopeKind(scope) === "role").sort(),
+    projectScope(context.canonical), MACHINE_SCOPE];
+  const basis = activeProfileBasis(wanted);
+  const scopes: ProfileRulesView["scopes"] = wanted.map(scope => ({ scope, kind: scopeKind(scope), roleId: scopeRole(scope), active: basis.get(scope)! }));
+  if (swarmRulesEnabled()) for (const role of SWARM_ROLE_IDS) {
+    scopes.push({ scope: swarmScope(role), kind: "swarm", roleId: role,
+      active: swarmRulesForRole(role).map(({ id, changedAt }) => ({ id, changedAt })) });
+  }
+  if (context.version().stamp !== before) throw new StateSnapshotChangedError();
+  const value = freezeProjectView({ project: context.canonical, enabled: context.enabled, scopes });
+  const bytes = Buffer.byteLength(JSON.stringify(value));
+  profileBases.delete(context.memoKey);
+  if (bytes <= PROJECT_VIEW_MEMO_BYTES) profileBases.set(context.memoKey, { stamp: before, bytes, value });
+  let total = [...profileBases.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+  while (profileBases.size > PROJECT_VIEW_MEMO_ENTRIES || total > PROJECT_VIEW_MEMO_BYTES) {
+    const oldest = profileBases.keys().next().value!;
+    total -= profileBases.get(oldest)!.bytes; profileBases.delete(oldest);
+  }
+  return value;
+}
+
 /** Production readers yield between bounded history slices on cold and revised views. */
 export async function projectViewAsync(project: string, now = Date.now()): Promise<RoleMemoryProjectView> {
   return withViewerOperation("role-memory.view", () => projectViewAsyncMemo(project, now));
 }
 
+type ProfileBasisMemo = { stamp: string; bytes: number; value: ProfileRulesView };
 type ProjectViewMemo = { stamp: string; guard: string; from: number; until: number; bytes: number; value: RoleMemoryProjectView };
 // One LRU across Next server bundles, bounded by both entries and serialized
 // bytes. It owns only rendered views; scope histories never enter this memo.
-const projectViewOwner = globalThis as typeof globalThis & { __llvProjectViews?: Map<string, ProjectViewMemo> };
+const projectViewOwner = globalThis as typeof globalThis & { __llvProjectViews?: Map<string, ProjectViewMemo>; __llvProfileBases?: Map<string, ProfileBasisMemo> };
 const projectViews = projectViewOwner.__llvProjectViews ??= new MeasuredCache<string, ProjectViewMemo>("project-views", "memory/roleStore", entry => entry.bytes, "encoded-json");
+// This cache contains only bases read through the independent profile reader.
+const profileBases = projectViewOwner.__llvProfileBases ??= new MeasuredCache<string, ProfileBasisMemo>("profile-bases", "memory/roleStore", entry => entry.bytes, "encoded-json");
 const PROJECT_VIEW_MEMO_BYTES = 8 * 1024 * 1024;
 const PROJECT_VIEW_MEMO_ENTRIES = 16;
 function freezeProjectView<T>(value: T): T {
@@ -641,7 +680,7 @@ function timedProjectView(value: RoleMemoryProjectView, now: number): RoleMemory
     nextAt: curation.nextAt && Date.parse(curation.nextAt) < now ? new Date(now).toISOString() : curation.nextAt } } : {}) };
 }
 type ProjectViewVersion = { stamp: string; other: string; memoryRevision: number | undefined };
-function projectViewContext(project: string, now: number): {
+function projectViewContext(project: string, now: number, allowCachedView = true): {
   canonical: string; file: string; memoKey: string; guard: string; enabled: boolean;
   version: () => ProjectViewVersion; hit: RoleMemoryProjectView | null;
 } {
@@ -659,7 +698,7 @@ function projectViewContext(project: string, now: number): {
   const settingsDatabase = path.join(path.dirname(settingsFile), "state.sqlite");
   const swarm = swarmRulesEnabled();
   const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[projectStoreSignature("project-aliases.json", path.dirname(file)), ...[path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp)].join("|")}:${process.env.LLV_ROLE_MEMORY}:${swarm}`;
-  const memo = projectViews.get(memoKey);
+  const memo = allowCachedView ? projectViews.get(memoKey) : undefined;
   if (memo?.guard === guard && now >= memo.from && now < memo.until) {
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);
     return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), version: () => ({ stamp: "", other: "", memoryRevision: undefined }), hit: timedProjectView(memo.value, now) };
@@ -791,13 +830,19 @@ export const WITHHELD_LESSON = "[learned rule]";
 
 const UNREADABLE = "role memory could not be read, so its learned rules cannot be kept out of outgoing text; nothing was sent. Repair or restore state.sqlite, or set LLV_ROLE_MEMORY=off and remove the role_memory rows";
 
+function unreadableRoleMemory(error: unknown): RoleMemoryRefusal {
+  const failure = privacyFailureOf(error, "store-unreadable");
+  console.warn(`[role-memory] privacy store read failed: ${failure}`);
+  return new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", `${UNREADABLE}; cause: ${failure}`, { cause: new PrivacyWorkError(failure) });
+}
+
 /** The stored rows, or a refusal that quotes nothing a row holds. */
 function readableRows(): { rows: RoleMemoryRow[]; signature: string } {
   try {
     const held = roleMemoryCollection();
     return held ? { signature: held.signature(), rows: held.snapshot() as RoleMemoryRow[] } : { signature: "", rows: [] };
-  } catch {
-    throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+  } catch (error) {
+    throw unreadableRoleMemory(error);
   }
 }
 
@@ -844,11 +889,10 @@ export function storedLessonRevision(): string {
     const cached = privacyRevisionHost.__llvLessonPrivacyRevision;
     if (cached?.file === file && cached.signature === signature) return cached.revision;
     const held = roleMemoryCollection();
-    const stat = held ? fs.statSync(held.filename, { bigint: true }) : null;
-    const revision = held && stat ? `${stat.dev}:${stat.ino}:${held.signature()}` : "";
+    const revision = held ? privacyRuleRevision() : "";
     if (`${identity()}:${stateDatabaseSignature(file)}` === signature) privacyRevisionHost.__llvLessonPrivacyRevision = { file, signature, revision };
     return revision;
-  } catch { throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE); }
+  } catch (error) { throw unreadableRoleMemory(error); }
 }
 
 /** Bounded alternatives in longest-first order, cached for this store signature. */
@@ -913,7 +957,7 @@ function compileStoredLessonMatchers(signature: string): LessonMatcher[] {
       chunk.push(source);
     }
     compile(chunk);
-    if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+    if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE, { cause: new PrivacyWorkError("store-changed") });
     matcherHost.__delegatusLessonMatcher = { key: signature, matchers, skipped, texts };
     if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
   }
@@ -1012,15 +1056,16 @@ export function lessonKnownValuesFile(): string {
   return path.join(statePath("role-memory"), "known-values.txt");
 }
 
-/** Rewrites the known-values file from the store, again when a lesson landed
-    while it was written. When the store cannot be read the file is removed,
-    and the gate refuses a push whose known-values file is missing. */
+/** Publish under the same collection lease and database transaction as rule
+    writers. In particular, a reader of the old committed rows cannot restore
+    this file after a curator invalidates it but before that apply commits.
+    Contention yields immediately; failure leaves publication closed. */
 export function refreshLessonKnownValues(): string {
   const file = lessonKnownValuesFile();
   const directory = path.dirname(file);
   try {
-    for (let pass = 0; pass < 4; pass += 1) {
-      const { rows: all, signature } = readableRows();
+    roleMemoryCollection(true)!.patchSync(() => {
+      const { rows: all } = readableRows();
       const texts = lessonTextsOf(all);
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       const temporary = path.join(directory, `.${crypto.randomUUID()}.tmp`);
@@ -1030,12 +1075,12 @@ export function refreshLessonKnownValues(): string {
       } finally {
         fs.rmSync(temporary, { force: true });
       }
-      if (readableRows().signature === signature) return file;
-    }
+      return { records: [] };
+    });
     return file;
   } catch (error) {
     fs.rmSync(file, { force: true });
-    throw error instanceof RoleMemoryRefusal ? error : new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+    throw error instanceof RoleMemoryRefusal ? error : unreadableRoleMemory(error);
   }
 }
 

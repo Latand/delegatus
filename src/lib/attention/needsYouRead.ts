@@ -42,6 +42,7 @@ export interface NeedsYouAnswer {
       never in `count`, and on the seat's own agenda. */
   routedToSeat?: number;
   nextCursor?: string; unavailable?: string[]; sections?: number;
+  partial?: true; omissions?: string[]; countIsLowerBound?: true;
 }
 export interface NeedsYouEvidencePorts {
   tasks: readonly BoardTask[]; pipelines: readonly Pipeline[]; dismissals: readonly AttentionDismissalV1[];
@@ -50,7 +51,7 @@ export interface NeedsYouEvidencePorts {
   canonicalConversationId?(id: string): string;
   ended?: ReadonlySet<string>; unavailable: readonly string[];
 }
-export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?: boolean; cursor?: string; locale?: Locale }
+export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?: boolean; cursor?: string; locale?: Locale; signal?: AbortSignal; deadlineAt?: number }
 
 /** One projection shared with both panels; closing is a browser transient. */
 export function needsYouEntries(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string): MobileAttentionEntry[] {
@@ -58,6 +59,7 @@ export function needsYouEntries(body: NeedsYouBody, decision: AutoView["decision
   return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), key)
     .filter(section => canonicalOrchestratorProject(section.project) === key).flatMap(section => section.entries);
 }
+const readEnded = (options: NeedsYouReadOptions) => options.signal?.aborted || options.deadlineAt !== undefined && Date.now() >= options.deadlineAt;
 const iso = (seconds: number | null) => seconds !== null && Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null;
 const clip = (value: string, cap: number) => value.length > cap ? value.slice(0, cap - 1) + "…" : value;
 const after = (value: string | number | null | undefined, since: number) => (typeof value === "number" ? value : Date.parse(value ?? "")) > since;
@@ -158,8 +160,9 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
     tasks: body.tasks.map(t => ({ ...t, prototypeReview: t.prototypeReview ? { ...t.prototypeReview, waitingDismissal: undefined } : undefined })) };
   const visible = new Set(needsYouEntries(body, decision, now, project).map(e => e.id));
   const live = needsYouEntries(raw, decision, now, project).flatMap((entry): ClearedRow[] => {
-    if (visible.has(entry.id) || entry.kind === "update") return [];
+    if (readEnded(options) || visible.has(entry.id) || entry.kind === "update") return [];
     const row = rowOf(entry, ports, options);
+    if (options.kinds && !options.kinds.includes(row.kind)) return [];
     let undo = row.target;
     let mark: { at: string; by: DismissedBy; note?: string } | undefined;
     if (entry.kind === "prototype") mark = ports.dismissals.find(d => d.kind === "prototype" && d.taskId === entry.notice.taskId && d.subject === entry.id);
@@ -184,7 +187,7 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
     if (!mark || !undo) return [];
     return [{ id: row.id, kind: row.kind, title: row.title, taskId: row.taskId, cleared: { at: mark.at, by: mark.by, note: mark.note ?? null }, undo }];
   });
-  return [...live, ...systemClearedRows(body, project, ports, live)].sort((a,b) => b.cleared.at.localeCompare(a.cleared.at)).slice(0,20);
+  return [...live, ...systemClearedRows(body, project, ports, live, options)].filter(row => !options.kinds || options.kinds.includes(row.kind)).sort((a,b) => b.cleared.at.localeCompare(a.cleared.at)).slice(0,20);
 }
 
 /**
@@ -195,7 +198,7 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
  * project, and Undo names the conversation's record. One the operator brought
  * back is no longer cleared.
  */
-function systemClearedRows(body: NeedsYouBody, project: string, ports: NeedsYouEvidencePorts, live: readonly ClearedRow[]): ClearedRow[] {
+function systemClearedRows(body: NeedsYouBody, project: string, ports: NeedsYouEvidencePorts, live: readonly ClearedRow[], options: NeedsYouReadOptions): ClearedRow[] {
   const key = canonicalOrchestratorProject(project);
   const canonical = ports.canonicalConversationId ?? ((id: string) => id);
   const shown = new Set(live.flatMap(row => row.undo.kind === "conversation"
@@ -206,6 +209,7 @@ function systemClearedRows(body: NeedsYouBody, project: string, ports: NeedsYouE
     : []));
   const rows: ClearedRow[] = [];
   for (const record of ports.dismissals) {
+    if (readEnded(options)) break;
     if (record.by.kind !== "system" || record.restoredAt || !record.cleared || record.kind === "prototype" || record.kind === "escalation") continue;
     if (canonicalOrchestratorProject(record.cleared.project) !== key) continue;
     const subject = record.conversationId ? canonical(record.conversationId) : record.path;
@@ -235,53 +239,126 @@ export function routedToSeat(body: Pick<NeedsYouBody, "files" | "pipelines">, no
 /** Forty rows and 24 KB, including the cleared list and pagination envelope. */
 export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string, ports: NeedsYouEvidencePorts, options: NeedsYouReadOptions = {}, order: "panel" | "stale-first" = "panel"): NeedsYouAnswer {
   const entries = needsYouEntries(body, decision, now, project);
-  const all = entries.map(e => rowOf(e, ports, options));
+  const selected = entries.filter(entry => !options.kinds || options.kinds.includes(entry.kind === "conversation" ? entry.item.reason.kind
+    : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind));
+  const all: NeedsYouRow[] = [];
+  for (const entry of selected) {
+    if (readEnded(options)) break;
+    all.push(rowOf(entry, ports, options));
+  }
+  const projectionOmitted = selected.length - all.length;
   if (order === "stale-first") all.sort((a,b) => Number(b.stale) - Number(a.stale));
   const filtered = options.kinds ? all.filter(r => options.kinds!.includes(r.kind)) : all;
-  const start = options.cursor ? filtered.findIndex(r => r.id === options.cursor) + 1 : 0;
-  if (options.cursor && !start) throw new DismissalError("INVALID_CURSOR", "The row cursor is no longer on this panel; read again");
-  const answer: NeedsYouAnswer = { project: canonicalOrchestratorProject(project), at: new Date(now * 1000).toISOString(), count: all.length, staleCount: all.filter(r => r.stale).length,
-    rows: [], cleared: clearedRows(body, decision, now, project, ports, options), omittedCount: filtered.length - start,
+  const cursor = projectionOmitted ? undefined : options.cursor;
+  const start = cursor ? filtered.findIndex(r => r.id === cursor) + 1 : 0;
+  if (cursor && !start) throw new DismissalError("INVALID_CURSOR", "The row cursor is no longer on this panel; read again");
+  const answer: NeedsYouAnswer = { project: canonicalOrchestratorProject(project), at: new Date(now * 1000).toISOString(), count: selected.length, staleCount: all.filter(r => r.stale).length,
+    rows: [], cleared: readEnded(options) ? [] : clearedRows(body, decision, now, project, ports, options), omittedCount: filtered.length - start + projectionOmitted,
     ...(ports.unavailable.length ? { unavailable: [...new Set(ports.unavailable)] } : {}) };
-  const sections = needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
+  const sections = readEnded(options) ? 0 : needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
   if (sections > 1) answer.sections = sections;
-  const routed = routedToSeat(body, now, answer.project);
+  const routed = readEnded(options) ? 0 : routedToSeat(body, now, answer.project);
   if (routed) answer.routedToSeat = routed;
   for (const row of filtered.slice(start, start + 40)) {
-    const candidate = { ...answer, rows: [...answer.rows, row], omittedCount: filtered.length - start - answer.rows.length - 1, nextCursor: row.id };
+    const candidate = { ...answer, rows: [...answer.rows, row], omittedCount: filtered.length - start - answer.rows.length - 1 + projectionOmitted, nextCursor: row.id };
     while (Buffer.byteLength(JSON.stringify(candidate)) > 24_000 && candidate.cleared.length) candidate.cleared = candidate.cleared.slice(0,-1);
     if (Buffer.byteLength(JSON.stringify(candidate)) > 24_000) break;
     Object.assign(answer, candidate);
   }
   while (Buffer.byteLength(JSON.stringify(answer)) > 24_000 && answer.cleared.length) answer.cleared.pop();
+  if (projectionOmitted || readEnded(options)) {
+    answer.partial = true;
+    answer.countIsLowerBound = true;
+    answer.omissions = [...(projectionOmitted ? ["row-evidence"] : []), "cleared", "section-counts"];
+    delete answer.nextCursor;
+  }
   if (!answer.omittedCount) delete answer.nextCursor;
+  while (Buffer.byteLength(JSON.stringify(answer)) > 24_000 && answer.rows.length) { answer.rows.pop(); answer.omittedCount++; }
   return answer;
 }
 
-/** Viewer-only gathering; unavailable evidence is named and never implies stale. */
-export async function readNeedsYou(project: string, options: NeedsYouReadOptions = {}, order: "panel" | "stale-first" = "panel"): Promise<NeedsYouAnswer> {
-  const [{ operatorBoardRepresentation }, { selfUpdateService }, { loadTasks }, { loadPipelinesForList }, { readAttentionDismissals }, { readBridgeReportLog }, { readReplySuggestionsFile }, { operatorLocale }, liveness, registry] = await Promise.all([
-    import("@/app/api/files/operatorProjection"), import("@/lib/selfUpdate/instance"), import("@/lib/tasks/store"), import("@/lib/pipelines/store"),
-    import("./dismissals"), import("@/lib/bridge/store"), import("@/lib/suggestions/store"), import("@/lib/operator/settings"), import("@/lib/lifecycle/liveness"), import("@/lib/agent/registry"),
-  ]);
-  const body = await operatorBoardRepresentation();
+/** Sources are selected before imports or reads. Each wait shares the route's cutoff. */
+export interface NeedsYouReadSources {
+  board(signal: AbortSignal): Promise<NeedsYouBody>;
+  tasks(signal: AbortSignal): Promise<BoardTask[]>;
+  pipelines(signal: AbortSignal): Promise<readonly Pipeline[]>;
+  dismissals(signal: AbortSignal): Promise<AttentionDismissalV1[]>;
+  reports(signal: AbortSignal): Promise<BridgeReportLogV1 | null>;
+  admissions(signal: AbortSignal): Promise<{ conversationId: string; at: string }[]>;
+  identity(signal: AbortSignal): Promise<(id: string) => string>;
+  ended(project: string, signal: AbortSignal, remainingMs: number): Promise<{ ids: Set<string>; complete: boolean }>;
+  decision(signal: AbortSignal): Promise<AutoView["decision"]>;
+  locale(signal: AbortSignal): Promise<Locale>;
+}
+const productionSources: NeedsYouReadSources = {
+  board: async signal => (await import("@/app/api/files/operatorProjection")).operatorBoardRepresentation(signal),
+  tasks: async signal => { const store = await import("@/lib/tasks/store"); signal.throwIfAborted(); return store.loadTasks(); },
+  pipelines: async signal => { const store = await import("@/lib/pipelines/store"); signal.throwIfAborted(); return store.loadPipelinesForList(); },
+  dismissals: async signal => { const store = await import("./dismissals"); signal.throwIfAborted(); return store.readAttentionDismissals().records; },
+  reports: async signal => { const store = await import("@/lib/bridge/store"); signal.throwIfAborted(); return store.readBridgeReportLog(); },
+  admissions: async signal => { const store = await import("@/lib/suggestions/store"); signal.throwIfAborted(); return store.readReplySuggestionsFile().admissions; },
+  identity: async signal => {
+    const registry = await import("@/lib/agent/registry");
+    signal.throwIfAborted();
+    const snapshot = await registry.agentRegistry().prepareReadOnlySnapshot(signal);
+    signal.throwIfAborted();
+    const lookup = registry.readOnlyConversationLookupFromSnapshot(snapshot);
+    return id => lookup.canonicalConversationId(id as `conversation_${string}`);
+  },
+  ended: async (project, signal, remainingMs) => {
+    const liveness = await import("@/lib/lifecycle/liveness");
+    signal.throwIfAborted();
+    const snapshot = await liveness.agentLivenessSnapshot({ project, signal, limit: 200, evidenceDeadlineMs: Math.min(1000, remainingMs) }, liveness.productionLivenessSources());
+    return { ids: new Set(snapshot.conversations.filter(row => row.lifecycle === "gone" && row.conversationId).map(row => row.conversationId!)), complete: snapshot.selection.budget === "complete" };
+  },
+  decision: async signal => { const store = await import("@/lib/selfUpdate/instance"); signal.throwIfAborted(); return (await store.selfUpdateService().snapshot()).auto?.decision ?? null; },
+  locale: async signal => { const store = await import("@/lib/operator/settings"); signal.throwIfAborted(); return store.operatorLocale() ?? "en"; },
+};
+
+export const NEEDS_YOU_READ_BUDGET_MS = 3500;
+export async function readNeedsYou(project: string, options: NeedsYouReadOptions = {}, order: "panel" | "stale-first" = "panel", sources: NeedsYouReadSources = productionSources): Promise<NeedsYouAnswer> {
+  const deadlineAt = Math.min(options.deadlineAt ?? Infinity, Date.now() + NEEDS_YOU_READ_BUDGET_MS);
+  const controller = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+  const timer = setTimeout(() => controller.abort(new Error("attention read budget exhausted")), Math.max(0, deadlineAt - Date.now()));
   const unavailable: string[] = [];
-  const source = <T>(name: string, read: () => T, fallback: T): T => { try { return read(); } catch { unavailable.push(name); return fallback; } };
-  const tasks = source("tasks", loadTasks, []);
-  const pipelines = source("pipelines", loadPipelinesForList, []);
-  const dismissals = source("dismissals", () => readAttentionDismissals().records, []);
-  const reports = source<BridgeReportLogV1 | null>("bridge", readBridgeReportLog, null);
-  const admissions = source("reply-suggestions", () => readReplySuggestionsFile().admissions, []);
-  const lookup = registry.readOnlyConversationLookupFromSnapshot(registry.agentRegistry().readOnlySnapshot());
-  const canonicalConversationId = (id: string) => lookup.canonicalConversationId(id as `conversation_${string}`);
-  const ended = new Set<string>();
+  const omissions: string[] = [];
+  const source = async <T>(name: string, read: (signal: AbortSignal) => Promise<T>, fallback: T): Promise<T> => {
+    if (signal.aborted || Date.now() >= deadlineAt) { omissions.push(name); return fallback; }
+    let abort: () => void = () => {};
+    try {
+      const cancelled = new Promise<never>((_, reject) => {
+        abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+      });
+      const value = await Promise.race([Promise.resolve().then(() => { signal.throwIfAborted(); return read(signal); }), cancelled]);
+      // A native read can run beyond expiry before its timer gets a turn.
+      if (signal.aborted || Date.now() >= deadlineAt) { omissions.push(name); return fallback; }
+      return value;
+    } catch { unavailable.push(name); omissions.push(name); return fallback; }
+    finally { signal.removeEventListener("abort", abort); }
+  };
   try {
-    const snapshot = await liveness.agentLivenessSnapshot({ project, limit: 200, evidenceDeadlineMs: 1000 }, liveness.productionLivenessSources());
-    for (const row of snapshot.conversations) if (row.lifecycle === "gone" && row.conversationId) ended.add(row.conversationId);
-    if (snapshot.selection.budget !== "complete") unavailable.push("liveness");
-  } catch { unavailable.push("liveness"); }
-  let decision: AutoView["decision"] = null;
-  try { decision = (await selfUpdateService().snapshot()).auto?.decision; } catch { unavailable.push("self-update"); }
-  if (needsYouEntries(body, null, Date.now() / 1000, project).some(entry => entry.kind === "pipeline" && (!body.workLinks?.pipelines[entry.row.pipeline.id] || body.workLinks.pipelines[entry.row.pipeline.id].links.some(link => link.kind === "pr" && link.state === null)))) unavailable.push("forge");
-  return needsYouAnswer(body, decision, Date.now() / 1000, project, { tasks, pipelines, dismissals, reports, admissions, ended, canonicalConversationId, workLinks: body.workLinks, unavailable }, { ...options, locale: options.locale ?? operatorLocale() ?? "en" }, order);
+    const wants = (kinds: readonly NeedsYouRowKind[]) => !options.kinds || options.kinds.some(kind => kinds.includes(kind));
+    const conversations = wants(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask"]);
+    const boardNeeded = conversations || wants(["lane-decision", "lane-review", "prototype"]);
+    const body = boardNeeded ? await source("board", () => sources.board(signal), { files: [], pipelines: [], tasks: [] }) : { files: [], pipelines: [], tasks: [] };
+    const tasks = boardNeeded ? await source("tasks", sources.tasks, []) : [];
+    const pipelines = boardNeeded ? await source("pipelines", sources.pipelines, []) : [];
+    const dismissals = boardNeeded ? await source("dismissals", sources.dismissals, []) : [];
+    const reports = wants(["decision"]) ? await source("bridge", sources.reports, null) : null;
+    const admissions = conversations ? await source("reply-suggestions", sources.admissions, []) : [];
+    const canonicalConversationId = conversations ? await source("identity", sources.identity, (id: string) => id) : (id: string) => id;
+    const liveness = conversations ? await source("liveness", () => sources.ended(project, signal, Math.max(0, deadlineAt - Date.now())), { ids: new Set<string>(), complete: false }) : { ids: new Set<string>(), complete: true };
+    if (!liveness.complete) { unavailable.push("liveness"); omissions.push("liveness"); }
+    const decision = wants(["update"]) ? await source("self-update", sources.decision, null) : null;
+    const locale = options.locale ?? await source("locale", sources.locale, "en");
+    if (needsYouEntries(body, null, Date.now() / 1000, project).some(entry => entry.kind === "pipeline" && (!body.workLinks?.pipelines[entry.row.pipeline.id] || body.workLinks.pipelines[entry.row.pipeline.id].links.some(link => link.kind === "pr" && link.state === null)))) unavailable.push("forge");
+    // A partial collection cannot validate a cursor into missing data.
+    const answer = needsYouAnswer(body, decision, Date.now() / 1000, project, { tasks, pipelines, dismissals, reports, admissions, ended: liveness.ids, canonicalConversationId, workLinks: body.workLinks, unavailable }, { ...options, signal, deadlineAt, ...(omissions.length ? { cursor: undefined } : {}), locale }, order);
+    if (omissions.length) Object.assign(answer, { partial: true, omissions: [...new Set([...omissions, ...(answer.omissions ?? [])])], countIsLowerBound: true });
+    while (Buffer.byteLength(JSON.stringify(answer)) > 24_000 && answer.rows.length) { answer.rows.pop(); answer.omittedCount++; }
+    if (answer.partial) delete answer.nextCursor;
+    return answer;
+  } finally { clearTimeout(timer); }
 }

@@ -1,4 +1,5 @@
 import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
+import { checkoutAdmission } from "./deploymentAdmission";
 import { resolveTrackedRevision } from "./git";
 import { prepareLauncherCredentials, releaseLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
@@ -1817,6 +1818,8 @@ export class SelfUpdateService {
   }
 
   async deployRevision(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
+    const settled = await checkoutAdmission(this.deps.dir, request, authorize, () => null);
+    if (settled) return settled;
     // Serialize target resolution with admission so two exact requests cannot build together.
     const preceding = this.deploying;
     const run = (async () => {
@@ -1848,12 +1851,17 @@ export class SelfUpdateService {
         if (/^[0-9a-f]{7,40}$/.test(requested) && active.revision.toLowerCase().startsWith(requested)) {
           const joinTarget = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === active.deploymentId);
           if (joinTarget && joinTarget.revision.toLowerCase().startsWith(requested)) {
-            const idempotencyKeys = [...new Set([...(joinTarget.idempotencyKeys ?? []), request.idempotencyKey])];
-            const idempotencyRequests = [...(joinTarget.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
-              { idempotencyKey: request.idempotencyKey, requestedRevision: request.revision! }];
-            authorize?.();
-            saveCheckoutDeployment(this.deps.dir, { ...joinTarget, idempotencyKeys, idempotencyRequests });
-            return { state: "accepted" as const, deploymentId: joinTarget.deploymentId, revision: joinTarget.revision, replayed: false };
+            return checkoutAdmission(this.deps.dir, request, authorize, () => {
+              // Admission may wait for another process. Preserve its latest
+              // phase and joins rather than writing the pre-lock snapshot.
+              const current = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === active.deploymentId);
+              if (!current || !current.revision.toLowerCase().startsWith(requested)) throw new Error("The deployment changed during admission");
+              const idempotencyKeys = [...new Set([...(current.idempotencyKeys ?? []), request.idempotencyKey])];
+              const idempotencyRequests = [...(current.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
+                { idempotencyKey: request.idempotencyKey, requestedRevision: request.revision! }];
+              saveCheckoutDeployment(this.deps.dir, { ...current, idempotencyKeys, idempotencyRequests });
+              return { state: "accepted" as const, deploymentId: current.deploymentId, revision: current.revision, replayed: false };
+            });
           }
         }
         return { state: "busy" as const, deploymentId: active.deploymentId, revision: active.revision };
@@ -1882,34 +1890,35 @@ export class SelfUpdateService {
       const health = await this.deps.hostHealth().catch(() => null);
       const current = await this.decide();
       if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
-      const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
       // Target, green checks and launcher observation can all wait. Authority
       // belongs to the attributable request at admission, after those waits.
-      authorize?.();
-      if (this.reserve(record, () => {}) || admitted)
-        return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
-      const serving = current.record!;
-      const alreadyServing = serving.launcher.state === "healthy" && !serving.launcher.error && serving.launcher.revision === target
-        && serving.web.state === "healthy" && serving.runtimeHost.state === "healthy"
-        && serving.web.revision === target.slice(0, 7) && serving.runtimeHost.revision === target.slice(0, 7)
-        && serving.web.pid !== null && serving.web.startIdentity !== null && this.deps.processAlive(serving.web.pid, serving.web.startIdentity)
-        && runtimeHostMatches(serving.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity);
-      const deploymentId = `checkout-${randomUUID()}`;
-      const at = new Date(this.deps.now()).toISOString();
-      saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? request.revision ?? target, revision: target,
-        phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
-        health: [], error: null, ...(alreadyServing ? { servingProgress: "Already serving the requested revision; nothing was restarted." } : {}),
-        owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
-      try { if (!alreadyServing) {
-        const started = this.startCheckout(record, revision, "seat", deploymentId);
-        if (!started.ok) throw new Error(started.error);
-      } }
-      catch (error) {
-        const row = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === deploymentId)!;
-        saveCheckoutDeployment(this.deps.dir, { ...row, phase: "failed", terminal: true, error: error instanceof Error ? error.message : String(error), updatedAt: new Date(this.deps.now()).toISOString(), revisionNumber: row.revisionNumber + 1 });
-        throw error;
-      }
-      return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
+      return checkoutAdmission(this.deps.dir, request, authorize, () => {
+        const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
+        if (this.reserve(record, () => {}) || admitted)
+          return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
+        const serving = current.record!;
+        const alreadyServing = serving.launcher.state === "healthy" && !serving.launcher.error && serving.launcher.revision === target
+          && serving.web.state === "healthy" && serving.runtimeHost.state === "healthy"
+          && serving.web.revision === target.slice(0, 7) && serving.runtimeHost.revision === target.slice(0, 7)
+          && serving.web.pid !== null && serving.web.startIdentity !== null && this.deps.processAlive(serving.web.pid, serving.web.startIdentity)
+          && runtimeHostMatches(serving.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity);
+        const deploymentId = `checkout-${randomUUID()}`;
+        const at = new Date(this.deps.now()).toISOString();
+        saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? request.revision ?? target, revision: target,
+          phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
+          health: [], error: null, ...(alreadyServing ? { servingProgress: "Already serving the requested revision; nothing was restarted." } : {}),
+          owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
+        try { if (!alreadyServing) {
+          const started = this.startCheckout(record, revision, "seat", deploymentId);
+          if (!started.ok) throw new Error(started.error);
+        } }
+        catch (error) {
+          const row = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === deploymentId)!;
+          saveCheckoutDeployment(this.deps.dir, { ...row, phase: "failed", terminal: true, error: error instanceof Error ? error.message : String(error), updatedAt: new Date(this.deps.now()).toISOString(), revisionNumber: row.revisionNumber + 1 });
+          throw error;
+        }
+        return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
+      });
     })();
     this.deploying = run;
     try { return await run; } finally { if (this.deploying === run) this.deploying = null; }

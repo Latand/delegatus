@@ -78,6 +78,12 @@ jobs:
             exit 1
           fi
 
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main; then
+            echo "Release tag commit is not on main; merge the reviewed release PR before tagging" >&2
+            exit 1
+          fi
+
           printf 'revision=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
 
           echo "Verified refs/tags/${RELEASE_TAG} at tag object $tag_object and commit $tag_commit"

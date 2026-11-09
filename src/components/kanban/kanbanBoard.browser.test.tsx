@@ -32,7 +32,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskFilesFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -68,6 +68,113 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+describe("accepted queued creation continuity", () => {
+  browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
+    const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "accepted-creation-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { expect(await captureAcceptedCreation(browser, out, false)).toHaveLength(24); }
+    finally { await browser.close(); sockets.close(); }
+  }, 600_000);
+});
+
+describe("independent creation lock", () => {
+  type CreationResult = { id?: string; accepted?: boolean; error?: string; warning?: string };
+  type CreationWindow = typeof window & { createAcceptedEvidence(): Promise<CreationResult>; firstResult: CreationResult | null };
+  for (const seam of ["headers", "body", "closed"] as const) browserTest(`a ${seam} stall releases capacity for another document`, async () => {
+    const { serveEvidenceFixture, openFixture, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "creation-lock", seam);
+    fs.mkdirSync(out, { recursive: true });
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let posts = 0;
+    let queued = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/fixture/config": { task: "Independent accepted work", repoDir: "/fixture/repo", project: "atlas", autoStart: false, stages: [] },
+      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: { tmux: { status: "healthy" } } },
+      "/api/tasks": { tasks: [] },
+      "/api/pipelines": async (request: Request) => {
+        if (request.method !== "POST") return Response.json({ pipelines: [] });
+        const number = ++posts;
+        const pipeline = buildPipeline({ id: `independent-${number}`, project: "atlas", task: "Independent accepted work", repoDir: "/fixture/repo", taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+        pipeline.state = "draft";
+        if (number === 1) {
+          entered();
+          if (seam === "body") return new Response(new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"pipeline":'));
+              await held;
+              try { controller.enqueue(new TextEncoder().encode(JSON.stringify(pipeline) + "}")); controller.close(); }
+              catch { /* The timed-out reader has already cancelled its stream. */ }
+            },
+          }), { status: 201, headers: { "content-type": "application/json" } });
+          await held;
+        }
+        return queued
+          ? Response.json({ pipeline, queued: { queuedAt: pipeline.createdAt, reason: "store_unavailable" } }, { status: 202 })
+          : Response.json({ pipeline }, { status: 201 });
+      },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const { context, page } = await openFixture(browser, `${server.base}?scenario=accepted-creation&project=atlas`, { width: 900, height: 700 }, "light", "en");
+    try {
+      await page.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
+      await page.clock.pauseAt(new Date("2030-01-01T00:00:01Z"));
+      const headers = seam === "body" ? page.waitForResponse(response => response.url().endsWith("/api/pipelines") && response.request().method() === "POST") : null;
+      await page.evaluate(() => {
+        (window as CreationWindow).firstResult = null;
+        void (window as CreationWindow).createAcceptedEvidence().then((value) => { (window as CreationWindow).firstResult = value; });
+      });
+      await started;
+      if (headers) await headers;
+      expect((await page.evaluate(() => navigator.locks.query())).held?.some(lock => lock.name === "delegatus-accepted-create")).toBe(true);
+      const second = await context.newPage();
+      await second.goto(`${server.base}?scenario=accepted-creation&project=atlas`);
+      await second.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      if (seam === "closed") await page.close();
+      else {
+        await page.clock.runFor(29_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toBeNull();
+        await page.clock.runFor(1_001);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+      }
+      const result = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+      expect(result).toEqual({ id: "independent-2" });
+      expect(posts).toBe(2);
+      release();
+      if (seam !== "closed") {
+        await page.clock.runFor(60_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+        expect(await page.locator('[data-pipeline="independent-1"], [data-creation="independent-1"]').count()).toBe(0);
+      }
+      expect(posts).toBe(2);
+      // Successful acceptance still serializes the shared eight-ID snapshot.
+      if (seam !== "closed") {
+        queued = true;
+        for (let index = 0; index < 8; index++) {
+          const document = index % 2 === 0 ? second : page;
+          expect(await document.evaluate(() => (window as CreationWindow).createAcceptedEvidence()))
+            .toEqual({ id: `independent-${index + 3}`, accepted: true });
+        }
+        const refused = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+        expect(refused.error).toContain("tracking is full");
+        expect(posts).toBe(10);
+      }
+      const locks = await second.evaluate(() => navigator.locks.query());
+      expect(locks.held?.filter(lock => lock.name === "delegatus-accepted-create")).toHaveLength(0);
+      fs.writeFileSync(path.join(out, "result.json"), JSON.stringify({ seam, posts, result, locks }, null, 2));
+    } finally { release(); await context.close(); await browser.close(); sockets.close(); server.stop(); }
+  }, 120_000);
+});
 
 describe("per-account paid spending", () => {
   browserTest("account row switch and balance fit in both locales and themes", async () => {
@@ -2588,6 +2695,101 @@ function richMemory(): RoleMemoryProjectView {
 }
 
 describe("memory profile window: opening under slow data", () => {
+  browserTest("a cached profile is readable while the first full rules response is still held", async () => {
+    const out = path.resolve(".artifacts/memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let releaseRules!: () => void;
+    let gate = Promise.resolve();
+    let rulesAnswered = 0, profileReads = 0, posts = 0;
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => { await gate; rulesAnswered++; return Response.json(rules); },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        profileReads++;
+        const lang = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        const view = service.read("garden", lang);
+        view.overall = { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "haiku", promptVersion: 1, stale: false,
+          answer: { headline: lang === "uk" ? "Збережений профіль проєкту" : "Saved project overview", text: lang === "uk" ? "Готовий опис доступний, поки завантажуються правила." : "The saved overview is available while the rules load.",
+            topics: [{ title: "Saved rule topic", text: "A known rule.", ruleIds: [rules.scopes.flatMap(scope => scope.active)[0]!.id] }] } };
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        rulesAnswered = profileReads = posts = 0; gate = new Promise<void>(resolve => { releaseRules = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-profile-ready]").waitFor({ timeout: 5000 });
+          expect(rulesAnswered).toBe(0); expect(profileReads).toBe(1);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+          const topic = page.getByRole("button", { name: /Saved rule topic/ });
+          expect(await topic.isDisabled()).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-before-rules.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-window-loading]").waitFor();
+          releaseRules();
+          await page.locator("[data-rules-section]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-all-rules.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.profile"), exact: true }).click();
+          await page.locator("[data-profile-ready]").waitFor();
+          expect(await topic.isDisabled()).toBe(false);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(1);
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+        } finally { releaseRules(); await context.close(); }
+      }
+    } finally { releaseRules?.(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
+  browserTest("the first slow rules answer opens both tabs after a poll tick", async () => {
+    const out = path.resolve(".artifacts/memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let answeredFirst!: () => void;
+    let began!: () => void;
+    let started = Promise.resolve();
+    let reads = 0, posts = 0;
+    const pending: Array<() => void> = [];
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => {
+        reads++;
+        const wait = new Promise<void>(resolve => { pending.push(resolve); if (reads === 1) answeredFirst = resolve; });
+        began(); await wait; return Response.json(rules);
+      },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        return Response.json(service.read("garden", new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en"));
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        reads = 0; posts = 0; started = new Promise<void>(resolve => { began = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.clock.install({ time: new Date("2026-01-02T12:00:00.000Z") });
+          await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
+          await started;
+          await page.locator("[data-rules-window-loading]").waitFor();
+          await page.clock.fastForward(16_000);
+          answeredFirst();
+          await page.locator("[data-memory-profile]").waitFor({ timeout: 5000 });
+          await page.locator('[data-memory-profile][aria-busy="false"]').waitFor({ timeout: 5000 });
+          expect(reads).toBe(1);
+          expect(await page.locator("[data-rules-window-loading]").count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile.png`) });
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          await page.locator("[data-rules-section]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-rules.png`) });
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } finally { for (const release of pending.splice(0)) release(); await context.close(); }
+      }
+    } finally { for (const release of pending.splice(0)) release(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
   browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
     const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
@@ -17763,7 +17965,7 @@ describe("a task's album: every picture its agents made, one click from the card
                 /* The foot keeps one line: every visible child shares the album button's line. */
                 footLines: new Set([...foot.children].filter((child) => child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map((child) => { const rect = child.getBoundingClientRect(); return Math.round((rect.top + rect.bottom) / 2); })).size,
                 exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
-                buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
+                buttonsOnBoard: [...document.querySelectorAll("[data-album-button]")].filter((button) => /\d/.test(button.textContent ?? "")).length,
               };
             });
             readings[`${label}-card`] = cardReading;
@@ -17772,7 +17974,7 @@ describe("a task's album: every picture its agents made, one click from the card
             if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
             if (cardReading.footLines !== 1) failures.push(`${label}: the card foot wraps onto ${cardReading.footLines} lines`);
             if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
-            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
+            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons with a picture count on the board, expected the two tasks with pictures`);
 
             await button.click();
             await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
@@ -17882,6 +18084,24 @@ describe("a task's album: every picture its agents made, one click from the card
     fs.writeFileSync("evidence/task-album/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
+
+  /* docs/design/task-file-preview.md §11.5: the Files view and the preview it opens, over a real
+     repository the driver builds, at 1440 and 820 here and at 390 below, in both languages and themes.
+     Frames go to TASK_FILES_PNG_DIR (default `.artifacts/task-files/`). */
+  for (const phone of [false, true]) {
+    browserTest(`the task's Files view and the preview it opens, on ${phone ? "the phone" : "the desktop"}, in both languages and themes`, async () => {
+      const out = path.resolve(process.env.TASK_FILES_PNG_DIR ?? ".artifacts/task-files", phone ? "phone" : "desktop");
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.mkdirSync(out, { recursive: true });
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try {
+        const result = await captureTaskFilesFrames(browser, out, phone);
+        expect(result.failures).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    }, 1_800_000);
+  }
 });
 
 describe("optimistic UI fix line: refusals and older pages say so in place", () => {
@@ -43607,4 +43827,61 @@ describe("a task card without inline conversations", () => {
     fs.writeFileSync("evidence/task-card-no-inline-conversations/rendered.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 1_500_000);
+});
+
+
+describe("MCP engine refusal card", () => {
+  browserTest("the persisted refusal and recovery reason remain readable in both locales and themes", async () => {
+    const { ensureSeatTickCard } = await import("@/lib/monitor/seatTickController");
+    const { seatMcpHealth } = await import("@/lib/monitor/seatMcpHealth");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { statePath } = await import("@/lib/configDir");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR!, "mcp-health-card");
+    fs.mkdirSync(out, { recursive: true });
+    const health = seatMcpHealth(null, null, "unused", Date.parse("2026-11-06T00:00:00Z"), "http", {
+      seq: 1, observedAt: "2026-11-06T00:00:00Z", denied: [{ tool: "get_task", seq: 1 }], unverified: false,
+    });
+    ensureSeatTickCard("atlas", { kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "1",
+      detail: `${health.detail}; check the seat conversation and rotate the seat if recovery remains unavailable` }, "2026-11-06T00:00:00Z");
+    const notice = loadTasks(statePath("tasks.json")).find(task => task.project === "atlas"
+      && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"))!.text;
+    const server = await serveEvidenceFixture(out);
+    // A short alias to this test's owned temp directory keeps Chromium sockets
+    // within the platform limit without allocating outside the stage sandbox.
+    const tempFd = process.platform === "linux" ? fs.openSync(process.env.TMPDIR!, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) {
+        const texts = { notice, failed: "Maintenance finished", live: "Maintenance running" };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(Buffer.from(JSON.stringify(texts)).toString("base64"))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390, 1, new Date("2026-11-06T00:00:00Z"));
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').tap();
+          let node = page.locator(width === 390 ? '[data-phone-card="task:t-tick-notice"]' : card("t-tick-notice"));
+          await node.waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-card.png`) });
+          if (width === 390) {
+            expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+            await node.tap();
+            await page.locator('[data-phone-task-description]').tap();
+            node = page.locator('[data-phone-task-editor="description"] textarea');
+          } else {
+            await node.locator("[data-describe]").click();
+            node = node.locator("textarea");
+          }
+          await node.waitFor();
+          expect(await node.inputValue()).toBe(notice.split("\n").slice(2).join("\n"));
+          expect(notice).toContain("engine approval denied: get_task");
+          expect(notice).toContain("Wakes to a live host with broken MCP remain withheld");
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-reason.png`) });
+          readings.push({ lang, theme, width, text: await node.inputValue(), errors: pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 180_000);
 });

@@ -421,6 +421,32 @@ const stateSchema = [
     PRIMARY KEY(collection, row_key),
     FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
   )`,
+  // Keep the privacy clock outside the pruned change journal and surviving
+  // rows. All writers, including imports and physical deletes, advance it in
+  // their own transaction; request and scope bookkeeping leave it untouched.
+  `CREATE TABLE IF NOT EXISTS role_memory_privacy_revision (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0)
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_insert AFTER INSERT ON state_rows
+    WHEN NEW.collection='role_memory' AND NEW.row_key >= 'r:' AND NEW.row_key < 'r;'
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_update AFTER UPDATE ON state_rows
+    WHEN (OLD.collection='role_memory' AND OLD.row_key >= 'r:' AND OLD.row_key < 'r;')
+      OR (NEW.collection='role_memory' AND NEW.row_key >= 'r:' AND NEW.row_key < 'r;')
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS role_memory_privacy_delete AFTER DELETE ON state_rows
+    WHEN OLD.collection='role_memory' AND OLD.row_key >= 'r:' AND OLD.row_key < 'r;'
+    BEGIN
+      INSERT INTO role_memory_privacy_revision VALUES(1,1)
+        ON CONFLICT(singleton) DO UPDATE SET revision=revision+1;
+    END`,
   `CREATE INDEX IF NOT EXISTS pipeline_integration_format
     ON state_rows(collection,row_key) WHERE ${PIPELINE_INTEGRATION_FORMAT}`,
   `CREATE TABLE IF NOT EXISTS pipeline_request_receipts (
@@ -1186,6 +1212,65 @@ function evidenceIndexReadyAt(db: Database, key: string): boolean {
  * schema_version. */
 export function pipelineEvidenceRevision(filename: string): string | null {
   return pipelineIndexRevision(filename, "pipeline_evidence_clock");
+}
+
+type TaskPipelineKey = { collection: string; row_key: string };
+let taskPipelineSelection: { filename: string; version: string; links: Map<string, TaskPipelineKey[]> | null } | undefined;
+const MAX_TASK_PIPELINE_LINKS = 20_000;
+
+/** Read an album's active and archived lanes without opening a writer or
+    decoding unrelated history. One scalar membership pass serves the whole
+    board summary, even when it asks for hundreds of tasks. The evidence clock
+    observes raw peer writes as well as store mutations. */
+export function readPipelineRowsForTask(filename: string, taskId: string): unknown[] | null {
+  const revisions = readStateCollectionRevisions(filename, ["pipelines", "pipelines_archive"]);
+  if (revisions.get("pipelines") == null || revisions.get("pipelines_archive") == null) return null;
+  const version = pipelineEvidenceRevision(filename) ?? stateEvidenceVersion(filename);
+  const db = sharedStateReadonlyDatabase(filename);
+  if (taskPipelineSelection?.filename !== filename || taskPipelineSelection.version !== version) {
+    const rows = db.query<TaskPipelineKey & { row_order: number; task_ids: string | null }, [number]>(`
+      SELECT collection, row_key, row_order,
+        CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.taskIds') END AS task_ids
+      FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')
+      LIMIT ?
+    `).all(MAX_TASK_PIPELINE_LINKS + 1);
+    // Ordering the large source collection made SQLite walk its history-order
+    // index and fetch payloads scattered across the database. Sort the compact
+    // membership projection after its sequential read instead.
+    rows.sort((a, b) => a.collection.localeCompare(b.collection) || a.row_order - b.row_order
+      || Buffer.compare(Buffer.from(a.row_key), Buffer.from(b.row_key)));
+    let links = rows.length > MAX_TASK_PIPELINE_LINKS ? null : new Map<string, TaskPipelineKey[]>();
+    let count = 0;
+    if (links) for (const { task_ids, collection, row_key } of rows) {
+      const ids: unknown = typeof task_ids === "string" && task_ids.startsWith("[") ? parseSqliteJson(task_ids, db) : [];
+      if (!Array.isArray(ids)) continue;
+      for (const id of ids) {
+        if (typeof id !== "string") continue;
+        const keys = links.get(id) ?? [];
+        keys.push({ collection, row_key });
+        links.set(id, keys);
+        count++;
+      }
+      if (count > MAX_TASK_PIPELINE_LINKS) { links = null; break; }
+    }
+    taskPipelineSelection = { filename, version, links };
+  }
+  // An installation above the cache bound remains readable through a targeted
+  // query, without retaining an unbounded membership graph.
+  const keys = taskPipelineSelection.links ? taskPipelineSelection.links.get(taskId) ?? []
+    : db.query<TaskPipelineKey, [string]>(`
+      SELECT collection, row_key FROM state_rows
+      WHERE collection IN ('pipelines', 'pipelines_archive') AND EXISTS (
+        SELECT 1 FROM json_each(CASE WHEN json_valid(value_json) THEN value_json ELSE '{}' END, '$.taskIds')
+        WHERE type = 'text' AND value = ?
+      )
+      ORDER BY collection, row_order, row_key
+    `).all(taskId);
+  const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+  return keys.flatMap(({ collection, row_key }) => {
+    const row = read.get(collection, row_key);
+    return row ? [parseSqliteJson(row.value_json, db)] : [];
+  });
 }
 
 /** Only changes to branch claims invalidate an asynchronous ownership read. */

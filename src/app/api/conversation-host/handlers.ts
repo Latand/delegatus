@@ -631,7 +631,13 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     await releaseAttachments("refused");
     return NextResponse.json({ error: "conversation authority could not be recorded" }, { status: 503 });
   }
+  try { relay?.admissionGuard?.(); }
+  catch {
+    await releaseAttachments("refused");
+    return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
+  }
   const selected = await dispatchConversationMessage({
+    ...(relay?.admissionGuard ? { admissionGuard: relay.admissionGuard, recoveryAuthorityGuard: relay.admissionGuard } : {}),
     path: filePath,
     ...(conversationId ? { conversationId } : {}),
     ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
@@ -643,6 +649,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     images,
     ...(origin ? { origin } : {}),
   } satisfies StructuredMessageRequest, {
+    ...(relay?.admissionGuard ? { admissionGuard: relay.admissionGuard, recoveryAuthorityGuard: relay.admissionGuard } : {}),
     pid: hasPid ? pid : null,
     path: filePath,
     ...(conversationId ? { conversationId } : {}),
@@ -660,6 +667,8 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     structured: request => structuredEnabled ? dependencies.enqueueStructuredMessage(request) : Promise.resolve(null),
     legacy: async (request): Promise<DeliveryOutcome | NextResponse<ApiError>> => {
       const revoked = actorRejection();
+      try { relay?.admissionGuard?.(); }
+      catch { return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 }); }
       return revoked ?? dependencies.deliverConversationMessage(request);
     },
   });

@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { procBackend } from "@/lib/proc";
+import { agentRegistry } from "@/lib/agent/registry";
 
 import {
   isOwnedTempConsumerName,
   isOwnedTempName,
   recordTempSweep,
   runTempSweep,
+  runTempSweepInHelper,
   scanProcesses,
   startTempSweep,
   stopTempSweep,
@@ -983,4 +985,23 @@ test("a failed production sweep records a fresh failed report before refusing", 
   const status = tempSweepStatus();
   expect(status?.failed).toBeTrue();
   expect(status?.errors).toBe(1);
+});
+
+test("temp cleanup protects a live owner without loading full registry history", async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"llv-temp-projection-"));
+  const held=path.join(root,"llv-held-candidate");fs.mkdirSync(held);
+  fs.writeFileSync(path.join(held,"retained.txt"),"keep");
+  const registry=agentRegistry();
+  registry.upsert({key:{engine:"codex",sessionId:"temp-protection-fixture"},artifactPath:path.join(root,"owner.jsonl"),
+    cwd:held,status:"live",host:null,accountId:null,claimEpoch:0,claimOwner:null,pendingAction:null});
+  const full=spyOn(registry,"readOnlySnapshot").mockImplementation(()=>{throw new Error("full history must not be read for cwd protection");});
+  try {
+    const report=await runTempSweepInHelper({NODE_ENV:"test",LLV_TEMP_SWEEP:"dry-run",LLV_TEMP_SWEEP_MAX_AGE_HOURS:"24"},{
+      roots:[{path:root,via:""}],scan:{ownNamespace:null,processes:[]},now:()=>Date.now()+3*86400000});
+    expect(report?.failed).not.toBe(true);
+    expect(report?.kept.inUse).toBe(1);
+    expect(report?.removed).toEqual([]);
+    expect(fs.readFileSync(path.join(held,"retained.txt"),"utf8")).toBe("keep");
+    expect(full).not.toHaveBeenCalled();
+  } finally {full.mockRestore();fs.rmSync(root,{recursive:true,force:true});}
 });

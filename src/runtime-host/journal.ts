@@ -22,7 +22,7 @@ import { Database } from "bun:sqlite";
 
 import { codexAnswerMatchesDispatch, sameCodexRequest } from "@/lib/runtime/codexRequestReceipt";
 import {
-  RUNTIME_SCHEMA_VERSION,
+  RUNTIME_SCHEMA_VERSION, DeploymentAdmissionClosedError,
   compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
   type ViewerDeploymentList, type ViewerDeploymentListOptions,
   RUNTIME_DELIVERY_DISCARDED_REASON,
@@ -549,6 +549,9 @@ export class RuntimeJournal {
           deployment_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
           request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
           active INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        )`,
+        `CREATE TABLE IF NOT EXISTS viewer_deployment_refusals (
+          idempotency_key TEXT PRIMARY KEY, requested_revision TEXT NOT NULL
         )`,
         `CREATE TABLE IF NOT EXISTS viewer_deployment_requests (
           idempotency_key TEXT PRIMARY KEY, deployment_id TEXT NOT NULL,
@@ -1236,10 +1239,10 @@ export class RuntimeJournal {
       if (stopCompleted && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
-      // Steer-first fallback follows the next live turn. Keep the observed turn
-      // on its receipt, without pinning the durable effect to the ended turn.
+      // Policies that select a running turn at dispatch retain its identity on
+      // the receipt. A proven pre-write refusal can then retry when idle.
       if (beginning && (command.kind === "send" || command.kind === "steer")
-        && command.policy !== "steer-or-queue" && details.turnId !== undefined) {
+        && command.policy !== "steer-or-queue" && command.policy !== "context-or-queue" && details.turnId !== undefined) {
         const effect = this.db.query<{ payload_json: string }, [string]>("SELECT payload_json FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`);
         if (!effect) throw new Error("runtime operation effect is missing");
@@ -1748,6 +1751,7 @@ export class RuntimeJournal {
     const requestHash = createHash("sha256").update(stableJson({ requestedRevision: input.requestedRevision, revision: input.revision })).digest("hex");
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      this.assertViewerDeploymentOpen(input.idempotencyKey, input.requestedRevision);
       const existing = this.db.query<{ deployment_id: string; request_hash: string; status_json: string }, [string]>(
         `SELECT requests.deployment_id, requests.request_hash, deployments.status_json
           FROM viewer_deployment_requests requests
@@ -1840,6 +1844,39 @@ export class RuntimeJournal {
     return row ? JSON.parse(row.status_json) as ViewerDeploymentStatus : null;
   }
 
+  assertViewerDeploymentOpen(key: string, requestedRevision: string): void {
+    const row = this.db.query<{ requested_revision: string }, [string]>(
+      "SELECT requested_revision FROM viewer_deployment_refusals WHERE idempotency_key = ?").get(key);
+    if (!row) return;
+    if (row.requested_revision !== requestedRevision) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
+    throw new DeploymentAdmissionClosedError();
+  }
+
+  /** This bypasses slow resolution, but shares the admission/join transaction. */
+  async reconcileViewerDeployment(key: string, requestedRevision: string): Promise<ViewerDeploymentReceipt> {
+    this.assertHealthy();
+    await waitForStateLock("runtime.viewer-deployment-reconcile", () => {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try { stateLockAttempt("runtime.viewer-deployment-reconcile", () => this.db.exec("BEGIN IMMEDIATE"), "viewer deployments"); }
+      finally { this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}`); }
+    }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
+    let receipt: ViewerDeploymentReceipt | null = null;
+    try {
+      this.assertViewerDeploymentOpen(key, requestedRevision);
+      const existing = this.viewerDeploymentByIdempotencyKey(key);
+      if (existing) {
+        if (existing.requestedRevision !== requestedRevision) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
+        receipt = { state: "accepted", deploymentId: existing.deploymentId, revision: existing.revision, replayed: true };
+      } else this.db.query("INSERT INTO viewer_deployment_refusals(idempotency_key, requested_revision) VALUES (?, ?)").run(key, requestedRevision);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
+    if (!receipt) throw new DeploymentAdmissionClosedError();
+    return receipt;
+  }
+
   viewerDeploymentByIdempotencyKey(idempotencyKey: string): ViewerDeploymentStatus | null {
     const row = this.db.query<{ status_json: string; requested_revision: string }, [string]>(`SELECT deployments.status_json, requests.requested_revision
       FROM viewer_deployment_requests requests JOIN viewer_deployments deployments USING (deployment_id)
@@ -1860,6 +1897,7 @@ export class RuntimeJournal {
       }
     }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
     try {
+      this.assertViewerDeploymentOpen(input.idempotencyKey, input.requestedRevision);
       const existing = this.db.query<{ deployment_id: string; requested_revision: string; request_hash: string; status_json: string }, [string]>(
         `SELECT requests.deployment_id, requests.requested_revision, requests.request_hash, deployments.status_json
           FROM viewer_deployment_requests requests

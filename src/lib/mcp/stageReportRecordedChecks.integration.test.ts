@@ -16,6 +16,7 @@ const root = createGateSandbox();
 Object.assign(process.env, isolatedEnvironment(root, checkEnvironment(process.env)));
 delete process.env.LLV_SPAWN_CAPABILITY;
 const { POST } = await import("@/app/api/mcp/route");
+const { POST: recordedPOST } = await import("@/app/api/recorded-check/route");
 const { setMcpHttpDependenciesForTests } = await import("./http");
 const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { spawnCapabilityDigest } = await import("@/lib/agent/callerClaims");
@@ -27,11 +28,13 @@ const { buildPipeline, savePipelines, findPipelineRecord } = await import("@/lib
 const { defaultPipelinePorts, reportStageCompletion, tickPipelines } = await import("@/lib/pipelines/engine");
 const { resolvePipelineRole } = await import("@/lib/pipelines/roles");
 const { RecordedCheckStore, rowSchema, recordedRootHeld } = await import("@/lib/recordedChecks/store");
+const { recordedReportReceipts } = await import("@/lib/recordedChecks/reportGate");
 const { retainResult } = await import("@/lib/recordedChecks/service");
-const { descriptorSchema, terminalSchema, readEnvelope, digest } = await import("@/lib/recordedChecks/wire");
+const { descriptorSchema, terminalSchema, identitySchema, readEnvelope, digest } = await import("@/lib/recordedChecks/wire");
 const identity = await import("@/lib/processIdentity");
 const custody = await import("@/lib/runtime/signalSandboxContext");
 const NOW = Date.parse("2026-11-01T12:00:00Z");
+const visited: Completion = { visited: 1, completed: 1, outcomes: [{ name: "focused.test.ts", exit: 0 }] };
 let cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.reverse()) await cleanup();
@@ -45,7 +48,9 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function fixture(name: string, live: "recorder" | "wrapper" | "command" | "not-started" | null = null, registerReceipt = true) {
+type Completion = { selection?: string[]; visited: number; completed: number; outcomes: Array<{ name: string; exit: number }> };
+async function fixture(name: string, live: "recorder" | "wrapper" | "supervisor" | "command" | "not-started" | null = null,
+  registerReceipt = true, completion: Completion = { visited: 0, completed: 0, outcomes: [] }) {
   const directory = path.join(root, name);
   fs.mkdirSync(directory);
   Object.assign(process.env, isolatedEnvironment(directory, checkEnvironment(original)));
@@ -88,7 +93,7 @@ import { cpuOwnerIdentity as captureProcessIdentity } from ${JSON.stringify(impo
 Date.now = () => ${NOW};
 const directory = process.argv[2], gate = path.join(directory, "check.log.gate");
 const parent = JSON.parse(process.argv[3]), live = process.argv[4];
-const manifest = await buildManifest({ cwd: directory, deadline: ${NOW + 60000}, executionMs: 1000, selection: ["focused.test.ts"],
+const manifest = await buildManifest({ cwd: directory, deadline: ${NOW + 60000}, executionMs: 1000, selection: ${JSON.stringify(completion.selection ?? ["focused.test.ts"])},
   executionEnvironment: {}, configurationDigest: digest({fixture:true}), roots: [{directory,purpose:"evidence"}],
   inputs: [{root:directory,file:"producer.ts"}], outputs: [{root:directory,file:"check.log"}], completion: {root:directory,file:"complete.json"} });
 const own = captureProcessIdentity(process.pid);
@@ -98,19 +103,26 @@ const descriptor = {...body, wrapper:live === "wrapper" ? parent : own, descript
 writeEnvelope(path.join(gate,"descriptor.json"),descriptor);
 writeEnvelope(path.join(gate,"owner.json"),own);
 process.env.LLV_RECORDED_CHECK_DIRECTORY=gate; process.env.LLV_RECORDED_CHECK_ID=body.runId;
-const report = live === "not-started" ? null : producerReport("portable", live === "command" ? parent : own, {phase:"close",cleanup:"confirmed",commandExit:1});
+const report = live === "not-started" ? null : producerReport("portable", live === "command" ? parent : own, {phase:"close",cleanup:"confirmed",commandExit:1,...(live === "supervisor" ? {supervisor:parent} : {})});
 writeEnvelope(path.join(gate,"result.json"),{version:1,runId:body.runId,descriptorDigest:descriptor.descriptorDigest,
   wrapperExit:1,wrapperSignal:null,cancellation:null,closedAt:Date.now(),closedUptimeMs:custodyClock(),report,reports:report ? [report] : [],
   ...(live === "not-started" ? {dispatch:"not-started"} : {})});
 fs.writeFileSync(path.join(gate,"exit"),"1\\n");
 fs.writeFileSync(path.join(directory,"check.log"),"interrupted before visiting files\\n");
-writeEnvelope(path.join(directory,"complete.json"),{selection:manifest.selection,visited:0,completed:0,outcomes:[]});
+writeEnvelope(path.join(directory,"complete.json"),{...${JSON.stringify(completion)},selection:manifest.selection});
 `);
   const child = spawnSync(process.execPath, [source, directory, JSON.stringify(custody.cpuOwnerIdentity(process.pid)), live ?? ""],
     { env: checkEnvironment(process.env), encoding: "utf8", timeout: 15000 });
   expect(child.status, child.stderr).toBe(0);
   const descriptor = descriptorSchema.parse(readEnvelope(path.join(gate, "descriptor.json")));
-  fs.writeFileSync(path.join(directory, "direct-evidence.log"), "Isolated producer check: exit 0; descriptor decoded successfully.\n");
+  const direct = spawnSync(process.execPath, ["--eval", `
+    const { descriptorSchema, readEnvelope } = await import(${JSON.stringify(import.meta.resolve("@/lib/recordedChecks/wire"))});
+    const descriptor = descriptorSchema.parse(readEnvelope(process.argv[1]));
+    if (descriptor.manifest.selection.length < 1) throw new Error("missing selection");
+    console.log("Independent descriptor validation: exit 0");
+  `, path.join(gate, "descriptor.json")], { env: checkEnvironment(process.env), encoding: "utf8", timeout: 15000 });
+  expect(direct.status, direct.stderr).toBe(0);
+  fs.writeFileSync(path.join(directory, "direct-evidence.log"), direct.stdout);
   let row = rowSchema.parse({ id: descriptor.runId, request: name, descriptor, log, revision: 1, admission: "refused",
     reason: "EBADF: bad file descriptor, close", result: null, notification: null, acknowledgement: null,
     binding: { project: pipeline.project, pipeline: pipeline.id, stage: "build", attempt: 1, launch: attempt.launchId,
@@ -130,8 +142,10 @@ writeEnvelope(path.join(directory,"complete.json"),{selection:manifest.selection
   let service = buildService();
   setMcpHttpDependenciesForTests({ service: async () => service,
     conversationForCapability: value => registry.conversationIdForSpawnCapabilityDigest(spawnCapabilityDigest(value)) });
-  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => POST(new NextRequest(request)) });
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => new URL(request.url).pathname === "/api/recorded-check"
+    ? recordedPOST(new NextRequest(request)) : POST(new NextRequest(request)) });
   cleanups.push(() => { listener.stop(true); });
+  process.env.LLV_VIEWER_CONTROL_URL = listener.url.origin;
   const client = new Client({ name: "stage-report-fixture", version: "1" });
   cleanups.push(() => client.close());
   await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), { requestInit: { headers: { "x-llv-spawn-capability": capability } } }));
@@ -140,7 +154,13 @@ writeEnvelope(path.join(directory,"complete.json"),{selection:manifest.selection
     ...(verdict === "fail" ? { findings: [{ severity: "P1", text: "Direct verification found an implementation defect." }] } : {}),
     ...(blocked ? { blocked: true, blockedReason: "Recorded verification is unavailable." } : {}),
   } })).structuredContent as Record<string, unknown> & { excludedRecordedChecks?: RecordedCheckExclusion[] };
-  return { row, read, call, pipeline, directory, ports, register: write,
+  const acknowledge = async () => {
+    const result = read().result!;
+    return (await client.callTool({ name: "recorded_check", arguments: { action: "acknowledge", receiptId: row.id,
+      clientRequestId: "acknowledge", resultRevision: result.revision, resultDigest: result.digest,
+      evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" } })).structuredContent;
+  };
+  return { row, read, call, acknowledge, pipeline, directory, ports, register: write,
     update: (change: Partial<typeof row>) => { row = { ...row, ...change, revision: row.revision + 1 }; write(); },
     restart: () => { receipts.close(); receipts = new SqliteMcpReceiptStore(path.join(directory, "mcp.sqlite")); service = buildService(); },
     report: () => findPipelineRecord(pipeline.id)!.runs[0].attempts[0].report };
@@ -254,9 +274,124 @@ test("fenced fallback settlement persists exclusions without an explicit stage r
     resultRevision: f.row.result!.revision, custody: "cleanup-confirmed", reason: expect.stringContaining("EBADF") }]);
 });
 
-for (const variant of ["absent", "unknown-cleanup", "foreign", "visited", "completed", "no-result"] as const) {
+for (const completion of [
+  { visited: 1, completed: 0, outcomes: [] },
+  { visited: 0, completed: 1, outcomes: [{ name: "focused.test.ts", exit: 0 }] },
+  visited,
+  { ...visited, outcomes: [{ name: "focused.test.ts", exit: 1 }] },
+]) test(`refused visited receipt completes through SDK and settlement: ${JSON.stringify(completion)}`, async () => {
+  const f = await fixture(`refused-visited-${completion.visited}-${completion.completed}-${completion.outcomes[0]?.exit ?? "none"}`, null, true, completion);
+  const before = f.read();
+  const failed = completion.outcomes.filter(outcome => outcome.exit !== 0).length;
+  expect(before.result).toMatchObject({ state: "unknown", complete: false, terminal: null,
+    visited: completion.visited, completed: completion.completed, failed });
+  expect(recordedReportReceipts(f.row.binding.launch)[0]).toMatchObject({ pending: true, complete: false });
+  expect(await f.acknowledge()).toMatchObject({ ok: false, error: expect.stringContaining("incomplete") });
+  const response = await f.call("pass");
+  expect(response).toMatchObject({ ok: true, excludedRecordedChecks: [{ id: f.row.id,
+    resultRevision: before.result!.revision, custody: "cleanup-confirmed",
+    reason: expect.stringContaining(`visited ${completion.visited}/1, completed ${completion.completed}, failed ${failed}`),
+  }] });
+  expect(f.report()?.excludedRecordedChecks).toEqual(response.excludedRecordedChecks);
+  f.restart();
+  expect(await f.call("pass")).toMatchObject({ ok: true, replayed: true, excludedRecordedChecks: response.excludedRecordedChecks });
+  f.ports.conversationAgentActive = async () => false;
+  f.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "Verified independently", ts: NOW + 1_000 },
+    lastRecordAt: NOW + 1_000 } as Awaited<ReturnType<typeof f.ports.durableTurnEvidence>>);
+  await tickPipelines([], f.ports);
+  const attempt = findPipelineRecord(f.pipeline.id)!.runs[0].attempts[0];
+  expect(attempt.verdict?.status).toBe("pass");
+  expect(attempt.excludedRecordedChecks).toEqual(response.excludedRecordedChecks);
+  expect(attempt.report?.excludedRecordedChecks).toEqual(response.excludedRecordedChecks);
+  const reopened = spawnSync(process.execPath, ["--eval", `
+    const { recordedReportReceipts } = await import(${JSON.stringify(import.meta.resolve("@/lib/recordedChecks/reportGate"))});
+    const { findPipelineRecord } = await import(${JSON.stringify(import.meta.resolve("@/lib/pipelines/store"))});
+    console.log(JSON.stringify({ receipts: recordedReportReceipts(process.argv[1]),
+      attempt: findPipelineRecord("report-lane").runs[0].attempts[0] }));
+  `, f.row.binding.launch], { env: checkEnvironment(process.env), encoding: "utf8", timeout: 15000 });
+  expect(reopened.status, reopened.stderr).toBe(0);
+  const durable = JSON.parse(reopened.stdout);
+  expect(durable.receipts[0]).toMatchObject({ pending: true, complete: false, exclusion: response.excludedRecordedChecks![0] });
+  expect(durable.attempt.excludedRecordedChecks).toEqual(response.excludedRecordedChecks);
+  expect(f.read()).toEqual(before);
+  expect(recordedRootHeld(f.directory)).toBe(true);
+});
+
+for (const admission of ["accepted", "preparing"] as const) {
+  for (const field of ["visited", "completed"] as const) test(`${admission} ${field} receipt still blocks SDK pass`, async () => {
+    const f = await fixture(`${admission}-${field}`, null, true, { visited: 0, completed: 0, outcomes: [], [field]: 1 });
+    const result = (await retainResult({ ...f.row, admission })).result;
+    f.update({ admission, result });
+    expect(recordedReportReceipts(f.row.binding.launch)[0]).toMatchObject({ pending: admission === "preparing", complete: false, exclusion: null });
+    expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+    expect(f.report()).toBeUndefined();
+  });
+}
+
+test("accepted partial evidence still requires acknowledgement through the SDK", async () => {
+  const f = await fixture("accepted-partial", null, true, { ...visited, selection: ["focused.test.ts", "remaining.test.ts"] });
+  const result = (await retainResult({ ...f.row, admission: "accepted" })).result;
+  f.update({ admission: "accepted", result });
+  expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+  expect(await f.acknowledge()).toMatchObject({ ok: true });
+  expect(await f.call("pass", "after-ack")).toMatchObject({ ok: true });
+  expect(f.read().result?.complete).toBe(false);
+  expect(recordedRootHeld(f.directory)).toBe(false);
+});
+
+test("a complete failed command stays failed when it supplies no outstanding work", async () => {
+  const f = await fixture("accepted-failure", null, true, { ...visited, outcomes: [{ name: "focused.test.ts", exit: 1 }] });
+  const result = (await retainResult({ ...f.row, admission: "accepted" })).result;
+  f.update({ admission: "accepted", result });
+  expect(result).toMatchObject({ complete: true, failed: 1, terminal: { report: { commandExit: 1 } } });
+  expect(recordedReportReceipts(f.row.binding.launch)[0]).toMatchObject({ pending: false, complete: true, exclusion: null });
+  const before = f.read();
+  expect(await f.call("pass")).toMatchObject({ ok: true });
+  expect(f.read()).toEqual(before);
+});
+
+for (const owner of ["recorder", "wrapper", "supervisor", "command"] as const) {
+  for (const status of ["alive", "unverified"] as const) test(`refused visited receipt blocks with ${status} ${owner}`, async () => {
+    const f = await fixture(`visited-${status}-${owner}`, owner, true, visited);
+    const parent = custody.cpuOwnerIdentity(process.pid)!;
+    const actualStatus = custody.cpuOwnerStatus;
+    const uncertain = status === "unverified" ? spyOn(custody, "cpuOwnerStatus").mockImplementation(identity =>
+      identity?.pid === parent.pid ? "unverified" : actualStatus(identity)) : null;
+    try {
+      const before = f.read();
+      expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+      expect(f.report()).toBeUndefined();
+      expect(f.read()).toEqual(before);
+      expect(recordedRootHeld(f.directory)).toBe(true);
+    } finally { uncertain?.mockRestore(); }
+  });
+}
+
+for (const field of ["runId", "descriptorDigest", "atUptimeMs", "phase", "cleanup"] as const) {
+  test(`refused visited receipt rejects retained custody with wrong ${field}`, async () => {
+    const f = await fixture(`retained-wrong-${field}`, null, true, visited);
+    const { reportSchema } = await import("@/lib/recordedChecks/wire");
+    const report = reportSchema.parse(readEnvelope(path.join(`${f.row.log}.gate`, "supervisor.json")));
+    const value = field === "atUptimeMs" ? f.row.descriptor.startedUptimeMs - 1
+      : field === "phase" ? "dispatch" : field === "cleanup" ? "unknown" : digest("foreign-proof");
+    f.update({ custody: [{ ...report, [field]: value }] });
+    fs.unlinkSync(path.join(`${f.row.log}.gate`, "result.json"));
+    expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+    expect(f.report()).toBeUndefined();
+  });
+}
+
+for (const field of ["runId", "descriptorDigest"] as const) test(`refused visited receipt rejects terminal ${field} mismatch`, async () => {
+  const f = await fixture(`terminal-wrong-${field}`, null, true, visited);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(`${f.row.log}.gate`, "result.json")));
+  f.update({ result: { ...f.row.result!, terminal: { ...terminal, [field]: digest("foreign-terminal") } } });
+  expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+  expect(f.report()).toBeUndefined();
+});
+
+for (const variant of ["absent", "unknown-cleanup", "foreign", "no-result"] as const) {
   test(`MCP keeps a ${variant} receipt blocking`, async () => {
-    const f = await fixture(variant);
+    const f = await fixture(variant, null, true, visited);
     const file = path.join(`${f.row.log}.gate`, "result.json");
     const terminal = readEnvelope(file) as Record<string, unknown>;
     if (variant === "absent") fs.unlinkSync(file);
@@ -265,7 +400,6 @@ for (const variant of ["absent", "unknown-cleanup", "foreign", "visited", "compl
       const report = { ...(terminal.report as object), cleanup: "unknown" };
       fs.writeFileSync(file, JSON.stringify({ ...terminal, report, reports: [report] }));
     } else if (variant === "no-result") f.update({ result: null });
-    else f.update({ result: { ...f.row.result!, [variant]: 1 } });
     expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
     expect(f.report()).toBeUndefined();
   });
@@ -303,8 +437,8 @@ test("a retained terminal receipt with an incomplete zero-visited selection is e
   expect(f.read().result?.complete).toBe(false);
 });
 
-test("custody becoming unknown during the report's await refuses the final write", async () => {
-  const f = await fixture("custody-race");
+for (const change of ["missing-proof", "live-owner", "accepted"] as const) test(`refused visited custody ${change} during the report's await refuses the final write`, async () => {
+  const f = await fixture(`custody-race-${change}`, null, true, { visited: 1, completed: 0, outcomes: [] });
   let entered!: () => void, release!: () => void;
   const waiting = new Promise<void>(resolve => { entered = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
@@ -312,9 +446,50 @@ test("custody becoming unknown during the report's await refuses the final write
   const response = f.call("pass");
   try {
     expect(await Promise.race([waiting.then(() => true), response.then(() => false)])).toBe(true);
-    fs.unlinkSync(path.join(`${f.row.log}.gate`, "result.json"));
+    if (change === "missing-proof") fs.unlinkSync(path.join(`${f.row.log}.gate`, "result.json"));
+    if (change === "live-owner") {
+      const { reportSchema } = await import("@/lib/recordedChecks/wire");
+      const proof = reportSchema.parse(readEnvelope(path.join(`${f.row.log}.gate`, "supervisor.json")));
+      f.update({ custody: [{ ...proof, command: identitySchema.parse(custody.cpuOwnerIdentity(process.pid)) }] });
+    }
+    if (change === "accepted") f.update({ admission: "accepted" });
     release();
     expect(await response).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
     expect(f.report()).toBeUndefined();
   } finally { release(); await response; }
+});
+
+for (const change of ["missing-proof", "live-owner", "accepted"] as const) test(`settlement rechecks refused visited custody after ${change}`, async () => {
+  const f = await fixture(`settlement-${change}`, null, true, { visited: 1, completed: 0, outcomes: [] });
+  expect(await f.call("pass")).toMatchObject({ ok: true, excludedRecordedChecks: [{ id: f.row.id }] });
+  f.restart();
+  if (change === "missing-proof") fs.unlinkSync(path.join(`${f.row.log}.gate`, "result.json"));
+  if (change === "live-owner") {
+    const { reportSchema } = await import("@/lib/recordedChecks/wire");
+    const proof = reportSchema.parse(readEnvelope(path.join(`${f.row.log}.gate`, "supervisor.json")));
+    f.update({ custody: [{ ...proof, supervisor: identitySchema.parse(custody.cpuOwnerIdentity(process.pid)) }] });
+  }
+  if (change === "accepted") f.update({ admission: "accepted" });
+  f.ports.conversationAgentActive = async () => false;
+  f.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "Independently verified", ts: NOW + 1_000 },
+    lastRecordAt: NOW + 1_000 } as Awaited<ReturnType<typeof f.ports.durableTurnEvidence>>);
+  await tickPipelines([], f.ports);
+  expect(findPipelineRecord(f.pipeline.id)!.runs[0].attempts[0].state).toBe("needs_decision");
+  expect(f.read().acknowledgement).toBeNull();
+  expect(recordedRootHeld(f.directory)).toBe(true);
+});
+
+test("a new attempt reads only its own launch and keeps the old receipt held", async () => {
+  const f = await fixture("new-attempt", "wrapper", true, visited);
+  const before = f.read();
+  const pipeline = findPipelineRecord(f.pipeline.id)!;
+  const first = pipeline.runs[0].attempts[0];
+  first.state = "needs_decision";
+  first.completedAt = new Date(NOW).toISOString();
+  pipeline.runs[0].attempts.push({ ...first, n: 2, state: "running", launchId: "fresh-launch", completedAt: null });
+  savePipelines([pipeline]);
+  expect(recordedReportReceipts("fresh-launch")).toEqual([]);
+  expect(await f.call("pass")).toMatchObject({ ok: true, attempt: 2 });
+  expect(f.read()).toEqual(before);
+  expect(recordedRootHeld(f.directory)).toBe(true);
 });

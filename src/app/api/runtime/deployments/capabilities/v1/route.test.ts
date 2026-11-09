@@ -39,7 +39,9 @@ test("both verifier generations wait for serving startup while passive prechecks
     const response = GET();
     const text = await response.text();
     expect(response.status).toBe(status);
-    expect(JSON.parse(text).releaseReady).toBe(ready);
+    expect(JSON.parse(text)).toMatchObject(status === 200
+      ? { admissionFence: true, releaseReady: ready }
+      : { releaseReady: ready });
     expect(incumbent.viewerDeploymentReleaseReady(response.status, text)).toBe(ready);
     if (promoted) expect(viewerDeploymentReleaseReady(response.status, text)).toBe(ready);
     else expect(hasViewerDeploymentCapability(response.status, text)).toBe(true);

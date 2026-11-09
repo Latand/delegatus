@@ -225,10 +225,10 @@ const RUNTIME_LANDED: ReadonlySet<string> = new Set(["delivered", "applied", "an
 /** The delivery the Viewer registry is holding under this wake's idempotency
     key. The key is the tick's own and carries the project, the seat epoch and
     the state fingerprint, so it identifies one wake across the whole file. */
-function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state: string } | null {
-  const found = Object.values(agentRegistry().readOnlySnapshot().heldDeliveries)
+export function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state: string; operationId: string } | null {
+  const found = Object.values(agentRegistry().deliverySnapshotForMessageKey(wake.conversationId, wake.clientMessageId).heldDeliveries)
     .find((delivery) => delivery.clientMessageId === wake.clientMessageId);
-  return found ? { id: found.id, state: found.state } : null;
+  return found ? { id: found.id, state: found.state, operationId: found.command.operationId } : null;
 }
 
 /** The runtime journal's receipt for one operation, as far as the tick reads
@@ -862,7 +862,7 @@ export function defaultSeatTickSources(): SeatTickSources {
          again inside the write: an attempt may have claimed it while the
          writer was held, and then it is not withdrawn. */
       const registry = agentRegistry();
-      const operationId = registry.readOnlySnapshot().heldDeliveries[delivery.id]?.command.operationId ?? null;
+      const operationId = delivery.operationId;
       const withdrawn = await registry.deliveryWrite({ label: "delivery.withdraw", operationId },
         () => registry.withdrawHeldDelivery(delivery.id, operationId, reason));
       return withdrawn.acquired ? withdrawn.value : "unknown";

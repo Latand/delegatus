@@ -1,6 +1,6 @@
 import type { Pipeline } from "./types";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
-import { publicationFailurePhase, publicationPrivacyRefusal } from "./publicationHistory";
+import { publicationFailurePhase, publicationPrivacyRefusal, publicationRemoteRefusalLine } from "./publicationHistory";
 
 const RUNNER_DEADLINE = /^NEW .*<runner error> runner did not finish \(124\)$/;
 
@@ -15,7 +15,7 @@ function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
 
 export function publicationTransportLine(output: string): string | undefined {
   return output.split("\n").map(line => line.trim()).find(line =>
-    /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
+    /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line)) ?? publicationRemoteRefusalLine(output);
 }
 
 /** A phase marker alone cannot erase a later transport or verification refusal. */
