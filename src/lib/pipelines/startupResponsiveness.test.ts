@@ -778,8 +778,64 @@ test("keyed startup ownership keeps an attempt owner even when membership is abs
 function recipientOwner(seed: ReturnType<typeof buildPipeline>, id: string, conversationId: string) {
   return { ...seed, id, ...pipelineIdentity(id,seed.task,seed.repoDir), runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed" as const, conversationId,
     flowId: null, launchId: null, sessionId: null, agentPath: null, paneId: null, startedAt: "2026-10-22T00:00:00.000Z", completedAt: "2026-10-22T00:00:01.000Z",
-    error: null, output: null, verdict: null, activatedBy: null, effectiveRole: seed.stages[0]!.effectiveRole }] }] };
+    error: null, input: null, output: null, verdict: null, activatedBy: null, effectiveRole: seed.stages[0]!.effectiveRole }] }] };
 }
+
+for (const collection of ["pipelines", "pipelines_archive"] as const)
+  test(`canonical ${collection} replacement clears obsolete unknown ownership for warm and cold readers`, async () => {
+    const { root, row } = fixture();
+    const filename = path.join(root, "state.sqlite");
+    const db = new Database(filename);
+    const owner = recipientOwner(row, row.id, "conversation_target");
+    const canonical = JSON.stringify(owner);
+    const ambiguous = canonical.replace('"srcConversationId":null', '"srcConversationId":null,"srcConversationId":"conversation_other"');
+    const read = (id: string) => loadPipelineOwnershipForStartupAsync([], new Set([id]));
+    try {
+      expect(ambiguous).not.toBe(canonical);
+      db.query("UPDATE state_rows SET collection=?,value_json=? WHERE collection='pipelines' AND row_key=?")
+        .run(collection, canonical, owner.id);
+      expect((await read("conversation_target")).map(item => item.id)).toEqual([owner.id]);
+      const write = db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?");
+      write.run(ambiguous, collection, owner.id);
+      for (const id of ["conversation_target", "conversation_unrelated"]) await expect(read(id)).rejects.toThrow("unknown rows");
+      // A rollback keeps both the ambiguous source and its refusal witness.
+      db.exec("BEGIN IMMEDIATE");
+      write.run(canonical, collection, owner.id);
+      await expect(read("conversation_target")).rejects.toThrow("unknown rows");
+      db.exec("ROLLBACK");
+      if (collection === "pipelines") savePipelines([owner]);
+      else write.run(canonical, collection, owner.id);
+      expect(db.query("SELECT kind FROM pipeline_owner_refs WHERE kind IN ('unknown','archive:unknown')").all()).toEqual([]);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect((await read("conversation_target")).map(item => item.id)).toEqual([owner.id]);
+        expect(await read("conversation_unrelated")).toEqual([]);
+      }
+      // Match the parent's SQLite backend in the fresh process too.
+      const version = db.query<{ version: string }, []>("SELECT sqlite_version() AS version").get()!.version;
+      const minimum = version.startsWith("3.39.")
+        ? (await import("@/lib/state/minimumSqlite.fixture")).minimumSqliteLibrary() : "";
+      const child = Bun.spawn([process.execPath, "--eval", `
+        if (process.argv[1]) {
+          const {mock}=await import('bun:test');
+          const {minimumSqliteModule}=await import('./src/lib/state/minimumSqlite.fixture.ts');
+          const sqlite=minimumSqliteModule(process.argv[1]), builtin=process.getBuiltinModule.bind(process);
+          mock.module('bun:sqlite',()=>sqlite);
+          process.getBuiltinModule=id=>id==='bun:sqlite'?sqlite:builtin(id);
+        }
+        const {Database}=process.getBuiltinModule('bun:sqlite'), db=new Database(':memory:');
+        console.error('backend='+db.query('SELECT sqlite_version() AS version').get().version); db.close();
+        const {loadPipelineOwnershipForStartupAsync:read}=await import('./src/lib/pipelines/store.ts');
+        console.log(JSON.stringify(await Promise.all(['conversation_target','conversation_unrelated'].map(async id =>
+          (await read([],new Set([id]))).map(row=>row.id)))));
+      `, minimum], { env: process.env, stdout: "pipe", stderr: "pipe" });
+      const output = await new Response(child.stdout).text();
+      expect(await child.exited).toBe(0);
+      expect((await new Response(child.stderr).text()).trim()).toBe(`backend=${version}`);
+      expect(JSON.parse(output)).toEqual([[owner.id], []]);
+      write.run(ambiguous, collection, owner.id);
+      await expect(read("conversation_target")).rejects.toThrow("unknown rows");
+    } finally { db.close(); }
+  });
 
 test("recipient ownership reads every active and archived owner while global health is held", async () => {
   const { root, row } = fixture();

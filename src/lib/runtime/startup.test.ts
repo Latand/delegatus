@@ -1143,7 +1143,7 @@ test("recipient preparation holds a seated busy turn whose restart evidence is u
   }
 });
 
-for (const end of ["cancel", "deadline"] as const) test(`recipient preparation coalesces its operation and fences late cut reads after ${end}`, async () => {
+test("recipient preparation coalesces its operation and fences late cut reads after cancel", async () => {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),"recipient-deadline-"));
   const oldState=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;savePipelines([]);
   const registry=new AgentRegistry(path.join(directory,"registry.json"));
@@ -1161,39 +1161,148 @@ for (const end of ["cancel", "deadline"] as const) test(`recipient preparation c
     if (reads === 1) { entered.resolve(); await release.promise; }
     return originalTail(...args);
   });
-  const now=performance.now.bind(performance);
-  let advanced=false;
-  const clock=spyOn(performance,"now").mockImplementation(() => now()+(advanced?5001:0));
   const dependencies={orchestratorSeats:() => [],signal:abort.signal};
   const first=prepareStructuredStartupRecipient(registry,conversation.id,dependencies,"original-operation").catch(error => error);
   const second=prepareStructuredStartupRecipient(registry,conversation.id,dependencies,"original-operation").catch(error => error);
   try {
     await entered.promise;
     expect(reads).toBe(1);
-    if(end === "cancel") abort.abort(new Error("recipient attempt cancelled")); else advanced=true;
-    if(end === "deadline") release.resolve();
-    for(const result of await Promise.all([first,second])) expect(result.message).toContain(end === "cancel"?"cancelled":"deadline exceeded");
-    if(end === "cancel") {
-      const retry=await prepareStructuredStartupRecipient(registry,conversation.id,dependencies,"original-operation").catch(error => error);
-      expect(retry.message).toContain("cancelled");expect(reads).toBe(1);
-      await adoptStructuredHostsAtStartup({ registry, client: null, orchestratorSeats: () => [],
-        pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }), refreshTranscriptState: async () => {},
-        adopt: async () => [], adoptClaude: async () => [], schedule: () => ({ unref() {} }),
-      });
-      const afterStartup = reads;
-      const retained = await prepareStructuredStartupRecipient(registry, conversation.id, { orchestratorSeats: () => [] }, "original-operation")
-        .catch(error => error);
-      expect(retained.message).toContain("cancelled");
-      expect(reads).toBe(afterStartup);
-    }
+    abort.abort(new Error("recipient attempt cancelled"));
+    for(const result of await Promise.all([first,second])) expect(result.message).toContain("cancelled");
+    const retry=await prepareStructuredStartupRecipient(registry,conversation.id,dependencies,"original-operation").catch(error => error);
+    expect(retry.message).toContain("cancelled");expect(reads).toBe(1);
+    await adoptStructuredHostsAtStartup({ registry, client: null, orchestratorSeats: () => [],
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }), refreshTranscriptState: async () => {},
+      adopt: async () => [], adoptClaude: async () => [], schedule: () => ({ unref() {} }),
+    });
+    const afterStartup = reads;
+    const retained = await prepareStructuredStartupRecipient(registry, conversation.id, { orchestratorSeats: () => [] }, "original-operation")
+      .catch(error => error);
+    expect(retained.message).toContain("cancelled");
+    expect(reads).toBe(afterStartup);
     release.resolve();
     await originalTail(artifactPath); // Let the refused read finish under its revoked proof.
     expect(interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list()).toEqual([]);
     expect(registry.conversation(conversation.id)?.generations).toHaveLength(1);
   } finally {
-    release.resolve();await Promise.all([first,second]);clock.mockRestore();tail.mockRestore();registry.close();
+    release.resolve();await Promise.all([first,second]);tail.mockRestore();registry.close();
     if(oldState===undefined) delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=oldState;
     fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("recipient preparation coalesces its operation and fences late cut reads after deadline", async () => {
+  if (process.env.LLV_RECIPIENT_DEADLINE_CHILD !== "1") {
+    // This observer's clock and release channel are independent of the reader.
+    // A disabled product deadline must time out here with the read still held.
+    const child = ownFixtureTree(spawn(process.execPath, ["test", "--timeout=60000", import.meta.filename,
+      "-t", "recipient preparation coalesces its operation and fences late cut reads after deadline"], {
+      env: { ...process.env, LLV_RECIPIENT_DEADLINE_CHILD: "1" }, stdio: ["pipe", "pipe", "pipe"],
+    }));
+    let stderr = "";
+    child.stderr!.on("data", chunk => { stderr += String(chunk); });
+    const phases = ["held", "refused", "settled"] as const;
+    const reports = new Map(phases.map(phase => [phase, Promise.withResolvers<Record<string, unknown>>()]));
+    const { createInterface } = await import("node:readline");
+    const lines = createInterface({ input: child.stdout! });
+    lines.on("line", line => {
+      if (!line.startsWith('{"phase":')) return;
+      const report = JSON.parse(line) as { phase: typeof phases[number] };
+      reports.get(report.phase)?.resolve(report);
+    });
+    child.on("error", error => { for (const report of reports.values()) report.reject(error); });
+    const exited = new Promise<number | null>(resolve => child.once("exit", code => {
+      resolve(code);
+      for (const report of reports.values()) report.reject(new Error(`deadline fixture exited ${code}: ${stderr}`));
+    }));
+    // All report promises are observed, including those skipped by a refusal.
+    for (const report of reports.values()) void report.promise.catch(() => {});
+    const observe = async (phase: typeof phases[number]) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([reports.get(phase)!.promise, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`deadline fixture did not report ${phase} while its read remained held: ${stderr}`)), 20_000);
+        })]);
+      } finally { clearTimeout(timer); }
+    };
+    try {
+      expect(await observe("held")).toMatchObject({ reads: 1, operationId: "original-operation" });
+      expect(await observe("refused")).toMatchObject({ reads: 1, refusals: 3, released: false,
+        operationId: "original-operation", claims: 0, recoveries: 0, writes: 0, published: false, status: "queued" });
+      child.stdin!.write("release\n");
+      expect(await observe("settled")).toMatchObject({ reads: 1, claims: 0, recoveries: 0, writes: 0, published: false, status: "queued" });
+      child.stdin!.end();
+      expect(await exited).toBe(0);
+    } finally { lines.close(); await stopFixtureTree(child); }
+    return;
+  }
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-deadline-child-"));
+  const oldState = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = directory;
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(), readFinished = Promise.withResolvers<void>();
+  const releaseFromParent = Promise.withResolvers<void>();
+  const onRelease = (chunk: Buffer) => { if (String(chunk).trim() === "release") releaseFromParent.resolve(); };
+  process.stdin.on("data", onRelease);
+  const originalTail = startupActivity.readStableTailRecords;
+  let reads = 0, recoveries = 0;
+  const tail = spyOn(startupActivity, "readStableTailRecords").mockImplementation(async (...args) => {
+    reads++; entered.resolve(); await release.promise;
+    try { return await originalTail(...args); } finally { readFinished.resolve(); }
+  });
+  const claim = spyOn(registry, "claimStructuredHost");
+  let first: Promise<unknown> | undefined, second: Promise<unknown> | undefined;
+  let drain: ReturnType<typeof kickStructuredDeliveryQueue> = undefined;
+  try {
+    savePipelines([]);
+    await initializeRecipientInterruptionIndex(interruptionObligationDirectory(registry.filename));
+    const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+      sessionId: "cccccccc-cccc-0ccc-0ccc-cccccccccccc", status: "live", turn: "busy",
+      transcriptRecords: [{ type: "event_msg", timestamp: "2026-10-22T00:00:00Z", payload: { type: "task_complete", turn_id: "completed-turn" } }],
+    });
+    const key = { engine: "codex" as const, sessionId: conversation.generations.at(-1)!.id };
+    const client = runtimeJournalClient(journal);
+    projectHostedRestart(journal, "codex", conversation.id, key.sessionId, directory, artifactPath);
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
+      recover: async () => { recoveries++; throw new Error("expired preparation reached recovery"); },
+    });
+    journal.executeOperation({ kind: "send", operationId: "original-operation", idempotencyKey: "original-operation",
+      conversationId: conversation.id, text: "retain this original message", policy: "queue" });
+    const dependencies = { orchestratorSeats: () => [] };
+    const attempt = () => prepareStructuredStartupRecipient(registry, conversation.id, dependencies, "original-operation").then(
+      () => "accepted", error => error.message);
+    first = attempt(); second = attempt();
+    drain = kickStructuredDeliveryQueue();
+    await entered.promise;
+    console.log(JSON.stringify({ phase: "held", reads, operationId: "original-operation" }));
+    const results = await Promise.all([first, second]);
+    results.push(await attempt());
+    for (const result of results) expect(result).toContain("deadline exceeded");
+    await drain;
+    const report = (phase: string, extra = {}) => console.log(JSON.stringify({ phase, reads, claims: claim.mock.calls.length, recoveries,
+      writes: fs.readFileSync(artifactPath, "utf8").includes("retain this original message") ? 1 : 0, published: hasStructuredDeliveryHost(key),
+      status: journal.operationResult("original-operation")?.receipt.status, ...extra }));
+    expect(reads).toBe(1);
+    report("refused", { refusals: results.length, released: false, operationId: "original-operation" });
+    await releaseFromParent.promise;
+    release.resolve(); await readFinished.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list()).toEqual([]);
+    expect(registry.conversation(conversation.id)?.generations).toHaveLength(1);
+    expect(claim).not.toHaveBeenCalled(); expect(recoveries).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBeFalse();
+    expect(journal.operationResult("original-operation")?.receipt.status).toBe("queued");
+    expect(fs.readFileSync(artifactPath, "utf8")).not.toContain("retain this original message");
+    report("settled");
+  } finally {
+    release.resolve(); await Promise.allSettled([first, second, drain]);
+    process.stdin.off("data", onRelease);
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    claim.mockRestore(); tail.mockRestore(); journal.close(); registry.close();
+    if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldState;
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 

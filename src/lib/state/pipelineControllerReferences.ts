@@ -138,7 +138,11 @@ const writeInput = (source: string, key: string, collection: string, guard = "1"
 const paths = ["runs","state","srcConversationId","srcPath","delivery.operation","publicationAdmission.state","remoteAction.state",
   "cursor.state","terminalReap.settledAttempts","terminalReap.settledAt","unconfirmedHosts","closeReport.unconfirmed","closeReport.pending"]
   .map(field => `'$.${field}'`).join(",");
-const changed = `OLD.collection IS NOT NEW.collection OR OLD.row_key IS NOT NEW.row_key OR CASE
+// Clearing ambiguity can preserve every extracted first value. Recompute an
+// unknown compact input on replacement so its obsolete witness is withdrawn.
+const changed = `OLD.collection IS NOT NEW.collection OR OLD.row_key IS NOT NEW.row_key
+  OR EXISTS (SELECT 1 FROM pipeline_ref_inputs WHERE collection=OLD.collection AND row_key=OLD.row_key
+    AND json_extract(value_json,'$.ownershipUnknown')=1) OR CASE
   WHEN json_valid(OLD.value_json) AND json_valid(NEW.value_json)
   THEN EXISTS (SELECT 1 FROM json_tree(NEW.value_json) GROUP BY fullkey HAVING count(*)>1 OR instr(fullkey,char(92))>0) OR json_extract(OLD.value_json,${paths}) IS NOT json_extract(NEW.value_json,${paths}) ELSE 1 END`;
 /** The trigger statements exactly as installed; readiness compares them with sqlite_master. */
