@@ -1,3 +1,4 @@
+import { refreshCapacity, refreshCapacityHolders, refreshConcurrency, refreshCreationAuthority } from "@/lib/pipelines/refreshCapacity";
 import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
 import { assertProactivePipelineExecution, proactivePipelineExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -923,22 +924,22 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
         const reserved = await commit(ports, read, (live, current) => {
           const pipelines = ports.loadPipelines();
           if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
-          const held = capacity();
           // Refresh admission ends the old head's checks obligation, whether
           // waiting for capacity or running our own successor lane.
           merge.headSeenAt = null;
           live.headSeenAt = null;
+          if (refreshWasRequested(current, pipelines, base, refreshHead)
+            || ports.loadRefreshByKey?.(refreshTupleKey(current, base, refreshHead))) {
+            block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
+            return;
+          }
+          const held = capacity();
           if (held) {
             bookkeeping(live);
             const reason = `${decision.kind === "refresh" ? "PR is behind its base" : refreshRefusal}; ${held}`;
             live.state = "checking";
             live.reason = reason;
             live.nextReadAt = iso(now + MERGE_POLL_MS);
-            return;
-          }
-          if (refreshWasRequested(current, pipelines, base, refreshHead)
-            || ports.loadRefreshByKey?.(refreshTupleKey(current, base, refreshHead))) {
-            block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
             return;
           }
           live.state = "refreshing";
@@ -1108,7 +1109,15 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
   if (!ports.startRefresh || !read.merge?.refresh || read.merge.refresh.pipelineId) return;
   const reservation = read.merge.refresh;
   try {
+    const capsule = refreshCapacity(reservation);
+    if (reservation.capacityDeadline !== undefined && reservation.capacityDeadline !== capsule.deadline) {
+      const reason = "refresh capacity origin conflicts with its deadline; UNKNOWN";
+      if (read.merge.reason !== reason) await commit(ports, read, live => { live.reason = reason; });
+      return;
+    }
     if (!ports.setting(read.project).enabled) return;
+    const policy = ports.setting(read.project);
+    const policySnapshot = JSON.stringify(policy);
     const lineage = await ports.activeSeat?.(read.project) ?? {
       srcPath: read.srcPath, srcConversationId: read.srcConversationId, srcDeputyConversationId: read.srcDeputyConversationId ?? undefined,
     };
@@ -1123,14 +1132,35 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
     const current = ports.loadPipelines().find((lane) => lane.id === read.id);
     if (!ports.setting(read.project).enabled || current?.merge?.state !== "refreshing"
       || current.merge.refresh?.key !== reservation.key || current.merge.refresh.pipelineId) return;
-    const held = !ports.loadRefreshByKey?.(reservation.key) && refreshCapacityReason(ports, read.merge.repository);
+    const found = ports.loadRefreshByKey?.(reservation.key);
+    if (found && (found.creationRequest?.key !== reservation.key || found.creationRequest.digest !== reservation.digest
+      || found.refreshOf?.pipelineId !== read.id || found.refreshOf.base !== reservation.base)) {
+      const reason = "keyed refresh creation conflicts with its original reservation; UNKNOWN";
+      if (read.merge.reason !== reason) await commit(ports, read, live => { live.reason = reason; });
+      return;
+    }
+    if (!found && ports.now() >= Date.parse(refreshCapacity(reservation).deadline)) {
+      const reason = "refresh capacity budget expired; keyed creation remains UNKNOWN";
+      if (read.merge.reason !== reason) await commit(ports, read, live => { live.reason = reason; });
+      return;
+    }
+    if (current.state !== "completed" || !mergeEligible(current) || current.lastPassedCommit !== read.lastPassedCommit
+      || current.controlGeneration !== read.controlGeneration || current.spec !== read.spec
+      || JSON.stringify(current.inputContext) !== JSON.stringify(read.inputContext)
+      || JSON.stringify(current.workspace) !== JSON.stringify(read.workspace)
+      || JSON.stringify(ports.setting(read.project)) !== policySnapshot
+      || JSON.stringify(refreshRequest(current, legacyBase)) !== JSON.stringify(refreshRequest(read, legacyBase))
+      || current.merge.attempts !== read.merge.attempts || JSON.stringify(current.delivery) !== JSON.stringify(read.delivery)
+      || JSON.stringify(current.merge.refresh) !== JSON.stringify(reservation)) return;
+    const held = !found && refreshCapacityReason(ports, read.merge.repository, reservation.key);
     if (held) {
       if (read.merge.reason !== held) await commit(ports, read, live => { live.reason = held; });
       return;
     }
     const result = await ports.startRefresh(refreshRequest(read, legacyBase), {
       creationRequest: { key: reservation.key, digest: reservation.digest },
-      refreshOf: { pipelineId: read.id, base: reservation.base, lineage },
+      refreshAuthority: refreshCreationAuthority(read, policy),
+      refreshOf: { pipelineId: read.id, base: reservation.base, capacity: refreshCapacity(reservation), lineage },
     });
     // A replay may race another sweep; write only while this reservation waits.
     await commit(ports, read, (live) => {
@@ -1147,31 +1177,28 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
 
 /* ── The sweep ──────────────────────────────────────────────────────────── */
 
-/** The slot covers the refresh attempt's preparation and execution, until
-    its verdict: once the update from main is finished, settlement, publication,
-    parks, seat resumes and later stages own no slot. */
-function holdsRefreshCapacity(pipeline: Pipeline): boolean {
-  if (!pipeline.refreshOf || pipeline.cursor?.stageId !== "refresh") return false;
-  // Creation returns before checkout preparation and first-stage dispatch.
-  // Keep that admitted refresh from spawning peers before its host starts.
-  if (pipeline.state === "provisioning") return true;
-  if (pipeline.state !== "running") return false;
-  const attempt = pipeline.runs.find(run => run.stageId === "refresh")?.attempts.filter(attempt => !attempt.historical).at(-1);
-  // Retry intent is durable before tickRunStage replaces the terminal attempt.
-  if (pipeline.cursor.state === "pending") return true;
-  return Boolean(attempt && ["spawning", "running", "reviewing"].includes(attempt.state));
-}
-
 function refreshLimit(ports: AutoMergePorts): number {
-  return Math.max(1, Math.min(2, Math.floor(ports.refreshConcurrency ?? 1) || 1));
+  return refreshConcurrency(ports.refreshConcurrency);
 }
 
-function refreshCapacityReason(ports: AutoMergePorts, repository: string): string | null {
-  const pipelines = ports.loadPipelines();
+function refreshCapacityReason(ports: AutoMergePorts, repository: string, ownKey?: string): string | null {
+  const pipelines = [...ports.loadPipelines()];
+  const present = new Set(pipelines.map(row => row.id));
+  const originIds = [...new Set(pipelines.filter(row => row.refreshOf?.capacity && !present.has(row.refreshOf.pipelineId)).map(row => row.refreshOf!.pipelineId))];
+  for (const parent of originIds.length ? ports.loadRefreshAncestors?.(originIds) ?? [] : []) {
+    if (!pipelines.some(row => row.id === parent.id)) pipelines.push(parent);
+  }
+  const known = new Set(pipelines.map(row => row.creationRequest?.key));
+  for (const parent of [...pipelines]) {
+    const reservation = parent.merge?.repository === repository ? parent.merge.refresh : null;
+    if (!reservation || known.has(reservation.key)) continue;
+    const child = ports.loadRefreshByKey?.(reservation.key);
+    if (child && child.creationRequest?.digest === reservation.digest) { pipelines.push(child); known.add(reservation.key); }
+  }
   const byId = new Map(pipelines.map(pipeline => [pipeline.id, pipeline]));
-  const holders = pipelines.filter(pipeline => holdsRefreshCapacity(pipeline)
-    && (ports.pullRequestOf(pipeline)?.repository ?? pipeline.merge?.repository
-      ?? byId.get(pipeline.refreshOf!.pipelineId)?.merge?.repository) === repository);
+  const holders = refreshCapacityHolders(pipelines, repository, pipeline => ports.pullRequestOf(pipeline)?.repository
+    ?? pipeline.merge?.repository ?? byId.get(pipeline.refreshOf?.pipelineId ?? "")?.merge?.repository)
+    .filter(holder => !ownKey || holder.merge?.refresh?.key !== ownKey && holder.creationRequest?.key !== ownKey);
   return holders.length >= refreshLimit(ports)
     ? `waiting for repository capacity held by refresh ${holders.slice(0, 2).map(pipeline => pipeline.id).join(", ")}`
     : null;
@@ -1583,6 +1610,15 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     for await (const { pipeline } of mergeRows(candidates.filter(entry => !selected.includes(entry)))) {
       if (!pipeline.hiddenAt) await retainQueueReason(ports, pipeline, queueReason, heldReason);
     }
+    const reconciledRefreshes = new Set<string>();
+    const reconcileRefresh = async (observed: Pipeline) => {
+      const live = ports.loadPipelines().find(row => row.id === observed.id);
+      if (!live || JSON.stringify(live.delivery) !== JSON.stringify(observed.delivery)
+        || live.lastPassedCommit !== observed.lastPassedCommit || live.spec !== observed.spec
+        || live.controlGeneration !== observed.controlGeneration
+        || JSON.stringify(live.merge?.refresh) !== JSON.stringify(observed.merge?.refresh)) return;
+      await startRefresh(live, ports);
+    };
     // Creation may commit before its answer is lost. Repair that exact link
     // even when the recovered child already owns the last refresh slot.
     for (const { pipeline } of ordered.filter(entry => entry.refreshLane)) {
@@ -1590,13 +1626,24 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       const reservation = parent?.merge?.refresh;
       if (parent?.state === "completed" && parent.merge?.state === "refreshing" && reservation && !reservation.pipelineId
         && reservation.base === pipeline.refreshOf!.base && pipeline.creationRequest?.key === reservation.key
-        && pipeline.creationRequest.digest === reservation.digest) await startRefresh(parent, ports);
+        && pipeline.creationRequest.digest === reservation.digest) {
+        reconciledRefreshes.add(parent.id);
+        await reconcileRefresh(parent);
+      }
+    }
+    // An unlinked admission owns capacity already. It must still be able to
+    // reconcile its own keyed create while that capacity keeps peers waiting.
+    for (const { pipeline } of ordered.filter(entry => !entry.refreshLane && entry.pipeline.merge?.state === "refreshing"
+      && !entry.pipeline.merge.refresh?.pipelineId).slice(0, limit)) {
+      if (reconciledRefreshes.has(pipeline.id)) continue;
+      reconciledRefreshes.add(pipeline.id);
+      await reconcileRefresh(pipeline);
     }
     let merged = false, readFailed = false;
     for (const [index, { pipeline: head }] of selected.entries()) {
       const capacity = () => refreshCapacityReason(ports, repository);
       if (head.merge!.state === "refreshing") {
-        await startRefresh(head, ports);
+        if (!reconciledRefreshes.has(head.id)) await startRefresh(head, ports);
         continue;
       }
       const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);

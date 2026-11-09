@@ -1,13 +1,16 @@
+import { REFRESH_CAPACITY_MS } from "@/lib/pipelines/refreshCapacity";
 import { createHash } from "node:crypto";
-import type { CreatePipelineRequest, Pipeline, PipelineRefresh } from "@/lib/pipelines/types";
+import type { CreatePipelineRequest, Pipeline, PipelineRefresh, PipelineRefreshOf } from "@/lib/pipelines/types";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
+import type { RefreshCreationAuthority } from "@/lib/pipelines/refreshCapacity";
 import { mergeEligible } from "./autoMerge";
 import { pipelineHasPullRequest } from "./resolve";
 
 export type RefreshLineage = { srcPath: string | null; srcConversationId: string | null; srcDeputyConversationId?: string };
 export type RefreshOptions = {
   creationRequest: { key: string; digest: string };
-  refreshOf: { pipelineId: string; base: string; lineage: RefreshLineage };
+  refreshAuthority: RefreshCreationAuthority;
+  refreshOf: PipelineRefreshOf & { lineage: RefreshLineage };
 };
 
 /** Admission at a fresh conflict or BEHIND read; an old block starts no work. */
@@ -45,9 +48,11 @@ export function refreshTupleKey(lane: Pipeline, base: string, head: string): str
 export function refreshReservation(lane: Pipeline, base: string, head: string, now: number, baseBranch?: string): PipelineRefresh {
   const attempt = lane.merge!.attempts;
   const key = refreshTupleKey(lane, base, head);
+  const original = lane.merge!.refresh;
+  if (original?.key === key && original.base === base && original.head === head) return structuredClone(original);
   return { attempt, base, head, key, ...(baseBranch ? { baseBranch } : {}),
     digest: createHash("sha256").update(JSON.stringify([key, base, head, lane.merge!.prNumber, ...(baseBranch ? [baseBranch] : [])])).digest("hex"),
-    requestedAt: new Date(now).toISOString(), pipelineId: null };
+    requestedAt: new Date(now).toISOString(), capacityDeadline: new Date(now + REFRESH_CAPACITY_MS).toISOString(), pipelineId: null };
 }
 
 /** Hot reservations cover pending creation and older children with lane-based

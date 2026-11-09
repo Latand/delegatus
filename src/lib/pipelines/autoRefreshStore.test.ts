@@ -116,6 +116,7 @@ test("the real create path records refresh lineage and one-round roles, with rep
   const { createPipelineFromRequest, defaultPipelinePorts } = await import("./engine");
   const { refreshRequest, refreshReservation } = await import("@/lib/forge/autoRefresh");
   const ports = defaultPipelinePorts();
+  ports.now = () => "2026-10-12T00:00:00.000Z";
   ports.preflightRepo = repoDir => ({ ok: true, repoDir, gitCommonDir: `${repoDir}/.git`, worktreeParent: "/fixture" });
   ports.projectForCwd = () => "fixture";
   ports.exec = async (_command, args) => {
@@ -133,8 +134,17 @@ test("the real create path records refresh lineage and one-round roles, with rep
   parent.baseBranch = "main";
   parent.lastPassedCommit = "b".repeat(40);
   parent.delivery = { target: { ...target, remote: "https://forge.example/owner/repo.git" }, disposition: "owner", active: false, publish: "disabled", ownerId: parent.id, epoch: 1, journal: [] };
-  parent.merge = { prNumber: 11, attempts: 0 } as typeof parent.merge;
+  parent.state = "completed";
+  parent.cursor = null;
+  parent.closedAt = ports.now();
+  const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
+  parent.delivery!.target.repository = projectIdentityFromRemote(parent.delivery!.target.remote, parent.repoDir)!.project;
+  parent.merge = { state: "refreshing", by: null, repository: "acme/widgets", prNumber: 11, attempts: 0,
+    policyChangedAt: ports.now(), reviewedHead: parent.lastPassedCommit, chain: [parent.lastPassedCommit], updates: [], seenChecks: [],
+    head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, readFailures: 0,
+    requestedAt: ports.now(), mergedHead: null, mergeCommit: null, method: null, mergedAt: null, reason: null, blockedAt: null, updatedAt: ports.now() };
   parent.merge!.refresh = refreshReservation(parent, "a".repeat(40), "b".repeat(40), Date.parse("2026-10-12T00:00:00Z"));
+  savePipelines([parent]);
   const request = refreshRequest(parent);
   const options = { creationRequest: { key: parent.merge!.refresh!.key, digest: parent.merge!.refresh!.digest },
     refreshOf: { pipelineId: parent.id, base: "a".repeat(40), lineage: { srcPath: null, srcConversationId: "seat-one" } } };
@@ -144,7 +154,20 @@ test("the real create path records refresh lineage and one-round roles, with rep
     stages: [{ id: "refresh", onFail: null }, { id: "review", onFail: { to: "fix", maxRounds: 1, onExhausted: "advance" }, effectiveRole: { access: "read-only" } }, { id: "fix" }] });
   const replay = await createPipelineFromRequest(request, ports, options);
   expect(replay.pipeline?.id).toBe(created.pipeline!.id);
+  const capsule = created.pipeline!.refreshOf!.capacity!;
+  expect(capsule).toMatchObject({ requestedAt: ports.now(), deadline: "2026-10-12T01:00:00.000Z" });
+  expect(refreshReservation(parent, "a".repeat(40), "b".repeat(40), Date.parse("2026-10-13T00:00:00Z")))
+    .toEqual(parent.merge!.refresh!);
+  const { cloneControllerPipeline, findPipelineRecord } = await import("./store");
+  const read = findPipelineRecord(created.pipeline!.id)!;
+  const clone = cloneControllerPipeline(read);
+  clone.refreshOf!.capacity!.deadline = "2026-10-13T01:00:00.000Z";
+  expect(read.refreshOf!.capacity).toEqual(capsule);
+  expect(findPipelineRecord(read.id)!.refreshOf!.capacity).toEqual(capsule);
+  const tampered = await createPipelineFromRequest(request, ports, { ...options,
+    refreshOf: { ...options.refreshOf, capacity: { ...capsule, deadline: "2026-10-13T01:00:00.000Z" } } });
+  expect(tampered.error).toContain("conflicts with the original");
   const refused = await createPipelineFromRequest(request, ports, { ...options, creationRequest: { key: "another-refresh", digest: "other" } });
-  expect(refused.error).toContain("target already owned");
-  expect(loadPipelines()).toHaveLength(1);
+  expect(refused.error).toContain("origin is missing or conflicting");
+  expect(loadPipelines()).toHaveLength(2);
 });

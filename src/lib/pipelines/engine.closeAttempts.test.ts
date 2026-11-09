@@ -183,6 +183,8 @@ test("a bound starting receipt retains custody until its original host materiali
       cwd: f.input.cwd, accountId: null, launchProfile: begun.receipt.launchProfile, status: "idle", host: null,
       structuredHost: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
     }).kind).toBe("settled");
+    expect(f.registry.conversation(begun.receipt.conversationId)!.generations.at(-1)!.id)
+      .not.toBe(f.registry.spawnReceipt(begun.receipt.launchId)!.key!.sessionId);
     const drained = await closeAndDrain(f.pipeline.id, { action: "close" }, f.h.ports);
     expect(drained.close).toMatchObject({ status: "settled", pending: [], alreadyStopped: [target] });
     expect(f.stops).toEqual([{ launchId: begun.receipt.launchId, outcome: "not-running" }]);
