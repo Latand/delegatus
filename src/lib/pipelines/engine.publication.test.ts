@@ -9,6 +9,7 @@ import { createPublicationFixtures } from "../../../scripts/publicationHook.fixt
 import { publicationCheckBinding, readPublicationCheckReceipt, type PublicationCheckReceipt } from "@/lib/git/publicationCheckReceipt";
 import { lessonPublicationEnv } from "@/lib/memory/roleStore";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { publicationFailurePhase, recoverablePublication } from "./publicationHistory";
 import type { CreatePipelineRequest, Pipeline } from "./types";
 
 const stages = [
@@ -406,17 +407,50 @@ test("legacy review creation refuses before any stage or delivery is admitted", 
 
 const nativePublicationTest = test.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arch));
 
-async function controllerPublicationFixture(roots: string[], cleanup: Array<() => void>) {
+type PrivacyPublicationMode = "preparation" | "transport" | "padded-preparation" | "padded-transport" | "privacy" | "remote" | "success";
+
+async function controllerPublicationFixture(roots: string[], cleanup: Array<() => void>, privacyMode?: PrivacyPublicationMode) {
   const fixtures = createPublicationFixtures(path.resolve(import.meta.dir, "../../.."), roots);
   const f = fixtures.nativeFixture();
+  // Keep the fixture's Bun shim and use native Git in its isolated children.
+  const shim = path.join(f.dir, "shims/bun");
+  f.env.PATH = `${path.dirname(shim)}:/usr/bin:/bin:${f.env.PATH}`;
+  expect(fs.readFileSync(Bun.which("git", { PATH: f.env.PATH })!).subarray(0, 4)).toEqual(Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
   const http = await fixtures.httpFixture(f, false);
   cleanup.push(() => http.close());
+  if (privacyMode) {
+    const root = path.resolve(import.meta.dir, "../../..");
+    fs.copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), path.join(f.dir, "scripts/privacy-known-value-fingerprints.json"));
+    // Run the real scanner, then pad its successful diagnostic and change a
+    // checked input. The gate itself detects and refuses that drift.
+    const scanner = `#!/bin/bash
+if [[ "$1" == scripts/privacy-publication-gate.ts ]]; then
+  shift
+  if [[ "$PRIVACY_FIXTURE_MODE" == privacy ]]; then export LLV_PRIVACY_KNOWN_VALUES_FILE="$PWD/.git/fixture-known-values"; fi
+  "$HOOK_BUN" "$PRIVACY_FIXTURE_SCANNER" "$@"
+  scanner_status=$?
+  if [[ "$scanner_status" == 0 && "$PRIVACY_FIXTURE_MODE" == padded-* ]]; then "$HOOK_BUN" -e 'process.stdout.write("benign diagnostic ".repeat(400) + "\\n")'; fi
+  if [[ "$scanner_status" == 0 && ( ( "$PRIVACY_FIXTURE_MODE" == *preparation && -z "${"${LLV_GATE_PUBLICATION_OBSERVED:-}"}" ) || ( "$PRIVACY_FIXTURE_MODE" == *transport && -n "${"${LLV_GATE_PUBLICATION_OBSERVED:-}"}" ) ) ]]; then
+    git config fixture.input changed
+  fi
+  exit "$scanner_status"
+fi
+`;
+    fs.writeFileSync(shim, fs.readFileSync(shim, "utf8").replace("#!/bin/bash\n", scanner));
+    Object.assign(f.env, { PRIVACY_FIXTURE_SCANNER: path.join(root, "scripts/privacy-publication-gate.ts"), PRIVACY_FIXTURE_MODE: privacyMode });
+    fixtures.commitFixtureInputs(f);
+    if (privacyMode === "privacy") fs.writeFileSync(path.join(f.dir, ".git/fixture-known-values"), "A retained publication fixture phrase.\n");
+    if (privacyMode === "remote") {
+      fs.mkdirSync(path.join(http.bare, "hooks"), { recursive: true });
+      fs.writeFileSync(path.join(http.bare, "hooks/pre-receive"), "#!/bin/sh\necho 'fatal error in commit_refs_rules' >&2\nexit 1\n", { mode: 0o700 });
+    }
+  }
   // Keep the installed fixture tools on the base; this source change selects
   // standalone types, lint and the touched test in the real gate plan.
   f.git("update-ref", "refs/remotes/origin/main", f.head);
-  fs.writeFileSync(path.join(f.dir, "example.ts"), "export const value = 3;\n");
+  if (!privacyMode) fs.writeFileSync(path.join(f.dir, "example.ts"), "export const value = 3;\n");
   f.git("-c", "core.hooksPath=/dev/null", "add", "example.ts");
-  f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "source change");
+  f.git("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", privacyMode === "privacy" ? "A retained publication fixture phrase." : "source change");
   f.head = f.git("rev-parse", "HEAD").toString().trim();
   f.env.LLV_GATE_PUSH_HEAD = f.head;
   // Seed with the environment the publisher supplies, including its defaults.
@@ -452,6 +486,7 @@ async function controllerPublicationFixture(roots: string[], cleanup: Array<() =
   const checks = () => ["tsc", "scripts/eslint-changes.ts", "scripts/local-gate-tests.ts"].map(command =>
     f.calls().filter(call => call.args[0] === command).length);
   const preparations: string[] = [], receipts: PublicationCheckReceipt[] = [], receiptPaths: string[] = [];
+  const captured: Array<{ command: string; output: string }> = [];
   let pushes = 0, driftOnPush = false, authorityChecks = 0, pendingId: string;
   h.ports.exec = async (command, args, cwd, overrides, options) => {
     if (command === "bun" && args.includes("--publication-prepare")) preparations.push(overrides!.LLV_GATE_PUBLICATION_ID!);
@@ -468,11 +503,14 @@ async function controllerPublicationFixture(roots: string[], cleanup: Array<() =
       if (driftOnPush) { f.env.LANG = "C.UTF-8"; driftOnPush = false; }
     }
     const result = await realExec(command, args, cwd, { ...f.env, ...overrides }, options);
+    if (command === "bun" && args.includes("--publication-prepare") || command === "git" && args[0] === "push") {
+      captured.push({ command, output: `${result.stdout}\n${result.stderr}` });
+    }
     if (command === "git" && args[0] === "push") {
       // Observe consumption before the publisher's unconditional cleanup.
       expect(fs.existsSync(receiptPaths.at(-1)!)).toBeFalse();
       expect(fs.existsSync(`${receiptPaths.at(-1)!}.consuming`)).toBeFalse();
-      if (result.code !== 0) expect(result.stderr).toContain("changed components: environment");
+      if (result.code !== 0 && !privacyMode) expect(result.stderr).toContain("changed components: environment");
     }
     return result;
   };
@@ -501,8 +539,63 @@ async function controllerPublicationFixture(roots: string[], cleanup: Array<() =
     expect(acceptedEvidence()).toEqual(acceptedRuns);
     expect(h.spawnInputs).toHaveLength(0);
   };
-  return { f, http, fixtures, current, checks, source, pinnedSource, preparations, receipts, receiptPaths, publish, consume,
+  return { f, http, fixtures, current, checks, source, pinnedSource, preparations, receipts, receiptPaths, captured, publish, consume,
     assertPublishedOnce, pushes: () => pushes, driftOnNextPush: () => { driftOnPush = true; } };
+}
+
+for (const mode of ["preparation", "transport", "padded-preparation", "padded-transport", "privacy", "remote", "success"] as const) {
+  nativePublicationTest(`real privacy-only publication preserves the outcome: ${mode}`, async () => {
+    const roots: string[] = [], cleanup: Array<() => void> = [], previous = loadPipelines();
+    try {
+      const c = await controllerPublicationFixture(roots, cleanup, mode);
+      await c.publish();
+      const result = await c.consume();
+      if (mode === "success") {
+        expect(result).toMatchObject({ ok: true, remote: "published", sha: c.f.head });
+        c.assertPublishedOnce();
+        expect(await c.consume()).toMatchObject({ ok: true, remote: "published", sha: c.f.head });
+        expect(c.pushes()).toBe(1);
+        c.assertPublishedOnce();
+        return;
+      }
+      expect(result.ok).toBe(false);
+      if (result.ok || !result.failure) throw new Error("expected publication refusal evidence");
+      const privacy = mode === "privacy", remote = mode === "remote";
+      const fullOutput = c.captured.at(-1)!.output;
+      expect(publicationFailurePhase({ outputTail: fullOutput })).toBe(privacy ? "privacy" : null);
+      expect(result.failure.outputTail.length).toBeLessThanOrEqual(4000);
+      expect(result.failure.changedFiles).toBe(0);
+      expect(c.source()).toEqual(c.pinnedSource);
+      expect(c.current().lastPassedCommit).toBe(c.f.head);
+      expect(c.current().publishedCommit).toBeNull();
+      expect(c.pushes()).toBe(mode.endsWith("preparation") || privacy ? 0 : 1);
+      expect(c.http.rpc()).toBe(remote ? 1 : 0);
+      if (!privacy && !remote) {
+        expect(fullOutput).toContain("PRIVACY GATE: PASS");
+        if (mode.startsWith("padded-")) expect(fullOutput.length).toBeGreaterThan(4000);
+        expect(result.failure.outputTail).toContain("publication inputs changed during");
+        expect(result.failure.outputTail).toContain("PRIVACY GATE: PASS");
+        expect(fs.existsSync(c.f.receipt)).toBeFalse();
+        expect(c.receipts).toHaveLength(mode.endsWith("transport") ? 1 : 0);
+      } else if (privacy) expect(result.failure.outputTail).toContain("known_value");
+      // Read the adapter's durable result through the real controller tick.
+      await tickPipelines([], { ...harness().ports, exec: realExec });
+      const row = c.current();
+      const record = row.publicationRecovery?.[c.f.head]?.history.at(-1);
+      expect(record?.cause).toBe(remote ? "remote-refusal" : "check-failure");
+      expect(publicationFailurePhase(result.failure)).toBe(privacy ? "privacy" : null);
+      expect(recoverablePublication(result)).toBe(!privacy && !remote);
+      expect(record?.retryAt).toBe(privacy || remote ? null : new Date(Date.parse(record!.at) + 60_000).toISOString());
+      expect(row.runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
+      if (!privacy) expect(row.stateDetail).not.toContain("commits this push carries were refused");
+      expect(row.lastPassedCommit).toBe(c.f.head);
+      expect(c.pushes()).toBe(mode.endsWith("preparation") || privacy ? 0 : 1);
+    } finally {
+      for (const close of cleanup) close();
+      savePipelines(previous);
+      for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 150_000);
 }
 
 nativePublicationTest("controller publication renews cached checks after environment drift on the same head", async () => {
