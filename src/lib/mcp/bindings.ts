@@ -6402,7 +6402,7 @@ export function captureBoardAliasProof(
     .filter(row => {
       if (canonicalProject(row.project) !== project) return false;
       const folder = row.projectRoot ? path.basename(row.projectRoot) : "";
-      return [row.project, row.displayName, row.projectName, row.projectRoot, folder]
+      return [row.project, row.displayName, row.projectRoot, folder]
         .some(value => typeof value === "string" && normalize(value) === spelling);
     })
     .map(row => row.project);
