@@ -2297,9 +2297,10 @@ async function prepareStructuredStartupRecipientOnce(
     && registry.canonicalConversationId(seat.conversationId as ViewerConversationId) === conversation!.id);
   const seatIdentity = () => JSON.stringify(relevantSeats().map(seat => [seat.project,seat.conversationId,seat.seatEpoch,seat.state]));
   const capturedSeats = seatIdentity();
-  const evidenceVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"));
-  if (!evidenceVersion) refuse("recipient pipeline ownership index is unavailable or incomplete");
   const selection = pipelineStartupMemberships(registry, entry);
+  const pipelineSelection = { ids: [...selection.byPipeline.keys()], conversationIds: [...selection.selectedIds] };
+  const evidenceVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"), pipelineSelection);
+  if (!evidenceVersion) refuse("recipient pipeline ownership index is unavailable or incomplete");
   const membershipIdentity = startupMembershipIdentity(selection);
   const interruptionDirectory = interruptionObligationDirectory(registry.filename);
   const interruptionEvidence = () => {
@@ -2314,7 +2315,7 @@ async function prepareStructuredStartupRecipientOnce(
     if (!prepared && performance.now() >= deadline) refuse("recipient startup preparation deadline exceeded");
     const current = registry.conversation(conversation!.id);
     if (interruptionEvidence().revision !== interruptionRevision) refuse("recipient interruption authority changed during preparation");
-    if (!evidenceVersion || recipientPipelineEvidenceRevision(statePath("state.sqlite")) !== evidenceVersion
+    if (!evidenceVersion || recipientPipelineEvidenceRevision(statePath("state.sqlite"), pipelineSelection) !== evidenceVersion
       || JSON.stringify(current?.generations.at(-1)) !== generationIdentity || current?.supersededBy
       || registry.canonicalConversationId(conversationId) !== conversation!.id
       || (owner && fingerprint(startupHostSnapshot(registry,key,true).entries[hostKey]) !== initialOwner)

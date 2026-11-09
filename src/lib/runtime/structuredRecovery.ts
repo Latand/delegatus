@@ -436,10 +436,10 @@ async function recoverCandidate(
           };
           const recipient = recipientSelection();
           const recipientIdentity = JSON.stringify(recipient);
-          const recipientVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"));
+          const recipientVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient);
           const authorize = () => {
             if (!recipientVersion) throw new StructuredRecoveryHeldForUpdateError("recipient pipeline ownership index is unavailable for native reconnect");
-            if (recipientPipelineEvidenceRevision(statePath("state.sqlite")) !== recipientVersion) {
+            if (recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient) !== recipientVersion) {
               throw new StructuredRecoveryHeldForUpdateError("recipient pipeline authority changed during native reconnect");
             }
             if (JSON.stringify(recipientSelection()) !== recipientIdentity) throw new StructuredRecoverySupersededError();

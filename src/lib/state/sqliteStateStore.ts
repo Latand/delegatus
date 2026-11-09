@@ -1289,15 +1289,54 @@ function pipelineIndexRevision(filename: string, table: "pipeline_evidence_clock
   return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
-/** Freshness proof for a held recipient preparation, including an index whose
- * completeness marker or trigger policy was removed by another release. */
-export function recipientPipelineEvidenceRevision(filename: string): string | null {
-  const revision = pipelineEvidenceRevision(filename);
-  const db = evidenceVersions.reader?.db;
-  return revision && db && pipelineControllerReferencesReady(db) && pipelineControllerReferencesCurrent(db) && pipelineControllerReferenceIndexesCurrent(db) ? revision : null;
+export type PipelineRecipientSelection = { ids: readonly string[]; conversationIds: readonly string[] };
+
+/** Freshness follows the complete selected ownership set and its row revisions.
+ * An unrelated writer cannot revoke a published recipient's dispatch proof. */
+export function recipientPipelineEvidenceRevision(filename: string, selection: PipelineRecipientSelection): string | null {
+  if (!fs.existsSync(filename)) return null;
+  const identity = databaseFileIdentity(filename);
+  const db = connectReadonlyDatabase(filename);
+  try {
+    db.exec("BEGIN");
+    const keys = recipientPipelineEvidenceKeys(db, selection);
+    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    const revision = db.query<{ revision: number }, [string, string]>(
+      "SELECT revision FROM pipeline_evidence_rows WHERE collection=? AND row_key=?");
+    const rows = keys.map(({ collection, row_key }) => [collection, row_key, revision.get(collection, row_key)?.revision ?? null]);
+    if (databaseFileIdentity(filename) !== identity) return null;
+    const collections = db.query("SELECT collection,schema_version FROM state_collections WHERE collection IN ('pipelines','pipelines_archive') ORDER BY collection").all();
+    return JSON.stringify([identity, schema, collections, rows]);
+  } catch { return null; }
+  finally { rollbackQuietly(db); db.close(); }
 }
 
-export type PipelineRecipientSelection = { ids: readonly string[]; conversationIds: readonly string[] };
+function recipientPipelineEvidenceKeys(db: BunDatabase, selection: PipelineRecipientSelection) {
+  if (!pipelineControllerReferencesReady(db) || !pipelineControllerReferencesCurrent(db) || !pipelineControllerReferenceIndexesCurrent(db)
+    || !pipelineEvidenceIndexReady(db)) throw new Error("recipient pipeline ownership index is incomplete or incompatible");
+  const metadata = db.query<{ collection: string; schema_version: number }, []>(
+    "SELECT collection,schema_version FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
+  if (metadata.length !== 2 || metadata[0]!.schema_version !== metadata[1]!.schema_version
+    || metadata.some(row => ![5,6].includes(row.schema_version))) {
+    throw new Error("recipient pipeline collections are incomplete or incompatible");
+  }
+  // Indeterminate ownership cannot prove absence for any recipient.
+  if (db.query("SELECT 1 FROM pipeline_owner_refs WHERE kind IN ('unknown','archive:unknown') LIMIT 1").get()) {
+    throw new Error("recipient pipeline ownership contains unknown rows");
+  }
+  const keys = db.query<{ collection: string; row_key: string }, [string, string]>(`
+    WITH matches AS MATERIALIZED (
+      SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
+        AND row_key IN (SELECT value FROM json_each(?))
+      UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
+        WHERE kind IN ('conversationId','archive:conversationId') AND identity IN (SELECT value FROM json_each(?)) LIMIT 257)
+    SELECT collection,row_key FROM matches
+    UNION SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
+      AND row_key IN (SELECT row_key FROM matches)
+    ORDER BY collection,row_key LIMIT 257`).all(JSON.stringify(selection.ids), JSON.stringify(selection.conversationIds));
+  if (keys.length > 256) throw new Error("recipient pipeline ownership exceeds its bounded read");
+  return keys;
+}
 
 /** A cold reader uses only the persisted ownership index. Initialization belongs
  * to the fenced startup writer; this path never backfills retained archives. */
@@ -1307,29 +1346,7 @@ export function readRecipientPipelineEvidence(filename: string, selection: Pipel
   const db = connectReadonlyDatabase(filename);
   try {
     db.exec("BEGIN");
-    if (!pipelineControllerReferencesReady(db) || !pipelineControllerReferencesCurrent(db) || !pipelineControllerReferenceIndexesCurrent(db)
-      || !pipelineEvidenceIndexReady(db)) throw new Error("recipient pipeline ownership index is incomplete or incompatible");
-    const metadata = db.query<{ collection: string; schema_version: number }, []>(
-      "SELECT collection,schema_version FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
-    if (metadata.length !== 2 || metadata[0]!.schema_version !== metadata[1]!.schema_version
-      || metadata.some(row => ![5,6].includes(row.schema_version))) {
-      throw new Error("recipient pipeline collections are incomplete or incompatible");
-    }
-    // Indeterminate ownership cannot prove absence for any recipient.
-    if (db.query("SELECT 1 FROM pipeline_owner_refs WHERE kind IN ('unknown','archive:unknown') LIMIT 1").get()) {
-      throw new Error("recipient pipeline ownership contains unknown rows");
-    }
-    const keys = db.query<{ collection: string; row_key: string }, [string, string]>(`
-      WITH matches AS MATERIALIZED (
-        SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
-          AND row_key IN (SELECT value FROM json_each(?))
-        UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
-          WHERE kind IN ('conversationId','archive:conversationId') AND identity IN (SELECT value FROM json_each(?)) LIMIT 257)
-      SELECT collection,row_key FROM matches
-      UNION SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
-        AND row_key IN (SELECT row_key FROM matches)
-      LIMIT 257`).all(JSON.stringify(selection.ids), JSON.stringify(selection.conversationIds));
-    if (keys.length > 256) throw new Error("recipient pipeline ownership exceeds its bounded read");
+    const keys = recipientPipelineEvidenceKeys(db, selection);
     const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
     let bytes = 0;
     const size = db.query<{ bytes: number }, [string,string]>("SELECT length(CAST(value_json AS BLOB)) AS bytes FROM state_rows WHERE collection=? AND row_key=?");

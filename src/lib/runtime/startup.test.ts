@@ -1196,6 +1196,18 @@ for (const end of ["cancel", "deadline"] as const) test(`recipient preparation c
   }
 });
 
+function recipientDispatchPipeline(conversationId?: `conversation_${string}`) {
+  const pipeline = buildPipeline({ id: "recipient-dispatch-pipeline", task: "synthetic dispatch authority", project: "synthetic", repoDir: "/repo",
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z" });
+  if (conversationId) pipeline.runs[0]!.attempts.push({
+    n: 1, state: "running", conversationId, flowId: null, launchId: null, sessionId: null, agentPath: null, paneId: null,
+    startedAt: pipeline.createdAt, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
+    effectiveRole: pipeline.stages[0]!.effectiveRole,
+  });
+  return pipeline;
+}
+
 for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline", "index", "cut", "cut-index"] as const) test(`recipient preparation refuses a changed ${field} after its awaited evidence read`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(),"recipient-authority-"));
   const oldState = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR=directory;
@@ -1219,10 +1231,10 @@ for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline
           owner: null, claimEpoch: original.claimEpoch, turnRef: "replacement-turn", boundary: "replacement-cut", reason: "viewer-release",
           checkpoint: { lastEventKind: "tool-call", lastEventAt: null }, seat: null,
         });
-        else if (field === "pipeline" || field === "index") {
+        else if (field === "pipeline") savePipelines([recipientDispatchPipeline(conversation.id)]);
+        else if (field === "index") {
           const db = new Database(path.join(directory,"state.sqlite"));
-          try { db.exec(field === "index" ? "DELETE FROM pipeline_ref_archive_complete"
-            : "UPDATE pipeline_evidence_clock SET revision=revision+1 WHERE id=1"); } finally { db.close(); }
+          try { db.exec("DELETE FROM pipeline_ref_archive_complete"); } finally { db.close(); }
         } else if (field === "generation") {
           const successor=registry.ensureConversation("codex",path.join(directory,"replacement.jsonl"),null);
           registry.recordSupersedence(conversation.id,successor.id,"recovery-spawn");
@@ -1252,7 +1264,8 @@ for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline
 for (const kind of ["unhosted", "live"] as const)
 for (const phase of ["census", "restart-cut", "pipeline evidence"] as const)
 for (const race of ["none", "publication-owner", "publication-generation", "publication-writer", "publication-epoch", "publication-seat", "publication-cut",
-  "dispatch-owner", "dispatch-generation", "dispatch-writer", "dispatch-epoch", "dispatch-seat", "dispatch-cut"] as const)
+  "dispatch-owner", "dispatch-generation", "dispatch-writer", "dispatch-epoch", "dispatch-seat", "dispatch-cut",
+  "dispatch-unrelated-pipeline", "dispatch-recipient-pipeline"] as const)
 if (phase === "census" || race === "none")
   test.skipIf(process.platform === "win32")(`addressed ${kind} recovery delivers the original HTTP operation to its socket transcript before the ${phase} (${race})`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-wire-"));
@@ -1295,7 +1308,11 @@ if (phase === "census" || race === "none")
     raced=true;
     replacementSequence++;
     const entry=registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!;
-    if (race.endsWith("-seat")) seats=[activeSeat("recipient-wire", replacementSequence + 1, conversation.id, artifactPath)];
+    if (race.endsWith("-pipeline")) {
+      const pipeline = recipientDispatchPipeline(race === "dispatch-recipient-pipeline" ? conversation.id : undefined);
+      savePipelines([pipeline]);
+    }
+    else if (race.endsWith("-seat")) seats=[activeSeat("recipient-wire", replacementSequence + 1, conversation.id, artifactPath)];
     else if (race.endsWith("-cut")) interruptionObligationStore(interruptionObligationDirectory(registry.filename)).record({
       conversationId: conversation.id, engine: "codex", hostKey: `codex:${sessionId}`, path: artifactPath,
       owner: null, claimEpoch: entry.claimEpoch, turnRef: `replacement-turn-${replacementSequence}`, boundary: `replacement-cut-${replacementSequence}`, reason: "viewer-release",
@@ -1388,7 +1405,7 @@ if (phase === "census" || race === "none")
     expect(response.ok).toBe(true);
     const responseBody = await response.json();
     await kickStructuredDeliveryQueue();
-    if (race !== "none") {
+    if (race !== "none" && race !== "dispatch-unrelated-pipeline") {
       await waitFor(() => raced,5000);
       await kickStructuredDeliveryQueue();
       expect(finished).toBe(false);
@@ -1404,6 +1421,7 @@ if (phase === "census" || race === "none")
     catch { throw new Error(JSON.stringify({response:responseBody,operation:journal.operationResult("recipient-original"),
       operations:journal.snapshot().recentOperations,spawns,writes:writes()})); }
     expect(finished).toBe(false);
+    if (race === "dispatch-unrelated-pipeline") expect(raced).toBe(true);
     expect(spawns).toBe(kind === "unhosted" ? 1 : 0);
     expect(writes()).toBe(1);
     const transcript = fs.readFileSync(artifactPath,"utf8").trim().split("\n").map(line => JSON.parse(line));

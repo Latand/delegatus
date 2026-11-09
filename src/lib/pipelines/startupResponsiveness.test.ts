@@ -959,3 +959,67 @@ test("recipient evidence refuses row and byte overflow before decoding payloads"
     expect(decodes.rows()).toBe(0);
   } finally { decodes.stop();db.close(); }
 });
+
+
+test("recipient freshness ignores unrelated writes and survives a cold reader without payload scans", async () => {
+  const { root, row } = fixture();
+  const filename = path.join(root, "state.sqlite");
+  const selection = { ids: [] as string[], conversationIds: ["conversation_target"] };
+  const db = new Database(filename);
+  const decodes = observeEvidenceDecodes();
+  try {
+    retainedHistory(db, row);
+    const own = recipientOwner(row, "selected-owner", "conversation_target");
+    db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,0,1,0)")
+      .run(own.id, JSON.stringify(own));
+    const revision = () => stateStore.recipientPipelineEvidenceRevision(filename, selection);
+    const captured = revision();
+    expect(captured).not.toBeNull();
+    db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.task','unrelated output') WHERE collection='pipelines'").run();
+    db.query("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key='retained-evidence-0'").run();
+    expect(revision()).toBe(captured);
+    expect(revision()).toBe(captured);
+    expect(decodes.rows()).toBe(0);
+    const child = Bun.spawn([process.execPath, "--eval", `
+      const {recipientPipelineEvidenceRevision:read}=await import('./src/lib/state/sqliteStateStore.ts');
+      console.log(JSON.stringify(read(process.argv[1], JSON.parse(process.argv[2]))));
+    `, filename, JSON.stringify(selection)], { env: process.env, stdout: "pipe", stderr: "pipe" });
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stderr).text()).toBe("");
+    expect(JSON.parse(output)).toBe(captured);
+    console.info(JSON.stringify({ case: "recipient-freshness", coldPayloadRows: 0, warmPayloadRows: decodes.rows(), retainedUnrelated: 48 }));
+  } finally { decodes.stop(); db.close(); }
+});
+
+for (const mutation of ["incoming", "retarget", "delete", "replace", "archive", "schema", "incomplete", "unknown", "rollback"] as const)
+  test(`recipient freshness observes selected ${mutation} authority`, () => {
+    const { root, row } = fixture();
+    const filename = path.join(root, "state.sqlite");
+    const selection = { ids: [] as string[], conversationIds: ["conversation_target"] };
+    const db = new Database(filename);
+    try {
+      const write = (conversationId: string) => db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+        .run(JSON.stringify(recipientOwner(row, row.id, conversationId)), row.id);
+      write(mutation === "incoming" ? "conversation_elsewhere" : "conversation_target");
+      const revision = () => stateStore.recipientPipelineEvidenceRevision(filename, selection);
+      const captured = revision();
+      expect(captured).not.toBeNull();
+      if (mutation === "incoming") write("conversation_target");
+      if (mutation === "retarget") write("conversation_elsewhere");
+      if (mutation === "delete") db.exec("DELETE FROM state_rows WHERE collection='pipelines'");
+      if (mutation === "replace") db.query("INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines',?,?,0,1,0)")
+        .run(row.id, JSON.stringify(recipientOwner(row, row.id, "conversation_target")));
+      if (mutation === "archive") db.exec("UPDATE state_rows SET collection='pipelines_archive' WHERE collection='pipelines'");
+      if (mutation === "schema") db.exec("UPDATE state_collections SET schema_version=6 WHERE collection IN ('pipelines','pipelines_archive')");
+      if (mutation === "incomplete") db.exec("DELETE FROM pipeline_ref_archive_complete");
+      if (mutation === "unknown") db.exec("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines'");
+      if (mutation === "rollback") {
+        db.exec("BEGIN IMMEDIATE"); write("conversation_elsewhere");
+        expect(revision()).toBe(captured);
+        db.exec("ROLLBACK");
+        expect(revision()).toBe(captured);
+      } else expect(revision()).not.toBe(captured);
+      if (mutation === "incomplete" || mutation === "unknown") expect(revision()).toBeNull();
+    } finally { db.close(); }
+  });

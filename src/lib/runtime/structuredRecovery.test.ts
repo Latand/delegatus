@@ -40,7 +40,7 @@ process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 for (const mode of ["startup", "foreground"] as const)
-for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed",
+for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed", "pipeline-unrelated",
   "claim-owner-replaced", "claim-epoch-replaced", "claim-writer-replaced"] as const) test.skipIf(process.platform === "win32")(`${mode} recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
   loadPipelines();
   const cwd = fs.mkdtempSync(path.join(sandbox, "native-reconnect-"));
@@ -92,9 +92,20 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
   const adopt = spyOn(CodexAppServerHost, "adopt").mockResolvedValue(host as never);
   if (scenario === "failed-attachment") adopt.mockRejectedValue(new Error("native attachment refused"));
   if (scenario === "revoked") adopt.mockImplementation(async () => { authorized = false; return host as never; });
-  if (scenario === "pipeline-changed") adopt.mockImplementation(async () => {
-    const db=new Database(statePath("state.sqlite"));
-    try { db.exec("UPDATE pipeline_evidence_clock SET revision=revision+1 WHERE id=1"); } finally { db.close(); }
+  let changedPipelineId: string | undefined;
+  if (scenario === "pipeline-changed" || scenario === "pipeline-unrelated") adopt.mockImplementation(async () => {
+    await Promise.resolve();
+    const pipeline = buildPipeline({ id: `reconnect-evidence-${sessionId}`, task: "synthetic reconnect evidence", project: "fixture", repoDir: cwd,
+      stages: [{ id: "build", kind: "run", prompt: "build", next: null,
+        effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+      srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z" });
+    if (scenario === "pipeline-changed") pipeline.runs[0]!.attempts.push({
+      n: 1, state: "running", conversationId: conversation.id, flowId: null, launchId: null, sessionId: null, agentPath: null, paneId: null,
+      startedAt: pipeline.createdAt, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
+      effectiveRole: pipeline.stages[0]!.effectiveRole,
+    });
+    changedPipelineId = pipeline.id;
+    savePipelines([...loadPipelines(), pipeline]);
     return host as never;
   });
   let spawned = 0;
@@ -175,6 +186,7 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
     await kickStructuredDeliveryQueue();
     expect(ledger.writes).toHaveLength(1);
   } finally {
+    if (changedPipelineId) savePipelines(loadPipelines().filter(pipeline => pipeline.id !== changedPipelineId));
     releaseLease.resolve(); await heldLease;
     adopt.mockRestore();
     admission.mockRestore();
