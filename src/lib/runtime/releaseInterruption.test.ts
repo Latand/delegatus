@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { Database } from "bun:sqlite";
+import { injectStateWriteFaultForTests } from "@/lib/state/sqliteStateStore";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -20,7 +22,7 @@ import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord }
 import { createFakeDeliveryLedger, FakeEngineHost, type FakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { bindClaudeHostPersistence, type StructuredHostAdoptionFilter } from "./registry";
 import type { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
-import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
+import { interruptionObligationDirectory, interruptionObligationStore, initializeRecipientInterruptionIndex } from "./interruptionObligations";
 import { INTERRUPTED_CODEX_CONTINUATION_TEXT } from "./recoveryNotices";
 import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
 import {
@@ -78,6 +80,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  injectStateWriteFaultForTests(null);
   await bindStructuredDeliveryQueue([], { registry: new AgentRegistry(path.join(directory, "agent-registry.json")), client: null });
   for (const [key, value] of Object.entries(previousEnvironment)) {
     if (value === undefined) delete process.env[key];
@@ -2995,7 +2998,7 @@ test.each([
   });
 });
 
-test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds is withdrawn when its turn ends by itself, and stays gone once the directory accepts records", async (member) => {
+test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds is withdrawn when its turn ends by itself, and stays gone once the canonical source accepts records", async (member) => {
   await withJournal(async (journal) => {
     const open = openClaudeTurn();
     const cut = incumbentConversation("claude", cutSessionId(94), deadEngine(2_000_001_194), open.records);
@@ -3003,13 +3006,16 @@ test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds
     appendHostLedger(cut, open.ledger);
     markHosted(cut, "live", "T1");
     const obligations = interruptionObligationDirectory(cut.registryFile);
-    fs.mkdirSync(obligations, { recursive: true });
-    fs.chmodSync(obligations, 0o500);
+    await initializeRecipientInterruptionIndex(obligations);
+    const source = JSON.parse(fs.readFileSync(obligations, "utf8"));
+    injectStateWriteFaultForTests({ site: "commit", collection: source.collection, error: new Error("fixture canonical source is unavailable") });
     const ledger = createFakeDeliveryLedger();
     expect((await successorBoot(cut.registryFile, journal, ledger, { registry: new AgentRegistry(cut.registryFile), adoptionFails: true })).error).not.toBeNull();
     const [proposal] = restartCuts(cut.registryFile);
     expect(proposal).toMatchObject({ turnRef: "T1" });
-    expect(fs.readdirSync(obligations)).toEqual([]);
+    const db = new Database(path.join(path.dirname(obligations), "state.sqlite"));
+    try { expect(db.query("SELECT row_key FROM state_rows WHERE collection=?").all(source.collection)).toEqual([]); }
+    finally { db.close(); }
     expect(fs.readFileSync(`${obligations}.pending.jsonl`, "utf8")).toContain(proposal!.id);
 
     appendTranscript(cut, open.ending);
@@ -3027,7 +3033,7 @@ test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds
     };
     expect(restartCutOf()).toBeNull();
 
-    fs.chmodSync(obligations, 0o700);
+    injectStateWriteFaultForTests(null);
     expect(restartCuts(cut.registryFile)).toEqual([]);
     restateHosted(cut, "live", "T1");
     expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(245) })).error).toBeNull();
@@ -3096,14 +3102,15 @@ test.each(["agent", "stage"] as const)("a live pending import cannot hide a comp
     appendHostLedger(cut, open.ledger);
     markHosted(cut, "live", "T1");
     const obligations = interruptionObligationDirectory(cut.registryFile);
-    fs.mkdirSync(obligations, { recursive: true });
-    fs.chmodSync(obligations, 0o500);
+    await initializeRecipientInterruptionIndex(obligations);
+    const source = JSON.parse(fs.readFileSync(obligations, "utf8"));
+    injectStateWriteFaultForTests({ site: "commit", collection: source.collection, error: new Error("fixture canonical source is unavailable") });
     const ledger = createFakeDeliveryLedger();
     expect((await successorBoot(cut.registryFile, journal, ledger, { adoptionFails: true })).error).not.toBeNull();
     expect(restartCuts(cut.registryFile)).toMatchObject([{ state: member === "agent" ? "owed" : "discharged", turnRef: "T1" }]);
     appendTranscript(cut, open.ending);
     appendHostLedger(cut, [...open.ending.map(record => frameOf(record, "T1")), turnEnded("T1")]);
-    fs.chmodSync(obligations, 0o700);
+    injectStateWriteFaultForTests(null);
     const ready = path.join(directory, "import-ready");
     const release = path.join(directory, "import-release");
     const childScript = `
