@@ -1942,6 +1942,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "telegram.bot.lastPost": "Останній допис {time}, автор {by}",
   "telegram.bot.reports": "Звіти оркестратора: {names}",
   "telegram.bot.reportsRefused": "Звіти оркестратора: {names}. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат",
+  "telegram.bot.reportsRefusedPosting": "Звіти оркестратора: {names}. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: додайте бота назад до чату з правом писати або оберіть інший чат",
   "telegram.bot.unidentified": "невідомий виклик",
   "telegram.bot.inactive": "Більше не учасник ({count})",
   "telegram.bot.limitsTitle": "Що бачить бот",

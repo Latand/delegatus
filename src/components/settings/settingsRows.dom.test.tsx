@@ -12,7 +12,7 @@ installActEnv();
 const matchMedia = (query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } });
 (dom as unknown as { matchMedia: typeof matchMedia }).matchMedia = matchMedia;
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement, Event: dom.Event, MouseEvent: dom.MouseEvent, KeyboardEvent: dom.KeyboardEvent, PointerEvent: dom.Event, localStorage: dom.localStorage, matchMedia, innerWidth: 1440, innerHeight: 900 });
-const { ConfirmAction, LinkRow, Literal, markLiterals, Prose, SectionHead, SettingsDensity } = await import("./settingsRows");
+const { ChoiceRow, ConfirmAction, LinkRow, Literal, markLiterals, Prose, SectionHead, SettingsDensity } = await import("./settingsRows");
 const { LAYER } = await import("@/components/layers");
 
 let root: Root | undefined;
@@ -152,4 +152,14 @@ for (const density of ["dialog", "sheet"] as const) test(`a section title is a h
   const level = head.tagName === "H4" ? 4 : head.getAttribute("role") === "heading" ? Number(head.getAttribute("aria-level")) : 0;
   expect(level).toBe(density === "dialog" ? 4 : 3);
   expect(head.textContent).toBe("Chats3");
+});
+
+for (const disabled of [false, true]) test(`the sheet's native select stays invisible and only the painted field dims (disabled: ${disabled})`, async () => {
+  const host = await mount(<SettingsDensity.Provider value="sheet"><ChoiceRow label="Speakers" value="" disabled={disabled} onChange={() => {}} options={[{ value: "", label: "System default" }]} /></SettingsDensity.Provider>);
+  const select = host.querySelector<HTMLSelectElement>("select")!;
+  /* An inline value outranks the select recipe's disabled:opacity-60, which painted a second copy of the value over the face. */
+  expect(select.style.opacity).toBe("0");
+  expect(select.disabled).toBe(disabled);
+  const face = host.querySelector<HTMLElement>("[data-settings-choice-face]")!.parentElement!;
+  expect(face.className.includes("opacity-60")).toBe(disabled);
 });

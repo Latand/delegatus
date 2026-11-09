@@ -1967,6 +1967,7 @@ export const en = {
   "telegram.bot.lastPost": "Last post {time} by {by}",
   "telegram.bot.reports": "Orchestrator reports: {names}",
   "telegram.bot.reportsRefused": "Orchestrator reports: {names}. Posts are refused here now, so they reach the log only: switch posting on or pick another chat",
+  "telegram.bot.reportsRefusedPosting": "Orchestrator reports: {names}. Posts are refused here now, so they reach the log only: add the bot back to the chat with the right to post, or pick another chat",
   "telegram.bot.unidentified": "an unidentified caller",
   "telegram.bot.inactive": "No longer a member ({count})",
   "telegram.bot.limitsTitle": "What a bot can see",

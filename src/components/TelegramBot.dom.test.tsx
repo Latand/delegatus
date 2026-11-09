@@ -453,3 +453,12 @@ test("the chat page says what it knows above the alias, so no line under the fie
   expect(alias.nextElementSibling?.getAttribute("data-settings-row")).not.toBe("text");
   expect(section.querySelector("[data-telegram-chat-page]")!.textContent).toContain(translate("en", "telegram.bot.readd"));
 });
+
+for (const posting of [true, false]) test(`reports refused in a chat whose posting is ${posting ? "on" : "off"} advise the real action`, async () => {
+  const { section } = await mount(undefined, { chats: [chat({ alias: "team-reports", postAllowed: posting, postable: false, reports: [{ name: "Atlas", refused: true }] })] });
+  await openChat(section, "-1000000000101");
+  const line = section.querySelector("[data-telegram-chat-page] [data-telegram-chat-reports='refused']")!.textContent;
+  expect(line).toBe(translate("en", posting ? "telegram.bot.reportsRefusedPosting" : "telegram.bot.reportsRefused", { names: "Atlas" }));
+  expect(section.querySelector("[data-telegram-chat-switch]")!.getAttribute("aria-checked")).toBe(String(posting));
+  if (posting) expect(line!.toLowerCase()).not.toContain("switch posting on");
+});

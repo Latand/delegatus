@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 
 import { MobileSheetSection } from "@/components/mobile/MobileSheet";
 import { SettingSwitch } from "@/components/ProjectSettingRow";
@@ -96,7 +96,9 @@ export interface ChoiceOption { value: string; label: string; disabled?: boolean
  * A choice on the phone: a touch screen draws every field at 16 px (globals.css,
  * so iOS does not zoom), which would make the value the loudest text on the
  * sheet. The value shows at the row's size in the select's own face, and the
- * app's `Select` lies over that face, transparent and 44 px tall.
+ * app's `Select` lies over that face, transparent and 44 px tall. The select's
+ * own `disabled:opacity-60` would paint it over the face again, so its opacity
+ * is set inline: only the painted field dims when the choice is disabled.
  */
 function SheetChoice({ label, value, options, width, disabled, onChange, selectAttrs, describedBy, id }: {
   label?: string; value: string; options: readonly ChoiceOption[]; width: string; disabled?: boolean; onChange: (value: string) => void; selectAttrs?: Data; describedBy?: string; id?: string;
@@ -106,7 +108,7 @@ function SheetChoice({ label, value, options, width, disabled, onChange, selectA
     <span className={`relative flex h-8 shrink-0 items-center gap-1 rounded-control border border-border bg-card pl-2 pr-1.5 text-body text-primary has-[select:focus-visible]:ring-2 has-[select:focus-visible]:ring-accent/40 ${disabled ? "opacity-60" : ""} ${width}`}>
       <span data-settings-choice-face="" className="min-w-0 flex-1 truncate">{current}</span>
       <ChevronDown className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-      <Select id={id} value={value} disabled={disabled} aria-label={label} aria-describedby={describedBy} onChange={(event) => onChange(event.target.value)} className="absolute inset-x-0 top-1/2 -translate-y-1/2 cursor-pointer opacity-0" style={{ height: 44 }} {...selectAttrs}>
+      <Select id={id} value={value} disabled={disabled} aria-label={label} aria-describedby={describedBy} onChange={(event) => onChange(event.target.value)} className="absolute inset-x-0 top-1/2 -translate-y-1/2 cursor-pointer opacity-0" style={{ height: 44, opacity: 0 }} {...selectAttrs}>
         {options.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
       </Select>
     </span>
@@ -247,6 +249,21 @@ export function RowField({ desktopClass = "", ...input }: InputHTMLAttributes<HT
     <span data-settings-field-face="" className={`relative block h-8 w-full min-w-0 overflow-visible rounded-control border border-border bg-well has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-accent/40 ${input.disabled ? "opacity-55" : ""}`}>
       <input {...input} className="absolute left-0 top-1/2 h-[50.3px] w-[114.286%] origin-left -translate-y-1/2 scale-[.875] bg-transparent pl-[9px] pr-2 text-body text-primary outline-none placeholder:text-muted disabled:cursor-not-allowed" />
     </span>
+  );
+}
+
+/**
+ * The secondary button on a row's line, beside a select or a `RowField`. On the
+ * phone it wears their 32 px face and the row's type inside a 44 px button that
+ * the row takes back with its own margins, so its target is a real box and the
+ * row keeps its height; in the window it is the plain `BUTTON`.
+ */
+export function RowButton({ children, className = "", ...button }: ButtonHTMLAttributes<HTMLButtonElement>) {
+  if (useDensity() !== "sheet") return <button {...button} className={`${BUTTON} ${className}`}>{children}</button>;
+  return (
+    <button {...button} className={`group -my-1.5 h-11 ${className} focus-visible:outline-none`}>
+      <span data-settings-button-face="" className="flex h-8 items-center rounded-control border border-border bg-card px-3 text-body font-semibold text-primary group-active:bg-sunken group-focus-visible:ring-2 group-focus-visible:ring-accent/40 group-disabled:cursor-not-allowed group-disabled:opacity-45">{children}</span>
+    </button>
   );
 }
 

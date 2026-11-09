@@ -354,7 +354,7 @@ function ChatPage({ chat, state, failure, here }: { chat: TelegramBotChatView; s
       {visibility ? <TextRow tone="muted">{visibility}</TextRow> : null}
       {!choosesSender && who ? <TextRow tone="muted" attrs={{ "data-telegram-posts-who": "" }}>{who}</TextRow> : null}
       {chat.reports?.some((entry) => !entry.refused) ? <TextRow tone="muted" attrs={{ "data-telegram-chat-reports": "chosen" }}>{t("telegram.bot.reports", { names: chat.reports.filter((entry) => !entry.refused).map((entry) => entry.name).join(", ") })}</TextRow> : null}
-      {chat.reports?.some((entry) => entry.refused) ? <TextRow tone="warning" attrs={{ "data-telegram-chat-reports": "refused" }}>{t("telegram.bot.reportsRefused", { names: chat.reports.filter((entry) => entry.refused).map((entry) => entry.name).join(", ") })}</TextRow> : null}
+      {chat.reports?.some((entry) => entry.refused) ? <TextRow tone="warning" attrs={{ "data-telegram-chat-reports": "refused" }}>{t(posting ? "telegram.bot.reportsRefusedPosting" : "telegram.bot.reportsRefused", { names: chat.reports.filter((entry) => entry.refused).map((entry) => entry.name).join(", ") })}</TextRow> : null}
       {lastPost && lastPostBy ? <TextRow tone="muted">{t("telegram.bot.lastPost", { time: lastPost, by: lastPostBy })}{chat.lastDelivery?.state === "sent" && chat.lastDelivery.bot ? ` · ${t("telegram.bot.via", { bot: chat.lastDelivery.bot.name })}` : ""}</TextRow> : null}
       {showField ? (
         <FieldRow label={t("telegram.bot.aliasLabel")} hint={!posting && draft === "" ? t("telegram.bot.aliasHint") : undefined}>

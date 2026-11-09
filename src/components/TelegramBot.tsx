@@ -205,7 +205,7 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
       ) : null}
       {chat.reports?.some((entry) => entry.refused) ? (
         <p data-telegram-chat-reports="refused" className="pr-1.5 text-[10px] font-semibold leading-snug text-warning">
-          {t("telegram.bot.reportsRefused", { names: chat.reports.filter((entry) => entry.refused).map((entry) => entry.name).join(", ") })}
+          {t(posting ? "telegram.bot.reportsRefusedPosting" : "telegram.bot.reportsRefused", { names: chat.reports.filter((entry) => entry.refused).map((entry) => entry.name).join(", ") })}
         </p>
       ) : null}
       {lastPost && lastPostBy ? (

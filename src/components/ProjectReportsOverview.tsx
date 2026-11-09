@@ -6,7 +6,7 @@ import type { TelegramBotState } from "@/hooks/useTelegramBot";
 import { useLocale } from "@/lib/i18n";
 import type { ProjectReportLine } from "@/lib/projects/reportDestination";
 
-import { BlockRow, BUTTON, ChoiceRow, FIELD, RefusalLine, SectionHead, TextRow } from "./settings/settingsRows";
+import { BlockRow, ChoiceRow, RefusalLine, RowButton, RowField, SectionHead, TextRow } from "./settings/settingsRows";
 
 /**
  * The reports overview in the bot panel (docs/design/orchestrator-reports.md
@@ -138,10 +138,10 @@ function ProjectLine({ line, postable, onSaved }: {
       {byLink ? (
         <BlockRow>
           <form className="flex min-w-0 flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); if (link.trim() && (line.reportName || name.trim())) void write(stored, (name.trim() || line.reportName), link.trim()).then((done) => { if (done) setByLink(false); }); }}>
-            <input type="text" value={link} onChange={(event) => setLink(event.target.value)} aria-label={t("telegram.reportLink")} placeholder={t("telegram.reportLink")} className={`${FIELD} flex-1 basis-[180px]`} />
-            {link.trim() && !line.reportName ? <input type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder={t("onboarding.telegram.name")}
-              aria-label={t("telegram.bot.projectNameAria", { project: line.label })} maxLength={60} className={`${FIELD} flex-1 basis-[120px]`} /> : null}
-            <button type="submit" disabled={saving || !link.trim() || !(line.reportName || name.trim())} className={`${BUTTON} shrink-0`}>{t("telegram.bot.projectSave")}</button>
+            <span className="min-w-0 flex-1 basis-[180px]"><RowField type="text" value={link} onChange={(event) => setLink(event.target.value)} aria-label={t("telegram.reportLink")} placeholder={t("telegram.reportLink")} /></span>
+            {link.trim() && !line.reportName ? <span className="min-w-0 flex-1 basis-[120px]"><RowField type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder={t("onboarding.telegram.name")}
+              aria-label={t("telegram.bot.projectNameAria", { project: line.label })} maxLength={60} /></span> : null}
+            <RowButton type="submit" disabled={saving || !link.trim() || !(line.reportName || name.trim())} className="shrink-0">{t("telegram.bot.projectSave")}</RowButton>
           </form>
         </BlockRow>
       ) : null}
@@ -154,17 +154,18 @@ function ProjectLine({ line, postable, onSaved }: {
               if (picked && name.trim()) void write(picked, name.trim());
             }}
           >
-            <input
-              type="text"
-              value={name}
-              maxLength={60}
-              autoComplete="off"
-              aria-label={t("telegram.bot.projectNameAria", { project: line.label })}
-              placeholder={t("onboarding.telegram.name")}
-              onChange={(event) => setName(event.target.value)}
-              className={`${FIELD} flex-1`}
-            />
-            <button type="submit" disabled={saving || name.trim() === ""} className={`${BUTTON} shrink-0`}>{t("telegram.bot.projectSave")}</button>
+            <span className="min-w-0 flex-1">
+              <RowField
+                type="text"
+                value={name}
+                maxLength={60}
+                autoComplete="off"
+                aria-label={t("telegram.bot.projectNameAria", { project: line.label })}
+                placeholder={t("onboarding.telegram.name")}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </span>
+            <RowButton type="submit" disabled={saving || name.trim() === ""} className="shrink-0">{t("telegram.bot.projectSave")}</RowButton>
           </form>
         </BlockRow>
       ) : null}

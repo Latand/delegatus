@@ -2040,7 +2040,7 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "telegram", name: "nine-bots", scene: "telegram-nine", section: "telegram", defining: '[data-telegram-sending-bot="atlas_sender_8_bot"]' },
   { surface: "telegram", name: "add-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-add-bot"), defining: "[data-telegram-add-bot-page] input[type=password]" },
   { surface: "telegram", name: "chat-ok", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-posts-as]" },
-  { surface: "telegram", name: "chat-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-telegram-delivery='refused']" },
+  { surface: "telegram", name: "chat-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-telegram-delivery='refused']", absent: /switch posting on|увімкніть дописи/ },
   { surface: "telegram", name: "chat-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-telegram-chat-bot='Nova']" },
   { surface: "telegram", name: "chat-no-suggestion", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000505"'), defining: "[data-telegram-chat-alias]" },
   { surface: "telegram", name: "chat-post-refused", scene: "telegram-rest", query: "refuse=1", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-telegram-chat-test]").click(); }, defining: "[data-telegram-failure]" },
@@ -2190,6 +2190,36 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   }
   /* A landscape phone's wide select reads the device whole. */
   if (phone && vw > vh) for (const face of scroller.querySelectorAll<HTMLElement>("[data-voice-device] [data-settings-choice-face]")) if (face.scrollWidth > face.clientWidth) failures.push(`device select cuts: ${face.textContent}`);
+  /* A select drawn over its face stays invisible, disabled or not: the face alone shows the value once. */
+  for (const select of scroller.querySelectorAll<HTMLSelectElement>("[data-settings-choice-face]")) {
+    const native = select.parentElement?.querySelector("select");
+    if (native && getComputedStyle(native).opacity !== "0") failures.push(`native select is painted over its face (opacity ${getComputedStyle(native).opacity}): ${select.textContent}`);
+  }
+  /* A hint's lines keep the muted line's step, whatever stands inline in them: a link does not grow its line. */
+  for (const hint of scroller.querySelectorAll<HTMLElement>("[data-voice-device-hint]")) {
+    const tops: number[] = [];
+    const lineWalk = document.createTreeWalker(hint, NodeFilter.SHOW_TEXT);
+    for (let node = lineWalk.nextNode(); node; node = lineWalk.nextNode()) {
+      if (!(node.textContent ?? "").trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 0 && !tops.some((top) => Math.abs(top - rect.top) < 2)) tops.push(rect.top);
+    }
+    tops.sort((a, b) => a - b);
+    for (let index = 1; index < tops.length; index += 1) if (tops[index] - tops[index - 1] > 18.5) failures.push(`hint line step ${(tops[index] - tops[index - 1]).toFixed(1)} px: ${hint.getAttribute("data-voice-device-hint")}`);
+  }
+  /* A name field and its Save button beside a select wear that select's height and type. */
+  for (const report of scroller.querySelectorAll<HTMLElement>("[data-telegram-project-report]")) {
+    const face = report.querySelector<HTMLElement>("[data-settings-choice-face]")?.parentElement;
+    if (!phone || !face) continue;
+    const reference = face.getBoundingClientRect().height;
+    const field = report.querySelector<HTMLElement>("form [data-settings-field-face]");
+    if (field && Math.abs(field.getBoundingClientRect().height - reference) > 2) failures.push(`reports field ${field.getBoundingClientRect().height} px beside a select ${reference} px`);
+    const save = report.querySelector<HTMLElement>("form [data-settings-button-face]");
+    if (save && Math.abs(save.getBoundingClientRect().height - reference) > 2) failures.push(`reports Save ${save.getBoundingClientRect().height} px beside a select ${reference} px`);
+    const faceSize = parseFloat(getComputedStyle(face).fontSize);
+    if (save && Math.abs(parseFloat(getComputedStyle(save).fontSize) - faceSize) > 0.5) failures.push(`reports Save type ${getComputedStyle(save).fontSize} beside a select's ${faceSize}px`);
+  }
   /* A chat page's field and select wear one height, and what stands under a field is the field's own. */
   const field = scroller.querySelector<HTMLElement>("[data-settings-field-face]");
   const choice = scroller.querySelector<HTMLElement>("[data-settings-row='choice'] [data-settings-choice-face]")?.parentElement;
@@ -2238,8 +2268,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   if (scrolls) {
     const band = Math.min(surface.getBoundingClientRect().bottom, vh) - scroller.getBoundingClientRect().bottom;
     if (band < (phone && vw > vh ? 3.5 : 8)) failures.push(`hairline ${band.toFixed(1)} px above the window's edge`);
-    /* A feature's choices under «Keys» are hosted whole, a radio centred on each: they keep their rows. */
-    if (phone && vw > vh && band >= 48 && !scroller.querySelector("[data-openai-feature-page]")) failures.push(`blank band of ${Math.round(band)} px under the first screen`);
+    if (phone && vw > vh && band >= 48) failures.push(`blank band of ${Math.round(band)} px under the first screen`);
   }
   scroller.scrollTop = scroller.scrollHeight;
   for (const text of cutByEdge()) failures.push(`end of scroll cuts: ${text}`);
@@ -2270,8 +2299,21 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
       const box = (control.matches("input[type=radio]") ? control.closest("label") ?? control : control).getBoundingClientRect();
       /* Keys, Memory and the worker limit are hosted unchanged, with their own recipes. */
       if (box.width === 0 || control.closest("[data-keys-page], [data-memory-page], [data-telegram-add-chat], [data-header-menu-workers]")) continue;
-      if (box.height < 43.5 || (box.width < 43.5 && !control.matches("input"))) failures.push(`target ${Math.round(box.width)}x${Math.round(box.height)}: ${control.getAttribute("aria-label") ?? control.textContent?.slice(0, 30)}`);
+      if (box.height < 43.5 || (box.width < 43.5 && !control.matches("input"))) {
+        /* A button may draw a smaller face over a 44 px target (a pseudo-element around it): the target is proven from the points a thumb lands on, 44 by 44 around its centre. */
+        let missed = "";
+        if (control.matches("button")) {
+          control.scrollIntoView({ block: "center" });
+          const now = control.getBoundingClientRect();
+          const cx = now.left + now.width / 2, cy = now.top + now.height / 2;
+          const reach = (dx: number, dy: number) => { let n = 0; while (n < 40 && control.contains(document.elementFromPoint(cx + dx * (n + 1), cy + dy * (n + 1)))) n += 1; return n; };
+          const tall = reach(0, -1) + reach(0, 1) + 1, wide = reach(-1, 0) + reach(1, 0) + 1;
+          if (tall < 43.5 || wide < 43.5) missed = ` (a thumb reaches it over ${tall}x${wide} px)`;
+        } else missed = " ";
+        if (missed) failures.push(`target ${Math.round(box.width)}x${Math.round(box.height)}: ${control.getAttribute("aria-label") ?? control.textContent?.slice(0, 30)}${missed}`);
+      }
     }
+    scroller.scrollTop = held;
     for (const dot of surface.querySelectorAll<HTMLElement>("[data-settings-dot]")) {
       const box = dot.getBoundingClientRect();
       const scrollBox = scroller.getBoundingClientRect();

@@ -107,7 +107,7 @@ export function VoiceDevicesSetting() {
         ]}
       >
         {/* A landscape phone's wide select shows the chosen name whole too, so its line goes there as well. */}
-        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className={`${sheet ? "px-4" : "px-5"} ${lines.every(entry => entry.phoneOnly) ? "landscape:hidden" : ""} pb-1.5 text-ui leading-snug text-muted`} data-voice-device-hint={kind}>{lines.filter(entry => sheet || !entry.phoneOnly).map(entry => <p key={entry.key} className={entry.phoneOnly ? "landscape:hidden" : undefined}>{entry.text}</p>)}</div> : null}
+        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className={`${sheet ? "px-4" : "px-5"} ${lines.every(entry => entry.phoneOnly) ? "landscape:hidden" : ""} ${sheet && lines.some(entry => entry.key === "permission") ? "landscape:pt-4" : ""} pb-1.5 text-ui leading-snug text-muted`} data-voice-device-hint={kind}>{lines.filter(entry => sheet || !entry.phoneOnly).map(entry => <p key={entry.key} className={entry.phoneOnly ? "landscape:hidden" : undefined}>{entry.text}</p>)}</div> : null}
       </ChoiceRow>
     );
   };
@@ -122,8 +122,9 @@ export function VoiceDevicesSetting() {
       if (denied) return [{ key: "denied", text: t("voiceCompanion.devices.denied") }];
       if (!list.labelled) return [{ key: "permission", text: (
         <>
+          {/* The link stands in the hint's own line height. Its 44 px target is the pseudo-element around it: 22 px above its line, which a wrapped hint has text over, and the hint's own 6 px of padding below, so it never lies over the next row's select; a landscape phone's one-line hint takes 16 px of room above for it. */}
           {t("voiceCompanion.devices.permission")}{" "}
-          <button type="button" data-voice-devices-allow onClick={() => void allow()} className="min-h-9 rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 settings-sheet:min-h-11">{t("voiceCompanion.devices.allow")}</button>
+          <button type="button" data-voice-devices-allow onClick={() => void allow()} className="relative rounded-[6px] align-baseline font-semibold text-accent before:absolute before:-inset-x-1 before:-inset-y-1.5 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 settings-sheet:before:-top-[22px] settings-sheet:before:-bottom-1.5">{t("voiceCompanion.devices.allow")}</button>
         </>
       ) }];
       const using = state === "present" ? chosen : defaultName ?? "";

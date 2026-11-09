@@ -270,9 +270,10 @@ function OptionRow({ feature, state, option, size, locked, onChoose }: {
       {t("openaiServices.addKey")}
     </button>
   ) : null;
+  /* On a landscape phone a row keeps only its 44 px target (the hairlines part the rows), so the screen ends on a whole row with no wide band under it. */
   return (
     <div data-openai-option={option.id} data-settings-unit="" data-selected={selected ? "" : undefined}
-      className={`flex border-b border-border last:border-b-0 ${sheet ? "items-center gap-1 py-1.5" : "flex-col py-1.5"}`}>
+      className={`flex border-b border-border last:border-b-0 ${sheet ? "items-center gap-1 py-1.5 landscape:py-0" : "flex-col py-1.5"}`}>
       <label className={`flex min-w-0 flex-1 gap-2 ${sheet ? "min-h-11 items-center" : "min-h-6 items-start"} ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
         <input type="radio" name={`openai-service-${feature}`} value={option.id} checked={selected} disabled={disabled}
           onChange={() => onChoose(option.id)}

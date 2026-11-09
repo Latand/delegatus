@@ -25766,7 +25766,18 @@ describe("floating voice companion", () => {
           textWidth: Math.round(canvas.measureText(selected).width), room: Math.round(room), truncated: canvas.measureText(selected).width > room, background: style.backgroundColor };
       });
       const button = section.querySelector<HTMLElement>("[data-voice-devices-allow]");
-      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => Math.round(node.getBoundingClientRect().height));
+      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => {
+        const box = node.getBoundingClientRect();
+        if (!node.matches("button") || box.height >= 24) return Math.round(box.height);
+        /* An inline link keeps its line's height: its target is what a thumb or a pointer reaches around it. */
+        node.scrollIntoView({ block: "nearest" });
+        const now = node.getBoundingClientRect();
+        const x = now.left + now.width / 2, y = now.top + now.height / 2;
+        let up = 0, down = 0;
+        while (up < 40 && node.contains(document.elementFromPoint(x, y - (up + 1)))) up += 1;
+        while (down < 40 && node.contains(document.elementFromPoint(x, y + (down + 1)))) down += 1;
+        return up + down + 1;
+      });
       /* Every text range of the section against the dialog's visible box and the window. */
       const outside: string[] = [];
       const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
@@ -25781,7 +25792,7 @@ describe("floating voice companion", () => {
         }
       }
       return { kinds, button: button ? { text: button.textContent, height: Math.round(button.getBoundingClientRect().height), left: button.getBoundingClientRect().left, right: button.getBoundingClientRect().right } : null,
-        controls, outside, title: section.querySelector("h3")?.textContent ?? null,
+        controls, outside, title: section.querySelector("[data-settings-section]")?.textContent ?? null,
         sideways: document.documentElement.scrollWidth - width, dialogSideways: dialog.scrollWidth - dialog.clientWidth,
         dialogBackground: getComputedStyle(dialog).backgroundColor, stored: { input: localStorage.getItem("llvVoiceInputDevice"), output: localStorage.getItem("llvVoiceOutputDevice") } };
     }, configuredWidth);
