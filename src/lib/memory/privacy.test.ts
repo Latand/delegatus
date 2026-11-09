@@ -383,7 +383,7 @@ test("concurrent callers own independent leases and no rejected result enters th
   const bounded = <T>(work: Promise<T>) => Promise.race([work, watchdog]);
   const real = TaskPageWorker.prototype.privacy;
   let calls = 0;
-  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: InstanceType<typeof TaskPageWorker>, request) {
     const firstCall = ++calls === 1;
     const result = await real.call(this, request);
     if (firstCall) { entered(); await held; }
