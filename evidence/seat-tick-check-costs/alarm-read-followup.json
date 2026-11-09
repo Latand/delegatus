@@ -1,0 +1,38 @@
+{
+  "recordedAt": "2026-11-05",
+  "baseline": "6e8b65d9b316ff2da95b8c94f4a3ea01a8f1cfb8",
+  "sourceSha256": {
+    "src/lib/memory/curation/run.ts": "081656268b2371617016f6cbf78ca116194d48519b5425a791548cd294e85d3b",
+    "src/lib/monitor/journalStore.ts": "ca8f0a19b7a1ee9f7fadeaec8e312ddeeb4809920e45e86c292dda6c3f82fdbe",
+    "src/lib/monitor/seatTickController.ts": "769557446841a2e4dd6b5691cf963bd59aad604a410653f6d55455212924dc9b"
+  },
+  "process": "isolated Bun 1.4.0 exercising Viewer journal writer/readers; no Viewer or runtime-host listener",
+  "conditions": {
+    "rowsPerRing": 500,
+    "phasesPerRow": 512,
+    "rings": ["global", "project"],
+    "operation": "append one error check with appendSeatTickRecordAsync, read 500 project rows, and evaluate seatTickCheckErrorAlarm",
+    "trials": 5,
+    "operationsPerReaderPerTrial": 10,
+    "order": "alternating full-reader/alarm-reader and alarm-reader/full-reader",
+    "mainThreadCpu": "process.threadCpuUsage",
+    "machineLoadAtEnd": [12.89, 21.91, 36.29],
+    "fixtureSha256": "9f26cc4532b77d7634c40781b9c0f7876ea5c079e3b7eeefaac362763809a56b"
+  },
+  "trials": [
+    {"order": ["full-reader", "alarm-reader"], "full-reader": {"operations": 10, "wallMs": 41.8171358, "mainThreadCpuMs": 31.3066, "processCpuMs": 46.152}, "alarm-reader": {"operations": 10, "wallMs": 28.9909387, "mainThreadCpuMs": 18.5876, "processCpuMs": 31.7391}},
+    {"order": ["alarm-reader", "full-reader"], "alarm-reader": {"operations": 10, "wallMs": 25.5484564, "mainThreadCpuMs": 16.6345, "processCpuMs": 26.4899}, "full-reader": {"operations": 10, "wallMs": 38.471005, "mainThreadCpuMs": 29.5942, "processCpuMs": 42.2577}},
+    {"order": ["full-reader", "alarm-reader"], "full-reader": {"operations": 10, "wallMs": 43.9124291, "mainThreadCpuMs": 33.0349, "processCpuMs": 46.4774}, "alarm-reader": {"operations": 10, "wallMs": 27.0210199, "mainThreadCpuMs": 16.4031, "processCpuMs": 29.0507}},
+    {"order": ["alarm-reader", "full-reader"], "alarm-reader": {"operations": 10, "wallMs": 22.8941744, "mainThreadCpuMs": 13.8384, "processCpuMs": 23.8037}, "full-reader": {"operations": 10, "wallMs": 39.6413278, "mainThreadCpuMs": 29.863, "processCpuMs": 42.2593}},
+    {"order": ["full-reader", "alarm-reader"], "full-reader": {"operations": 10, "wallMs": 38.3435753, "mainThreadCpuMs": 28.8868, "processCpuMs": 40.5909}, "alarm-reader": {"operations": 10, "wallMs": 24.5878322, "mainThreadCpuMs": 15.0498, "processCpuMs": 25.3453}}
+  ],
+  "median": {
+    "fullReaderWallMs": 39.6413278,
+    "alarmReaderWallMs": 25.5484564,
+    "fullReaderMainThreadCpuMs": 29.863,
+    "alarmReaderMainThreadCpuMs": 16.4031,
+    "wallReductionPercent": 35.55,
+    "mainThreadCpuReductionPercent": 45.1
+  },
+  "interpretation": "Full-ring upper-bound fixture only. This replay does not explain historical 75-second overruns and does not establish that checks are fixed."
+}
