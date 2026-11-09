@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, jest, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -206,7 +206,20 @@ afterEach(() => {
 /** `/api/files` serves `filesByPin` keyed by the request's `path` param
     (`""` = the unpinned global scope); `/api/board` is a real in-memory board
     so the focus request can actually place its card. Everything else 404s. */
-function stubFetch(filesByPin: (pin: string) => FileEntry[], delayByPin?: (pin: string) => number) {
+function stubFetch(
+  filesByPin: (pin: string) => FileEntry[],
+  delayByPin?: (pin: string) => number,
+  /** `unavailable`: the server's controlled 503 for a scope it cannot build
+      right now. `overlay`: the rows only a pin admitted, as production names
+      them in `pinOverlayPaths`. */
+  scopes: {
+    unavailable?: (pin: string) => boolean;
+    overlay?: (pin: string) => string[];
+    /** Holds a scope's answer until the returned promise settles, so a test
+        decides when the answer arrives instead of racing a real delay. */
+    hold?: (pin: string) => Promise<void> | undefined;
+  } = {},
+) {
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     requestLog.push(url);
@@ -215,8 +228,32 @@ function stubFetch(filesByPin: (pin: string) => FileEntry[], delayByPin?: (pin: 
       /* A per-scope delay models a pinned fetch slower than the global one. */
       const delay = delayByPin?.(pin) ?? 0;
       if (delay > 0) await Bun.sleep(delay);
+      const held = scopes.hold?.(pin);
+      if (held) {
+        /* A real fetch ends with an AbortError when its signal fires, so a held
+           answer must too: the client's requests run one after another, and a
+           held one that ignored its signal would block every later link. */
+        const signal = init?.signal;
+        await Promise.race([
+          held,
+          new Promise<never>((_, reject) => {
+            const abort = () => reject(new DOMException("aborted", "AbortError"));
+            if (signal?.aborted) abort();
+            else signal?.addEventListener("abort", abort, { once: true });
+          }),
+        ]);
+      }
+      /* Decided when the answer is given, so a held request can turn from
+         unavailable to available while it waits. */
+      const down = scopes.unavailable?.(pin) ?? false;
+      if (down) {
+        return Response.json(
+          { error: "files projection unavailable", code: "files_projection_unavailable", reason: "expired" },
+          { status: 503, headers: { "cache-control": "no-store" } },
+        );
+      }
       return new Response(
-        JSON.stringify({ files: filesByPin(pin), projectCatalog }),
+        JSON.stringify({ files: filesByPin(pin), projectCatalog, pinOverlayPaths: scopes.overlay?.(pin) ?? [] }),
         { headers: { "content-type": "application/json" } },
       );
     }
@@ -275,10 +312,10 @@ async function waitFor(check: () => boolean, timeoutMs = 3_000): Promise<boolean
     about the outcome itself — a quiescence check over a failed open says
     nothing, which is exactly how the first version of the loop test passed
     on the defective base. */
-async function expectNavigationQuiescence(): Promise<void> {
+async function expectNavigationQuiescence(elapse: () => Promise<void> = () => act(async () => { await Bun.sleep(300); })): Promise<void> {
   const settled = historyWrites.length;
   const hashAtSettle = dom.location.hash;
-  await act(async () => { await Bun.sleep(300); });
+  await elapse();
   expect(historyWrites.every((write) => write.startsWith("replace:"))).toBe(true);
   expect(historyWrites.length).toBe(settled);
   expect(dom.location.hash).toBe(hashAtSettle);
@@ -661,3 +698,212 @@ test("#f= naming a report file (anchor glued on as %23) opens the file preview, 
   expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
   expect(host.textContent).not.toContain(en["viewer.staleFocusEntry"]);
 }, 20_000);
+
+/* A cold scope the server cannot build in time answers 503 and nothing else.
+   The link keeps the scope that asked for it, says it is opening, and opens
+   when that scope answers.
+
+   These cases own the clock: nothing waits on real time, answers the test
+   wants late are held on a promise it releases, and time passes only by the
+   amounts the case advances. A paused event loop cannot change what they
+   observe. */
+const OTHER_ID = "conversation_second-target";
+const OTHER_PATH = "/sessions/second-target.jsonl";
+const secondRow = fileEntry({ path: OTHER_PATH, name: "second-target.jsonl", project: TARGET_PROJECT, title: "The second conversation", conversationId: OTHER_ID });
+const pinnedOverlay = (pin: string) => (pin === CONVERSATION_ID ? [TARGET_PATH] : pin === OTHER_ID ? [OTHER_PATH] : []);
+const pathScopeRequests = (path: string) => requestLog.filter((url) => url.startsWith("/api/files") && url.includes(`path=${encodeURIComponent(path)}`));
+const filesScopeRequests = (id: string) => requestLog.filter((url) => url.startsWith("/api/files") && url.includes(`path=${id}`));
+/** The longest retry delay the files client waits (`FILES_HYDRATE_RETRY_MAX_MS`) plus a margin. */
+const LONGEST_RETRY_MS = 31_000;
+
+function deferred() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
+
+/** Let every promise already queued run, inside `act`. */
+async function settle(): Promise<void> {
+  await act(async () => { for (let round = 0; round < 24; round += 1) await Promise.resolve(); });
+}
+
+/** Move the test clock forward, then let what the timers started finish. */
+async function advance(ms: number): Promise<void> {
+  await act(async () => { jest.advanceTimersByTime(ms); });
+  await settle();
+}
+
+/** Advance in small steps until the state under test holds. The check reads
+    state, never time, so the number of steps taken decides nothing. */
+async function advanceUntil(check: () => boolean, stepMs = 250, maxSteps = 200): Promise<boolean> {
+  for (let step = 0; step < maxSteps; step += 1) {
+    if (check()) return true;
+    await advance(stepMs);
+  }
+  return check();
+}
+
+/** Pass `totalMs` of clock in one-second steps, letting each step's work finish
+    before the next, so a retry chain runs out the way it would in a tab. */
+async function elapse(totalMs: number): Promise<void> {
+  for (let passed = 0; passed < totalMs; passed += 1_000) await advance(Math.min(1_000, totalMs - passed));
+}
+
+async function mountViewerOnTestClock(): Promise<HTMLElement> {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = root;
+  await act(async () => { root.render(<Viewer />); });
+  await settle();
+  return host as unknown as HTMLElement;
+}
+
+function onTestClock(name: string, body: () => Promise<void>): void {
+  test(name, async () => {
+    jest.useFakeTimers();
+    try {
+      await body();
+    } finally {
+      unmountViewer();
+      /* happy-dom delivers hashchange on a window timer: drain it while the
+         clock is still the test's, so none is left to fire on the real one. */
+      jest.advanceTimersByTime(50);
+      jest.useRealTimers();
+    }
+  }, 20_000);
+}
+
+const quiescent = () => advance(300);
+const noticeKind = (host: HTMLElement) => host.querySelector("[data-link-pending-notice]")?.getAttribute("data-link-pending-notice") ?? null;
+
+onTestClock("a resolved #c= keeps the scope that resolved it and never asks for the transcript path", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID || pin === TARGET_PATH ? [otherRow, targetRow] : [otherRow]),
+    undefined,
+    { unavailable: (pin) => pin === TARGET_PATH, overlay: pinnedOverlay },
+  );
+
+  const host = await mountViewerOnTestClock();
+
+  expect(await advanceUntil(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  await advance(1_200);
+  expect(openOnBoard(host, TARGET_PATH)).not.toBeNull();
+  expect(pathScopeRequests(TARGET_PATH)).toEqual([]);
+  expect(filesScopeRequests(CONVERSATION_ID).length).toBeGreaterThan(0);
+  expect(host.textContent).not.toContain("reconnecting");
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  await expectNavigationQuiescence(quiescent);
+});
+
+onTestClock("a link whose scope is unavailable says it is opening, then retrying, and opens when the scope answers", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  /* The scope's answers are held until the test has seen the opening notice. A
+     request the client abandons and asks again stays held too. */
+  const firstAnswer = deferred();
+  let answers = 0;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID ? [otherRow, targetRow] : [otherRow]),
+    undefined,
+    {
+      hold: (pin) => (pin === CONVERSATION_ID ? firstAnswer.promise : undefined),
+      unavailable: (pin) => pin === CONVERSATION_ID && ++answers <= 2,
+      overlay: pinnedOverlay,
+    },
+  );
+
+  const host = await mountViewerOnTestClock();
+
+  expect(await advanceUntil(() => noticeKind(host) === "opening")).toBe(true);
+  expect(host.textContent).toContain(en["viewer.linkOpening"]);
+  expect(filesScopeRequests(CONVERSATION_ID).length).toBeGreaterThan(0);
+  expect(answers).toBe(0);
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+
+  /* The first 503 arrives; the retry is queued behind the client's backoff. */
+  firstAnswer.release();
+  await settle();
+  expect(await advanceUntil(() => noticeKind(host) === "retrying")).toBe(true);
+  expect(host.textContent).toContain(en["viewer.linkRetrying"]);
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+
+  expect(await advanceUntil(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  expect(answers).toBeGreaterThanOrEqual(3);
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  expect(dom.location.hash).toBe(`#c=${encodeURIComponent(CONVERSATION_ID)}`);
+  expect(pathScopeRequests(TARGET_PATH)).toEqual([]);
+  await expectNavigationQuiescence(quiescent);
+});
+
+onTestClock("a link that opens at once never flashes the pending notice", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(() => [otherRow, targetRow]);
+
+  const host = await mountViewerOnTestClock();
+  expect(await advanceUntil(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  /* Past the notice's own delay on the test clock. */
+  await advance(1_200);
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+});
+
+onTestClock("a new link replaces one that is still pending, and the old scope is never asked again", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  /* The first link's scope answers only after the hash has moved on, and then
+     with the transcript available. */
+  const firstScope = deferred();
+  let firstScopeAvailable = false;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID ? [otherRow, targetRow] : pin === OTHER_ID ? [otherRow, secondRow] : [otherRow]),
+    undefined,
+    {
+      hold: (pin) => (pin === CONVERSATION_ID ? firstScope.promise : undefined),
+      unavailable: (pin) => pin === CONVERSATION_ID && !firstScopeAvailable,
+      overlay: pinnedOverlay,
+    },
+  );
+
+  const host = await mountViewerOnTestClock();
+  expect(await advanceUntil(() => noticeKind(host) === "opening")).toBe(true);
+  expect(filesScopeRequests(CONVERSATION_ID).length).toBeGreaterThan(0);
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+
+  const changedAt = requestLog.length;
+  await act(async () => { dom.location.hash = `#c=${encodeURIComponent(OTHER_ID)}`; });
+  expect(await advanceUntil(() => openOnBoard(host, OTHER_PATH) !== null)).toBe(true);
+
+  /* The old scope can now answer with its transcript; the link that asked for
+     it is gone, so nothing of it may reach the board and nothing asks again. */
+  firstScopeAvailable = true;
+  firstScope.release();
+  await settle();
+  await elapse(LONGEST_RETRY_MS);
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+  expect(openOnBoard(host, OTHER_PATH)).not.toBeNull();
+  expect(dom.location.hash).toBe(`#c=${encodeURIComponent(OTHER_ID)}`);
+  expect(requestLog.slice(changedAt).filter((url) => url.startsWith("/api/files") && url.includes(`path=${CONVERSATION_ID}`))).toEqual([]);
+  expect(host.querySelector("[data-link-pending-notice]")).toBeNull();
+});
+
+onTestClock("navigating away from a pending link clears its notice and stops asking for its scope", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID ? [otherRow, targetRow] : [otherRow]),
+    undefined,
+    { unavailable: (pin) => pin === CONVERSATION_ID, overlay: pinnedOverlay },
+  );
+
+  const host = await mountViewerOnTestClock();
+  /* "retrying" means the first 503 landed, so a retry is queued to be cancelled. */
+  expect(await advanceUntil(() => noticeKind(host) === "retrying")).toBe(true);
+
+  await act(async () => { dom.location.hash = "#p=other-project"; });
+  expect(await advanceUntil(() => host.querySelector("[data-link-pending-notice]") === null)).toBe(true);
+  const settled = requestLog.length;
+  await elapse(LONGEST_RETRY_MS);
+  expect(requestLog.slice(settled).filter((url) => url.includes(`path=${CONVERSATION_ID}`))).toEqual([]);
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+});
