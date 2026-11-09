@@ -566,12 +566,20 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
         ...(prior === "rich" ? { features: ["relay_rich_messages"] } : {}),
         input: { ...contextRequest.input, ...(prior === "rich" ? { format: formatGuide } : {}), tools: [{ name: tool, summary: "Notes", mode: "direct", effect, parameters: { type: "object", properties: {} } }],
           requester: { ...contextRequest.input.requester, is_owner: true } },
-      }, undefined, { leaseWorker: false, cloudTransport: async () => {
+      }, undefined, { leaseWorker: false, cloudTransport: async input => {
         cloud++;
+        expect(Buffer.byteLength(input.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+        expect(input.prompt.match(/<owner_request>\n/g)).toHaveLength(1);
+        if (priorCall && cloud > 1) expect(input.prompt).toContain('"output":"Found"');
         if (priorCall && cloud === 1) return JSON.stringify({ action: "call", text: "", reply_to: null, calls: [{ tool, arguments: "{}", cursor: null }] });
         throw new CloudFailure(true);
       }, ownerPorts: {
-        launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_fallback_tools", initialMessage: "delivered" } }; },
+        launch: async input => {
+          launches++;
+          expect(Buffer.byteLength(String(input.prompt))).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+          if (priorCall) expect(String(input.prompt)).toContain('"output":"Found"');
+          return { status: 202, body: { conversationId: "conversation_fallback_tools", initialMessage: "delivered" } };
+        },
         observe: async () => {
           if (prior === "reassigned") expect(spawnSync("git", ["-C", repository.cwd, "remote", "add", "origin", "https://example.test/fixture/reassigned.git"], { env: checkEnvironment(process.env) }).status).toBe(0);
           list = await relayServiceToolsOp("conversation_fallback_tools", { op: "list" });

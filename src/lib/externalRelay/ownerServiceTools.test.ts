@@ -49,6 +49,12 @@ test.each(["inline", "on_demand"])("owner describes and calls reactions and poll
   request.input.requester!.is_owner = true;
   request.input.tools = mode === "on_demand" ? JSON.parse(fs.readFileSync(path.join(x1Dir, "claimed_tools_on_demand_owner.json"), "utf8")).request.input.tools : ownerRequest().input.tools;
   request.input.tool_guidance = "Describe the target before the action.";
+  // Prompt selection must not change the hydrated adapter's full contracts.
+  request.input.owner_instructions = "o".repeat(15017);
+  request.input.short_term_memory = "optional memory ".repeat(1000);
+  request.input.conversation.unshift(...Array.from({ length: 38 }, (_, i) => ({
+    ...request.input.conversation[0]!, id: `unrelated-${i}`, text: "old history ".repeat(100),
+  })));
   updateRelayStore(s => ({ ...s, relays: [relay] }));
   const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "answer", kind: "managed", home, transcriptRoot: home, env: { ...process.env },
@@ -80,6 +86,8 @@ test.each(["inline", "on_demand"])("owner describes and calls reactions and poll
     await expect(own.relay_service_tools({ op: "call", calls: [{ tool: "create_poll", arguments: {} }] })).rejects.toMatchObject({ details: { code: "relay_tools_unavailable" } });
     expect(posts).toHaveLength(2);
     expect(prompts[0]).not.toContain('"parameters"');
+    expect(Buffer.byteLength(prompts[0]!)).toBeLessThanOrEqual(32000);
+    expect(prompts[0]).not.toContain("optional memory");
     expect(lookups.length).toBe(mode === "on_demand" ? 2 : 0);
     if (mode === "on_demand") {
       const bodies = JSON.parse(fs.readFileSync(path.join(x1Dir, "lookup_bodies.json"), "utf8"));

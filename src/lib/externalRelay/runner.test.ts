@@ -4354,7 +4354,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
     const message = (id: string, reply_to: string | null, self = false) => ({ ...contextRequest.input.conversation[0]!, id, reply_to,
       author: { key: self ? "fixture-bot" : contextRequest.input.requester.key, name: self ? "Assistant" : "Owner", self }, text: `Fixture turn ${id}` });
     return { ...contextRequest, ...(rich ? { features: ["relay_tool_calls", "relay_rich_messages"] } : {}), request_id: `chain-owner-${n}`, chat: { key: "fixture-owner-chain" }, answer: { max_chars: rich ? 32000 : 1000, progress: "none" as const }, input: {
-      ...contextRequest.input, ...(rich ? { format: formatGuide } : {}), tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(1000), requester: { ...contextRequest.input.requester, is_owner: true },
+      ...contextRequest.input, ...(rich ? { format: formatGuide } : {}), tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(600), requester: { ...contextRequest.input.requester, is_owner: true },
       respond_to: `turn-${n}`, conversation: [ ...(includeRoot && n > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : []), message(`turn-${n}`, parent) ] } };
   };
   const ports: import("./ownerRun").OwnerRunPorts = {
@@ -4898,4 +4898,50 @@ test("a Cloud relay answer arrives while local account admission is occupied", a
     accountManager.resolveHeadlessSpawn = previous;
     await server.close();
   }
+});
+
+for (const mode of ["fresh", "resumed", "cloud"] as const)
+test(`owner ${mode} prompt refuses an oversized required parent before native or Cloud dispatch`, async () => {
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  if (mode === "cloud") {
+    paired.targets[0]!.engine = "codex-cloud";
+    paired.targets[0]!.cloudEnvironmentId = "answer-env";
+    paired.targets[0]!.project = "fixture-project";
+  }
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  let launches = 0, continues = 0, cloud = 0;
+  const first = requestSchema.parse({ ...contextRequest, request_id: `envelope-${mode}-first`,
+    answer: { max_chars: 4000, progress: "none" }, input: { ...contextRequest.input,
+      requester: { ...contextRequest.input.requester, is_owner: true }, tools: [] } });
+  const runtime = { ownerPorts: {
+    launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_size_fixture",
+      launchId: "launch_size_fixture", initialMessage: "delivered" } }; },
+    continue: async () => { continues++; throw new Error("unexpected continuation"); },
+    observe: async () => ({ state: "ended" as const, finalText: "Ready" }), stop: async () => {}, pollMs: 1,
+  }, cloudTransport: async () => { cloud++; return JSON.stringify({ action: "reply", text: "Ready", reply_to: "m1" }); } };
+  try {
+    if (mode === "resumed") {
+      expect(await runClaimedRequest(paired, first, undefined, runtime)).toMatchObject({ outcome: "answered" });
+      expect(launches).toBe(1);
+      launches = 0; completions.length = 0;
+    }
+    const row = first.input.conversation[0]!;
+    const request = { ...first, request_id: `envelope-${mode}-large`, input: { ...first.input, respond_to: "follow-up",
+      conversation: [row, { ...row, id: "quote", text: "я".repeat(16000), reply_to: row.id,
+        author: { key: "bot", name: "Assistant", self: true } },
+      { ...row, id: "follow-up", text: "Explain the quote", reply_to: "quote" }] } };
+    const result = await runClaimedRequest(paired, request, undefined, runtime);
+    expect(result).toMatchObject({ outcome: "answered", answer: { reply_to: "follow-up", text: expect.stringContaining("Shorten") } });
+    expect({ launches, continues, cloud }).toEqual({ launches: 0, continues: 0, cloud: 0 });
+    expect(completions).toHaveLength(1);
+    expect(readAnswerRecord(paired.id, first.target_id, request.request_id)).toMatchObject({ diagnostic: {
+      promptBudget: { kind: "mandatory_core_too_large", limitBytes: 32000, mandatoryBytes: expect.any(Number) },
+    } });
+  } finally { await service.close(); }
 });

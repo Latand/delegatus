@@ -56,7 +56,7 @@ import { useNativeQueue, type NativeQueueMutation } from "@/hooks/useNativeQueue
 import { documentHidden } from "@/lib/client/hiddenTraffic";
 
 import { DormantView } from "./conversation/DormantView";
-import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./ComposerBar";
+import { ComposerBar, composerSlotKind, RECEIPTS_FIRST_ROW_CLOSING, type ComposerSlotKind } from "./ComposerBar";
 import { AgentControlStatus, AgentInterruptButton, AgentMoreMenu, useAgentControlActionsWith } from "./AgentControlStrip";
 import { AttachTerminalDialog } from "./AttachTerminalDialog";
 import { publishComposerStepsSlot } from "./conversation/composerStepsSlot";
@@ -439,6 +439,7 @@ export function RuntimeComposerReceipts({
   chipMount,
   onOpenChange,
   onRegionChange,
+  onFirstRowSpace,
 }: {
   receipts: RuntimeReceipt[];
   actionsDisabled?: boolean;
@@ -483,9 +484,19 @@ export function RuntimeComposerReceipts({
   /** Told whether anything is drawn in the composer's region: nothing while
       the list waits behind its chip and no operation is still moving. */
   onRegionChange?: (inRegion: boolean) => void;
+  /** While the list is open, the height (px) from its top edge to the bottom
+      edge of its first row including that row's controls, so the composer can
+      keep that much of its region for it; null when the list is closed. */
+  onFirstRowSpace?: (px: number | null) => void;
 }) {
   const { t } = useLocale();
+  const isMobile = useIsMobile();
   const statusId = useId();
+  const listId = useId();
+  const chipRef = useRef<HTMLButtonElement>(null);
+  /* Where keyboard focus is on a phone, where the chip's own line is hidden
+     while the list is open: moved into the list, then handed back. */
+  const phoneFocus = useRef<"enter" | "inside" | "return" | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Current original-operation evidence must survive text-based history folding.
   // Repeated snapshots share one row; a different operation cannot resolve it.
@@ -632,15 +643,21 @@ export function RuntimeComposerReceipts({
       ? `${noticeLabel} — ${noticeFailure.cause}`
       : noticeLabel
     : null;
+  /* WITH THE CHIP IN THE COMPOSER'S ROW the state and its count are named
+     there, so the open list's header carries only what acts on the list (2026-10-12). */
+  const chipNamesState = Boolean(chipMount);
   /* The notice line already says the status of the delivery it speaks for, so
-     that delivery's card does not say it again; any other one names its own. */
+     that delivery's card does not say it again; any other one names its own.
+     Behind the chip that line is read, never drawn, so the card is the one
+     place the status is drawn. */
   const unknownCard = (receipt: RuntimeReceipt) => (
     <DeliveryCheckCard
       key={receipt.operationId}
       operationId={receipt.operationId}
       text={receipt.text ? receiptPreviewText(receipt.text) : null}
       status={unknownStatusText(receipt)}
-      statusShown={notice?.current.operationId !== receipt.operationId}
+      statusShown={chipNamesState || notice?.current.operationId !== receipt.operationId}
+      actionsFirst={chipNamesState}
       detail={unknownDetail(receipt)}
       pending={!receiptIsTerminal(receipt.status)}
     >
@@ -700,6 +717,13 @@ export function RuntimeComposerReceipts({
      many attempts it took. */
   const decisionCount = attemptGroups.filter((group) => deliveryProblem(group.current.status)
     || receiptHasUnknownFate(group.current) || uncertainOperationIds.has(group.current.operationId)).length + textlessRows.length;
+  /* The same messages, those whose fate nobody knows. When they are ALL of
+     them and the chip is yellow, «Not delivered» would claim more than the
+     record shows, so the chip says «Unconfirmed» (the card says it too). */
+  const unknownDecisionCount = attemptGroups.filter((group) => receiptHasUnknownFate(group.current)
+    || uncertainOperationIds.has(group.current.operationId)).length
+    + textlessRows.filter((bucket) => receiptHasUnknownFate(bucket[0]!)).length;
+  const chipUnconfirmed = noticeUnknown && decisionCount > 0 && unknownDecisionCount === decisionCount;
   /* «Retry failed (N)» (operator, round 1): every message whose failure is
      settled and safe to send again, and none whose delivery is unconfirmed —
      that one may have arrived, so it keeps its own Check delivery and Discard. */
@@ -929,27 +953,100 @@ export function RuntimeComposerReceipts({
       </div>
     );
   };
-  /* WITH THE CHIP IN THE COMPOSER'S ROW the state and its count are named
-     there, so the open list's header carries only what acts on the list (2026-10-12). */
-  const chipNamesState = Boolean(chipMount);
   /* The list is its own scroller; a fade at its foot and the closed frame say
      there are rows below the edge. */
   const stackRef = useRef<HTMLDetailsElement>(null);
   const [moreBelow, setMoreBelow] = useState(false);
+  /* The fade is 1.25 rem (`h-5`) high. It sits only on what follows the first
+     card: while the card's own text still reaches into the fade's band, the
+     closed frame alone says there is more, so the card's sentence is never
+     drawn under a wash that lowers its ink. */
   const measureMoreBelow = useCallback(() => {
     const stack = stackRef.current;
-    if (stack) setMoreBelow(stack.scrollHeight - stack.scrollTop - stack.clientHeight > 1);
+    if (!stack) return;
+    const below = stack.scrollHeight - stack.scrollTop - stack.clientHeight > 1;
+    const row = stack.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    const fadeBand = 20;
+    const cardInBand = Boolean(row) && row!.getBoundingClientRect().bottom > stack.getBoundingClientRect().bottom - 1 - fadeBand;
+    setMoreBelow(below && !cardInBand);
   }, []);
+  /* What the open list needs to be usable: its top edge down to the bottom of
+     its first row, controls included, never more than its own frame can hold.
+     The composer keeps that much of its region for it while it is open. */
+  const lastFirstRowSpace = useRef<number | null>(null);
+  const reportFirstRowSpace = useCallback((px: number | null) => {
+    if (lastFirstRowSpace.current === px) return;
+    lastFirstRowSpace.current = px;
+    onFirstRowSpace?.(px);
+  }, [onFirstRowSpace]);
+  const measureFirstRow = useCallback(() => {
+    const stack = stackRef.current;
+    const row = stack?.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    if (!stack || stack.hidden || !stack.open || !row) { reportFirstRowSpace(null); return; }
+    const frame = stack.getBoundingClientRect();
+    /* A card that leads with its status and controls guarantees up to the
+       controls; the message and the sentence under them scroll in the list. */
+    const lead = row.querySelector("[data-delivery-check-lead]") ?? row;
+    const rowBottom = lead.getBoundingClientRect().bottom - frame.top + stack.scrollTop;
+    const cap = parseFloat(window.getComputedStyle(stack).maxHeight);
+    /* Never more than the list holds (its content plus its 1 px frame on each
+       side) or than its own cap lets it show. */
+    const space = Math.ceil(Math.min(rowBottom + RECEIPTS_FIRST_ROW_CLOSING, stack.scrollHeight + 2, Number.isFinite(cap) ? cap : Infinity));
+    reportFirstRowSpace(space > 0 ? space : null);
+  }, [reportFirstRowSpace]);
   useLayoutEffect(() => {
     const stack = stackRef.current;
-    if (!stack) { setMoreBelow(false); return; }
+    if (!stack) { setMoreBelow(false); reportFirstRowSpace(null); return; }
     measureMoreBelow();
+    measureFirstRow();
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measureMoreBelow);
+    const observer = new ResizeObserver(() => { measureMoreBelow(); measureFirstRow(); });
     observer.observe(stack);
     for (const child of Array.from(stack.children)) observer.observe(child);
+    const firstRow = stack.querySelector("[data-runtime-receipt-details] > *");
+    if (firstRow) observer.observe(firstRow);
     return () => observer.disconnect();
-  }, [shown, detailsOpen, measureMoreBelow, attemptGroups.length, textlessRows.length]);
+  }, [shown, detailsOpen, measureMoreBelow, measureFirstRow, reportFirstRowSpace, attemptGroups.length, textlessRows.length]);
+  useEffect(() => () => { onFirstRowSpace?.(null); }, [onFirstRowSpace]);
+  /* Opening brings the first row's status and controls into view inside the
+     list and the region. It is the lead that is asked for, not the whole row:
+     a row taller than the room would otherwise push the region's own scroll
+     past the surfaces above the list and cut their first line. */
+  useLayoutEffect(() => {
+    if (!detailsOpen) return;
+    const row = stackRef.current?.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    (row?.querySelector<HTMLElement>("[data-delivery-check-lead]") ?? row)?.scrollIntoView?.({ block: "nearest" });
+  }, [detailsOpen, shown]);
+  /* Phone focus (the chip's line is hidden while the list is open): into the
+     list on opening, back on the chip on closing — unless the operator has
+     already put it somewhere else. Runs after every render because the chip
+     is drawn again only once the composer has cleared its own hidden line. */
+  useEffect(() => {
+    const mode = phoneFocus.current;
+    if (!mode) return;
+    const stack = stackRef.current;
+    const chipButton = chipRef.current;
+    if (mode === "enter") {
+      /* The composer reveals its region a render after the list opens, and a
+         hidden element takes no focus: wait for it, and keep the claim until
+         the focus has really landed. */
+      if (!detailsOpen) { phoneFocus.current = null; return; }
+      if (!stack || stack.closest("[hidden]")) return;
+      const header = stack.querySelector<HTMLElement>(":scope > summary");
+      header?.focus({ preventScroll: true });
+      if (document.activeElement === header) phoneFocus.current = "inside";
+      return;
+    } else if (mode === "inside") {
+      if (!detailsOpen) phoneFocus.current = chipButton ? "return" : null;
+    }
+    if (phoneFocus.current === "return") {
+      if (!chipButton) { phoneFocus.current = null; return; }
+      if (chipButton.closest("[hidden]")) return;
+      const active = document.activeElement;
+      if (!active || active === document.body || (stack?.contains(active) ?? false)) chipButton.focus({ preventScroll: true });
+      phoneFocus.current = null;
+    }
+  });
   const failureDetail = notice && noticeFailure?.detail ? (
     <div className="border-t border-border/70 px-3.5 py-2 text-secondary" data-delivery-notice-detail>
       <p className="whitespace-pre-wrap break-words" data-delivery-notice-sentence>
@@ -976,16 +1073,23 @@ export function RuntimeComposerReceipts({
       <button
         type="button"
         data-receipts-chip
+        ref={chipRef}
         aria-expanded={detailsOpen}
-        aria-label={t("runtime.receipt.chipAria", { count: decisionCount })}
-        onClick={() => setDetailsOpen((open) => !open)}
+        aria-controls={listId}
+        aria-label={t(chipUnconfirmed ? "runtime.receipt.chipUnconfirmedAria" : "runtime.receipt.chipAria", { count: decisionCount })}
+        onClick={() => {
+          /* A phone hides the line this chip sits in while the list is open,
+             so focus goes into the list and comes back to the chip on close. */
+          if (!detailsOpen && isMobile) phoneFocus.current = "enter";
+          setDetailsOpen((open) => !open);
+        }}
         className={`inline-flex shrink-0 items-center gap-1 rounded-control border px-2 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 sm:h-7 ${
           noticeUnknown ? "border-warning/45 bg-warning-soft text-warning" : "border-danger/45 bg-danger-soft text-danger"
         }`}
       >
         <CircleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
         {/* In a narrow composer row the count alone; the button's name keeps the words. */}
-        <span className="whitespace-nowrap tabular-nums @max-[36rem]:hidden">{t("runtime.receipt.chip", { count: decisionCount })}</span>
+        <span className="whitespace-nowrap tabular-nums @max-[36rem]:hidden">{t(chipUnconfirmed ? "runtime.receipt.chipUnconfirmed" : "runtime.receipt.chip", { count: decisionCount })}</span>
         <span aria-hidden className="hidden tabular-nums @max-[36rem]:inline">{decisionCount}</span>
         <ChevronRight className={`h-3 w-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${detailsOpen ? "rotate-90" : "-rotate-90"}`} aria-hidden />
       </button>
@@ -1008,6 +1112,7 @@ export function RuntimeComposerReceipts({
                only (design §3.7: role in the edge, never a full wash) — an
                annotation under the composer, subordinate to it in both themes. */
             ref={stackRef}
+            id={listId}
             /* The frame is the list's own scroller, bounded by the room the
                composer's box leaves it: a list that outgrows that room scrolls
                behind its sticky header and ends in a closed frame, never cut
@@ -1035,7 +1140,14 @@ export function RuntimeComposerReceipts({
               <ChevronRight className="h-3 w-3 shrink-0 text-muted transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" aria-hidden />
               {chipNamesState ? (
                 <>
-                  <span className="min-w-0 flex-1" aria-hidden />
+                  {/* The phone hides the chip's line while the list is open, so
+                      its own words and count head the list there; elsewhere the
+                      chip beside the field is on screen and names the state. */}
+                  {isMobile ? (
+                    <span className="min-w-0 flex-1 truncate text-label font-semibold text-primary" data-receipts-header-count aria-hidden>
+                      {t(chipUnconfirmed ? "runtime.receipt.chipUnconfirmed" : "runtime.receipt.chip", { count: decisionCount })}
+                    </span>
+                  ) : <span className="min-w-0 flex-1" aria-hidden />}
                   {/* Read, never drawn: the chip beside the field names the state. */}
                   {notice ? <span className="sr-only" data-delivery-notice-cause>{noticeLine}</span> : (
                     <>
@@ -2132,6 +2244,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      chip opens above the field, and the phone's row makes way for it. */
   const [receiptChipSlot, setReceiptChipSlot] = useState<HTMLElement | null>(null);
   const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [receiptsFirstRowSpace, setReceiptsFirstRowSpace] = useState<number | null>(null);
   /* Whether the receipts draw anything in the region: told by them, and a
      surface until they say otherwise. */
   const [receiptsDrawn, setReceiptsDrawn] = useState(true);
@@ -5182,7 +5295,20 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        the only honest option. Sending the text alone would silently deliver
        something they did not compose. */
     if (attachments.imagesRef.current.length > 0) {
-      setStatus({ kind: "err", text: t("inject.imagesUnsupported") });
+      /* The routes that do carry the image are the Context toggle and, where
+         the host offers it, the native queue — never this Send again. */
+      setStatus({
+        kind: "err",
+        /* A touch screen has no Alt+Enter and its Context toggle is the icon
+           alone, so the line names the buttons that screen draws. */
+        text: t(isMobile
+          ? nativeQueueEnabled ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedTouch"
+          : nativeQueueEnabled ? "composer.context.imagesBlockedQueue" : "composer.context.imagesBlocked", {
+          toggle: t("composer.context.toggle"),
+          queue: t("queue.queueMessage"),
+          menu: t("composer.sendMenuTitle"),
+        }),
+      });
       return;
     }
     /* Documents DO ride along, exactly as they do on a send: the route writes
@@ -6031,6 +6157,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          surfaces a recovered one, and reconciles a timed-out admission. */
       onSendBlockedRecover={retiredOrchestrator ? undefined : () => void runtimeDependencies.refreshRuntime()}
       receiptsHidden={!switchHeld && !payloadRecovery && !receiptsInRegion}
+      receiptsMinHeight={receiptsOpen ? receiptsFirstRowSpace : null}
       receipts={switchHeld || payloadRecovery || unownedRuntimeReceipts.length ? <>{switchHeld}{payloadRecovery}{
         unownedRuntimeReceipts.length
           ? <RuntimeComposerReceipts
@@ -6059,6 +6186,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
               chipMount={receiptChipSlot}
               onOpenChange={setReceiptsOpen}
               onRegionChange={setReceiptsDrawn}
+              onFirstRowSpace={setReceiptsFirstRowSpace}
             />
           : undefined
       }</> : undefined}
