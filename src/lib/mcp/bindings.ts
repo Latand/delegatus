@@ -6376,6 +6376,7 @@ export function captureBoardAliasProof(
   project: string,
   aliases: Readonly<Record<string, string>>,
   displayNames: Readonly<Record<string, string>> = {},
+  dependencies?: ViewerMcpDomainDependencies,
 ): () => boolean {
   // Match the spelling vocabulary accepted by the shared named-project resolver.
   const normalize = (value: string) => value.trim().toLowerCase().replace(/[._/\\-]+/gu, "-").replace(/^-|-$/gu, "");
@@ -6393,10 +6394,22 @@ export function captureBoardAliasProof(
       || normalize(currentNames[key] ?? "") === spelling && resolvesToProject(key))).sort();
   };
   const keys = matchingKeys(aliases, displayNames);
+  // A catalog name or directory can be the evidence that resolved a key
+  // which is itself several aliases away from the selected canonical project.
+  // Keep that original source in the proof even though resolution returned
+  // only the canonical key.
+  const catalogSourceKeys = (dependencies?.lastCompletedCatalog?.()?.projectCatalog ?? [])
+    .filter(row => {
+      if (canonicalProject(row.project) !== project) return false;
+      const folder = row.projectRoot ? path.basename(row.projectRoot) : "";
+      return [row.project, row.displayName, row.projectName, row.projectRoot, folder]
+        .some(value => typeof value === "string" && normalize(value) === spelling);
+    })
+    .map(row => row.project);
   const displayProof = new Map(keys.filter(key => normalize(displayNames[key] ?? "") === spelling)
     .map(key => [key, displayNames[key]]));
   const proof = new Map<string, string | undefined>();
-  for (const start of [project, named, ...keys]) {
+  for (const start of [project, named, ...keys, ...catalogSourceKeys]) {
     let key = start;
     while (key && !proof.has(key)) {
       const target = Object.hasOwn(aliases, key) ? aliases[key] : undefined;
@@ -6434,7 +6447,7 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
     : resolved !== undefined ? resolved : named ? resolveBoardProject(named, dependencies) : "";
   const project = boardReadProject(requested, dependencies);
-  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases, aliasSnapshot.displayNames);
+  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases, aliasSnapshot.displayNames, dependencies);
   return { project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([project, caller.fingerprint])).digest("hex")}`, assert() {
     assertWorkspaceMcpCall();
     caller.assert();

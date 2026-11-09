@@ -379,6 +379,46 @@ for (const workspace of [false, true]) for (const spelling of ["outer-alias", "l
   });
 }
 
+for (const tool of TOOLS) for (const workspace of [false, true]) for (const spelling of ["Catalog Widgets", "WidgetsRepo"])
+  for (const form of ["fresh", "keyed", "replay"] as const) {
+  test(`${tool}: catalog alias source is pinned for ${spelling} ${form} workspace=${workspace}`, async () => {
+    const h = await harness(workspace);
+    setBoardAliases({ "catalog-repo": "middle-alias", "middle-alias": OWN });
+    h.domain.lastCompletedCatalog = () => ({ files: [], projectCatalog: [
+      { project: "catalog-repo", displayName: "Catalog Widgets", projectRoot: h.folder, smt: 1, conversations: 1 },
+      { project: FOREIGN, displayName: "Foreign Canary Board", projectRoot: path.join(root, "OtherRepo"), smt: 1, conversations: 1 },
+    ] });
+    const args = { project: spelling, limit: 1, ...(form === "fresh" ? {} : { clientRequestId: `catalog-${form}` }) };
+    if (form === "replay") expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1 });
+    const db = new Database(h.filename);
+    try {
+      const receipts = () => JSON.stringify(db.query("SELECT * FROM mcp_receipts ORDER BY receipt_key").all());
+      const before = receipts(), reads = h.rowReads();
+      const first = await h.call(tool, args);
+      expect(first).toMatchObject({ ok: true, total: 1, replayed: form === "replay" });
+      if (form === "replay") expect(h.rowReads()).toBe(reads);
+    h.atSdkReturn(() => setBoardAliases({ "middle-alias": FOREIGN }));
+      refused(await h.call(tool, args), workspace ? "workspace_forbidden" : "project_scope_refused");
+      if (form === "replay") expect(receipts()).toBe(before);
+    } finally { db.close(); }
+  });
+}
+
+for (const workspace of [false, true]) for (const spelling of ["Catalog Widgets", "WidgetsRepo"]) {
+  test(`list_pipelines: catalog alias source remains pinned after page await for ${spelling} workspace=${workspace}`, async () => {
+    const h = await harness(workspace); h.many();
+    setBoardAliases({ "catalog-repo": "middle-alias", "middle-alias": OWN });
+    h.domain.lastCompletedCatalog = () => ({ files: [], projectCatalog: [
+      { project: "catalog-repo", displayName: "Catalog Widgets", projectRoot: h.folder, smt: 1, conversations: 1 },
+      { project: FOREIGN, displayName: "Foreign Canary Board", projectRoot: path.join(root, "OtherRepo"), smt: 1, conversations: 1 },
+    ] });
+    const first = await h.call("list_pipelines", { project: spelling, limit: 1 });
+    expect(first).toMatchObject({ ok: true, total: 251, hasMore: true });
+    h.onRows(() => queueMicrotask(() => setBoardAliases({ "middle-alias": FOREIGN })));
+    refused(await h.call("list_pipelines", { project: spelling, limit: 1 }), workspace ? "workspace_forbidden" : "project_scope_refused");
+  });
+}
+
 for (const tool of TOOLS) {
   for (const seam of ["authorization", "claim-before", "claim-after", "binding", "completion"] as const) {
     for (const changed of [false, true]) test(`${tool}: ${seam} await ${changed ? "refuses replaced authority" : "allows unchanged authority"}`, async () => {

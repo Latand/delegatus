@@ -140,7 +140,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       }
       if (boardRead && typeof args.project === "string" && !args.project.trim()) args.project = project;
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
-      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases, aliasSnapshot.displayNames) : undefined;
+      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases, aliasSnapshot.displayNames, dependencies) : undefined;
       const checks: (() => string | null | undefined)[] = [() => project];
       const task = (id: string) => {
         const source = dependencies.taskSelectionSource?.();
