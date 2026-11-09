@@ -582,6 +582,26 @@ test("on the phone the open list's room is paid for by the queue panel and the s
   flushSync(() => root.unmount());
 });
 
+test("on the desktop pane a line below the field gives the queue panel a floor of its own while the list is open, and only then", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const region = () => host.querySelector('[data-testid="composer-accessories"]')!.className;
+  /* No line below the field: the equal shares stay as they were. */
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} />));
+  expect(region()).not.toContain("native-queue-panel");
+  /* A refusal is drawn: the panel keeps at least its header line (the
+     region's height, zero here, cannot hold its row's controls as well). */
+  flushSync(() => root.render(<ReceiptsHarness minHeight={142} refuse />));
+  expect(region()).toContain("[&>[data-testid=native-queue-panel]]:min-h-[1.625rem]");
+  expect(region()).toContain("[&>[data-testid=native-queue-panel]]:max-h-[1.625rem]");
+  expect(region()).not.toContain("min-h-14");
+  /* The list closed: the floor goes with the room. */
+  flushSync(() => root.render(<ReceiptsHarness minHeight={null} refuse />));
+  expect(region()).not.toContain("native-queue-panel");
+  flushSync(() => root.unmount());
+});
+
 test("a refusal and a blocked-send reason never shrink out of the bounded form", () => {
   const host = document.createElement("div");
   document.body.append(host);

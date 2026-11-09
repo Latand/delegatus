@@ -957,9 +957,18 @@ export function RuntimeComposerReceipts({
      there are rows below the edge. */
   const stackRef = useRef<HTMLDetailsElement>(null);
   const [moreBelow, setMoreBelow] = useState(false);
+  /* The fade is 1.25 rem (`h-5`) high. It sits only on what follows the first
+     card: while the card's own text still reaches into the fade's band, the
+     closed frame alone says there is more, so the card's sentence is never
+     drawn under a wash that lowers its ink. */
   const measureMoreBelow = useCallback(() => {
     const stack = stackRef.current;
-    if (stack) setMoreBelow(stack.scrollHeight - stack.scrollTop - stack.clientHeight > 1);
+    if (!stack) return;
+    const below = stack.scrollHeight - stack.scrollTop - stack.clientHeight > 1;
+    const row = stack.querySelector<HTMLElement>("[data-runtime-receipt-details] > *");
+    const fadeBand = 20;
+    const cardInBand = Boolean(row) && row!.getBoundingClientRect().bottom > stack.getBoundingClientRect().bottom - 1 - fadeBand;
+    setMoreBelow(below && !cardInBand);
   }, []);
   /* What the open list needs to be usable: its top edge down to the bottom of
      its first row, controls included, never more than its own frame can hold.
@@ -1131,7 +1140,14 @@ export function RuntimeComposerReceipts({
               <ChevronRight className="h-3 w-3 shrink-0 text-muted transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" aria-hidden />
               {chipNamesState ? (
                 <>
-                  <span className="min-w-0 flex-1" aria-hidden />
+                  {/* The phone hides the chip's line while the list is open, so
+                      its own words and count head the list there; elsewhere the
+                      chip beside the field is on screen and names the state. */}
+                  {isMobile ? (
+                    <span className="min-w-0 flex-1 truncate text-label font-semibold text-primary" data-receipts-header-count aria-hidden>
+                      {t(chipUnconfirmed ? "runtime.receipt.chipUnconfirmed" : "runtime.receipt.chip", { count: decisionCount })}
+                    </span>
+                  ) : <span className="min-w-0 flex-1" aria-hidden />}
                   {/* Read, never drawn: the chip beside the field names the state. */}
                   {notice ? <span className="sr-only" data-delivery-notice-cause>{noticeLine}</span> : (
                     <>
@@ -5283,9 +5299,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          the host offers it, the native queue — never this Send again. */
       setStatus({
         kind: "err",
-        text: t(nativeQueueEnabled ? "composer.context.imagesBlockedQueue" : "composer.context.imagesBlocked", {
+        /* A touch screen has no Alt+Enter and its Context toggle is the icon
+           alone, so the line names the buttons that screen draws. */
+        text: t(isMobile
+          ? nativeQueueEnabled ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedTouch"
+          : nativeQueueEnabled ? "composer.context.imagesBlockedQueue" : "composer.context.imagesBlocked", {
           toggle: t("composer.context.toggle"),
           queue: t("queue.queueMessage"),
+          menu: t("composer.sendMenuTitle"),
         }),
       });
       return;

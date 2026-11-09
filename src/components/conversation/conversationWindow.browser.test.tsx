@@ -2970,8 +2970,19 @@ describe("a consumed queued send leaves the composer by its own id", () => {
               why.scrollIntoView({ block: "nearest" });
               const whyReachable = whole(why);
               for (const [node, top] of saved) node.scrollTop = top;
+              /* The list's closing fade never lies over the first card's own
+                 text: no text range of the card's status, message or sentence
+                 meets it. */
+              const fade = document.querySelector("[data-receipt-more-below]")?.getBoundingClientRect() ?? null;
+              const textBoxes = [...firstCard.querySelectorAll('[role="status"], [data-receipt-message], [data-receipt-uncertain-why]')].flatMap((node) => {
+                const range = document.createRange(); range.selectNodeContents(node);
+                return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              });
+              const fadeOverText = fade ? textBoxes.some((rect) => Math.min(rect.right, fade.right) - Math.max(rect.left, fade.left) > 0.5
+                && Math.min(rect.bottom, fade.bottom) - Math.max(rect.top, fade.top) > 0.5) : false;
               return {
                 whyReachable,
+                fadeOverText,
                 operation: firstCard.getAttribute("data-operation"),
                 status: status.textContent?.trim() ?? "",
                 statusDrawn: !status.classList.contains("sr-only") && whole(status),
@@ -3009,12 +3020,26 @@ describe("a consumed queued send leaves the composer by its own id", () => {
               tileReachable: reachable(tile),
               tileRemoveReachable: reachable(tileRemove),
               tileHeight: tile ? Math.round(tile.getBoundingClientRect().height * 10) / 10 : null,
+              /* Every control of the queue's rows lies inside the panel's own
+                 clip box, so a squeezed panel never cuts across them. */
+              queueControlsWhole: (() => {
+                const firstRow = queuePanel?.querySelector('[data-testid="native-queue-row"]');
+                if (!queuePanel || !firstRow) return null;
+                const panel = queuePanel.getBoundingClientRect();
+                return [...firstRow.querySelectorAll("button")].every((button) => {
+                  const box = button.getBoundingClientRect();
+                  return box.top >= panel.top - 0.5 && box.bottom <= panel.bottom + 0.5;
+                });
+              })(),
               overlaps,
               geometry: (() => {
                 const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
                 const rr = region?.getBoundingClientRect();
                 const hr = queueHeader?.getBoundingClientRect();
-                return rr ? `region ${rr.top.toFixed(1)}-${rr.bottom.toFixed(1)} scroll ${region!.scrollTop}/${region!.scrollHeight - region!.clientHeight}; header ${hr ? `${hr.top.toFixed(1)}-${hr.bottom.toFixed(1)}` : "-"}` : "no region";
+                const holder = document.querySelector<HTMLElement>('[data-testid="composer-receipts"]');
+                const kids = [...(region?.children ?? [])].filter((kid) => kid.getClientRects().length > 0)
+                  .map((kid) => `${kid.getAttribute("data-testid") ?? kid.tagName.toLowerCase()} ${kid.getBoundingClientRect().height.toFixed(1)}`).join(", ");
+                return rr ? `region ${rr.top.toFixed(1)}-${rr.bottom.toFixed(1)} scroll ${region!.scrollTop}/${region!.scrollHeight - region!.clientHeight}; header ${hr ? `${hr.top.toFixed(1)}-${hr.bottom.toFixed(1)}` : "-"}; list floor ${holder?.style.minHeight || "-"}; kids ${kids}` : "no region";
               })(),
             };
             const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
@@ -3026,6 +3051,12 @@ describe("a consumed queued send leaves the composer by its own id", () => {
               chip: chipShown ? chip!.innerText.trim() : null,
               chipAria: chip?.getAttribute("aria-label") ?? null,
               chipWhole: !chipShown || whole(chip!),
+              /* The open list's own header carries the chip's words where the
+                 chip's line is hidden. */
+              headerCount: (() => {
+                const node = document.querySelector<HTMLElement>("[data-receipts-header-count]");
+                return node && node.getClientRects().length > 0 ? { text: node.textContent?.trim() ?? "", whole: whole(node) } : null;
+              })(),
               first,
               panels,
               active: document.activeElement?.closest("[data-runtime-receipt-stack]") ? "list" : document.activeElement?.hasAttribute("data-receipts-chip") ? "chip" : document.activeElement?.tagName.toLowerCase() ?? null,
@@ -3148,20 +3179,31 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           for (const state of [before, after]) {
             expect(state.first?.status).toBe(translate(lang, "composer.deliveryCheckEnded"));
             expect(state.first?.statusDrawn).toBe(true);
+            /* The closing fade sits on what follows the first card, never on
+               the card's own sentence. */
+            expect({ key, fadeOverText: state.first?.fadeOverText }).toEqual({ key, fadeOverText: false });
             if (!viewport.touch) expect({ key, whyWhole: state.first?.whyWhole }).toEqual({ key, whyWhole: true });
             expect({ key, whyReachable: state.first?.whyReachable }).toEqual({ key, whyReachable: true });
             expect(state.first?.controls.length).toBeGreaterThanOrEqual(2);
             expect(state.first?.controls.filter((control) => !control.whole)).toEqual([]);
           }
           /* A phone hides the chip's line while the list is open: focus is in
-             the list then and back on the chip once it closes. */
+             the list then and back on the chip once it closes, and the list's
+             own header says what the list is and how many sends it holds. */
           if (viewport.touch) {
             expect(before.active).toBe("list");
             expect(afterRest.active).toBe("chip");
+            for (const [state, count] of [[before, 2], [after, 1]] as const) {
+              expect({ key, header: state.headerCount }).toEqual({ key, header: { text: translate(lang, "runtime.receipt.chipUnconfirmed", { count }), whole: true } });
+            }
+          } else {
+            expect(before.headerCount).toBeNull();
           }
           /* The refusal: named routes, whole below the field, nothing lost. */
-          expect(refused.text).toBe(translate(lang, "composer.context.imagesBlockedQueue", {
-            toggle: translate(lang, "composer.context.toggle"), queue: translate(lang, "queue.queueMessage") }));
+          expect(refused.text).toBe(translate(lang, viewport.touch ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedQueue", {
+            toggle: translate(lang, "composer.context.toggle"), queue: translate(lang, "queue.queueMessage"), menu: translate(lang, "composer.sendMenuTitle") }));
+          /* A touch screen has no keyboard shortcut to name. */
+          if (viewport.touch) expect(refused.text).not.toContain("Alt+Enter");
           expect(refused.whole).toBe(true);
           expect(refused.scrollHeight).toBeLessThanOrEqual(refused.clientHeight + 1);
           expect(refused.draft).toBe("an unsent draft");
@@ -3171,6 +3213,20 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           expect(refusedList.first?.statusDrawn).toBe(true);
           expect(refusedList.first?.controls.filter((control) => !control.whole)).toEqual([]);
           expect(refusedList.transcriptWhole).toBe(true);
+          /* On the desktop the queue panel yields to the refusal line only in
+             whole units: its header line always, and at 1440 its first row's
+             controls too. */
+          if (!viewport.touch) {
+            expect({ key, queueHeaderPlaced: refusedList.panels.queueHeaderPlaced }).toEqual({ key, queueHeaderPlaced: true });
+            if (viewport.width >= 1440) expect({ key, queueControlsWhole: refusedList.panels.queueControlsWhole }).toEqual({ key, queueControlsWhole: true });
+          }
+          /* The phone's refusal is the two lines its touch wording allows, so
+             the staged picture and its remove button stay whole beside the
+             open list's first card. */
+          if (viewport.touch) {
+            expect({ key, tileWhole: refusedList.panels.tileWhole }).toEqual({ key, tileWhole: true });
+            expect(refused.clientHeight).toBeLessThanOrEqual(31);
+          }
           /* Beside the open list, in the list-open and refused states alike:
              the queue panel keeps its header line (a floor, never collapsed
              to an empty bar), the staged picture's tile and its remove button
@@ -3953,8 +4009,13 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
           const open = await record("list-open");
           if (!open.list?.aboveField) fail("list-open", "the list is not open above the field");
           if (!open.list?.retryAll?.includes("2")) fail("list-open", `«Retry failed» reads ${JSON.stringify(open.list?.retryAll)}`);
-          /* The chip names the state and the count, so the header does not say it again. */
-          if (open.list && !/^(Повторити невдалі|Retry failed)( \(\d+\))?$/.test(open.list.header)) fail("list-open", `the list's header reads ${JSON.stringify(open.list.header)}`);
+          /* The chip names the state and the count, so the desktop's header does
+             not say it again; the phone hides the chip's line while the list is
+             open, so there the header leads with the chip's own words. */
+          const headerPattern = surface.phone
+            ? /^(Не доставлено|Not delivered): \d+ (Повторити невдалі|Retry failed)( \(\d+\))?$/
+            : /^(Повторити невдалі|Retry failed)( \(\d+\))?$/;
+          if (open.list && !headerPattern.test(open.list.header)) fail("list-open", `the list's header reads ${JSON.stringify(open.list.header)}`);
           if (open.list?.firstFailed && !(open.list.firstFailed.whole && open.list.firstFailed.retryWhole)) fail("list-open", "the first failed row or its Retry is cut off");
           if (open.list && !open.list.firstFailed) fail("list-open", "no failed row with its Retry is in the list");
           if (open.list?.sliced.length) fail("list-open", `cut through mid-control: ${open.list.sliced.join(", ")}`);

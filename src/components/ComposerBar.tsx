@@ -127,6 +127,11 @@ export function composerSlotKind({ killed, offline, working, hasDraft }: {
     card's space with this added, and the region does not scroll for it. */
 export const RECEIPTS_FIRST_ROW_CLOSING = 11;
 
+/** Height, in px, of a queue panel that shows its header and its first row's
+    controls whole: the header line (26), the row's top padding (6) and the
+    row of controls (22), with a pixel to spare. */
+const QUEUE_CONTROLS_WHOLE = 56;
+
 export interface ComposerBarProps {
   composer: UseComposerReturn;
   placeholder: string;
@@ -745,6 +750,35 @@ export function ComposerBar({
     observer.observe(region);
     return () => observer.disconnect();
   }, [yieldingFloors, receiptsMinHeight, regionShown]);
+  /* On the desktop pane the queue panel yields to the open list down to its
+     header line, never less. While a line is drawn below the field (a refusal
+     takes its room from the region) the panel keeps its first row's controls
+     whole as well, when the region can hold that, the list's first-card floor
+     and what else is in it; otherwise the header alone, exactly its height,
+     and the row below it is scrolled to inside the panel rather than shown
+     cut across its controls. Decided from the region's own height, which the
+     floors do not change while the region is squeezed, so it does not flip. */
+  const lineBelowField = Boolean(status);
+  const controlsFloorWanted = receiptsListHoldsRoom && !isMobile && lineBelowField;
+  const [queueControlsWhole, setQueueControlsWhole] = useState(false);
+  const hasQueuePanel = Boolean(queuePanel);
+  useLayoutEffect(() => {
+    const region = accessoriesRef.current;
+    if (!region || !controlsFloorWanted || !receiptsMinHeight) { setQueueControlsWhole(false); return; }
+    const measure = () => {
+      const kids = Array.from(region.children).filter((kid) => kid.getClientRects().length > 0) as HTMLElement[];
+      const gap = parseFloat(window.getComputedStyle(region).rowGap) || 0;
+      const need = kids.reduce((sum, kid) => sum + (kid.matches('[data-testid="native-queue-panel"]')
+        ? QUEUE_CONTROLS_WHOLE
+        : kid.matches('[data-testid="composer-receipts"]') ? receiptsMinHeight : kid.offsetHeight), 0) + gap * Math.max(0, kids.length - 1);
+      setQueueControlsWhole(need <= region.clientHeight + 0.5);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(region);
+    return () => observer.disconnect();
+  }, [controlsFloorWanted, receiptsMinHeight, regionShown, hasQueuePanel]);
   return (
     <>
       {regionShown || receipts ? (
@@ -758,7 +792,9 @@ export function ComposerBar({
                its header line, the staged strip to its row of tiles. What
                then exceeds the region scrolls in the region, and nothing is
                painted over a neighbour. */
-            yieldingFloors ? "[&>[data-testid=native-queue-panel]]:min-h-[1.625rem] [&>[data-testid=attachment-tray]]:min-h-14" : ""
+            yieldingFloors
+              ? "[&>[data-testid=native-queue-panel]]:min-h-[1.625rem] [&>[data-testid=attachment-tray]]:min-h-14"
+              : controlsFloorWanted ? queueControlsWhole ? "[&>[data-testid=native-queue-panel]]:min-h-14" : "[&>[data-testid=native-queue-panel]]:h-[1.625rem] [&>[data-testid=native-queue-panel]]:max-h-[1.625rem] [&>[data-testid=native-queue-panel]]:min-h-[1.625rem]" : ""
           }`}
         >
           {deliveries}

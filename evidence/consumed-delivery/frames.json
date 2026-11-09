@@ -6,6 +6,7 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -15,8 +16,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -53,8 +55,10 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -78,8 +82,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -116,6 +121,7 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -125,8 +131,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -160,8 +167,10 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -185,8 +194,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
         "listOpen": true,
@@ -228,12 +238,14 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
-          "whyWhole": true,
+          "whyWhole": false,
           "controls": [
             {
               "label": "Retry",
@@ -246,15 +258,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 46.3,
+          "queueHeight": 67.9,
           "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
         "listOpen": true,
@@ -268,7 +281,7 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": false,
+        "rowsWhole": true,
         "notice": null,
         "count": "1 message",
         "cards": [
@@ -277,7 +290,7 @@
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
-        "cardsWhole": true,
+        "cardsWhole": false,
         "notices": [
           "Delivery unconfirmed"
         ],
@@ -290,6 +303,7 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -299,8 +313,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -337,8 +352,10 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -362,8 +379,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -400,6 +418,7 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -409,8 +428,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -444,8 +464,10 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -469,8 +491,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
         "listOpen": true,
@@ -512,12 +535,14 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
-          "whyWhole": true,
+          "whyWhole": false,
           "controls": [
             {
               "label": "Retry",
@@ -530,15 +555,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 46.3,
+          "queueHeight": 67.9,
           "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
         "listOpen": true,
@@ -552,7 +578,7 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": false,
+        "rowsWhole": true,
         "notice": null,
         "count": "1 message",
         "cards": [
@@ -561,7 +587,7 @@
         "cardText": [
           "Delivery unconfirmedRetryDiscardSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Retry won't duplicate a delivered message. Discard clears this card and stops attempts."
         ],
-        "cardsWhole": true,
+        "cardsWhole": false,
         "notices": [
           "Delivery unconfirmed"
         ],
@@ -574,6 +600,7 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -583,8 +610,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -621,8 +649,10 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -646,8 +676,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -684,6 +715,7 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -693,8 +725,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -728,8 +761,10 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -753,8 +788,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
         "listOpen": true,
@@ -796,12 +832,14 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
-          "whyWhole": true,
+          "whyWhole": false,
           "controls": [
             {
               "label": "Повторити",
@@ -814,15 +852,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 46.3,
+          "queueHeight": 67.9,
           "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
         "listOpen": true,
@@ -836,7 +875,7 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": false,
+        "rowsWhole": true,
         "notice": null,
         "count": "1 повідомлення",
         "cards": [
@@ -845,7 +884,7 @@
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
-        "cardsWhole": true,
+        "cardsWhole": false,
         "notices": [
           "Доставку не підтверджено"
         ],
@@ -858,6 +897,7 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -867,8 +907,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0"
+          "geometry": "region 585.0-736.0 scroll 0/0; header 586.0-610.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -905,8 +946,10 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -930,8 +973,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 51.4, composer-receipts 134.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -968,6 +1012,7 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -977,8 +1022,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0"
+          "geometry": "region 654.0-736.0 scroll 0/0; header 655.0-679.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -1012,8 +1058,10 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1037,8 +1085,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-736.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.3, composer-receipts 118.5"
         },
         "active": "chip",
         "listOpen": true,
@@ -1080,12 +1129,14 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
-          "whyWhole": true,
+          "whyWhole": false,
           "controls": [
             {
               "label": "Повторити",
@@ -1098,15 +1149,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 46.3,
+          "queueHeight": 67.9,
           "queueHeaderPlaced": true,
           "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2"
+          "geometry": "region 544.2-715.0 scroll 0/0; header 545.2-569.2; list floor 85px; kids native-queue-panel 67.9, composer-receipts 96.9"
         },
         "active": "button",
         "listOpen": true,
@@ -1120,7 +1172,7 @@
         "rows": [
           "held-same-text"
         ],
-        "rowsWhole": false,
+        "rowsWhole": true,
         "notice": null,
         "count": "1 повідомлення",
         "cards": [
@@ -1129,7 +1181,7 @@
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
         ],
-        "cardsWhole": true,
+        "cardsWhole": false,
         "notices": [
           "Доставку не підтверджено"
         ],
@@ -1142,6 +1194,7 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -1151,8 +1204,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -1189,8 +1243,10 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1214,8 +1270,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -1252,6 +1309,7 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -1261,8 +1319,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -1296,8 +1355,10 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1321,8 +1382,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -1364,8 +1426,10 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1382,15 +1446,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 20.9,
-          "queueHeaderPlaced": false,
-          "queueHeaderReachable": false,
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
         "listOpen": true,
@@ -1426,6 +1491,7 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -1435,8 +1501,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -1473,8 +1540,10 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1498,8 +1567,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -1536,6 +1606,7 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -1545,8 +1616,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -1580,8 +1652,10 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1605,8 +1679,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -1648,8 +1723,10 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -1666,15 +1743,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 20.9,
-          "queueHeaderPlaced": false,
-          "queueHeaderReachable": false,
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
         "listOpen": true,
@@ -1710,6 +1788,7 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -1719,8 +1798,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -1739,8 +1819,8 @@
         "notice": "1 повідомлення чекає на підтвердження від Codex.",
         "count": "2 повідомлення",
         "cards": [
-          "consumed-tick",
-          "unknown-send"
+          "unknown-send",
+          "consumed-tick"
         ],
         "cardText": [
           "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
@@ -1757,8 +1837,10 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1782,8 +1864,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -1820,6 +1903,7 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -1829,8 +1913,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -1864,8 +1949,10 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1889,8 +1976,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -1932,8 +2020,10 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -1950,15 +2040,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 20.9,
-          "queueHeaderPlaced": false,
-          "queueHeaderReachable": false,
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
         "listOpen": true,
@@ -1994,6 +2085,7 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 151,
@@ -2003,8 +2095,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0"
+          "geometry": "region 485.0-636.0 scroll 0/0; header 486.0-510.0; list floor -; kids native-queue-panel 151.0"
         },
         "active": "body",
         "listOpen": false,
@@ -2041,8 +2134,10 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2066,8 +2161,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -2104,6 +2200,7 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 82,
@@ -2113,8 +2210,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0"
+          "geometry": "region 554.0-636.0 scroll 0/0; header 555.0-579.0; list floor -; kids native-queue-panel 82.0"
         },
         "active": "body",
         "listOpen": false,
@@ -2148,8 +2246,10 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2173,8 +2273,9 @@
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-636.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 31.4, composer-receipts 114.4"
         },
         "active": "chip",
         "listOpen": true,
@@ -2216,8 +2317,10 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2234,15 +2337,16 @@
           ]
         },
         "panels": {
-          "queueHeight": 20.9,
-          "queueHeaderPlaced": false,
-          "queueHeaderReachable": false,
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": false,
           "tileHeight": 40,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2"
+          "geometry": "region 484.2-615.0 scroll 0/0; header 485.2-509.2; list floor 85px; kids native-queue-panel 26.0, composer-receipts 98.8"
         },
         "active": "button",
         "listOpen": true,
@@ -2278,6 +2382,7 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 101,
@@ -2287,8 +2392,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "body",
         "listOpen": false,
@@ -2325,8 +2431,13 @@
         "chip": null,
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Unconfirmed: 2",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2350,8 +2461,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2388,6 +2500,7 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 101,
@@ -2397,8 +2510,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "chip",
         "listOpen": false,
@@ -2432,8 +2546,13 @@
         "chip": null,
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Unconfirmed: 1",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2457,8 +2576,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2489,7 +2609,7 @@
         "overflowX": 0
       },
       "refused": {
-        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "text": "Added context cannot carry images. Turn off Context mode or choose “Queue for Codex” in “Send options”.",
         "whole": true,
         "clientHeight": 30,
         "scrollHeight": 30,
@@ -2500,8 +2620,13 @@
         "chip": null,
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Unconfirmed: 1",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2525,8 +2650,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0"
+          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "button",
         "listOpen": true,
@@ -2562,6 +2688,7 @@
         "chip": "Unconfirmed: 2",
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 101,
@@ -2571,8 +2698,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "body",
         "listOpen": false,
@@ -2609,8 +2737,13 @@
         "chip": null,
         "chipAria": "Messages with unconfirmed delivery: 2. Show them",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Unconfirmed: 2",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2634,8 +2767,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2672,6 +2806,7 @@
         "chip": "Unconfirmed: 1",
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 101,
@@ -2681,8 +2816,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "chip",
         "listOpen": false,
@@ -2716,8 +2852,13 @@
         "chip": null,
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Unconfirmed: 1",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2741,8 +2882,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2773,7 +2915,7 @@
         "overflowX": 0
       },
       "refused": {
-        "text": "Added context cannot carry images. Turn off “Context” to send the message with its image, or use “Queue for Codex” (Alt+Enter).",
+        "text": "Added context cannot carry images. Turn off Context mode or choose “Queue for Codex” in “Send options”.",
         "whole": true,
         "clientHeight": 30,
         "scrollHeight": 30,
@@ -2784,8 +2926,13 @@
         "chip": null,
         "chipAria": "Messages with unconfirmed delivery: 1. Show them",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Unconfirmed: 1",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Delivery unconfirmed",
           "statusDrawn": true,
@@ -2809,8 +2956,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0"
+          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "button",
         "listOpen": true,
@@ -2846,6 +2994,7 @@
         "chip": "Не підтверджено: 2",
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 101,
@@ -2855,8 +3004,315 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
+        },
+        "active": "body",
+        "listOpen": false,
+        "listShown": false,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": false,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "before": {
+        "chip": null,
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
+        "chipWhole": true,
+        "headerCount": {
+          "text": "Не підтверджено: 2",
+          "whole": true
+        },
+        "first": {
+          "whyReachable": true,
+          "fadeOverText": false,
+          "operation": "consumed-tick",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "queueControlsWhole": false,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+        },
+        "active": "list",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": false,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "afterRest": {
+        "chip": "Не підтверджено: 1",
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "headerCount": null,
+        "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "queueControlsWhole": true,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
+        },
+        "active": "chip",
+        "listOpen": false,
+        "listShown": false,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "chip": null,
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "headerCount": {
+          "text": "Не підтверджено: 1",
+          "whole": true
+        },
+        "first": {
+          "whyReachable": true,
+          "fadeOverText": false,
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "queueControlsWhole": false,
+          "overlaps": false,
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+        },
+        "active": "list",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "refused": {
+        "text": "Доданий контекст не може містити зображення. Вимкніть режим контексту або виберіть «У чергу до Codex» у «Дії відправки».",
+        "whole": true,
+        "clientHeight": 30,
+        "scrollHeight": 30,
+        "draft": "an unsent draft",
+        "images": 1
+      },
+      "refusedList": {
+        "chip": null,
+        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
+        "chipWhole": true,
+        "headerCount": {
+          "text": "Не підтверджено: 1",
+          "whole": true
+        },
+        "first": {
+          "whyReachable": true,
+          "fadeOverText": false,
+          "operation": "unknown-send",
+          "status": "Доставку не підтверджено",
+          "statusDrawn": true,
+          "whyWhole": false,
+          "controls": [
+            {
+              "label": "Повторити",
+              "whole": true
+            },
+            {
+              "label": "Відкинути",
+              "whole": true
+            }
+          ]
+        },
+        "panels": {
+          "queueHeight": 26,
+          "queueHeaderPlaced": false,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "queueControlsWhole": false,
+          "overlaps": false,
+          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
+        },
+        "active": "button",
+        "listOpen": true,
+        "listShown": true,
+        "box": {
+          "height": 320,
+          "share": 0.402
+        },
+        "transcriptWhole": true,
+        "images": 1,
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": false,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
+        ],
+        "cardsWhole": false,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "phone-390-uk-dark": {
+      "beforeRest": {
+        "chip": "Не підтверджено: 2",
+        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
+        "chipWhole": true,
+        "headerCount": null,
+        "first": null,
+        "panels": {
+          "queueHeight": 101,
+          "queueHeaderPlaced": true,
+          "queueHeaderReachable": true,
+          "tileWhole": true,
+          "tileReachable": true,
+          "tileRemoveReachable": true,
+          "tileHeight": 48,
+          "queueControlsWhole": true,
+          "overlaps": false,
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "body",
         "listOpen": false,
@@ -2893,8 +3349,13 @@
         "chip": null,
         "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Не підтверджено: 2",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "consumed-tick",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -2918,8 +3379,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "list",
         "listOpen": true,
@@ -2956,6 +3418,7 @@
         "chip": "Не підтверджено: 1",
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": null,
         "first": null,
         "panels": {
           "queueHeight": 101,
@@ -2965,8 +3428,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": true,
           "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
+          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0; list floor -; kids native-queue-panel 101.0, attachment-tray 60.0"
         },
         "active": "chip",
         "listOpen": false,
@@ -3000,8 +3464,13 @@
         "chip": null,
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Не підтверджено: 1",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -3025,8 +3494,9 @@
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
+          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "list",
         "listOpen": true,
@@ -3057,10 +3527,10 @@
         "overflowX": 0
       },
       "refused": {
-        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
+        "text": "Доданий контекст не може містити зображення. Вимкніть режим контексту або виберіть «У чергу до Codex» у «Дії відправки».",
         "whole": true,
-        "clientHeight": 45,
-        "scrollHeight": 45,
+        "clientHeight": 30,
+        "scrollHeight": 30,
         "draft": "an unsent draft",
         "images": 1
       },
@@ -3068,8 +3538,13 @@
         "chip": null,
         "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
         "chipWhole": true,
+        "headerCount": {
+          "text": "Не підтверджено: 1",
+          "whole": true
+        },
         "first": {
           "whyReachable": true,
+          "fadeOverText": false,
           "operation": "unknown-send",
           "status": "Доставку не підтверджено",
           "statusDrawn": true,
@@ -3089,296 +3564,13 @@
           "queueHeight": 26,
           "queueHeaderPlaced": false,
           "queueHeaderReachable": true,
-          "tileWhole": false,
-          "tileReachable": true,
-          "tileRemoveReachable": true,
-          "tileHeight": 48,
-          "overlaps": false,
-          "geometry": "region 507.0-673.0 scroll 47/58; header 461.0-485.0"
-        },
-        "active": "button",
-        "listOpen": true,
-        "listShown": true,
-        "box": {
-          "height": 320,
-          "share": 0.402
-        },
-        "transcriptWhole": true,
-        "images": 1,
-        "rows": [
-          "held-same-text"
-        ],
-        "rowsWhole": false,
-        "notice": null,
-        "count": "1 повідомлення",
-        "cards": [
-          "unknown-send"
-        ],
-        "cardText": [
-          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
-        ],
-        "cardsWhole": false,
-        "notices": [
-          "Доставку не підтверджено"
-        ],
-        "draft": "an unsent draft",
-        "overflowX": 0
-      }
-    },
-    "phone-390-uk-dark": {
-      "beforeRest": {
-        "chip": "Не підтверджено: 2",
-        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
-        "chipWhole": true,
-        "first": null,
-        "panels": {
-          "queueHeight": 101,
-          "queueHeaderPlaced": true,
-          "queueHeaderReachable": true,
           "tileWhole": true,
           "tileReachable": true,
           "tileRemoveReachable": true,
           "tileHeight": 48,
+          "queueControlsWhole": false,
           "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
-        },
-        "active": "body",
-        "listOpen": false,
-        "listShown": false,
-        "box": {
-          "height": 320,
-          "share": 0.402
-        },
-        "transcriptWhole": true,
-        "images": 1,
-        "rows": [
-          "held-same-text",
-          "consumed-tick"
-        ],
-        "rowsWhole": false,
-        "notice": "1 повідомлення чекає на підтвердження від Codex.",
-        "count": "2 повідомлення",
-        "cards": [
-          "consumed-tick",
-          "unknown-send"
-        ],
-        "cardText": [
-          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
-          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
-        ],
-        "cardsWhole": false,
-        "notices": [
-          "Доставку не підтверджено"
-        ],
-        "draft": "an unsent draft",
-        "overflowX": 0
-      },
-      "before": {
-        "chip": null,
-        "chipAria": "Повідомлень без підтвердження доставки: 2. Показати їх",
-        "chipWhole": true,
-        "first": {
-          "whyReachable": true,
-          "operation": "consumed-tick",
-          "status": "Доставку не підтверджено",
-          "statusDrawn": true,
-          "whyWhole": false,
-          "controls": [
-            {
-              "label": "Повторити",
-              "whole": true
-            },
-            {
-              "label": "Відкинути",
-              "whole": true
-            }
-          ]
-        },
-        "panels": {
-          "queueHeight": 26,
-          "queueHeaderPlaced": true,
-          "queueHeaderReachable": true,
-          "tileWhole": true,
-          "tileReachable": true,
-          "tileRemoveReachable": true,
-          "tileHeight": 48,
-          "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
-        },
-        "active": "list",
-        "listOpen": true,
-        "listShown": true,
-        "box": {
-          "height": 320,
-          "share": 0.402
-        },
-        "transcriptWhole": true,
-        "images": 1,
-        "rows": [
-          "held-same-text",
-          "consumed-tick"
-        ],
-        "rowsWhole": false,
-        "notice": "1 повідомлення чекає на підтвердження від Codex.",
-        "count": "2 повідомлення",
-        "cards": [
-          "consumed-tick",
-          "unknown-send"
-        ],
-        "cardText": [
-          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
-          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
-        ],
-        "cardsWhole": false,
-        "notices": [
-          "Доставку не підтверджено"
-        ],
-        "draft": "an unsent draft",
-        "overflowX": 0
-      },
-      "afterRest": {
-        "chip": "Не підтверджено: 1",
-        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
-        "chipWhole": true,
-        "first": null,
-        "panels": {
-          "queueHeight": 101,
-          "queueHeaderPlaced": true,
-          "queueHeaderReachable": true,
-          "tileWhole": true,
-          "tileReachable": true,
-          "tileRemoveReachable": true,
-          "tileHeight": 48,
-          "overlaps": false,
-          "geometry": "region 507.0-674.0 scroll 0/0; header 508.0-532.0"
-        },
-        "active": "chip",
-        "listOpen": false,
-        "listShown": false,
-        "box": {
-          "height": 320,
-          "share": 0.402
-        },
-        "transcriptWhole": true,
-        "images": 1,
-        "rows": [
-          "held-same-text"
-        ],
-        "rowsWhole": false,
-        "notice": null,
-        "count": "1 повідомлення",
-        "cards": [
-          "unknown-send"
-        ],
-        "cardText": [
-          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
-        ],
-        "cardsWhole": false,
-        "notices": [
-          "Доставку не підтверджено"
-        ],
-        "draft": "an unsent draft",
-        "overflowX": 0
-      },
-      "after": {
-        "chip": null,
-        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
-        "chipWhole": true,
-        "first": {
-          "whyReachable": true,
-          "operation": "unknown-send",
-          "status": "Доставку не підтверджено",
-          "statusDrawn": true,
-          "whyWhole": false,
-          "controls": [
-            {
-              "label": "Повторити",
-              "whole": true
-            },
-            {
-              "label": "Відкинути",
-              "whole": true
-            }
-          ]
-        },
-        "panels": {
-          "queueHeight": 26,
-          "queueHeaderPlaced": true,
-          "queueHeaderReachable": true,
-          "tileWhole": true,
-          "tileReachable": true,
-          "tileRemoveReachable": true,
-          "tileHeight": 48,
-          "overlaps": false,
-          "geometry": "region 507.0-724.0 scroll 0/7; header 508.0-532.0"
-        },
-        "active": "list",
-        "listOpen": true,
-        "listShown": true,
-        "box": {
-          "height": 320,
-          "share": 0.402
-        },
-        "transcriptWhole": true,
-        "images": 1,
-        "rows": [
-          "held-same-text"
-        ],
-        "rowsWhole": false,
-        "notice": null,
-        "count": "1 повідомлення",
-        "cards": [
-          "unknown-send"
-        ],
-        "cardText": [
-          "Доставку не підтвердженоПовторитиВідкинутиSeat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби."
-        ],
-        "cardsWhole": false,
-        "notices": [
-          "Доставку не підтверджено"
-        ],
-        "draft": "an unsent draft",
-        "overflowX": 0
-      },
-      "refused": {
-        "text": "Доданий контекст не може містити зображення. Вимкніть «Контекст», щоб надіслати повідомлення із зображенням, або скористайтеся «У чергу до Codex» (Alt+Enter).",
-        "whole": true,
-        "clientHeight": 45,
-        "scrollHeight": 45,
-        "draft": "an unsent draft",
-        "images": 1
-      },
-      "refusedList": {
-        "chip": null,
-        "chipAria": "Повідомлень без підтвердження доставки: 1. Показати їх",
-        "chipWhole": true,
-        "first": {
-          "whyReachable": true,
-          "operation": "unknown-send",
-          "status": "Доставку не підтверджено",
-          "statusDrawn": true,
-          "whyWhole": false,
-          "controls": [
-            {
-              "label": "Повторити",
-              "whole": true
-            },
-            {
-              "label": "Відкинути",
-              "whole": true
-            }
-          ]
-        },
-        "panels": {
-          "queueHeight": 26,
-          "queueHeaderPlaced": false,
-          "queueHeaderReachable": true,
-          "tileWhole": false,
-          "tileReachable": true,
-          "tileRemoveReachable": true,
-          "tileHeight": 48,
-          "overlaps": false,
-          "geometry": "region 507.0-673.0 scroll 47/58; header 461.0-485.0"
+          "geometry": "region 507.0-688.0 scroll 32/43; header 476.0-500.0; list floor 130px; kids native-queue-panel 26.0, attachment-tray 56.0, composer-receipts 130.0"
         },
         "active": "button",
         "listOpen": true,

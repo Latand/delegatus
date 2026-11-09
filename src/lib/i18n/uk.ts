@@ -4527,6 +4527,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.context.unconfirmed": "Сервер не відповів. Рядок повідомлення покаже, чи його додано.",
   "composer.context.imagesBlocked": "Доданий контекст не може містити зображення. Вимкніть «{toggle}», щоб надіслати повідомлення із зображенням.",
   "composer.context.imagesBlockedQueue": "Доданий контекст не може містити зображення. Вимкніть «{toggle}», щоб надіслати повідомлення із зображенням, або скористайтеся «{queue}» (Alt+Enter).",
+  "composer.context.imagesBlockedTouch": "Доданий контекст не може містити зображення. Вимкніть режим контексту, щоб надіслати повідомлення із зображенням.",
+  "composer.context.imagesBlockedQueueTouch": "Доданий контекст не може містити зображення. Вимкніть режим контексту або виберіть «{queue}» у «{menu}».",
   "outbox.context.chip": "Контекст",
   "outbox.context.waitingStep": "Увійде в поточний хід на наступному кроці",
   "outbox.context.stored": "Збережено для наступного запиту",

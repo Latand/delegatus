@@ -545,6 +545,37 @@ test("Send in context mode with a staged picture names the Context toggle and th
   }
 });
 
+test("on a touch screen the refusal names the send menu and no keyboard shortcut, and keeps the draft and the picture", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    turn = "running";
+    mobile = true;
+    const { host, root } = await mount();
+    try {
+      await type(host, "look at this");
+      await pasteImage(host);
+      const staged = host.querySelectorAll("img").length;
+      await clickSend(host);
+      await settle(() => {});
+      const line = refusal(host)!;
+      expect(line.textContent).toBe(translate(locale, "composer.context.imagesBlockedQueueTouch", {
+        queue: translate(locale, "queue.queueMessage"),
+        menu: translate(locale, "composer.sendMenuTitle"),
+      }));
+      expect(line.textContent).not.toContain("Alt+Enter");
+      expect(line.className).toContain("shrink-0");
+      expect(injections).toEqual([]);
+      expect(sends).toEqual([]);
+      expect(queueWrites).toEqual([]);
+      expect(textarea(host).value).toBe("look at this");
+      expect(host.querySelectorAll("img").length).toBe(staged);
+    } finally {
+      root.unmount();
+      document.body.replaceChildren();
+    }
+  }
+});
+
 test("a host with no native queue gets the refusal without the queue route", async () => {
   turn = "running";
   nativeQueueCapable = false;

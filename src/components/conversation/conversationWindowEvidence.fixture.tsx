@@ -1694,8 +1694,8 @@ function ConsumedDeliveryFixture() {
            drives the real path; this stage shows where the line is drawn). */
         onSubmit={(event) => {
           event.preventDefault();
-          composer.setStatus({ kind: "err", text: t("composer.context.imagesBlockedQueue", {
-            toggle: t("composer.context.toggle"), queue: t("queue.queueMessage"),
+          composer.setStatus({ kind: "err", text: t(isMobile ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedQueue", {
+            toggle: t("composer.context.toggle"), queue: t("queue.queueMessage"), menu: t("composer.sendMenuTitle"),
           }) });
         }}
         className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${

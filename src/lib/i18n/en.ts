@@ -4595,6 +4595,8 @@ export const en = {
   "composer.context.unconfirmed": "No answer from the server. The message row will show whether it was added.",
   "composer.context.imagesBlocked": "Added context cannot carry images. Turn off “{toggle}” to send the message with its image.",
   "composer.context.imagesBlockedQueue": "Added context cannot carry images. Turn off “{toggle}” to send the message with its image, or use “{queue}” (Alt+Enter).",
+  "composer.context.imagesBlockedTouch": "Added context cannot carry images. Turn off Context mode to send the message with its image.",
+  "composer.context.imagesBlockedQueueTouch": "Added context cannot carry images. Turn off Context mode or choose “{queue}” in “{menu}”.",
   "outbox.context.chip": "Context",
   "outbox.context.waitingStep": "Joins the running turn at its next step",
   "outbox.context.stored": "Stored for the next request",

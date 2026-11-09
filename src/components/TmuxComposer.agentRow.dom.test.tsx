@@ -567,6 +567,31 @@ test("phone: opening from the chip moves focus into the list, closing from its h
   }
 });
 
+test("phone: the open list's own header carries the chip's words and count, and the desktop's header stays wordless", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    mobile = true;
+    const phone = await mount({ receipts: ONE_UNCONFIRMED });
+    try {
+      const chip = phone.host.querySelector<HTMLButtonElement>("[data-receipts-chip]")!;
+      await settle(() => chip.click());
+      const header = phone.host.querySelector<HTMLElement>("[data-runtime-receipt-stack] > summary [data-receipts-header-count]")!;
+      expect(header.textContent).toBe(translate(locale, "runtime.receipt.chipUnconfirmed", { count: 1 }));
+      expect(header.closest(".sr-only, [hidden]")).toBeNull();
+    } finally {
+      flushSync(() => phone.root.unmount());
+    }
+    mobile = false;
+    const desk = await mount({ receipts: ONE_UNCONFIRMED });
+    try {
+      await settle(() => desk.host.querySelector<HTMLButtonElement>("[data-receipts-chip]")!.click());
+      expect(desk.host.querySelector("[data-receipts-header-count]")).toBeNull();
+    } finally {
+      flushSync(() => desk.root.unmount());
+    }
+  }
+});
+
 test("phone: closing the list leaves the focus alone when the operator has moved it to the field", async () => {
   mobile = true;
   const { host, root } = await mount({ receipts: ONE_UNCONFIRMED });
