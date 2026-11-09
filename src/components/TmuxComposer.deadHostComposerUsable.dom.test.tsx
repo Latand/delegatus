@@ -51,7 +51,8 @@ import {
 } from "./composerAdmissionDeadline";
 import { lookupRuntimeAdmission, type RuntimeAdmissionLookup } from "@/hooks/useRuntime";
 import { NextRequest } from "next/server";
-import { admissionInFlight, handleRuntimeAdmissionQuery } from "@/lib/runtime/http";
+import { admissionInFlight, handleRuntimeAdmissionQuery, handleRuntimeCommand } from "@/lib/runtime/http";
+import { resetIngressStopsForTests } from "@/lib/runtime/ingressStop";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
@@ -589,6 +590,99 @@ test("an unknown dead-host outcome proven NOT executed keeps every byte and send
     await act(async () => root.unmount());
   }
 });
+
+/**
+ * A REFUSAL WHOSE ANSWER WAS LOST, AND A REQUEST THAT NEVER ARRIVED.
+ *
+ * 2026-11-09: the route turned a send away, the browser never read the
+ * refusal, and the lookup under the key answered a bare `not-executed`, which a
+ * request lost on the way also answers. Both sides run the production route:
+ * the send reaches `POST /api/runtime/send` (or does not), the lookup reaches
+ * `GET`. A recorded stop is shown with its reason; its absence keeps the plain
+ * sentence. Both keep the words for Retry and send nothing by themselves.
+ */
+for (const reached of [true, false]) {
+  test(`a lost ${reached ? "refusal" : "request"} read back by lookup ${reached ? "shows the recorded refusal" : "stays a plain never-sent"} and keeps the message resendable`, async () => {
+    resetIngressStopsForTests(() => {});
+    lostResponseSend();
+    const conversationId = `conversation_lost-${reached ? "refusal" : "request"}`;
+    VIEWS[conversationId] = reclaimedView(conversationId);
+    let lookupReadable = false;
+    const lookups: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
+      if (url.startsWith("/api/runtime/send?")) {
+        lookups.push(url);
+        if (!lookupReadable) return Response.json({ outcome: "unknown" });
+        return await handleRuntimeAdmissionQuery(
+          new NextRequest(`http://127.0.0.1${url}`, { method: "GET", headers: { host: "127.0.0.1" } }),
+          {
+            enabled: () => true,
+            registry: () => ({ deliveryAdmissionForKey: () => ({ outcome: "not-executed" }) }) as unknown as AgentRegistry,
+            query: async () => { throw new Error("nothing was admitted"); },
+            sendInFlight: (conversation, key) => admissionInFlight(conversation, key),
+          },
+        ) as unknown as Response;
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as typeof fetch;
+    setTmuxComposerRuntimeDependenciesForTests({
+      useAgentCapabilities: (file) => agentCapabilitiesFromViews(
+        file, file.conversationId ? VIEWS[file.conversationId] ?? null : null, null, true),
+      refreshRuntime: async () => true,
+      sendRuntimeMessage: (async (body: Record<string, unknown>) => {
+        sentBodies.push(body);
+        if (reached) {
+          await handleRuntimeCommand(new NextRequest("http://127.0.0.1/api/runtime/send", {
+            method: "POST",
+            headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+            body: JSON.stringify({ conversationId, idempotencyKey: body.idempotencyKey, text: body.text }),
+          }), "send", {
+            enabled: () => true, structuredEnabled: () => true, client: () => null,
+            enqueue: async () => ({ ok: false, structured: true, outcome: "failed", status: 503,
+              error: "the conversation is synchronizing; try again shortly", admission: "refused" }) as never,
+          });
+        }
+        /* Whatever the route answered, the browser never read it. */
+        throw new ComposerAdmissionTimeoutError();
+      }) as never,
+      lookupRuntimeAdmission: lookupRuntimeAdmission as never,
+    });
+    const { host, root } = await renderInto(<TmuxComposer file={conversationFile(conversationId)} deadHost />);
+    try {
+      typeInto(host, "Hold the release until the check is green.");
+      const recover = await untilUnknownOutcome(host);
+      expect(sentBodies).toHaveLength(1);
+      const key = String(sentBodies[0]!.idempotencyKey);
+      await act(async () => {
+        lookupReadable = true;
+        recover.click();
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const stopped = translate("en", "composer.admissionLookupStopped", {
+        reason: translate("en", "composer.ingressStop.refused-before-reservation"),
+      });
+      const expected = reached ? stopped : translate("en", "composer.admissionLookupNotExecuted");
+      for (let attempt = 0; attempt < 300
+        && readOutbox(conversationId).find((row) => row.id === key)?.state !== "failed"; attempt += 1) {
+        await act(async () => { await new Promise((r) => setTimeout(r, 3)); });
+      }
+      const entry = readOutbox(conversationId).find((row) => row.id === key)!;
+      expect(entry.state).toBe("failed");
+      expect(entry.deliveryUncertain).toBeUndefined();
+      expect(entry.error).toBe(expected);
+      expect(entry.text).toBe("Hold the release until the check is green.");
+      expect(host.textContent).toContain(expected);
+      if (!reached) expect(host.textContent).not.toContain(stopped);
+      /* A lookup is a read: the one original attempt is still the only send. */
+      expect(lookups.length).toBeGreaterThanOrEqual(1);
+      expect(sentBodies).toHaveLength(1);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}
 
 test("a lookup that cannot answer leaves the unknown outcome unknown, and still sends nothing", async () => {
   quietWire();
