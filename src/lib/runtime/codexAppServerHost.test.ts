@@ -8192,10 +8192,15 @@ test("MCP service controls preserve denial layers and same-key effects", async (
 });
 
 
-test.each([1, 33, "pending-denial", "starts-32", "starts-33", "healthy-32", "healthy-33"] as const)("a fresh process retains MCP correlation (%s)", async scenario => {
+const mcpRestartCases = [1, 33, "pending-denial", "starts-32", "starts-33", "healthy-32", "healthy-33"] as const;
+const mcpRestartDeliveries = [
+  ...mcpRestartCases.map(scenario => ({ scenario, delivery: undefined as string | undefined, label: String(scenario) })),
+  ...["buffered", "live"].flatMap(delivery => [1, "starts-33"].map(scenario => ({ scenario, delivery, label: `${scenario}, ${delivery}` }))),
+];
+test.each(mcpRestartDeliveries)("a fresh process retains MCP correlation ($label)", async ({ scenario, delivery }) => {
   const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
   const directory = path.join(metadataState, "mcp-process-events");
-  const first = spawn(process.execPath, [fixture, "mcp-produce", directory, path.join(metadataState, "unused.jsonl"), String(scenario)],
+  const first = spawn(process.execPath, [fixture, "mcp-produce", directory, path.join(metadataState, "unused.jsonl"), String(scenario), ...(delivery ? [delivery] : [])],
     { cwd: process.cwd(), env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
   let firstOutput = "", firstErrors = "";
   first.stderr!.on("data", data => { firstErrors += String(data); });
@@ -8214,7 +8219,7 @@ test.each([1, 33, "pending-denial", "starts-32", "starts-33", "healthy-32", "hea
     else expect(ready.observation).toBeUndefined();
     first.kill("SIGKILL");
     await closed;
-    const resumed = Bun.spawn([process.execPath, fixture, "mcp-resume", directory, path.join(metadataState, "unused.jsonl"), String(scenario)],
+    const resumed = Bun.spawn([process.execPath, fixture, "mcp-resume", directory, path.join(metadataState, "unused.jsonl"), String(scenario), ...(delivery ? [delivery] : [])],
       { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
     const [output, errors, exit] = await Promise.all([new Response(resumed.stdout).text(), new Response(resumed.stderr).text(), resumed.exited]);
     expect({ exit, errors }).toMatchObject({ exit: 0 });
@@ -8222,6 +8227,15 @@ test.each([1, 33, "pending-denial", "starts-32", "starts-33", "healthy-32", "hea
       denied: scenario === "starts-32" || (typeof scenario === "string" && scenario.startsWith("healthy-")) ? [] : [{ tool: "get_task", seq: expect.any(Number) }],
       unverified: scenario === "starts-33" || scenario === 33,
     });
+    expect(JSON.parse(output).activeTurnRef).toBe("mcp-turn");
+    const events = new FileRuntimeEventStore(directory).load("callback-process-thread");
+    expect(events.filter(event => event.kind === "turn-started").map(event => event.turnId)).toEqual(["mcp-turn"]);
+    expect(events.filter(event => event.kind === "turn-ended")).toEqual([]);
+    const target = scenario.toString().startsWith("starts-") ? "fresh-recovery" : "before-restart";
+    expect(events.filter(event => event.kind === "item" && event.phase === "completed"
+      && (event.item as { id?: string }).id === target)).toMatchObject([{
+        turnId: "mcp-turn", codexItemIdentity: { threadId: "callback-process-thread", turnId: "mcp-turn" },
+      }]);
   } finally {
     if (first.exitCode === null && first.signalCode === null) first.kill("SIGKILL");
     await closed;
