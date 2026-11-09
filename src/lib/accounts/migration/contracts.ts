@@ -421,18 +421,21 @@ export interface SuccessorProviderPort {
     conversationId: ViewerConversationId;
     source: NativeGeneration;
     targetAccountId: string;
+    /** Re-read operation and source custody immediately before provider effects. */
+    assertCurrent?: () => void;
     /** Persists a provider-created artifact after its path and file identity
         are validated. The write waits for the registry lock off the loop; the
         provider awaits it where it calls it, and a refusal throws. */
     recordContinuityPath(pathname: string): void | Promise<void>;
   }): Promise<ProviderReceipt>;
-  verify(receipt: ProviderReceipt, input: { engine: MigrationEngine; targetAccountId: string; launchProfile: LaunchProfile }): Promise<void>;
+  verify(receipt: ProviderReceipt, input: { engine: MigrationEngine; targetAccountId: string; launchProfile: LaunchProfile; assertCurrent?: () => void }): Promise<void>;
   publishHost?(receipt: ProviderReceipt, input: {
     engine: MigrationEngine;
     conversationId: ViewerConversationId;
     targetAccountId: string;
     launchProfile: LaunchProfile;
     ownsOperation?: () => Promise<boolean>;
+    assertCurrent?: () => void;
   }): Promise<void>;
   cleanup?(receipt: ProviderReceipt): Promise<void>;
 }

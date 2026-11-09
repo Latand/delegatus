@@ -2,7 +2,8 @@
 
 Every project in Delegatus can designate one agent as its **orchestrator**.
 You tell it what you want shipped, in the orchestrator panel above the board;
-it opens a task for each piece of work, runs each as a pipeline, merges
+it opens a task for each piece of work, runs work that needs agents as a
+pipeline, merges
 according to the project's merge setting, and reports back. It works through
 Delegatus's own HTTP API and MCP tools, so everything it starts is a card you
 can open, read, interrupt or take over.
@@ -75,7 +76,15 @@ when you ask; I'll suggest what could come next.
 
 ## How the seat runs work
 
-Every piece of accepted work is a pipeline on its board task: the seat finds
+You can state only an outcome and know nothing of research, pipelines or
+review. For a vague ask the seat first makes a quick, bounded scope check, then
+chooses the route itself: direct work, a pipeline, or a research stage before
+building. It asks you through a decision form only about what stays materially
+ambiguous in your intent, the scope or a trade-off, and settles routine
+technical choices on its own. Its fences, worker limit and the rules on spend,
+other projects, publishing, review, merge and deploys apply on every route.
+
+Accepted work that needs agents is a pipeline on its board task: the seat finds
 or creates the task, composes the stages from the role table and calls
 `create_pipeline` with the task ids. A pipeline has up to eight stages. A
 review is a read-only reviewer stage whose fail edge leads to a fix stage that

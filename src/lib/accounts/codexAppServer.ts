@@ -35,6 +35,8 @@ export interface CodexAppServerClock {
 }
 
 export interface CodexAppServerOptions {
+  /** Local caller custody, checked after launch preparation and before spawn. */
+  assertCurrent?: () => void;
   home: string;
   /** Executable used for launch admission; tests and embedded callers can pin a private fixture. */
   launchBinary?: string;
@@ -309,6 +311,7 @@ export class CodexAppServerClient {
       : options.protocolProfile === "voice"
       ? protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "thread/start", "thread/realtime/start", "thread/realtime/appendSpeech", "thread/realtime/stop"])
       : protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "account/login/start"]);
+    options.assertCurrent?.();
     const client = new CodexAppServerClient(
       options.spawn ? options.spawn(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS)
         : spawnCodexAppServer(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS, binary),
@@ -326,6 +329,7 @@ export class CodexAppServerClient {
         capabilities,
       });
       if (!isRecord(response)) throw protocolError("initialize response must be an object");
+      options.assertCurrent?.();
       client.notify("initialized");
       return client;
     } catch (error) {
@@ -435,6 +439,8 @@ export class CodexAppServerClient {
     serviceTier?: string | null;
     approvalPolicy?: string | null;
     sandbox?: string | null;
+    /** Local authority only; never serialized into the provider request. */
+    assertCurrent?: () => void;
   } = {}): Promise<AppServerThreadRef> {
     const effectiveConfig = await this.request("config/read", {
       ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -455,12 +461,14 @@ export class CodexAppServerClient {
       config,
     };
     let response: unknown;
+    options.assertCurrent?.();
     try {
       response = await this.request("thread/resume", resumeParams);
     } catch (error) {
       /* Paginated threads refuse full-history resume (#1332); this consumer
          only reads id and path, so metadata plus live state is enough. */
       if (!(error instanceof Error && /not supported/i.test(error.message))) throw error;
+      options.assertCurrent?.();
       response = await this.request("thread/resume", { ...resumeParams, excludeTurns: true });
     }
     const thread = isRecord(response) && isRecord(response.thread) ? response.thread : response;

@@ -25,11 +25,14 @@ export function ImagePane({
   meta,
   mobile,
   onFailure,
+  contentUrl = artifactContentUrl(path),
 }: {
   path: string;
   meta: ArtifactMeta;
   mobile: boolean;
   onFailure: (failure: ArtifactFailure) => void;
+  /** Where the bytes come from; a local link reads `/api/artifact`. */
+  contentUrl?: string;
 }) {
   const { t } = useLocale();
   const [src, setSrc] = useState<string | null>(null);
@@ -51,7 +54,7 @@ export function ImagePane({
   useEffect(() => {
     const controller = new AbortController();
     let url: string | null = null;
-    void fetch(artifactContentUrl(path), {
+    void fetch(contentUrl, {
       signal: controller.signal,
       headers: { "if-match": meta.etag },
     })
@@ -72,7 +75,7 @@ export function ImagePane({
       controller.abort();
       if (url) URL.revokeObjectURL(url);
     };
-  }, [path, meta.etag, onFailure]);
+  }, [contentUrl, meta.etag, onFailure]);
 
   /* Same touch-target contract as the host header: 44 px controls on mobile. */
   const control = mobile ? "h-11 w-11" : "h-7 w-7";
