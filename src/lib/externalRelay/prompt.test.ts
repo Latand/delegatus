@@ -36,25 +36,25 @@ test("structured owner prompt builders fit escaped history while preserving the 
   for (const prompt of prompts) {
     expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
     const messages = section(prompt, "conversation") as typeof request.input.conversation;
-    expect(messages.find(message => message.id === current.id)).toEqual(current);
+    expect(messages.find(message => message.id === current.id)).toEqual({ ...current, text: undefined, text_reference: "owner_request.text" });
     expect(messages.find(message => message.id === parent.id)).toEqual(parent);
     expect(messages.length).toBeLessThan(request.input.conversation.length);
   }
   const initial = ownerRunPrompt(request, owner, 1);
-  const quoted = section(initial, "owner_reply_context") as { text: string };
-  expect(Buffer.byteLength(quoted.text)).toBeLessThanOrEqual(4096);
+  expect(section(initial, "owner_reply_context")).toEqual({ message_id: parent.id, reply_to: parent.reply_to, earlier_request: null });
+  expect(initial.match(/https:\/\/example\.test\/report/g)).toHaveLength(1);
   const sent = section(initial, "conversation") as typeof request.input.conversation;
   const cursor = ownerInitialCursor(request, owner, 1);
   const originals = new Map(request.input.conversation.map(message => [message.id, message]));
   const complete = sent.filter(message => message.text === originals.get(message.id)?.text);
   expect(cursor.seen).toEqual([...new Set([...complete.map(message => message.id), current.id])]);
-  const clipped = sent.find(message => message.text !== originals.get(message.id)?.text)!;
-  expect(clipped).toBeDefined();
-  expect(cursor.seen).not.toContain(clipped.id);
-  const next = { ...current, id: "reply-to-clipped", reply_to: clipped.id };
-  const followup = { ...request, input: { ...request.input, respond_to: next.id, conversation: [originals.get(clipped.id)!, next] } };
+  const omitted = request.input.conversation.find(message => !sent.some(row => row.id === message.id))!;
+  expect(omitted).toBeDefined();
+  expect(cursor.seen).not.toContain(omitted.id);
+  const next = { ...current, id: "reply-to-omitted", reply_to: omitted.id };
+  const followup = { ...request, input: { ...request.input, respond_to: next.id, conversation: [omitted, next] } };
   const continued = ownerContinuationPrompt(followup, { ...owner, messageId: next.id }, 1, { seen: cursor.seen, staticDigest: cursor.digest }).prompt;
-  expect((section(continued, "conversation") as typeof sent).find(message => message.id === clipped.id)).toEqual(originals.get(clipped.id));
+  expect((section(continued, "conversation") as typeof sent).find(message => message.id === omitted.id)).toEqual(omitted);
   expect(JSON.stringify(request)).toBe(original);
 });
 
@@ -64,13 +64,13 @@ test("owner continuation budgets inbound context with optional memory and advanc
   request.input.short_term_memory = "optional memory ".repeat(2200);
   const inboundContext = "[Inbound document context]\n" + "document text ".repeat(60);
   const owner = { messageId: current.id, text: current.text, requestText: null };
-  const turn = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null }, inboundContext);
+  const turn = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null }, { mandatory: inboundContext });
 
   expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
   expect(turn.prompt).toContain(inboundContext);
   expect(turn.prompt).not.toContain("optional memory");
   const retained = section(turn.prompt, "conversation") as typeof request.input.conversation;
-  expect(retained.find(message => message.id === current.id)).toEqual(current);
+  expect(retained.find(message => message.id === current.id)).toEqual({ ...current, text: undefined, text_reference: "owner_request.text" });
   expect(retained.find(message => message.id === parent.id)).toEqual(parent);
   expect(turn.seen).toContain(current.id);
   expect(turn.seen).toContain(parent.id);
@@ -101,12 +101,12 @@ test("known agent answers stay in the resumed conversation while only the new ow
   const record = { seen: cursor.seen, staticDigest: cursor.digest, anchors: [root.id, parent.id], conversationId: "conversation_current",
     answerWitness: { conversationId: "conversation_current", inReplyTo: root.id, textSha256: createHash("sha256").update(parent.text).digest("hex") } };
   const turn = ownerContinuationPrompt(followup, instruction, 1, record);
-  expect(section(turn.prompt, "conversation")).toEqual([next]);
+  expect(section(turn.prompt, "conversation")).toEqual([{ ...next, text: undefined, text_reference: "owner_request.text" }]);
   expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
   expect(turn.seen).toContain(parent.id);
   expect(turn.seen).toContain(next.id);
   const replaced = ownerContinuationPrompt(followup, instruction, 1, { ...record, conversationId: "conversation_replaced" });
-  expect(section(replaced.prompt, "conversation")).toEqual([parent, next]);
+  expect(section(replaced.prompt, "conversation")).toEqual([parent, { ...next, text: undefined, text_reference: "owner_request.text" }]);
   const edited = { ...followup, input: { ...followup.input, conversation: [root, { ...parent, text: parent.text + " Changed." }, next] } };
   expect((section(ownerContinuationPrompt(edited, instruction, 1, record).prompt, "conversation") as typeof request.input.conversation)[0]!.text)
     .toBe(parent.text + " Changed.");
@@ -288,6 +288,32 @@ test("owner initial cursor records the exact conversation sent with the first pr
   const cursor = ownerInitialCursor(request, owner, 1);
   expect(cursor.seen).toEqual([...new Set([...request.input.conversation.map(message => message.id), owner.messageId])]);
   expect(cursor.digest).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test("local recovery retains the full explicit chain once and every reply reference resolves", async () => {
+  const { prepareOwnerPrompt, ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const row = request.input.conversation[0]!;
+  const earlier = { ...row, id: "earlier", text: "Original requested fact: amber.", reply_to: null };
+  const parent = { ...row, id: "parent", text: "Confirmed full quoted message.", reply_to: earlier.id };
+  const current = { ...row, id: "current", text: "Continue that request", reply_to: parent.id };
+  request.input.respond_to = current.id;
+  request.input.conversation = [{ ...parent, text: "Service excerpt" }, current];
+  request.input.short_term_memory = "я".repeat(15000);
+  request.input.request_text = "";
+  const owner = { messageId: current.id, text: current.text, requestText: "", localContext: {
+    resolution: "explicit_parent" as const, questionIds: [parent.id], origins: { parent: "agent" as const },
+    conversation: [earlier, parent, current],
+  } };
+  for (const turn of [prepareOwnerPrompt(request, owner, 1),
+    ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null })]) {
+    expect(turn.prompt.match(/Confirmed full quoted message\./g)).toHaveLength(1);
+    expect(turn.prompt.match(/Original requested fact: amber\./g)).toHaveLength(1);
+    expect(turn.prompt).not.toContain("Service excerpt");
+    expect(turn.seen).toEqual(expect.arrayContaining([earlier.id, parent.id, current.id]));
+    expect(section(turn.prompt, "owner_request")).toEqual({ message_id: current.id, text: current.text, request_text: "" });
+    expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+  }
 });
 
 

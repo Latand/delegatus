@@ -20,7 +20,7 @@ import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, ownerAnswer, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, prepareOwnerPrompt, ownerAnswer, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
 import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
@@ -55,7 +55,7 @@ import {
   type ExternalRelayProgress,
 } from "./protocol";
 import { callableTools, RELAY_TOOL_ROUNDS, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
-import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
+import { json, answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { createRelaySteps } from "./progressSteps";
 import { readRelayStepObservation } from "./stepObservation";
@@ -895,14 +895,18 @@ export async function runClaimedRequest(
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         const ownerTarget = target;
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
-        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, inbound?.prompt) : conversationTurnPrompt(request, conversation, frame);
-        const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
-        const inboundAlreadyComposed = !!(conversation && owner && rounds === 1 && inbound?.prompt && (conversation.conversationId || usingCloud));
+        const ownerAdditions = { mandatory: [inbound?.prompt,
+          ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
+        ].filter(Boolean).join("\n") };
+        // Prepare only the mode that will be sent. Cloud has no native cursor.
+        let preparedOwner = owner && !prototype ? (conversation?.conversationId && !usingCloud
+          ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, ownerAdditions)
+          : prepareOwnerPrompt(request, owner, ownerTarget.hardCapMinutes, ownerAdditions)) : null;
+        if (conversation && rounds === 1) turn = preparedOwner ?? conversationTurnPrompt(request, conversation, frame);
+        const persistentPrompt = preparedOwner?.prompt ?? (conversation ? rounds === 1 ? turn!.prompt
+          : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt);
         if (conversation) {
-          const measuredPrompt = owner
-            ? (conversation.conversationId || usingCloud ? turn!.prompt : ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes, inbound?.prompt))
-            : persistentPrompt;
-          const promptBytes = Buffer.byteLength(measuredPrompt);
+          const promptBytes = Buffer.byteLength(persistentPrompt);
           chain = rounds === 1 ? { continued: owner ? !!conversation.conversationId : !!conversation.sessionId, promptBytes }
             : { continued: chain!.continued, promptBytes: chain!.promptBytes + promptBytes };
         }
@@ -910,7 +914,7 @@ export async function runClaimedRequest(
           await releaseConversationAsync(conversation.id, { state: "running", runningRequestId: requestId,
             pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, ownerRelayStoreDeadline(), requestId);
         }
-        const agentPrompt = (conversation ? persistentPrompt : roundPrompt) + (inbound?.prompt && !inboundAlreadyComposed ? "\n" + inbound.prompt : "");
+        const agentPrompt = persistentPrompt + (!owner && inbound?.prompt ? "\n" + inbound.prompt : "");
         const roundDirectory = loop ? path.join(runDir, `round-${rounds}`) : runDir;
         let inputFile: string | undefined;
         if (!owner && target.engine === "claude" && inbound?.files.length) {
@@ -926,61 +930,73 @@ export async function runClaimedRequest(
             : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
               : offersHandoff(request) ? handoffAnswerSchema : answerSchema, caps!);
         const localEngine = target.engine, localModel = target.model, localRunDir = runDir;
-        const localRun = () => prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
-          if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked");
-        }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
-          ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
-          authorize: () => { if (cloud && Date.now() >= executionDeadline || leaseUnavailable && !ownerExecution || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked or execution deadline expired"); },
-          credentials: ownerCredentials,
-          onDiagnostic: recordDiagnostic,
-          rawDeadlineAt: rawRequest.deadline_at,
-          inboundContext: inboundAlreadyComposed ? undefined : inbound?.prompt,
-          request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
-          hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
-          onConversation: async (conversationId, initialPrompt) => {
-            localOwnerConversationId = conversationId;
-            await changeRunAsync(requestId, current => ({ ...current, conversationId }), ownerRelayStoreDeadline());
-            if (conversation) {
-              conversation.conversationId = conversationId;
-              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, ownerTarget.hardCapMinutes, inbound?.prompt) : null;
-              if (cursor) turn = { prompt: "", ...cursor };
-              const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
-                ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
-              await releaseConversationAsync(conversation.id, patch, ownerRelayStoreDeadline(), requestId);
-              if (cursor) Object.assign(conversation, patch);
-            }
-            ownerTools?.bindConversation(conversationId);
-            recorder?.bindConversation(conversationId);
-          },
-          ...(steps ? { onProgress: steps.observe } : {}),
-        }) : runEphemeralAgent({
-          ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (localEngine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd!, codexHome: conversationCodexHome(conversation) } } : {}),
-          key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
-          engine: localEngine,
-          model: localModel,
-          effort: target.effort,
-          account: selectedAccount(),
-          ["prompt"]: agentPrompt,
-          ...(inputFile ? { inputFile } : {}),
-          ...(inbound?.files.length ? { inputImages: inbound.files.filter(file => isInboundImage(file.mime_type)).map(file => file.path) } : {}),
-          schema,
-          runDir: loop ? path.join(localRunDir, `round-${rounds}`) : localRunDir,
-          hardCapMs: target.hardCapMinutes * 60_000,
-          webSearch: profile.webSearch,
-          ...(caps?.generate ? { imageGeneration: { readableRoot: conversation?.cwd ?? path.join(loop ? path.join(localRunDir, `round-${rounds}`) : localRunDir, "cwd"), ...(inbound?.files.length ? { readableMediaRoot: path.dirname(inbound.files[0]!.path) } : {}) } } : {}),
-          runtime,
-          onEvent: (event) => {
-            if (steps) return;
-            const progress = progressForEvent(event);
-            if (progress && request.answer.progress === "notes") {
-              newestProgress = progress;
-              noteRelayProgress(relay.id, target.id, progress);
-              transport?.progress(progress);
-            }
-          },
-        });
+        const localRun = () => {
+          // A confirmed Cloud refusal may fall back to a native conversation;
+          // recompute from unchanged inputs for that actual delivery mode.
+          if (owner && cloudFailed) {
+            const fallbackAdditions = { mandatory: [inbound?.prompt,
+              rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : ""].filter(Boolean).join("\n") };
+            preparedOwner = conversation?.conversationId
+              ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, fallbackAdditions)
+              : prepareOwnerPrompt(request, owner, ownerTarget.hardCapMinutes, fallbackAdditions);
+            turn = preparedOwner;
+          }
+          return prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
+            if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked");
+          }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
+            ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: preparedOwner!.prompt } } : {}),
+            authorize: () => { if (cloud && Date.now() >= executionDeadline || leaseUnavailable && !ownerExecution || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked or execution deadline expired"); },
+            credentials: ownerCredentials,
+            onDiagnostic: recordDiagnostic,
+            rawDeadlineAt: rawRequest.deadline_at,
+            preparedPrompt: preparedOwner!,
+            request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
+            hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
+            onConversation: async (conversationId, initialPrompt) => {
+              localOwnerConversationId = conversationId;
+              await changeRunAsync(requestId, current => ({ ...current, conversationId }), ownerRelayStoreDeadline());
+              if (conversation) {
+                conversation.conversationId = conversationId;
+                const cursor = initialPrompt ? preparedOwner : null;
+                if (cursor) turn = cursor;
+                const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
+                  ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
+                await releaseConversationAsync(conversation.id, patch, ownerRelayStoreDeadline(), requestId);
+                if (cursor) Object.assign(conversation, patch);
+              }
+              ownerTools?.bindConversation(conversationId);
+              recorder?.bindConversation(conversationId);
+            },
+            ...(steps ? { onProgress: steps.observe } : {}),
+          }) : runEphemeralAgent({
+            ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (localEngine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd!, codexHome: conversationCodexHome(conversation) } } : {}),
+            key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
+            engine: localEngine,
+            model: localModel,
+            effort: target.effort,
+            account: selectedAccount(),
+            ["prompt"]: agentPrompt,
+            ...(inputFile ? { inputFile } : {}),
+            ...(inbound?.files.length ? { inputImages: inbound.files.filter(file => isInboundImage(file.mime_type)).map(file => file.path) } : {}),
+            schema,
+            runDir: loop ? path.join(localRunDir, `round-${rounds}`) : localRunDir,
+            hardCapMs: target.hardCapMinutes * 60_000,
+            webSearch: profile.webSearch,
+            ...(caps?.generate ? { imageGeneration: { readableRoot: conversation?.cwd ?? path.join(loop ? path.join(localRunDir, `round-${rounds}`) : localRunDir, "cwd"), ...(inbound?.files.length ? { readableMediaRoot: path.dirname(inbound.files[0]!.path) } : {}) } } : {}),
+            runtime,
+            onEvent: (event) => {
+              if (steps) return;
+              const progress = progressForEvent(event);
+              if (progress && request.answer.progress === "notes") {
+                newestProgress = progress;
+                noteRelayProgress(relay.id, target.id, progress);
+                transport?.progress(progress);
+              }
+            },
+          });
+        };
         const pendingRun = usingCloud && !cloudFailed && !prototype ? runCloudRelay({
-          ["prompt"]: owner ? ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes, agentPrompt) : agentPrompt,
+          ["prompt"]: agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
           transport: async input => {
