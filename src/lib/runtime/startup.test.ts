@@ -1089,15 +1089,16 @@ for (const scope of ["unrelated", "target", "uninitialized"] as const) test(`rec
     checkpoint: { lastEventKind: "tool-call", lastEventAt: null }, seat: null,
   }).obligation;
   if (scope !== "uninitialized") await initializeRecipientInterruptionIndex(cutDirectory);
-  const read = fs.readFileSync;
   let cutReads = 0;
-  const reader = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
-    if (String(file) === path.join(cutDirectory, `${cut.id}.json`)) {
+  const read = pipelineState.SqliteStateCollection.prototype.interruptionRecipients;
+  const reader = spyOn(pipelineState.SqliteStateCollection.prototype, "interruptionRecipients").mockImplementation(function (this: pipelineState.SqliteStateCollection<unknown>, ids, limit) {
+    const records = read.call(this, ids, limit);
+    if (records.some(record => (record as { id: string }).id === cut.id)) {
       cutReads++;
       throw Object.assign(new Error("fixture cut is unreadable"), { code: "EACCES" });
     }
-    return Reflect.apply(read, fs, [file, ...args]);
-  }) as typeof read);
+    return records;
+  });
   const bulk = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(async () => {
     throw new Error("recipient attempted a global census");
   });
@@ -1208,7 +1209,7 @@ function recipientDispatchPipeline(conversationId?: `conversation_${string}`) {
   return pipeline;
 }
 
-for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline", "index", "cut", "cut-index"] as const) test(`recipient preparation refuses a changed ${field} after its awaited evidence read`, async () => {
+for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline", "index", "cut", "cut-index", "cut-source"] as const) test(`recipient preparation refuses a changed ${field} after its awaited evidence read`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(),"recipient-authority-"));
   const oldState = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR=directory;
   savePipelines([]);
@@ -1225,7 +1226,13 @@ for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline
       changed=true;
       queueMicrotask(() => {
         if (field === "seat") seats=[];
-        else if (field === "cut-index") fs.rmSync(path.join(`${interruptionObligationDirectory(registry.filename)}.account-guard-pending`, "recipient-ready"));
+        else if (field === "cut-index") {
+          const db = new Database(path.join(directory, "state.sqlite"));
+          try { db.exec("DROP INDEX state_rows_interruption_recipient_v2"); } finally { db.close(); }
+        } else if (field === "cut-source") {
+          const source = interruptionObligationDirectory(registry.filename);
+          fs.writeFileSync(source, JSON.stringify({ ...JSON.parse(fs.readFileSync(source, "utf8")), epoch: "replacement-source" }));
+        }
         else if (field === "cut") interruptionObligationStore(interruptionObligationDirectory(registry.filename)).record({
           conversationId: conversation.id, engine: "codex", hostKey: `codex:${sessionId}`, path: artifactPath,
           owner: null, claimEpoch: original.claimEpoch, turnRef: "replacement-turn", boundary: "replacement-cut", reason: "viewer-release",
@@ -1249,7 +1256,7 @@ for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline
   });
   try {
     await expect(prepareStructuredStartupRecipient(registry,conversation.id,{orchestratorSeats:() => seats}))
-      .rejects.toThrow(field === "cut-index" ? "recipient interruption evidence" : field === "cut" ? "recipient interruption authority changed" : "recipient startup authority changed");
+      .rejects.toThrow(field === "cut-index" ? "recipient interruption evidence" : field === "cut" || field === "cut-source" ? "recipient interruption authority changed" : "recipient startup authority changed");
     expect(changed).toBe(true);
     if (field === "owner") expect(registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!.claimOwner).toBe("replacement-writer");
     if (field === "epoch") expect(registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!.claimEpoch).toBe(original.claimEpoch+1);

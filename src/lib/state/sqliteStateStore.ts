@@ -402,7 +402,42 @@ const PIPELINE_INTEGRATION_FORMAT = `collection IN ('pipelines','pipelines_archi
     OR json_type(value_json, '$.adoptedCreationRequests') IS NOT NULL
   ELSE 0 END`;
 
+/** Invalid cut payloads occupy the NULL bucket, so a keyed absence lookup
+ * also has a bounded proof that no uninterpretable source can name its target.
+ * SQLite maintains this expression from the canonical row on every write. */
+const interruptionRecipientExpression = `CASE WHEN json_valid(value_json) THEN CASE WHEN
+  json_extract(value_json,'$.version')=1 AND json_extract(value_json,'$.id')=row_key
+  AND row_key GLOB 'interruption-continuation-*'
+  AND json_type(value_json,'$.conversationId')='text'
+  AND json_extract(value_json,'$.engine') IN ('codex','claude')
+  AND json_extract(value_json,'$.reason') IN ('viewer-release','viewer-restart','account-guard')
+  AND json_extract(value_json,'$.state') IN ('owed','submitted','delivered','discharged','failed')
+  AND json_type(value_json,'$.hostKey')='text' AND json_type(value_json,'$.path')='text'
+  AND json_type(value_json,'$.recordedAt')='text' AND json_type(value_json,'$.boundary')='text'
+  AND (json_type(value_json,'$.claimEpoch')='null' OR
+    (json_type(value_json,'$.claimEpoch')='integer' AND json_extract(value_json,'$.claimEpoch') BETWEEN 0 AND 9007199254740991))
+  AND json_type(value_json,'$.turnRef') IN ('null','text')
+  AND (json_type(value_json,'$.owner')='null' OR (json_type(value_json,'$.owner')='object'
+    AND json_type(value_json,'$.owner.pid')='integer' AND json_extract(value_json,'$.owner.pid') BETWEEN 1 AND 9007199254740991
+    AND json_type(value_json,'$.owner.startIdentity') IN ('null','text')))
+  AND json_type(value_json,'$.checkpoint')='object'
+  AND (json_type(value_json,'$.checkpoint.lastEventAt')='null' OR
+    (json_type(value_json,'$.checkpoint.lastEventAt') IN ('integer','real')
+      AND json_extract(value_json,'$.checkpoint.lastEventAt') BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308))
+  AND json_type(value_json,'$.checkpoint.lastEventKind') IN ('null','text')
+  AND (json_type(value_json,'$.seat')='null' OR (json_type(value_json,'$.seat')='object'
+    AND json_type(value_json,'$.seat.project')='text' AND json_type(value_json,'$.seat.seatEpoch')='integer'
+    AND json_extract(value_json,'$.seat.seatEpoch') BETWEEN -9007199254740991 AND 9007199254740991))
+  AND json_type(value_json,'$.operationId') IN ('null','text')
+  AND json_type(value_json,'$.attempts')='integer' AND json_extract(value_json,'$.attempts') BETWEEN 0 AND 9007199254740991
+  AND json_type(value_json,'$.resolvedAt') IN ('null','text') AND json_type(value_json,'$.resolution') IN ('null','text')
+  THEN json_extract(value_json,'$.conversationId') END END`;
+const interruptionRecipientIndex = `CREATE INDEX IF NOT EXISTS state_rows_interruption_recipient_v2
+  ON state_rows(collection, ${interruptionRecipientExpression}, row_key)
+  WHERE collection GLOB 'interruption_obligations:*'`;
+
 const stateSchema = [
+  // The source and its recipient index share the same SQLite transaction.
   `CREATE TABLE IF NOT EXISTS state_collections (
     collection TEXT PRIMARY KEY,
     schema_version INTEGER NOT NULL,
@@ -500,6 +535,7 @@ const stateSchema = [
   `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_delete AFTER DELETE ON state_rows
     WHEN OLD.collection IN ('pipelines', 'pipelines_archive')
     BEGIN DELETE FROM pipeline_request_receipts WHERE collection = OLD.collection AND row_key = OLD.row_key; END`,
+  interruptionRecipientIndex,
   `CREATE INDEX IF NOT EXISTS state_rows_collection_order
     ON state_rows(collection, row_order)`,
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
@@ -2159,6 +2195,45 @@ export class SqliteStateCollection<T> {
       const decoded = this.decodeRow(row.value_json);
       return { key: row.row_key, value: decoded === null ? null : this.options.clone(decoded) };
     });
+  }
+
+  /** A complete bounded cut view, including records with no immediate work.
+   * No payload outside the selected recipients (or the one invalidity witness)
+   * is decoded. A replaced/missing index cannot certify absence. */
+  interruptionRecipients(recipients: readonly string[], limit: number): T[] {
+    if (!this.options.collection.startsWith("interruption_obligations:")
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new Error("invalid interruption recipient lookup");
+    const context = this.refreshReadCache();
+    this.readDb.exec("BEGIN");
+    try {
+      const index = this.readDb.query<{ sql: string }, []>(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='state_rows_interruption_recipient_v2'").get();
+      if (index?.sql !== interruptionRecipientIndex.replace("IF NOT EXISTS ", "")
+        || this.collectionMeta()?.schema_version !== this.options.schemaVersion
+        || this.readDb.query<{ migration_id: string }, [string]>("SELECT migration_id FROM state_collections WHERE collection=?")
+          .get(this.options.collection)?.migration_id !== "interruption-source-v2") throw new Error("interruption source index is incomplete or incompatible");
+      const invalid = this.readDb.query(`SELECT row_key FROM state_rows INDEXED BY state_rows_interruption_recipient_v2
+        WHERE collection=? AND collection GLOB 'interruption_obligations:*'
+          AND ${interruptionRecipientExpression} IS NULL LIMIT 1`).get(this.options.collection);
+      if (invalid) throw new Error("interruption source contains unknown authority");
+      const records: T[] = [];
+      for (const recipient of new Set(recipients)) {
+        const rows = this.readDb.query<{ value_json: string }, [string, string, number]>(`
+          SELECT value_json FROM state_rows INDEXED BY state_rows_interruption_recipient_v2
+          WHERE collection=? AND collection GLOB 'interruption_obligations:*'
+            AND ${interruptionRecipientExpression}=? ORDER BY row_key LIMIT ?
+        `).all(this.options.collection, recipient, limit + 1 - records.length);
+        if (rows.length + records.length > limit) throw new Error("interruption recipient evidence exceeds its bound");
+        for (const row of rows) {
+          const record = this.decodeRow(row.value_json);
+          if (!record) throw new Error("invalid interruption source record");
+          records.push(this.options.clone(record));
+        }
+      }
+      this.assertReadContext(context);
+      this.readDb.exec("COMMIT");
+      return records;
+    } catch (error) { rollbackQuietly(this.readDb); throw error; }
   }
 
   /** Indexed recipient lookup for the bounded send-failure alarm reader. */

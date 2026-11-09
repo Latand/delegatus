@@ -4,6 +4,7 @@ import contextlib
 import pathlib
 import json
 import shutil
+import sqlite3
 import os
 import sys
 import subprocess
@@ -385,6 +386,83 @@ class InterruptedConversations(unittest.TestCase):
 
     def write(self, record):
         deploy.write_json(self.directory / (record["id"] + ".json"), record)
+
+    def seal_source(self, records):
+        database = self.state / "state.sqlite"
+        collection = "interruption_obligations:interruption-obligations"
+        with sqlite3.connect(database) as db:
+            db.executescript("CREATE TABLE state_collections(collection TEXT PRIMARY KEY,schema_version INTEGER,migration_id TEXT);"
+                             "CREATE TABLE state_rows(collection TEXT,row_key TEXT,value_json TEXT,row_order INTEGER);")
+            db.execute("INSERT INTO state_collections VALUES (?,2,'interruption-source-v2')", (collection,))
+            for order, record in enumerate(records):
+                db.execute("INSERT INTO state_rows VALUES (?,?,?,?)", (collection, record["id"], json.dumps(record), order))
+        self.directory.rename(self.state / "retained-source")
+        status = database.stat()
+        deploy.write_json(self.directory, {"format": "interruption-sqlite-v2", "epoch": "fixture-source", "collection": collection,
+                                          "databaseIdentity": str(status.st_dev) + ":" + str(status.st_ino)})
+        return database, collection
+
+    def test_reads_sealed_source_and_pending_cuts_without_repair_or_legacy_files(self):
+        canonical = obligation("canonical", "conversation_canonical", "2026-10-06T14:26:00Z")
+        self.seal_source([canonical])
+        pending = self.state / "interruption-obligations.pending.jsonl"
+        pending.write_text(json.dumps(obligation("pending", "conversation_pending", "2026-10-06T14:26:01Z")) + "\n")
+        before = {file.name: file.read_bytes() for file in self.state.iterdir() if file.is_file()}
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15Z")
+        self.assertEqual(unreadable, [])
+        self.assertEqual([row["conversationId"] for row in listed], ["conversation_canonical", "conversation_pending"])
+        self.assertEqual({file.name: file.read_bytes() for file in self.state.iterdir() if file.is_file()}, before)
+
+    def test_unrelated_database_writes_do_not_keep_the_cut_inventory_moving(self):
+        canonical = obligation("canonical", "conversation_canonical", "2026-10-06T14:26:00Z")
+        database, _collection = self.seal_source([canonical])
+        read = deploy.read_obligations
+        writes = []
+
+        def read_then_write(*args):
+            result = read(*args)
+            with sqlite3.connect(database) as db:
+                db.execute("INSERT INTO state_rows VALUES ('unrelated',?,?,?)", ("other", "{}", len(writes)))
+            writes.append(True)
+            return result
+
+        with patch.object(deploy, "read_obligations", side_effect=read_then_write):
+            listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15Z")
+        self.assertEqual(unreadable, [])
+        self.assertEqual([row["conversationId"] for row in listed], ["conversation_canonical"])
+        self.assertEqual(len(writes), 1)
+
+    def test_sealed_inventory_refuses_missing_replaced_or_incompatible_authority(self):
+        for flaw in ("collection", "schema", "identity", "payload"):
+            with self.subTest(flaw=flaw), tempfile.TemporaryDirectory(prefix="delegatus-cut-source-") as root:
+                original = self.state, self.directory
+                self.state = pathlib.Path(root)
+                self.directory = self.state / "interruption-obligations"
+                self.directory.mkdir()
+                try:
+                    database, collection = self.seal_source([obligation("cut", "conversation_cut", "2026-10-06T14:26:00Z")])
+                    with sqlite3.connect(database) as db:
+                        if flaw == "collection":
+                            db.execute("DELETE FROM state_collections")
+                        elif flaw == "schema":
+                            db.execute("UPDATE state_collections SET schema_version=99")
+                        elif flaw == "payload":
+                            db.execute("UPDATE state_rows SET value_json='{' WHERE collection=?", (collection,))
+                    if flaw == "identity":
+                        marker = json.loads(self.directory.read_text())
+                        marker["databaseIdentity"] = "replacement"
+                        deploy.write_json(self.directory, marker)
+                    listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15Z")
+                    self.assertEqual(listed, [])
+                    self.assertTrue(unreadable)
+                finally:
+                    self.state, self.directory = original
+
+    def test_cutover_intent_with_no_marker_keeps_inventory_unknown(self):
+        deploy.write_json(self.state / "interruption-obligations.source.json", {"format": "interruption-sqlite-v2"})
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15Z")
+        self.assertEqual(listed, [])
+        self.assertEqual(unreadable, ["interruption-obligations:incomplete"])
 
     def test_lists_cuts_recorded_since_the_switch_with_their_stage(self):
         self.write(obligation("old", "conversation_before", "2026-10-06T14:00:00.000Z"))
