@@ -139,12 +139,13 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
   }, 40_000);
 }
 
-test.skipIf(process.platform !== "linux").each(["delayedexit", "delayedcontrol", "shortlive", "unlinked"])(
-  "startup drain retains its bounded diagnostic across %s", async mode => {
+for (const mode of ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler"]) {
+  for (const wc of ["gnu", "bsd"]) test.skipIf(process.platform !== "linux")(
+    `startup drain retains its bounded diagnostic across ${mode}/${wc} wc semantics`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-drain-"));
     try {
       const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
-        env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off" }, stdout: "pipe", stderr: "pipe",
+        env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", STDERR_WC_SEMANTICS: wc }, stdout: "pipe", stderr: "pipe",
       });
       const output = new Response(child.stdout).text();
       const errors = new Response(child.stderr).text();
@@ -158,7 +159,7 @@ test.skipIf(process.platform !== "linux").each(["delayedexit", "delayedcontrol",
         expect(result.orphanReceipts).toBe(0);
         expect(result.collection.children).toHaveLength(2);
         expect(result.collection.childrenDead).toBeTrue();
-        if (mode === "delayedexit" || mode === "unlinked") {
+        if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler") {
           expect(result.collection.nativeCompleted).toBeTrue();
           expect(result.collection.waiterLive).toBeTrue();
           expect(result.collection.initialSize).toBe(34);
@@ -178,14 +179,19 @@ test.skipIf(process.platform !== "linux").each(["delayedexit", "delayedcontrol",
           for (const write of result.collection.writes) expect(write.written).toBe(write.requested);
           expect(result.collection.writes.at(-1).written).toBe(20001);
         }
+        if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler") {
+          expect(fs.existsSync(path.join(root, "wc-stream"))).toBeTrue();
+          if (wc === "bsd") expect(fs.existsSync(path.join(root, "wc-regular"))).toBeFalse();
+        }
       } finally {
         clearTimeout(timer);
         if (child.exitCode === null) child.kill("SIGKILL");
         await child.exited;
       }
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
-  }, 40_000,
-);
+    }, 40_000,
+  );
+}
 
 // Every reviewed pin exposes the native private socket transport.
 test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.164.0", "codex-cli 0.165.0", "codex-cli 0.166.0", "codex-cli 0.167.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {

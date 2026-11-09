@@ -9,7 +9,7 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import type { AgentMemoryPlan } from "./agentMemory";
 
 const [root, mode] = process.argv.slice(2);
-const delayed = mode === "delayedexit" || mode === "delayedcontrol" || mode === "shortlive" || mode === "unlinked";
+const delayed = ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler"].includes(mode!);
 const owned: Array<{ identity: ReturnType<typeof captureProcessIdentity>; closed: Promise<void> }> = [];
 let nativeCompleted = false;
 let waiterLive = false;
@@ -20,7 +20,14 @@ if (delayed) {
   const spawn = childProcess.spawn;
   const waitOwner = await import("./nativeWaitOwner");
   mock.module("./nativeWaitOwner", () => ({ ...waitOwner,
-    nativeWaitOwnerSource: waitOwner.nativeWaitOwnerSource.replace("process.exitCode =", "setTimeout(() => {}, 400); process.exitCode ="),
+  nativeWaitOwnerSource: waitOwner.nativeWaitOwnerSource.replace("process.exitCode = code ??", `
+    fs.writeFileSync(path.join(directory, "waiter-live"), "ready");
+    const barrierDeadline = Date.now() + 3000;
+    while (!fs.existsSync(path.join(process.env.DRAIN_ROOT, "release-waiter"))) {
+      if (Date.now() > barrierDeadline) throw new Error("waiter barrier deadline exceeded");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+    process.exitCode = code ??`),
   }));
   mock.module("node:child_process", () => ({ ...childProcess, spawn: (...args: Parameters<typeof spawn>) => {
     const child = spawn(...args);
@@ -29,8 +36,10 @@ if (delayed) {
   } }));
   const bin = path.join(root!, "drain-bin"); fs.mkdirSync(bin, { recursive: true });
   const dd = Bun.which("dd")!;
-  // The first short FIFO read is visible before the bulk write. Hold only the
-  // next read; both schedules keep the production diagnostic deadlines.
+  const cat = Bun.which("cat")!;
+  const wc = Bun.which("wc")!;
+  // Acknowledged barriers hold the drain after its first short read. The test
+  // observes durable native exit and sink state before releasing either owner.
   fs.writeFileSync(path.join(bin, "dd"), `#!/bin/sh
 if [ ! -e "$DRAIN_ROOT/first" ]; then
   "${dd}" "$@"
@@ -38,12 +47,30 @@ if [ ! -e "$DRAIN_ROOT/first" ]; then
 else
   if [ ! -e "$DRAIN_ROOT/delayed" ]; then
     touch "$DRAIN_ROOT/delayed"
-    sleep 0.2
+    until [ -e "$DRAIN_ROOT/release-drain" ]; do sleep 0.005; done
   fi
   exec "${dd}" "$@"
 fi
 `, { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, "cat"), `#!/bin/sh
+touch "$DRAIN_ROOT/drain-tail"
+touch "$DRAIN_ROOT/release-waiter"
+exec "${cat}" "$@"
+`, { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, "wc"), `#!/bin/sh
+if [ "$STDERR_WC_SEMANTICS" = "bsd" ] && [ -f /proc/self/fd/0 ]; then
+  touch "$DRAIN_ROOT/wc-regular"
+  /usr/bin/stat -c %s /proc/self/fd/0
+else
+  [ -p /proc/self/fd/0 ] && touch "$DRAIN_ROOT/wc-stream"
+  exec "${wc}" "$@"
+fi
+`, { mode: 0o700 });
   process.env.DRAIN_ROOT = root;
+  if (mode === "shortlive") {
+    fs.writeFileSync(path.join(root, "release-drain"), "ready");
+    fs.writeFileSync(path.join(root, "release-waiter"), "ready");
+  }
   process.env.PATH = `${bin}:${process.env.PATH}`;
 }
 const { CodexSocketTransport } = await import("./codexSocketTransport");
@@ -82,8 +109,8 @@ const peer = `
   }
   write(2, "Bearer " + "private".repeat(8) + "\\n");
   write(2, process.env.HOME + "/private/file\\n");
-  if (mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "exit" || mode === "large" || mode === "boundary" || mode === "secret") {
-    if (mode === "large" || mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol") write(2, "x".repeat(20000) + "\\n");
+  if (mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler" || mode === "exit" || mode === "large" || mode === "boundary" || mode === "secret") {
+    if (mode === "large" || mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler") write(2, "x".repeat(20000) + "\\n");
     if (mode === "boundary") write(2, "Bearer " + "private".repeat(3000));
     if (mode === "secret") {
       // The key header and the first payload lines are visible; the footer is past the retained bytes.
@@ -92,7 +119,7 @@ const peer = `
       for (let line = 0; line < 150; line++) write(2, "KEYPAYLOAD" + String(line).padStart(3, "0") + "A".repeat(50) + "\\n");
       write(2, "-----END PRIVATE KEY-----\\n");
     }
-    if (["delayedexit", "delayedcontrol", "unlinked"].includes(mode)) fs.writeFileSync(process.env.DRAIN_ROOT + "/writes.json", JSON.stringify(writes));
+    if (["delayedexit", "delayedcontrol", "unlinked", "scheduler"].includes(mode)) fs.writeFileSync(process.env.DRAIN_ROOT + "/writes.json", JSON.stringify(writes));
     process.exit(23);
   }
   if (mode === "signal" || mode === "wrappedsignal") process.kill(process.pid, "SIGTERM");
@@ -128,6 +155,7 @@ const peer = `
   setInterval(() => {}, 1000);
 `;
 let sink: number | undefined;
+let releaseDrainTimer: ReturnType<typeof setTimeout> | undefined;
 let peerProcess: ChildProcessWithoutNullStreams | undefined;
 let peerClosed = false;
 const memory = mode === "observedmemory" ? new AgentMemoryCell({ mechanism: "watchdog", platform: "linux", unit: null,
@@ -172,14 +200,20 @@ try {
       const startup = path.dirname(args.at(-1)!.slice("unix://".length));
       const until = performance.now() + 3000;
       const completion = path.join(startup, "native-exit.json");
-      if (mode === "delayedexit" || mode === "unlinked") {
+      if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler") {
         while (!fs.existsSync(completion)) {
           if (performance.now() > until) throw new Error("native exit did not become durable");
+          await Bun.sleep(5);
+        }
+        while (!fs.existsSync(path.join(startup, "waiter-live")) || !fs.existsSync(path.join(root!, "delayed"))) {
+          if (performance.now() > until) throw new Error("drain and waiter barriers did not become ready");
           await Bun.sleep(5);
         }
         initialSize = fs.fstatSync(sink!).size;
         nativeCompleted = JSON.parse(fs.readFileSync(completion, "utf8")).code === 23;
         waiterLive = peerProcess.exitCode === null && peerProcess.signalCode === null;
+        if (mode === "scheduler") await Bun.sleep(250); // Simulate a delayed readiness observer while both owners are held.
+        releaseDrainTimer = setTimeout(() => fs.writeFileSync(path.join(root!, "release-drain"), "ready"), mode === "scheduler" ? 500 : 250);
       }
       if (mode === "unlinked") {
         // Exercise successful-startup sink unlink while the collector is held.
@@ -277,6 +311,7 @@ try {
   const orphanReceipts = fs.existsSync(receipts) ? fs.readdirSync(receipts).filter(file => !beforeReceipts.has(file)).length : 0;
   process.stdout.write(JSON.stringify({ error: (error as Error).message, orphanReceipts, collection }));
 } finally {
+  clearTimeout(releaseDrainTimer);
   if (sink !== undefined) fs.closeSync(sink);
   memory?.close();
   Date.now = clock;

@@ -77,17 +77,18 @@ async function startStderrDrain(fifo: string, file: string): Promise<StderrDrain
     // wrapper's diagnostic through its alias when the FIFO ends without bytes.
     // dd copies one block at a time so short FIFO reads stay visible to the
     // startup diagnostic; cat then discards everything after the retained cap.
-    // A separate read descriptor counts newly retained bytes even after startup
-    // unlinks the sink. Limit each read to the remaining storage capacity.
-    const script = `umask 077; exec 3<"$1" 4>"$2" 5<"$2" || exit 1; echo ready; exec >/dev/null
+    // Count bytes in each dd output stream. wc sees a pipe on both BSD and GNU,
+    // so its count is independent of regular-file offset and unlink semantics.
+    // Limit each read to the remaining storage capacity.
+    const script = `umask 077; exec 3<"$1" 4>"$2" || exit 1; echo ready; exec >/dev/null
 trap '' HUP
 size=0
 while [ "$size" -lt "$3" ]; do
   previous=$size
   block=$(($3 - size))
   [ "$block" -le 4096 ] || block=4096
-  dd bs="$block" count=1 conv=notrunc <&3 >&4 2>/dev/null
-  size=$((size + $(wc -c <&5)))
+  copied=$(dd bs="$block" count=1 <&3 2>/dev/null | tee -a /dev/fd/4 | wc -c)
+  size=$((size + copied))
   [ "$size" -gt "$previous" ] || break
 done
 cat <&3 >/dev/null`;
