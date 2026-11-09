@@ -199,7 +199,7 @@ your earlier agent sessions appear as chats straight away.
 
 The first start shows a notice about the anonymous install ping, in the page
 and in the start output. Turn it off in the sidebar's ⋯ menu under
-**Settings** → **Install ping**, or start Delegatus with
+**Settings** → **Privacy**, or start Delegatus with
 `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
 [What leaves your machine](security-and-privacy.md#what-leaves-your-machine)
 lists what it sends.
@@ -305,7 +305,7 @@ any stage starts, with a message that a stage's engine is not connected.
 Before the first pipeline, do one of these:
 
 - connect the other engine in the setup guide's **Engines** step;
-- open the sidebar's ⋯ menu → **Settings** → **Roles: engine and model**
+- open the sidebar's ⋯ menu → **Settings** → **Roles and workers** → **Roles: engine and model**
   and move every role you will use to the engine you have. When roles sit on
   an engine that is not connected, the table says so above its rows and
   offers a button that moves them to the connected one. A change applies to
