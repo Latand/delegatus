@@ -361,3 +361,52 @@ test.each(["none", "rewrite"] as const)("GET /api/memory/source tells an undone 
     expect((await read()).import.undo).toBeUndefined();
   }
 });
+
+
+test.each(["role_memory", "role_memory_curation", "role_memory_import"])("keyed import rolls back %s failures and replays adoption ids without another disposition", async collection => {
+  const { Database } = await import("bun:sqlite");
+  const { readCurationOperation } = await import("./apply");
+  const candidate = importCandidate(1);
+  await seedImport([candidate]);
+  const p = pass(); await readCuration(p, "imports");
+  const owned = patchPass(p.id, { conversationId: "conversation_import-witness" })!;
+  const operation = { pass: p.id, conversationId: owned.conversationId!, project: owned.project,
+    requestId: "import-keyed-apply", digest: "b".repeat(64), assertCurrent: () => {} };
+  const plan = scopeInput({ [candidate.suggestedScope]: [`adopt:${candidate.id}:0`] }, { adopt: [adopt(candidate)] });
+  const held = roleMemoryCollection(true)!, before = held.snapshot();
+  const original = candidateById(IMPORT_ID, candidate.id)!;
+  const db = new Database(path.join(root, "state.sqlite"));
+  try {
+    db.exec(`CREATE TRIGGER refuse_import BEFORE INSERT ON state_rows WHEN NEW.collection='${collection}' BEGIN SELECT RAISE(ABORT, 'fixture import refusal'); END`);
+    expect(() => applyCuration(owned, plan, IMPORT_AT, { operation })).toThrow(/fixture import refusal/);
+    expect(held.snapshot()).toEqual(before);
+    expect(candidateById(IMPORT_ID, candidate.id)).toEqual(original);
+    expect(readCurationOperation(operation)).toBeNull();
+    db.exec("DROP TRIGGER refuse_import");
+    const first = applyCuration(owned, plan, IMPORT_AT, { operation });
+    expect(first).toMatchObject({ disposition: "committed", counts: { calls: 1, changed: 1 } });
+    expect(first.placeholders[`adopt:${candidate.id}:0`]).toBeDefined();
+    const committed = held.snapshot();
+    expect(applyCuration(owned, plan, IMPORT_AT, { operation })).toEqual(first);
+    expect(held.snapshot()).toEqual(committed);
+    expect(candidateById(IMPORT_ID, candidate.id)!.dispositions).toHaveLength(1);
+    expect(readPass(p.id)!.counts.calls).toBe(1);
+  } finally { db.close(); }
+});
+
+
+test("a candidate gaining an occurrence after the read refuses a stale disposition with no witness", async () => {
+  const { readCurationOperation } = await import("./apply");
+  const candidate = importCandidate(1); await seedImport([candidate]);
+  const p = pass(); await readCuration(p, "imports");
+  const owned = patchPass(p.id, { conversationId: "conversation_import-drift" })!;
+  const operation = { pass: p.id, conversationId: owned.conversationId!, project: owned.project,
+    requestId: "import-drift", digest: "c".repeat(64), assertCurrent: () => {} };
+  const original = candidateById(IMPORT_ID, candidate.id)!;
+  importCollection()!.boundedPatch(2, tx => tx.put({ ...original, occurrences: [...original.occurrences, { ...original.occurrences[0], id: "o_additional-occurrence" }] }));
+  const plan = scopeInput({ [candidate.suggestedScope]: [`adopt:${candidate.id}:0`] }, { adopt: [adopt(candidate)] });
+  expect(() => applyCuration(owned, plan, IMPORT_AT, { operation })).toThrow(/every candidate/);
+  expect(candidateById(IMPORT_ID, candidate.id)!.dispositions).toEqual([]);
+  expect(readCurationOperation(operation)).toBeNull();
+  expect(roleMemoryCollection()?.get(`s:${candidate.suggestedScope}`)).toBeNull();
+});

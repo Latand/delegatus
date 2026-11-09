@@ -14,6 +14,9 @@ export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], pr
   if (!known && raw.kind !== undefined) notes?.push(`Unknown hold kind ${JSON.stringify(raw.kind)} normalized to unstated.`);
   const ref = typeof raw.ref === "number" && Number.isSafeInteger(raw.ref) && raw.ref > 0 ? String(raw.ref) : sentence(raw.ref, 500);
   const until = (kind === "limit" || kind === "postponed") ? iso(raw.until) : undefined;
+  if (raw.until !== undefined && kind !== "limit" && kind !== "postponed") {
+    notes?.push(`hold.until ignored for hold kind "${kind}"; only limit and postponed store until. Use dueAt for the task deadline.`);
+  }
   return { kind, note: sentence(raw.note, 200), since: previous?.since ?? now, by,
     ...(["task", "pr", "issue", "external"].includes(kind) && ref ? { ref } : {}),
     ...(until ? { until } : {}), ...(by === "agent" && conversationId ? { conversationId } : {}) };

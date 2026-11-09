@@ -56,6 +56,7 @@ import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { useDrainDecisionsLeaving } from "./selfUpdate/AutoDrainDecision";
+import { SettingsWindowHost } from "./settings/SettingsWindow";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LearnedRulesWindowHost } from "./roleMemory/LearnedRules";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
@@ -64,8 +65,6 @@ import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
 import { VoiceCompanionHost } from "./voiceCompanion/VoiceCompanionHost";
-import { VoiceCompanionSettingsHost } from "./voiceCompanion/VoiceCompanionSetting";
-import { onOpenKeys } from "./keys/openKeys";
 import { focusHandoffBus } from "./attention/focusHandoffBus";
 import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
 import { textField } from "./kanban/taskText";
@@ -846,14 +845,6 @@ function ViewerApp() {
       return next;
     });
   }, []);
-  /* «Open Keys» from a place that asked for a key (docs/design/keys-settings.md
-     §4): the phone opens its menu sheet, and a desktop with the rail put away
-     brings the rail back, whose ⋯ menu then opens on «Keys». */
-  useEffect(() => onOpenKeys(() => {
-    if (isMobile) { if (mobileNav.getState().sheet !== "menu") mobileNav.openSheet("menu"); }
-    else setRailHidden(false);
-  }), [isMobile, mobileNav]);
-
   /* The overview board has no project view state to report: presence publishes
      the overview context/slice here, and ProjectDashboard takes over the moment
      a project opens. */
@@ -2115,10 +2106,10 @@ function ViewerApp() {
       <SelfUpdateHost />
       <LinkedSettingsHost />
       <TelemetrySettingsHost />
+      {/* The one Settings window: the header menu's Settings, «Open Keys» and the install notice open it. */}
+      <SettingsWindowHost project={project === OVERVIEW ? null : project} />
       {/* Role memory's rules window, opened from the board's ⋯ and from a stage report's rule line. */}
       <LearnedRulesWindowHost />
-      {/* #2519: the voice companion's settings, from the desktop menu's Settings page and the companion's own notice. */}
-      <VoiceCompanionSettingsHost />
       <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card

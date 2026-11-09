@@ -9,8 +9,10 @@
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
+import { useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import type { TeamView, WorkspacesView } from "@/lib/team/contract";
 
 let runtimeEnabled = false;
 mock.module("./runtimeBus", () => ({
@@ -180,13 +182,14 @@ test("a refused browser drops what it stored and stops painting the restored ans
   }
 });
 
-test("a refusal after this document certified its own answer leaves that answer alone", async () => {
+test("a refusal after this document certified its answer removes protected rows and conditional bytes", async () => {
   let status = 200;
   const cache = createFilesClientCache(async () => (status === 200 ? new Response(JSON.stringify(BODY), { status: 200, headers: { ETag: ETAG } }) : new Response("", { status })));
   await cache.revalidate();
   status = 403;
   await cache.revalidate().catch(() => undefined);
-  expect(cache.readScope().files.length).toBe(2);
+  expect(cache.readScope().files).toEqual([]);
+  expect(cache.certifiedGlobal()).toBeNull();
 });
 
 test("a snapshot is never painted over an answer this document already has", async () => {
@@ -209,6 +212,129 @@ function Probe() {
   const data = useFiles();
   return <div data-loaded={String(data.loaded)} data-cached={String(Boolean(data.cached))}>{data.files.map((file) => file.path).join(",") || "empty"}</div>;
 }
+
+for (const phase of ["headers", "body"] as const) {
+  test.each(["solo confirmation", "team confirmation", "replacement", "rescope"] as const)(
+    `a live board reloads after %s while its first catalog awaits ${phase}`, async (transition) => {
+      const { setTeamViewForTests } = await import("@/components/team/teamClient");
+      const { setWorkspacesForTests } = await import("@/components/team/workspacesClient");
+      const { buildPipeline } = await import("@/lib/pipelines/store");
+      const pipeline = buildPipeline({ id: "refunds", project: "atlas", task: "Idempotent refunds", taskIds: [],
+        repoDir: "/fixture/repo", srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [], state: "draft" });
+      const stale = { ...BODY, pipelines: [{ ...pipeline, id: "stale", task: "Stale card" }] };
+      const team = (id: string): TeamView => ({ mode: "team", me: {
+        id, name: "Member", role: "member", status: "active", color: "sky", initials: "M", telegram: null,
+      }, members: [], methods: { approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false } } });
+      const workspaces = (project: string): WorkspacesView => ({ mode: "team", canManage: false,
+        workspaces: [{ id: "workspace-a", name: "Workspace", color: "sky", createdAt: "2030-01-01T00:00:00Z", projects: [project] }] });
+      setTeamViewForTests(transition.endsWith("confirmation") ? null : team("member-a"));
+      setWorkspacesForTests(workspaces("atlas"));
+      resetFilesClientCacheForTests(memoryFilesSnapshotStore());
+      runtimeEnabled = true;
+      let started!: () => void;
+      const firstRequest = new Promise<void>(resolve => { started = resolve; });
+      let answer!: () => void;
+      const requests: string[] = [];
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "HEAD") return new Response(null);
+        expect(init?.method ?? "GET").toBe("GET");
+        requests.push(String(input));
+        if (requests.length === 1) {
+          if (phase === "headers") return new Promise<Response>(resolve => {
+            answer = () => resolve(Response.json(stale));
+            started();
+          });
+          const response = Response.json(stale);
+          const read = response.text.bind(response);
+          response.text = async () => {
+            await new Promise<void>(resolve => { answer = resolve; started(); });
+            return read();
+          };
+          return response;
+        }
+        return Response.json({ ...BODY, files: [{ ...BODY.files[0], path: "/sessions/current.jsonl" }], pipelines: [pipeline] });
+      }) as typeof fetch;
+      let painted!: () => void;
+      const currentPainted = new Promise<void>(resolve => { painted = resolve; });
+      const seen: string[][] = [];
+      function Board() {
+        const data = useFiles(null, "/sessions/pinned.jsonl");
+        useEffect(() => {
+          seen.push([...data.files.map(file => file.path), ...data.pipelines.map(row => row.task)]);
+          if (data.loaded && data.pipelines[0]?.id === pipeline.id) painted();
+        }, [data]);
+        return <span>{[...data.files.map(file => file.path), ...data.pipelines.map(row => row.task)].join(",")}</span>;
+      }
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host as unknown as Element);
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        flushSync(() => root.render(<Board />));
+        await Promise.race([firstRequest, new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("initial catalog did not reach the response barrier")), 1500);
+        })]);
+        clearTimeout(deadline);
+        if (transition === "solo confirmation") setTeamViewForTests({ ...team("member-a"), mode: "solo", me: null });
+        else if (transition === "rescope") setWorkspacesForTests(workspaces("harbor"));
+        else setTeamViewForTests(team(transition === "replacement" ? "member-b" : "member-a"));
+        // A confirmed refresh with the same signature owes no additional read.
+        setWorkspacesForTests(workspaces(transition === "rescope" ? "harbor" : "atlas"));
+        answer();
+        await Promise.race([currentPainted, new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("authority replacement did not repaint the board")), 1500);
+        })]);
+        expect(host.textContent).toBe("/sessions/current.jsonl,Idempotent refunds");
+        expect(requests).toEqual([filesApiUrl(null, "/sessions/pinned.jsonl"), filesApiUrl(null, "/sessions/pinned.jsonl")]);
+        expect(seen.flat()).not.toContain("/sessions/alpha.jsonl");
+        expect(seen.flat()).not.toContain("/sessions/beta.jsonl");
+        expect(seen.flat()).not.toContain("Stale card");
+      } finally {
+        clearTimeout(deadline);
+        flushSync(() => root.unmount());
+        runtimeEnabled = false;
+        setTeamViewForTests(null);
+        setWorkspacesForTests(null);
+      }
+    },
+  );
+}
+
+test.each(["confirmation", "replacement", "rescope", "revocation"] as const)(
+  "a catalog body cannot publish across authority %s before the replacement read", async (transition) => {
+    let authority: { owner: string; signature: string } | null = transition === "confirmation"
+      ? null : { owner: "member-a", signature: "member-a:atlas" };
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let finish!: () => void;
+    let requests = 0;
+    const cache = createFilesClientCache(async () => {
+      if (++requests > 1) return Response.json(BODY);
+      const response = Response.json({ ...BODY, files: [{ ...BODY.files[0], path: "/sessions/stale.jsonl" }] });
+      const read = response.text.bind(response);
+      response.text = async () => {
+        await new Promise<void>(resolve => { finish = resolve; started(); });
+        return read();
+      };
+      return response;
+    }, { authority: () => authority });
+    const seen: string[] = [];
+    const unsubscribe = cache.subscribe(data => { seen.push(...data.files.map(file => file.path)); });
+    try {
+      const pending = cache.revalidate();
+      await reading;
+      authority = transition === "revocation" ? null : { owner: transition === "replacement" ? "member-b" : "member-a",
+        signature: transition === "rescope" ? "member-a:harbor" : "current" };
+      cache.refreshCreationAuthority();
+      finish();
+      expect((await pending).files).toEqual([]);
+      expect(seen).not.toContain("/sessions/stale.jsonl");
+      authority = { owner: "member-b", signature: "current" };
+      cache.refreshCreationAuthority();
+      expect((await cache.revalidate()).files.map(file => file.path)).toEqual(BODY.files.map(file => file.path));
+    } finally { unsubscribe(); cache.dispose(); }
+  },
+);
 
 test("the board's rows paint from the stored answer before the request answers, then certify on a 304", async () => {
   const store = memoryFilesSnapshotStore(record());
@@ -303,4 +429,93 @@ test("a visible board heartbeats through files HEAD even with live streaming, an
     runtimeEnabled = false;
     delete (document as unknown as { visibilityState?: string }).visibilityState;
   }
+});
+
+
+test("quiet live boards read accepted IDs on the existing health cadence without another catalog or POST", async () => {
+  const { setTeamViewForTests } = await import("@/components/team/teamClient");
+  const { reservePipelineCreation, usePipelineCreationCards, retryPipelineCreationRead } = await import("./useFiles");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
+    approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
+  } });
+  resetFilesClientCacheForTests(memoryFilesSnapshotStore());
+  runtimeEnabled = true;
+  const originalInterval = globalThis.setInterval;
+  let tick!: () => void;
+  globalThis.setInterval = ((callback: () => void, ms: number) => {
+    if (ms === 10_000) tick = callback;
+    return originalInterval(callback, 100_000);
+  }) as typeof setInterval;
+  const pipeline = buildPipeline({ id: "quiet-accepted", project: "atlas", task: "Quiet accepted work", taskIds: [],
+    srcPath: null, srcConversationId: null, repoDir: "/fixture/repo", now: "2030-01-01T00:00:00Z", stages: [], state: "draft" });
+  let reads = 0, catalogs = 0, terminal = false;
+  let readDone!: () => void;
+  let done = new Promise<void>(resolve => { readDone = resolve; });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    expect(init?.method ?? "GET").not.toBe("POST");
+    if (String(input).startsWith("/api/pipelines/")) {
+      reads++;
+      const response = Response.json({ code: terminal ? "pipeline_creation_refused" : "pipeline_queued", queuedCreation: {
+        id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: pipeline.createdAt,
+        state: terminal ? "refused" : "queued", reason: terminal ? "creation_refused" : "store_unavailable",
+      } }, { status: 404 });
+      const json = response.json.bind(response);
+      response.json = async () => { const result = await json(); queueMicrotask(readDone); return result; };
+      return response;
+    }
+    if (String(input).includes("view=storage-health")) return Response.json({ state: "ok", freeBytes: null, since: null });
+    if (String(input).startsWith("/api/files")) catalogs++;
+    return Response.json(BODY);
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host as unknown as Element);
+  function Board() { useFiles(); return <span>{usePipelineCreationCards().map(card => card.status).join(",")}</span>; }
+  try {
+    flushSync(() => root.render(<Board />));
+    const reservation = reservePipelineCreation()!;
+    await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+    tick(); await done;
+    await retryPipelineCreationRead();
+    const beforeCatalogs = catalogs;
+    terminal = true;
+    done = new Promise<void>(resolve => { readDone = resolve; });
+    tick(); await done;
+    await retryPipelineCreationRead();
+    flushSync(() => root.render(<Board />));
+    expect(host.textContent).toBe("refused");
+    expect(reads).toBe(2);
+    expect(catalogs).toBe(beforeCatalogs);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.setInterval = originalInterval;
+    runtimeEnabled = false;
+    setTeamViewForTests(null);
+    resetFilesClientCacheForTests();
+  }
+});
+
+
+test("receipt envelopes merge concurrent documents, survive expired catalogs, and fence old owners", async () => {
+  const { usableCreationLocators, CREATION_LOCATORS_MAX_BYTES } = await import("@/lib/client/filesSnapshotStore");
+  const store = memoryFilesSnapshotStore(record({ savedAt: Date.now() - FILES_SNAPSHOT_MAX_AGE_MS - 1 }));
+  await Promise.all([
+    store.updateCreations!("member-a", [{ id: "first" }], [], () => true, undefined, "scope-a"),
+    store.updateCreations!("member-a", [{ id: "second" }], [], () => true, undefined, "scope-a"),
+  ]);
+  expect((await store.read())?.creations?.entries).toEqual([{ id: "first" }, { id: "second" }]);
+  await store.write(record());
+  expect((await store.read())?.creations?.entries).toEqual([{ id: "first" }, { id: "second" }]);
+  await store.updateCreations!("member-a", [], ["first"], () => true, undefined, "scope-a");
+  expect((await store.read())?.creations?.entries).toEqual([{ id: "second" }]);
+  await expect(store.updateCreations!("member-a", [{ id: "late" }], [], () => false)).rejects.toThrow("owner changed");
+  await store.updateCreations!("member-b", [{ id: "new-owner" }], [], () => true, undefined, "scope-b");
+  await store.clear("member-a");
+  expect((await store.read())?.creations).toEqual({ owner: "member-b", scope: "scope-b", entries: [{ id: "new-owner" }] });
+  expect((await store.read())?.text).toBe("");
+  expect(usableCreationLocators({ owner: "member-a", scope: "x".repeat(CREATION_LOCATORS_MAX_BYTES), entries: [] })).toBe(false);
+  const maximum = { owner: "member-a", entries: Array.from({ length: 8 }, (_, index) => ({ id: `accepted-${index}` })) };
+  expect(usableCreationLocators(maximum)).toBe(true);
+  expect(new TextEncoder().encode(JSON.stringify(maximum)).byteLength).toBeLessThan(1024);
+  expect(usableCreationLocators({ ...maximum, entries: [...maximum.entries, { id: "ninth" }] })).toBe(false);
 });

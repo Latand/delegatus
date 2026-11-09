@@ -4539,3 +4539,358 @@ for (const ending of ["release", "external"] as const) test(`Claude host exit ob
     expect((await host.health()).exitProcess).toEqual(process);
   } finally { await host.release(); }
 });
+
+describe("terminal bookkeeping after host loss", () => {
+  async function fixture(eventStore: RuntimeEventStore = new MemoryEventStore(), ignoreStop = false) {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger, ignoreStop, ignoreStop);
+    const options: ClaudeStreamBrokerHostOptions = {
+      cwd: "/repo", sessionId: "00000000-0000-0000-0000-000000000077",
+      eventStore, deliveryLedger: ledger, shutdownGraceMs: 2,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [], spawnProcess: fakeSpawn(child, {}),
+    };
+    const host = await ClaudeStreamBrokerHost.start(options);
+    const send = async () => {
+      const pending = host.send({ id: "original-turn", text: "original instruction" });
+      child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "original-input",
+        message: { role: "user", content: [{ type: "text", text: "original instruction" }] } });
+      await pending;
+    };
+    const terminals = () => eventStore.load(host.identity.sessionId).filter(event => event.kind === "turn-ended");
+    return { host, child, options, eventStore, ledger, send, terminals };
+  }
+
+  for (const mode of ["idle", "active", "attention", "background"] as const) {
+    test(`${mode} child death settles only the identified turn once across release and adoption`, async () => {
+      const f = await fixture();
+      try {
+        if (mode !== "idle") await f.send();
+        if (mode === "attention") f.child.emitJson({ type: "control_request", request_id: "permission",
+          request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" } } });
+        if (mode === "background") f.child.emitJson({ type: "system", subtype: "task_started", task_id: "background-task" });
+        f.child.emit("close", 1, null);
+        f.child.emit("close", 1, null);
+        f.child.emitJson({ type: "result", subtype: "success", session_id: f.host.identity.sessionId });
+        await f.host.release();
+        expect(f.terminals()).toMatchObject(mode === "idle" ? [] : [
+          { kind: "turn-ended", turnId: "original-turn", status: "error" },
+        ]);
+        const events = f.eventStore.load(f.host.identity.sessionId);
+        if (mode !== "idle") expect(events.findIndex(e => e.kind === "turn-ended")).toBeLessThan(
+          events.findIndex(e => e.kind === "session-status" && e.status === "dead"));
+        const successor = await ClaudeStreamBrokerHost.adopt(f.host.identity.sessionId, {
+          ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+        });
+        await successor.release();
+        expect(f.terminals()).toHaveLength(mode === "idle" ? 0 : 1);
+      } finally { await f.host.release(); }
+    });
+  }
+
+  test("release waits for proven termination and preserves a result that wins the race", async () => {
+    for (const result of [null, "success", "interrupted", "error"] as const) {
+      const f = await fixture(new MemoryEventStore(), true);
+      try {
+        await f.send();
+        await expect(f.host.release()).rejects.toThrow("Claude child could not be reaped");
+        expect(f.terminals()).toEqual([]);
+        expect((await f.host.health()).activeTurnRef).toBe("original-turn");
+        if (result) f.child.emitJson({ type: "result", subtype: result, session_id: f.host.identity.sessionId });
+        f.child.emit("close", 0, "SIGTERM");
+        await f.host.release();
+        expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: result === "success" ? "completed" : result === "interrupted" ? "interrupted" : "error" }]);
+      } finally { f.child.emit("close", 0, "SIGKILL"); await f.host.release(); }
+    }
+  });
+
+  test("a written queued input without echo retains uncertainty and no invented terminal turn", async () => {
+    const f = await fixture();
+    try {
+      await f.send();
+      const queued = f.host.send({ id: "queued-input", text: "next instruction" }).catch(error => error);
+      f.child.emit("close", 1, null);
+      expect(await queued).toBeInstanceOf(Error);
+      expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: "error" }]);
+      expect(f.ledger.load(f.host.identity.sessionId).find(row => row.entry.id === "queued-input"))
+        .toMatchObject({ delivered: false, disposition: "queued-next-turn" });
+    } finally { await f.host.release(); }
+  });
+
+  for (const status of ["dead", "unhosted"] as const) {
+    test(`adoption reconciles the unmatched start across legacy ${status} status once`, async () => {
+      const events = new MemoryEventStore();
+      const f = await fixture(events);
+      await f.host.release();
+      const sessionId = f.host.identity.sessionId;
+      const cursor = events.load(sessionId).at(-1)!.seq;
+      events.append(sessionId, { seq: cursor + 1, kind: "turn-started", turnId: "legacy-turn" });
+      events.append(sessionId, { seq: cursor + 2, kind: "session-status", status });
+      for (let restart = 0; restart < 2; restart++) {
+        const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+          ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+        });
+        try {
+          expect(f.terminals()).toMatchObject([{ turnId: "legacy-turn", status: "error" }]);
+          expect((await host.health()).activeTurnRef).toBeNull();
+        } finally { await host.release(); }
+      }
+    });
+  }
+
+  test("a terminal ledger refusal publishes no persisted completion and adoption repairs the unmatched start", async () => {
+    const events = new MemoryEventStore();
+    let refuse = true;
+    const store: RuntimeEventStore = {
+      load: id => events.load(id),
+      append: (id, event) => {
+        if (refuse && event.kind === "turn-ended") throw new Error("fixture terminal storage unavailable");
+        events.append(id, event);
+      },
+    };
+    const f = await fixture(store);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await f.send();
+      f.child.emit("close", 1, null);
+      await f.host.release();
+      expect(f.terminals()).toEqual([]);
+      expect((await f.host.health()).status).toBe("dead");
+      expect(warning).toHaveBeenCalledWith("[structured host] terminal event persistence failed", {
+        reason: "runtime event ledger failed: fixture terminal storage unavailable",
+      });
+      refuse = false;
+      const successor = await ClaudeStreamBrokerHost.adopt(f.host.identity.sessionId, {
+        ...f.options, spawnProcess: fakeSpawn(new FakeClaude(f.ledger), {}),
+      });
+      try { expect(f.terminals()).toMatchObject([{ turnId: "original-turn", status: "error" }]); }
+      finally { await successor.release(); }
+    } finally { warning.mockRestore(); await f.host.release(); }
+  });
+});
+
+describe("meaningful background turns", () => {
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000003689"].join("-");
+  async function fixture(store: RuntimeEventStore = new MemoryEventStore(), resume = false) {
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const options = {
+      cwd: "/repo", sessionId, eventStore: store, deliveryLedger: ledger, readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      signalProcess: () => { throw new Error("fixture has no process group"); },
+      processIdentity: () => "fixture-identity", spawnProcess: fakeSpawn(child, {}),
+    };
+    const host = resume ? await ClaudeStreamBrokerHost.adopt(sessionId, options) : await ClaudeStreamBrokerHost.start(options);
+    return { host, child, ledger, store };
+  }
+  const assistant = (id?: string) => ({ type: "assistant", session_id: sessionId,
+    message: { role: "assistant", ...(id ? { id } : {}), content: [{ type: "text", text: "Fixture result.\nVerdict: needs_decision" }] } });
+  const result = (uuid?: string) => ({ type: "result", subtype: "success", session_id: sessionId, is_error: false,
+    ...(uuid ? { uuid } : {}), num_turns: 1 });
+
+  test.each([true, false])("retained reply starts and settles one identified turn (queued: %s)", async queued => {
+    const f = await fixture();
+    try {
+      if (queued) {
+        const receipt = f.host.send({ id: "fixture-input", text: "fixture request" });
+        f.child.emitJson({ ...f.child.inputs.find(frame => frame.type === "user"), uuid: "fixture-user" });
+        expect(await receipt).toMatchObject({ outcome: "turn-started" });
+      }
+      f.child.emitJson(assistant());
+      const active = (await f.host.health()).activeTurnRef;
+      if (!active) throw new Error("expected an observed active turn");
+      expect(active).toBeTruthy();
+      expect(active).not.toBe("unknown");
+      expect((await f.host.health()).status).toBe("active");
+      f.child.emitJson(result());
+      f.child.emitJson(result());
+      const events = f.store.load(sessionId);
+      expect(events.filter(e => e.kind === "turn-started")).toEqual([{ kind: "turn-started", turnId: active, seq: expect.any(Number) }]);
+      expect(events.filter(e => e.kind === "turn-ended")).toEqual([{ kind: "turn-ended", turnId: active, status: "completed", seq: expect.any(Number) }]);
+      for (const event of events) if (event.kind === "delta" || (event.kind === "item" && !event.deliveryEcho)) expect(event.turnId).toBe(active);
+      expect((await f.host.health()).status).toBe("idle");
+      if (!queued) expect(f.ledger.order).toEqual([]);
+    } finally { await f.host.release(); }
+  });
+
+  test.each([false, true])("streamed text and tool-first activity retain one turn (tool: %s)", async tool => {
+    const f = await fixture();
+    const stream = (event: unknown, parent: string | null = null) => f.child.emitJson({ type: "stream_event", session_id: sessionId, parent_tool_use_id: parent, event });
+    try {
+      stream({ type: "content_block_delta", delta: { type: "text_delta", text: "orphan" } });
+      expect((await f.host.health()).activeTurnRef).toBeNull();
+      stream({ type: "message_start", message: { role: "assistant", id: "native-first" } });
+      expect((await f.host.health()).activeTurnRef).toBeNull();
+      stream({ type: "content_block_start", content_block: tool
+        ? { type: "tool_use", id: "tool-one", name: "Read", input: {} }
+        : { type: "thinking", thinking: "private reasoning" } });
+      if (!tool) expect((await f.host.health()).activeTurnRef).toBeNull();
+      stream({ type: "content_block_delta", delta: { type: "text_delta", text: "first answer" } });
+      const turn = (await f.host.health()).activeTurnRef;
+      expect(turn).toBeTruthy();
+      stream({ type: "content_block_stop" });
+      stream({ type: "content_block_delta", delta: { type: "text_delta", text: " continued" } });
+      stream({ type: "message_stop" });
+      f.child.emitJson(assistant("native-first"));
+      stream({ type: "message_start", message: { role: "assistant", id: "native-second" } });
+      f.child.emitJson(assistant("native-second"));
+      f.child.emitJson(result("result-stream"));
+      const events = f.store.load(sessionId);
+      expect(events.filter(e => e.kind === "turn-started")).toHaveLength(1);
+      expect(events.filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn, claudeResultUuid: "result-stream" }]);
+      expect(events.filter(e => e.kind === "delta").map(e => e.text)).toEqual([
+        "orphan", "first answer", " continued", "Fixture result.\nVerdict: needs_decision",
+      ]);
+    } finally { await f.host.release(); }
+  });
+
+  test("complete tool blocks and synthetic follow-ups share the observed turn", async () => {
+    const f = await fixture();
+    try {
+      f.child.emitJson({ type: "user", isSynthetic: true, message: { role: "user", content: "background task finished" } });
+      f.child.emitJson({ type: "assistant", parent_tool_use_id: null, message: { role: "assistant", id: "tool-message", content: [
+        { type: "tool_use", id: "read-one", name: "Read", input: {} },
+      ] } });
+      const turn = (await f.host.health()).activeTurnRef;
+      expect(turn).toBeTruthy();
+      f.child.emitJson(assistant("next-message"));
+      f.child.emitJson({ ...result("r".repeat(129)), origin: { kind: "task-notification" } });
+      const events = f.store.load(sessionId);
+      expect(events.filter(e => e.kind === "turn-started")).toHaveLength(1);
+      expect(events.filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn }]);
+      expect(events.find(e => e.kind === "turn-ended")).not.toHaveProperty("claudeResultUuid");
+    } finally { await f.host.release(); }
+  });
+
+  test("bookkeeping, child, empty, error and malformed content never invent a turn", async () => {
+    const f = await fixture();
+    try {
+      for (const subtype of ["task_started", "task_progress", "task_notification", "status", "compact_boundary"]) f.child.emitJson({ type: "system", subtype });
+      for (const change of [{ parent_tool_use_id: "child-tool" }, { agent_id: "child-agent" }, { error: "server_error" }, { aborted: true }]) f.child.emitJson({ ...assistant(), ...change });
+      for (const content of [[], [{ type: "text", text: " " }], [{ type: "thinking", thinking: "thinking" }], [{ type: "tool_use", id: "tool", name: "Read", input: [] }], [{ type: "other" }]]) {
+        f.child.emitJson({ type: "assistant", message: { role: "assistant", content } });
+      }
+      f.child.emitJson({ type: "user", isSynthetic: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool", content: "done" }] } });
+      f.child.emitJson({ ...result(), origin: { kind: "task-notification" } });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-started" || e.kind === "turn-ended")).toEqual([]);
+      f.child.emitJson(assistant("after-bookkeeping"));
+      expect((await f.host.health()).activeTurnRef).toBeTruthy();
+      f.child.emitJson(result());
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toHaveLength(1);
+    } finally { await f.host.release(); }
+  });
+
+  test("a background result preserves the waiting foreground identity and its receipt", async () => {
+    const f = await fixture();
+    try {
+      f.child.emitJson({ ...assistant("background"), user_message_uuid: "background-user" });
+      const background = (await f.host.health()).activeTurnRef;
+      if (!background) throw new Error("expected an observed background turn");
+      const receipt = f.host.send({ id: "next-input", text: "next instruction" });
+      f.child.emitJson({ ...f.child.inputs.find(frame => frame.type === "user"), uuid: "next-user" });
+      expect(await receipt).toEqual({ outcome: "queued-next-turn", turnId: "next-input" });
+      f.child.emitJson({ ...result("wrong-result"), user_message_uuid: "next-user" });
+      expect((await f.host.health()).activeTurnRef).toBe(background);
+      f.child.emitJson({ ...result("background-result"), user_message_uuid: "background-user" });
+      expect((await f.host.health()).activeTurnRef).toBe("next-input");
+      f.child.emitJson(result("background-result"));
+      expect((await f.host.health()).activeTurnRef).toBe("next-input");
+      f.child.emitJson({ ...result("next-result"), user_message_uuid: "next-user" });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended").map(e => e.turnId)).toEqual([background, "next-input"]);
+      expect(f.ledger.load(sessionId)).toMatchObject([{ entry: { id: "next-input" }, engineMessageId: "next-user", delivered: true }]);
+    } finally { await f.host.release(); }
+  });
+
+  test.each([
+    { subtype: "success", is_error: false, status: "completed" },
+    { subtype: "success", is_error: true, status: "error" },
+    { subtype: "error_during_execution", is_error: true, status: "error" },
+    { subtype: "interrupted", is_error: false, status: "interrupted" },
+    { subtype: "future-result", is_error: false, status: "error" },
+  ])("background result $subtype/$is_error settles as $status", async ({ subtype, is_error, status }) => {
+    const f = await fixture();
+    try {
+      f.child.emitJson(assistant());
+      f.child.emitJson({ ...result(), subtype, is_error });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ status }]);
+    } finally { await f.host.release(); }
+  });
+
+  test.each(["malformed", "wrong-session", "death"])("background work settles on %s", async fault => {
+    const f = await fixture();
+    try {
+      f.child.emitJson(assistant());
+      const active = (await f.host.health()).activeTurnRef;
+      if (fault === "malformed") f.child.stdout.write("{broken\n");
+      else if (fault === "wrong-session") f.child.emitJson({ ...result(), session_id: "different-session" });
+      else f.child.emit("close", 1, null);
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: active, status: "error" }]);
+    } finally { await f.host.release(); }
+  });
+
+  test("writer loss refuses new starts and results while a current writer succeeds", async () => {
+    const f = await fixture();
+    let current = false;
+    f.host.setWriterFence(() => current);
+    try {
+      const before = f.store.load(sessionId);
+      f.child.emitJson(assistant("refused"));
+      f.child.emitJson({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } } });
+      f.child.emitJson({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "stale" } } });
+      expect(f.store.load(sessionId)).toEqual(before);
+      current = true;
+      f.child.emitJson(assistant("accepted"));
+      const turn = (await f.host.health()).activeTurnRef;
+      expect(turn).toBeTruthy();
+      current = false;
+      f.child.emitJson(result());
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toEqual([]);
+      current = true;
+      f.child.emitJson(result());
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: turn }]);
+    } finally { current = true; await f.host.release(); }
+  });
+
+  test.each([false, true])("file-backed adoption preserves terminal correlation and repairs only unmatched starts (%s)", async ended => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-background-reopen-"));
+    const f = await fixture(new FileRuntimeEventStore(directory));
+    let restored: Awaited<ReturnType<typeof fixture>> | undefined;
+    try {
+      f.child.emitJson(assistant("first"));
+      const first = (await f.host.health()).activeTurnRef;
+      if (ended) f.child.emitJson(result("durable-result"));
+      // Reopen the actual writer output before old-host cleanup can add an outcome.
+      const copy = path.join(directory, "crash-snapshot"); fs.mkdirSync(copy);
+      for (const file of fs.readdirSync(directory)) if (file.endsWith(".jsonl")) fs.copyFileSync(path.join(directory, file), path.join(copy, file));
+      await f.host.release();
+      restored = await fixture(new FileRuntimeEventStore(copy), true);
+      expect(restored.store.load(sessionId).filter(e => e.kind === "turn-ended")).toMatchObject([{ turnId: first, status: ended ? "completed" : "error" }]);
+      restored.child.emitJson(assistant("second"));
+      const second = (await restored.host.health()).activeTurnRef;
+      expect(second).not.toBe(first);
+      if (ended) {
+        restored.child.emitJson(result("durable-result"));
+        expect((await restored.host.health()).activeTurnRef).toBe(second);
+      }
+      restored.child.emitJson(result("second-result"));
+      await restored.host.release();
+      const again = await fixture(new FileRuntimeEventStore(copy), true);
+      try { expect(again.store.load(sessionId).filter(e => e.kind === "turn-ended")).toHaveLength(2); }
+      finally { await again.host.release(); }
+    } finally { await restored?.host.release(); await f.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["turn-started", "turn-ended"])("an append refusal at %s cannot publish a successful outcome", async kind => {
+    const store = new MemoryEventStore();
+    const original = store.append.bind(store);
+    store.append = (session, event) => { if (event.kind === kind) throw new Error("fixture append refused"); original(session, event); };
+    const f = await fixture(store);
+    try {
+      f.child.emitJson(assistant());
+      f.child.emitJson(result());
+      expect(store.load(sessionId).filter(e => e.kind === "turn-ended")).toEqual([]);
+      expect(store.load(sessionId).filter(e => e.kind === "turn-started")).toHaveLength(kind === "turn-started" ? 0 : 1);
+      expect((await f.host.health()).status).toBe("dead");
+    } finally { await f.host.release(); }
+  });
+});

@@ -26,7 +26,7 @@ export interface AlbumTranscript {
 
 export interface TaskAlbumWorld {
   task(taskId: string): BoardTask | null;
-  pipelines(): readonly Pipeline[];
+  pipelines(taskId: string): readonly Pipeline[];
   flow(flowId: string): Flow | null;
   /** Every transcript a conversation has had, newest last. */
   conversationPaths(conversationId: string): readonly string[];
@@ -54,7 +54,7 @@ export function taskAlbumTranscripts(taskId: string, world: TaskAlbumWorld): Alb
 
   /* Stages first: a stage's conversation is also a task assignment, and the
      album names it by its stage. */
-  for (const pipeline of world.pipelines()) {
+  for (const pipeline of world.pipelines(taskId)) {
     if (!pipeline.taskIds.includes(taskId)) continue;
     for (const run of pipeline.runs) {
       for (const attempt of run.attempts) {

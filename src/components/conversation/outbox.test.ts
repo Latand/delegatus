@@ -24,6 +24,7 @@ import {
   releaseHeldOutbox,
   readOperationShared,
   outboxHistory,
+  outboxStored,
   OUTBOX_DELIVERED_TTL_MS,
   OUTBOX_LIMIT,
   OUTBOX_MTIME_GRACE_MS,
@@ -82,6 +83,38 @@ test("a submitted draft becomes a queued entry immediately and survives a reload
   /* A fresh module state (a page refresh) rehydrates the same queue. */
   resetOutboxForTests();
   expect(readOutbox("conv").map((entry) => entry.text)).toEqual(["first message"]);
+});
+
+/* 2026-11-09: a queue write refused by storage left the row in this page's
+   memory only, said nothing, and the composer let go of the words. The queue
+   now says whether a reload would find it. */
+test("a queue write storage refuses is reported as not stored, and a reload does not find its row", async () => {
+  const storage = dom.sessionStorage;
+  const refusing = {
+    getItem: (key: string) => storage.getItem(key),
+    removeItem: (key: string) => storage.removeItem(key),
+    setItem: () => { throw new Error("QuotaExceededError: the quota has been exceeded"); },
+  };
+  submit("conv-quota", "stored", "stored before the quota ran out");
+  expect(outboxStored("conv-quota")).toBe(true);
+  Object.assign(globalThis, { sessionStorage: refusing });
+  try {
+    expect(submit("conv-quota", "memory-only", "the words that must not vanish")?.state).toBe("queued");
+    expect(outboxStored("conv-quota")).toBe(false);
+    /* Another conversation's queue is its own. */
+    expect(outboxStored("conv-other")).toBe(true);
+  } finally {
+    Object.assign(globalThis, { sessionStorage: storage });
+  }
+  /* A reload rehydrates what storage holds, and that is not the second row. */
+  resetOutboxForTests();
+  expect(readOutbox("conv-quota").map((entry) => entry.id)).toEqual(["stored"]);
+  expect(outboxStored("conv-quota")).toBe(true);
+  /* Once a write lands again, the queue is stored again. */
+  submit("conv-quota", "after", "storage came back");
+  expect(outboxStored("conv-quota")).toBe(true);
+  resetOutboxForTests();
+  expect(readOutbox("conv-quota").map((entry) => entry.id)).toEqual(["stored", "after"]);
 });
 
 test("the dispatcher is serial: one delivering entry at a time, oldest first", () => {

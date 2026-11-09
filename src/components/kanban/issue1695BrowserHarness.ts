@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
 import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
@@ -10,6 +11,7 @@ import sharp from "sharp";
 
 import { translate } from "@/lib/i18n";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
+import { stubVoiceDevices as stubVoiceDevicesForSettings } from "@/test-helpers/voiceDevicesStub";
 import { createGateSandbox } from "../../../scripts/local-gate";
 
 /** Chrome's singleton socket must fit the platform's short Unix socket path. */
@@ -210,6 +212,372 @@ export function browserCase(enabled: boolean) {
   };
 }
 
+/** Real browser producer and real durable queue, with deliberately lagging catalogs. */
+export async function captureAcceptedCreation(browser: Browser, out: string, phone: boolean) {
+  const { execFileSync } = await import("node:child_process");
+  const { NextRequest } = await import("next/server");
+  const { POST } = await import("@/app/api/pipelines/route");
+  const { GET } = await import("@/app/api/pipelines/[id]/route");
+  const { GET: taskListGET } = await import("@/app/api/tasks/route");
+  const { withPipelineMutation, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const { admitQueuedPipelineCreations, pipelineCreationQueueDir } = await import("@/lib/pipelines/creationQueue");
+  const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const { MAX_TASK_LENGTH } = await import("@/lib/pipelines/limits");
+  const creationTitle = "Keep the accepted creation visible through catalog refresh and reload. ".repeat(MAX_TASK_LENGTH).slice(0, MAX_TASK_LENGTH);
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "accepted-browser-"));
+  const repo = path.join(root, "repo");
+  const git = (...args: string[]) => execFileSync("git", args, { stdio: "pipe", env: { ...process.env,
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" } });
+  const unregister = registerPipelineTick(async () => {});
+  const priorWait = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "100";
+  let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+  let release: (() => void) | undefined;
+  let holder: Promise<unknown> | undefined;
+  const results: unknown[] = [];
+  // Freeze rendering beyond every creation in this bounded run. The real
+  // server keeps its own clock; age labels must never describe future rows.
+  const frameNow = new Date(Date.now() + 60 * 60 * 1000);
+  try {
+    git("init", "--template=", "--initial-branch=main", repo);
+    fs.writeFileSync(path.join(repo, "README.md"), "Accepted creation fixture\n");
+    git("-C", repo, "add", "README.md"); git("-C", repo, "-c", "commit.gpgsign=false", "commit", "-m", "Seed fixture");
+    git("-C", repo, "remote", "add", "origin", "https://example.invalid/accepted-creation.git");
+    const project = projectForCwd(repo)!;
+    const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    const { codexSessionRoots } = await import("@/lib/accounts/codex");
+    const registry = agentRegistry();
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: repo, role: "builder", origin: { kind: "operator" } });
+    if (begun.kind !== "created") throw new Error("fixture creator was refused");
+    const sessionId = "00000000-0000-0000-0000-000000000000";
+    const source = path.join(codexSessionRoots()[0], `caller-${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+    const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId },
+      artifactPath: source, cwd: repo, accountId: "terra", status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    if (settled.kind !== "settled") throw new Error("fixture creator did not settle");
+    const controlTask: import("@/lib/tasks/types").BoardTask = { id: "accepted-control-task", project,
+      text: "Preserve the two existing review lanes", status: "assigned", placement: "unplaced", assignments: [],
+      createdAt: frameNow.toISOString(), updatedAt: frameNow.toISOString() };
+    saveTasks([controlTask]);
+    const controls: import("@/lib/pipelines/types").Pipeline[] = [];
+    for (let index = 0; index < 3; index++) {
+      const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", { method: "POST",
+        headers: { host: "127.0.0.1", "content-type": "application/json", cookie: `llv_operator=${soloBrowserSession()}` },
+        body: JSON.stringify({ task: `Existing review lane ${index + 1}`, repoDir: repo, src: source, autoStart: false,
+          ...(index ? { taskIds: [controlTask.id] } : {}), stages: [{ id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "{{task}}", next: null }] }) }));
+      expect(response.status, await response.clone().text()).toBe(201);
+      controls.push((await response.json()).pipeline);
+    }
+    let posts = 0, catalogs = 0, showStored = false, retainLink = false;
+    const readAnswers: Array<{ id: string; status: number; code?: string }> = [];
+    let readMode: "normal" | "unavailable" | "denied" = "normal";
+    let holdRead: Promise<void> | undefined;
+    let releaseRead: (() => void) | undefined;
+    const responses: Record<string, unknown> = {
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/api/tasks": (request: Request) => taskListGET(new NextRequest(request)),
+      "/fixture/config": () => Response.json({ task: creationTitle, repoDir: repo, src: source, autoStart: false,
+        ...(retainLink ? { savedLink: { attachLink: "sample/project#7", kind: "issue" } } : {}),
+        ...(phone && !retainLink ? { taskIds: [controlTask.id] } : {}),
+        stages: [{ id: "implement", kind: "run", role: { roleId: "builder" }, prompt: "{{task}}", next: null }] }),
+      "/api/files": () => {
+        catalogs++;
+        return Response.json({ files: [], pipelines: showStored ? loadPipelines() : controls, tasks: [controlTask], flows: [], workflows: [],
+          projectCatalog: [{ project, displayName: "Atlas", conversations: 0, smt: 1 }], projectCwds: { [project]: repo },
+          systemHealth: { tmux: { status: "healthy" } } }, { headers: { ETag: `"catalog-${catalogs}"` } });
+      },
+      "/api/pipelines": async (request: Request) => {
+        if (request.method !== "POST") return Response.json({ pipelines: showStored ? loadPipelines() : [] });
+        posts++;
+        const headers = new Headers(request.headers); headers.set("cookie", `llv_operator=${soloBrowserSession()}`);
+        const response = await POST(new NextRequest(request.url, { method: "POST", headers, body: await request.text() }));
+        const body = await response.clone().json();
+        if (body.pipeline) responses[`/api/pipelines/${body.pipeline.id}`] = async (read: Request) => {
+          if (holdRead) await holdRead;
+          if (readMode !== "normal") return Response.json({ error: "read unavailable" }, { status: readMode === "denied" ? 403 : 503 });
+          const answer = await GET(new NextRequest(read), { params: Promise.resolve({ id: body.pipeline.id }) });
+          readAnswers.push({ id: body.pipeline.id, status: answer.status, code: (await answer.clone().json()).code });
+          return answer;
+        };
+        return response;
+      },
+    };
+    server = await serveEvidenceFixture(path.join(out, "bundle"), undefined, responses);
+    for (const width of phone ? [390] : [900, 1440]) for (const locale of ["en", "uk"] as const)
+      for (const theme of ["light", "dark"] as const) for (const outcome of ["materialized", "refused", "refused-revoked"] as const) {
+        const terminal = outcome === "materialized" ? "materialized" : "refused";
+        showStored = false;
+        retainLink = terminal === "materialized";
+        readMode = "normal";
+        const beforePosts = posts;
+        let acquired!: () => void;
+        const ready = new Promise<void>(resolve => { acquired = resolve; });
+        const held = new Promise<void>(resolve => { release = resolve; });
+        holder = withPipelineMutation(async () => { acquired(); await held; });
+        await ready;
+        const { page, context, pageErrors } = await openFixture(browser,
+          `${server.base}?scenario=accepted-creation&project=${encodeURIComponent(project)}`,
+          { width, height: phone ? 844 : 900 }, theme, locale, "reduce", phone, 1, frameNow);
+        try {
+          await page.evaluate(project => {
+            sessionStorage.setItem("llvDraftPane:accepted-control:text", "Keep this unsent agent draft intact.");
+            localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { [project]: true }, placement: "top", width: null }));
+          }, project);
+          await page.reload();
+          await page.waitForFunction(() => typeof (window as unknown as { createAcceptedEvidence?: unknown }).createAcceptedEvidence === "function");
+          if (terminal === "refused") await page.evaluate(() => {
+            const put = IDBObjectStore.prototype.put;
+            Object.assign(window, { restoreCreationStorage: () => { IDBObjectStore.prototype.put = put; } });
+            IDBObjectStore.prototype.put = function (value, key) {
+              if (value?.creations?.entries?.length) throw new DOMException("Fixture storage refusal", "QuotaExceededError");
+              return put.call(this, value, key!);
+            };
+          });
+          const created = await page.evaluate(() => (window as unknown as { createAcceptedEvidence(): Promise<{ id?: string; accepted?: boolean; error?: string }> }).createAcceptedEvidence());
+          expect(created.error).toBeUndefined(); expect(created.id).toBeTruthy();
+          const visibleId = `[data-creation="${created.id}"], [data-pipeline="${created.id}"]`;
+          await page.locator(visibleId).first().waitFor({ state: "attached" });
+          const selector = `[data-creation="${created.id}"]`;
+          const frames: unknown[] = [];
+          const capture = async (state: string) => {
+            const card = page.locator(selector).first(); await card.waitFor();
+            await card.scrollIntoViewIfNeeded();
+            expect(await page.locator(selector).count()).toBe(1);
+            const geometry = await card.evaluate(element => {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const rects = [...range.getClientRects()].filter(rect => rect.width && rect.height);
+              const clipped: string[] = [];
+              const contrast: number[] = [];
+              const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+              const luminance = (color: number[]) => color.slice(0, 3).map(value => {
+                const v = value / 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+              }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const text = walker.currentNode;
+                if (!text.textContent?.trim()) continue;
+                const foreground = rgb(getComputedStyle(text.parentElement!).color);
+                for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+                  const background = rgb(getComputedStyle(parent).backgroundColor);
+                  if (background.length >= 3 && (background.length === 3 || background[3] === 1)) {
+                    const a = luminance(foreground), b = luminance(background);
+                    contrast.push((Math.max(a, b) + .05) / (Math.min(a, b) + .05)); break;
+                  }
+                }
+                const leaf = document.createRange(); leaf.selectNodeContents(text);
+                for (const rect of leaf.getClientRects()) for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+                  if ((/(hidden|clip|auto|scroll)/.test(style.overflowX) && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1))
+                    || (/(hidden|clip|auto|scroll)/.test(style.overflowY) && (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1))) clipped.push(text.textContent!);
+                }
+              }
+              return { whole: rects.every(rect => rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight),
+                clipped, text: element.textContent, contrast,
+                buttons: [...element.querySelectorAll("button")].map(button => button.getBoundingClientRect().height) };
+            });
+            expect(geometry.whole).toBe(true);
+            expect(geometry.clipped).toEqual([]);
+            expect(Math.min(...geometry.contrast)).toBeGreaterThanOrEqual(4.5);
+            for (const height of geometry.buttons) expect(height).toBeGreaterThanOrEqual(44);
+            frames.push({ state, geometry });
+            expect(await page.evaluate(() => sessionStorage.getItem("llvDraftPane:accepted-control:text"))).toBe("Keep this unsent agent draft intact.");
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-${state}.png`) });
+            if (phone) {
+              expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches && navigator.maxTouchPoints > 0)).toBe(true);
+              await page.locator(`[data-phone-card]:has(${selector})`).tap();
+              const linked = terminal === "refused";
+              const detail = page.locator(linked ? '[data-mobile2-screen="task"]' : '[data-mobile2-sheet="card"]');
+              await detail.waitFor();
+              expect(await detail.locator(selector).count()).toBe(1);
+              await detail.locator(selector).scrollIntoViewIfNeeded();
+              for (const button of await detail.locator(`${selector} button`).all()) expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+              await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-${state}-detail.png`) });
+              for (let step = 0; !linked && step < 5; step++) {
+                await page.keyboard.press("Tab");
+                expect(await detail.evaluate(element => element.contains(document.activeElement))).toBe(true);
+              }
+              await detail.locator(linked ? "[data-mobile2-back]" : "[data-mobile2-close]").tap();
+              await detail.waitFor({ state: "detached" });
+            }
+          };
+          if (created.accepted) await capture("accepted");
+          if (terminal === "refused" && created.accepted) {
+            await capture("persistence");
+            await page.evaluate(() => (window as unknown as { restoreCreationStorage(): void }).restoreCreationStorage());
+          }
+          const beforeCatalogs = catalogs;
+          for (let index = 0; index < 2; index++) {
+            const answered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/files" && response.status() === 200);
+            await page.evaluate(() => window.dispatchEvent(new Event("llv:pipelines-changed")));
+            const catalog = await (await answered).json();
+            expect(catalog.pipelines.some((row: { id: string }) => row.id === created.id)).toBe(false);
+            await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          }
+          expect(catalogs - beforeCatalogs).toBeGreaterThanOrEqual(2);
+          await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          expect(await page.locator(visibleId).count()).toBe(1);
+          expect(created.accepted).toBe(true);
+          await capture("lagging");
+          readMode = "unavailable";
+          await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          await page.locator(`${selector}[data-creation-state="unavailable"]`).first().waitFor();
+          await capture("unavailable");
+          if (phone) await page.locator(`[data-phone-card]:has(${selector})`).tap();
+          const detailSelector = terminal === "refused" ? '[data-mobile2-screen="task"]' : '[data-mobile2-sheet="card"]';
+          const retry = phone ? page.locator(detailSelector).locator(`${selector} button`) : page.locator(`${selector} button`);
+          // Opening a task subscribes to readback. Settle that unavailable
+          // read before allowing the user's retry to recover the receipt.
+          await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          await retry.scrollIntoViewIfNeeded();
+          const retryBox = await retry.boundingBox();
+          expect(await retry.isEnabled()).toBe(true);
+          readMode = "normal";
+          if (phone) await page.touchscreen.tap(retryBox!.x + retryBox!.width / 2, retryBox!.y + retryBox!.height / 2);
+          else await retry.click();
+          await (phone ? page.locator(detailSelector) : page.locator("body")).locator(`${selector}[data-creation-state="lagging"]`).waitFor();
+          if (phone) await page.locator(detailSelector).locator(terminal === "refused" ? "[data-mobile2-back]" : "[data-mobile2-close]").tap();
+          holdRead = new Promise<void>(resolve => { releaseRead = resolve; });
+          await page.reload();
+          await page.locator('[data-creation-notice="restoring"]').waitFor();
+          expect(await page.locator(selector).count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-restoring.png`) });
+          frames.push({ state: "restoring" });
+          releaseRead!(); holdRead = undefined; releaseRead = undefined;
+          await page.locator(selector).first().waitFor();
+          await capture("reloaded");
+          await page.goto("about:blank");
+          await page.goBack();
+          await page.locator(selector).first().waitFor();
+          expect(posts - beforePosts).toBe(1);
+          release!(); await holder; release = undefined; holder = undefined;
+          if (terminal === "refused") {
+            const file = path.join(pipelineCreationQueueDir(), `${created.id}.json`);
+            const queued = JSON.parse(fs.readFileSync(file, "utf8"));
+            queued.pipeline.stages[0].kind = "review-loop";
+            fs.writeFileSync(file, JSON.stringify(queued));
+          }
+          if (terminal === "refused") {
+            // Settle with the real drainer between the reader's exact opens.
+            const open = fsPromises.open;
+            let transitioned = false;
+            const observer = spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+              if (!transitioned && String(args[0]).endsWith(`${created.id}.refused.json`)) {
+                transitioned = true;
+                await admitQueuedPipelineCreations();
+              }
+              return open(...args);
+            });
+            try {
+              await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+              expect(transitioned).toBe(true);
+              expect(readAnswers.some(answer => answer.id === created.id && answer.status === 503)).toBe(true);
+              await page.locator(`${selector}[data-creation-state="unavailable"]`).first().waitFor();
+              await capture("refusal-transition");
+            } finally { observer.mockRestore(); }
+          } else await admitQueuedPipelineCreations();
+          await admitQueuedPipelineCreations();
+          await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+          if (terminal === "refused") {
+            await page.locator(`${selector}[data-creation-state="refused"]`).first().waitFor();
+            await capture("refused");
+          } else {
+            expect(loadPipelines().filter(pipeline => pipeline.id === created.id)).toHaveLength(1);
+            await page.locator(`${selector}[data-creation-state="linkPending"]`).first().waitFor();
+            await capture("link-pending");
+            // Model a previously completed attachment whose acknowledgement
+            // was lost. The visible action reads the same ID and sends no PATCH.
+            savePipelines(loadPipelines().map(pipeline => pipeline.id === created.id ? { ...pipeline,
+              workLinks: [{ repository: "sample/project", number: 7, kind: "issue", addedAt: frameNow.toISOString(), addedBy: "operator" }],
+            } : pipeline));
+            if (phone) await page.locator(`[data-phone-card]:has(${selector})`).tap();
+            const action = phone ? page.locator('[data-mobile2-sheet="card"]').locator(`${selector} button`) : page.locator(`${selector} button`);
+            if (phone) await action.tap(); else await action.click();
+            if (phone) await page.locator('[data-mobile2-sheet="card"]').waitFor({ state: "detached" });
+            await page.locator(`[data-pipeline="${created.id}"]`).first().waitFor();
+            await page.locator(selector).waitFor({ state: "detached" });
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-stored.png`) });
+            frames.push({ state: "stored" });
+          }
+          // Reload the actual terminal answer while the catalog still omits
+          // this ID. The retained locator must read the same operation again.
+          await page.reload();
+          if (terminal === "refused") {
+            await page.locator(`${selector}[data-creation-state="refused"]`).first().waitFor();
+            await capture("refused-reloaded");
+          } else {
+            await page.locator(`[data-pipeline="${created.id}"]`).first().waitFor();
+            expect(await page.locator(selector).count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-stored-reloaded.png`) });
+            frames.push({ state: "stored-reloaded" });
+          }
+          expect(posts - beforePosts).toBe(1); expect(pageErrors).toEqual([]);
+          expect(loadPipelines().filter(pipeline => controls.some(control => control.id === pipeline.id))).toEqual(controls);
+          expect(controls.filter(pipeline => pipeline.taskIds.includes(controlTask.id))).toHaveLength(2);
+          if (outcome === "refused") {
+            if (phone) await page.locator(`[data-phone-card]:has(${selector})`).tap();
+            const dismiss = phone ? page.locator(detailSelector).locator(`${selector} button`) : page.locator(`${selector} button`);
+            if (phone) await dismiss.tap(); else await dismiss.click();
+            await page.waitForFunction(selector => !document.querySelector(selector), selector);
+            if (phone) await page.locator(detailSelector).locator("[data-mobile2-back]").tap();
+            await page.reload();
+            await page.waitForFunction(() => typeof (window as unknown as { createAcceptedEvidence?: unknown }).createAcceptedEvidence === "function");
+            expect(await page.locator(selector).count()).toBe(0);
+            expect(posts - beforePosts).toBe(1);
+          } else {
+            readMode = "denied";
+            // Keep the mounted page and its last confirmed authority intact.
+            for (let index = 0; index < 2; index++) {
+              const answered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/files" && response.status() === 200);
+              await page.evaluate(() => window.dispatchEvent(new Event("llv:pipelines-changed")));
+              await answered;
+              await page.evaluate(() => (window as unknown as { refreshAcceptedEvidence(): Promise<void> }).refreshAcceptedEvidence());
+            }
+            await page.locator('[data-creation-notice="revoked"]').waitFor();
+            expect(await page.locator(selector).count()).toBe(0);
+            expect(await page.locator(`[data-pipeline="${created.id}"]`).count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-revoked.png`) });
+            frames.push({ state: "revoked" });
+            readMode = "normal";
+            await page.reload();
+            await page.waitForFunction(() => typeof (window as unknown as { createAcceptedEvidence?: unknown }).createAcceptedEvidence === "function");
+            expect(await page.locator(visibleId).count()).toBe(0);
+            expect(posts - beforePosts).toBe(1);
+          }
+          results.push({ width, locale, theme, terminal, outcome, clock: frameNow.toISOString(), id: created.id, posts: posts - beforePosts, missingCatalogs: catalogs - beforeCatalogs,
+            controls: controls.map(pipeline => pipeline.id), frames });
+        } catch (error) {
+          fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ pageErrors, readAnswers,
+            cards: await page.locator('[data-creation], [data-pipeline], .card[data-id]').evaluateAll(elements => elements.map(element => ({ html: element.outerHTML.slice(0, 2500) }))),
+          }, null, 2));
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${outcome}-failure.png`) });
+          fs.writeFileSync(path.join(out, "failure.txt"), await page.locator("body").innerText());
+          throw error;
+        } finally { releaseRead?.(); holdRead = undefined; releaseRead = undefined; await context.close(); release?.(); await holder; release = undefined; holder = undefined; }
+      }
+    fs.writeFileSync(path.join(out, "results.json"), JSON.stringify(results, null, 2));
+    return results;
+  } finally {
+    release?.(); await holder; server?.stop(); unregister();
+    if (priorWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = priorWait;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** Linux's proc alias keeps Chrome's socket name short while its directory
+ * remains inside the caller's isolated export. Only the browser gets TMPDIR. */
+export function ownedBrowserSocketEnvironment() {
+  const directory = fs.mkdtempSync(path.join(process.cwd(), ".browser-sockets-"));
+  return { env: { ...process.env, TMPDIR: process.platform === "linux"
+    ? `/proc/${process.pid}/cwd/${path.basename(directory)}` : directory },
+    close: () => fs.rmSync(directory, { recursive: true, force: true }) };
+}
+
 export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
@@ -362,7 +730,7 @@ export async function captureDoneFrames(browser: Browser, phone: boolean) {
   return failures;
 }
 
-type WorkersRowReading = { icon: number; titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
+type WorkersRowReading = { titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
   inputWeight: number; inputAlign: string; inputX: number; inputY: number; inputH: number; stateRight: number; stateTop: number; stateBottom: number };
 
 /** Worker-limit frames shared by the board and phone drivers. The fixture
@@ -421,11 +789,11 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
         if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
       }
-      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]"), iconEl = element.querySelector("[data-worker-limit-icon]");
-      const row = titleEl && stateEl && iconEl && input ? (() => {
+      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]");
+      const row = titleEl && stateEl && input ? (() => {
         const title = getComputedStyle(titleEl), state = getComputedStyle(stateEl), field = getComputedStyle(input);
         const stateBox = stateEl.getBoundingClientRect(), inputBox = input.getBoundingClientRect();
-        return { icon: iconEl.getBoundingClientRect().width, titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
+        return { titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
           titleX: titleEl.getBoundingClientRect().left - box.left, stateWeight: Number(state.fontWeight), stateColor: state.color,
           inputWeight: Number(field.fontWeight), inputAlign: field.textAlign, inputX: inputBox.left, inputY: inputBox.top, inputH: inputBox.height,
           stateRight: stateBox.right, stateTop: stateBox.top, stateBottom: stateBox.bottom };
@@ -451,10 +819,10 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
     if (selector === "[data-header-menu-workers]") {
       if (Math.abs((measurement.inputWidth ?? 0) - 48) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
       const row = measurement.row as WorkersRowReading | null;
-      const want = phone ? { icon: 18, title: 13, titleX: 46, stateWeight: 500 } : { icon: 16, title: 12, titleX: 32, stateWeight: 500 };
+      /* The Settings window's row recipe: no icon, a 13 px title at the rows' inset, the muted line in the body weight. */
+      const want = phone ? { title: 13, titleX: 16, stateWeight: 400 } : { title: 13, titleX: 20, stateWeight: 400 };
       if (!row) failures.push(`${name}: row geometry missing`);
       else {
-        if (Math.abs(row.icon - want.icon) > .5) failures.push(`${name}: icon ${row.icon}px, siblings ${want.icon}px`);
         if (Math.abs(row.titleSize - want.title) > .5 || row.titleWeight !== 600) failures.push(`${name}: title ${row.titleSize}px/${row.titleWeight}`);
         if (Math.abs(row.titleX - want.titleX) > .5) failures.push(`${name}: label x ${row.titleX}, siblings ${want.titleX}`);
         if (row.stateWeight !== want.stateWeight || row.stateColor === row.titleColor) failures.push(`${name}: state line ${row.stateWeight}/${row.stateColor} is not the muted sibling word`);
@@ -520,15 +888,16 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         await page.locator("[data-rail-menu]").first().click();
         await page.locator("[data-rail-menu-settings]").click();
       }
+      await page.locator('[data-settings-section-row="roles"]').click();
       await page.locator("[data-header-menu-workers] input").waitFor();
       await frame(page, "[data-header-menu-workers]", `${name}-settings-row`);
-      /* The 232 px panel wraps the override line («7 here (own limit 10) · 19 on machine») onto a second state line: 14 px more than the machine scene. */
-      await frame(page, phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]", `${name}-settings`, phone ? 743 : 436);
+      await frame(page, phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]", `${name}-settings`);
       if (!phone && scene === "machine") {
         await page.keyboard.press("Escape");
         await page.locator("[data-rail-overview]").click();
         await page.locator("[data-rail-menu]").first().click();
         await page.locator("[data-rail-menu-settings]").click();
+        await page.locator('[data-settings-section-row="roles"]').click();
         await page.locator("[data-header-menu-workers] input").waitFor();
         await frame(page, "[data-header-menu-workers]", `${name}-overview`);
       }
@@ -538,6 +907,7 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         await page.locator("[data-mobile2-project='__overview__']").click();
         await page.locator("[data-mobile2-open='menu']").first().click();
         await page.locator("[data-mobile2-menu-row='settings']").click();
+        await page.locator('[data-settings-section-row="roles"]').click();
         await page.locator("[data-header-menu-workers] input").waitFor();
         const overview = await frame(page, "[data-header-menu-workers]", `${name}-overview`);
         if (overview.text?.includes(lang === "en" ? " here" : " тут")) failures.push(`${name}: overview names a project's running count`);
@@ -1485,6 +1855,7 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
     for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
       for (const scene of ["multi-one", "multi-kicked", "multi-refused", "multi-ready"]) {
         const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        let railDot: { dot: number[]; opens: boolean } | null = null;
         try {
           await context.addInitScript(({ lang, scheme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv_theme", scheme); }, { lang, scheme });
           const page = await context.newPage();
@@ -1493,31 +1864,28 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             await page.locator('[data-mobile2-open="menu"]').first().click();
             await page.locator('[data-mobile2-menu-row="accounts"]').click();
             await page.locator("[data-mobile2-telegram] button").first().click();
+            /* The panel's status dot is a 44 px target of its own, and a tap on the row's button still reaches the button. */
+            await page.locator("[data-telegram-bot-entry] [data-settings-dot]").waitFor();
+            const entry = await page.locator("[data-telegram-bot-entry]").evaluate((section) => {
+              const dot = section.querySelector<HTMLElement>("[data-settings-dot]")!.getBoundingClientRect();
+              const open = section.querySelector<HTMLElement>("[data-telegram-bot-open]")!;
+              const box = open.getBoundingClientRect();
+              return { dot: [Math.round(dot.width), Math.round(dot.height)], opens: open.contains(document.elementFromPoint(box.left + 4, box.top + box.height / 2)) };
+            });
+            if (entry.dot[0]! < 44 || entry.dot[1]! < 44 || !entry.opens) throw new Error(`rail Telegram dot ${JSON.stringify(entry)}`);
+            railDot = entry;
           } else {
             const footer = page.locator("[data-rail-footer]").first();
             await footer.waitFor();
             if (await footer.getAttribute("data-rail-footer") === "folded") await page.click("[data-rail-footer-toggle]");
             await page.locator(`button[aria-label="${lang === "uk" ? "Підключення Telegram" : "Telegram connection"}"]`).click();
           }
-          const panel = page.locator(`[role="dialog"][aria-label="Telegram"] section[aria-label="${lang === "uk" ? "Бот" : "Bot"}"]`);
-          await panel.waitFor();
-          const add = panel.locator("details").filter({ has: page.locator("summary", { hasText: lang === "uk" ? "Додати ще одного бота" : "Add another bot" }) });
-          const row = panel.locator("li").filter({ hasText: "Team Reports" }).first();
+          /* The panel's bot row opens the Settings window on Telegram; a chat's bots are on its page. */
+          await page.locator("[data-telegram-bot-open]").click();
+          const panel = page.locator("[data-settings-window], [data-mobile2-sheet='settings']");
+          await panel.locator("[data-telegram-settings]").waitFor();
+          const row = panel.locator("[data-telegram-chat-row]").filter({ hasText: "Team Reports" }).first();
           await row.waitFor();
-          await row.scrollIntoViewIfNeeded();
-          if (scene === "multi-kicked") {
-            const states = await row.locator("[data-telegram-bot-posting-state]").allTextContents();
-            const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
-            const mayPost = lang === "uk" ? "Агентам можна писати" : "Agents may post";
-            const frame = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}`;
-            if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) {
-              throw new Error(`${frame}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
-            }
-            const overflow = await row.evaluate(el => el.scrollWidth > el.clientWidth
-              || [...el.querySelectorAll<HTMLElement>("[data-telegram-bot-posting-state]")].some(state => state.getBoundingClientRect().right > el.getBoundingClientRect().right + 1));
-            if (overflow) throw new Error(`${frame}: bot posting states overflow the chat row`);
-          }
-          if (scene === "multi-refused" && !await row.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
           const key = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}-${scene}`;
           const frames: string[] = [];
           const capture = async (suffix = "") => {
@@ -1525,44 +1893,569 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             await page.screenshot({ path: path.join(out, name) });
             frames.push(name);
           };
+          await capture();
           const before = await panel.evaluate(el => ({ panelWidth: el.getBoundingClientRect().width, overflow: el.scrollWidth - el.clientWidth,
             controls: [...el.querySelectorAll<HTMLElement>("button,input,select")].map(c => ({ label: c.getAttribute("aria-label"), disabled: (c as HTMLButtonElement).disabled })) }));
-          if (before.overflow > 1) throw new Error(`${key}: panel overflows horizontally`);
-          const clipping = await row.evaluate(el => {
-            const card = el.getBoundingClientRect();
-            const dialog = el.closest('[role="dialog"]')!.getBoundingClientRect();
-            return card.top < dialog.top || card.bottom > dialog.bottom || card.left < dialog.left || card.right > dialog.right;
-          });
-          if (clipping) throw new Error(`${key}: chat card is clipped`);
-          await capture();
-          if (scene === "multi-ready") {
-            await row.locator("select").selectOption("release_fixture_bot");
-            await page.waitForFunction(() => (document.querySelector('select[aria-label$=": Team Reports"]') as HTMLSelectElement)?.value === "release_fixture_bot");
-            const remove = panel.getByRole("button", { name: lang === "uk" ? "Видалити" : "Remove", exact: true }).first();
-            await remove.click();
-            const confirm = panel.getByRole("button", { name: lang === "uk" ? "Підтвердити" : "Confirm", exact: true });
-            await confirm.locator("..").scrollIntoViewIfNeeded();
-            const confirmationOverflows = await confirm.evaluate(el => [...el.parentElement!.children].some(child => child.scrollWidth > child.clientWidth + 1));
-            if (confirmationOverflows) throw new Error(`${key}: remove confirmation overflows`);
-            await capture("-remove");
-            await confirm.click();
-            await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "remove_bot"));
-          }
+          if (before.overflow > 1) throw new Error(`${key}: window overflows horizontally`);
           if (scene === "multi-one") {
-            await add.locator("summary").click();
-            await add.scrollIntoViewIfNeeded();
+            await panel.locator("[data-telegram-add-bot] [data-settings-row='link']").click();
+            await panel.locator("[data-telegram-add-bot-page]").waitFor();
             await capture("-add");
-            await add.locator('input[type="password"]').fill("12345:" + "not-a-real-token-".repeat(2) + "fake");
-            await add.locator('button[type="submit"]').click();
+            await panel.locator('input[type="password"]').fill("12345:" + "not-a-real-token-".repeat(2) + "fake");
+            await panel.locator('button[type="submit"]').click();
             await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "add_bot"));
+          } else {
+            await row.locator("[data-settings-row='link']").first().click();
+            await panel.locator("[data-telegram-chat-page]").waitFor();
+            await capture("-chat");
+            if (scene === "multi-kicked") {
+              const states = await panel.locator("[data-telegram-bot-posting-state]").allTextContents();
+              const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
+              const mayPost = translate(lang, "settings.telegram.bot.canPost");
+              if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) throw new Error(`${key}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
+            }
+            if (scene === "multi-refused" && !await panel.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
+            if (scene === "multi-ready") {
+              await panel.locator("[data-telegram-posts-as]").selectOption("release_fixture_bot");
+              await page.waitForFunction(() => (document.querySelector("[data-telegram-posts-as]") as HTMLSelectElement)?.value === "release_fixture_bot");
+              await page.locator("[data-settings-back]").click();
+              await panel.locator("[data-telegram-sending-bot] [data-settings-row='link']").first().click();
+              await panel.getByRole("button", { name: lang === "uk" ? "Видалити" : "Remove", exact: true }).click();
+              const confirm = panel.getByRole("button", { name: lang === "uk" ? "Підтвердити" : "Confirm", exact: true });
+              await capture("-remove");
+              await confirm.click();
+              await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "remove_bot"));
+            }
           }
           const actions = await page.evaluate(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.map(p => p.action));
-          readings.push({ key, width, height, ...before, actions, frames });
+          readings.push({ key, width, height, ...before, actions, frames, ...(railDot ? { railDot } : {}) });
         } finally { await context.close(); }
       }
     }
   }
   return readings;
+}
+
+/* ---- The one Settings window (docs/design/settings-redo/build-brief.md §7) ---- */
+
+type SettingsSurfaceName = "window" | "privacy" | "telegram" | "voice";
+interface SettingsFrame {
+  surface: SettingsSurfaceName;
+  name: string;
+  /** `?settings=<scene>` on the fixture; `&dev=` picks the voice devices. */
+  scene: string;
+  query?: string;
+  section?: string;
+  /** The row to press, then what else to do: every step runs through the product's own controls. */
+  steps?: (page: Page, phone: boolean) => Promise<unknown>;
+  /** The state's defining element, in view at the frame. */
+  defining?: string;
+  details?: boolean;
+  /** Text that must be absent from the surface, Details opened. */
+  absent?: RegExp;
+  /** The window scrolled itself to this state: where it stopped falls between lines too. */
+  landed?: boolean;
+  desktopOnly?: boolean;
+  phoneOnly?: boolean;
+}
+
+const rowButton = (page: Page, attr: string) => page.locator(`[${attr}] [data-settings-row="link"]`).first();
+const pressRow = async (page: Page, attr: string) => { await rowButton(page, attr).scrollIntoViewIfNeeded(); await rowButton(page, attr).click(); };
+const openDot = async (page: Page, attr: string) => {
+  const dot = page.locator(`[${attr}] [data-settings-dot]`).first();
+  await dot.scrollIntoViewIfNeeded();
+  await dot.click();
+  await page.locator("[data-settings-dot-popover]").waitFor();
+};
+const NO_KEY_OR_SPEND = /\bkeys?\b|\bcap\b|spend|\$|ключ|витрат|межа/i;
+const OPEN_MENU = async (page: Page, phone: boolean) => {
+  await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+  await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+};
+const toolPage = (name: string) => async (page: Page) => pressRow(page, `data-voice-tool-server="${name}"`);
+const openFeature = (feature: string) => async (page: Page) => {
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } })));
+  const row = page.locator(`[data-openai-service="${feature}"]`);
+  await row.scrollIntoViewIfNeeded();
+  await row.click();
+  await page.locator(`[data-openai-feature-page="${feature}"]`).waitFor();
+};
+const removeTool = (name: string) => async (page: Page) => {
+  await toolPage(name)(page);
+  await page.locator("[data-voice-tool-action='remove']").click();
+  await page.waitForFunction(() => document.activeElement?.matches("[data-voice-tools]"), undefined, { timeout: 10_000 });
+};
+
+const SETTINGS_FRAMES: SettingsFrame[] = [
+  /* The window. */
+  { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
+  { surface: "window", name: "keys-on-key", scene: "voice-file", steps: async (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } }))), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
+  /* A feature the OpenAI key serves, opened from its row under «Keys»: its choices are rows of the page, with no box around them. */
+  { surface: "window", name: "keys-feature", scene: "voice-file", steps: openFeature("dictation"), defining: "[data-openai-feature-page='dictation'] [role=radiogroup]", absent: /Now [A-Z]|Зараз / },
+  { surface: "window", name: "keys-feature-no-key", scene: "voice-missing", steps: openFeature("read"), defining: "[data-openai-feature-page='read'] [data-openai-add-key]" },
+  /* An option without its key lands on that key, whichever key it is. */
+  { surface: "window", name: "keys-feature-add-soniox", scene: "voice-missing", steps: async (page) => { await openFeature("read")(page); await page.locator("[data-openai-add-key='soniox']").click(); }, defining: "[data-header-menu-page='keys'] [data-keys-row='soniox']" },
+  { surface: "window", name: "keys-feature-chosen", scene: "voice-file", steps: async (page) => { await openFeature("memory")(page); await page.locator("[data-openai-option='openai'] input").check(); }, defining: "[data-openai-option='openai'][data-selected]" },
+  { surface: "window", name: "notice-opens-privacy", scene: "privacy-notice", steps: async (page) => { await page.locator("[data-telemetry-notice] button").first().click(); }, defining: "[data-telemetry-settings]" },
+  /* First run: the setup guide fills the screen, and the install notice's button still opens a window a person can reach. */
+  { surface: "window", name: "over-onboarding", scene: "privacy-notice", steps: async (page) => {
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: null } })));
+    await page.locator("[data-onboarding-dialog]").waitFor();
+    await page.locator("[data-telemetry-notice] button").first().click();
+  }, defining: "[data-telemetry-settings]" },
+  { surface: "window", name: "memory", scene: "telegram-rest", section: "memory", defining: "[data-memory-page]" },
+  { surface: "window", name: "roles", scene: "telegram-rest", section: "roles", defining: "[data-header-menu-workers]" },
+  { surface: "window", name: "general", scene: "telegram-rest", section: "general", defining: "[data-header-menu-page='settings']" },
+  { surface: "window", name: "back-from-page", scene: "telegram-rest", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-settings-back]").click(); }, defining: '[data-telegram-chat-row="-1000000000101"]' },
+  /* Privacy. */
+  { surface: "privacy", name: "rest", scene: "privacy-rest", section: "privacy", defining: "[data-swarm-setting]" },
+  { surface: "privacy", name: "swarm-on", scene: "privacy-swarm", section: "privacy", defining: "[data-swarm-setting] [role=switch][aria-checked=true]" },
+  { surface: "privacy", name: "locked", scene: "privacy-locked", section: "privacy", defining: "[data-telemetry-ping]:disabled" },
+  { surface: "privacy", name: "consent-failed", scene: "privacy-consent-failed", section: "privacy", defining: "[data-subscription-api-retry]" },
+  /* From the read failure one control reads the setting again. */
+  { surface: "privacy", name: "consent-retry", scene: "privacy-consent-failed", section: "privacy", steps: async (page) => { await page.locator("[data-subscription-api-retry]").click(); }, defining: "[data-subscription-api-retry]" },
+  { surface: "privacy", name: "ping-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-telemetry-ping]").click(), defining: "[role=alert]" },
+  { surface: "privacy", name: "direct-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-subscription-api] [role=switch]").click(), defining: "[data-subscription-api] [role=alert]" },
+  { surface: "privacy", name: "swarm-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-swarm-setting] [role=switch]").click(), defining: "[data-swarm-setting] [role=alert]" },
+  { surface: "privacy", name: "details", scene: "privacy-rest", section: "privacy", details: true, defining: "[data-settings-details]" },
+  /* Telegram. */
+  { surface: "telegram", name: "no-bot", scene: "telegram-none", section: "telegram", defining: "[data-telegram-bot-token='missing']" },
+  { surface: "telegram", name: "clone-only", scene: "telegram-clone", section: "telegram", defining: '[data-telegram-chat-row="-1000000000202"]' },
+  { surface: "telegram", name: "rest", scene: "telegram-rest", section: "telegram", defining: "[data-telegram-bot-row]" },
+  { surface: "telegram", name: "popover-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, "data-telegram-bot-row"), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "popover-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "popover-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "bot-page", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='saved']", absent: /Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки|Last checked|Перевірено/ },
+  { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']", absent: /Atlas team|Atlas support|Release notes|Підтримка Atlas|Реліз-нотатки|Last checked|Перевірено/ },
+  { surface: "telegram", name: "webhook-elsewhere", scene: "telegram-webhook", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-page] [role=status]" },
+  { surface: "telegram", name: "sending-rejected", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"'), defining: "[data-telegram-sending-bot-page] [role=status]" },
+  /* A sender removed from its own page: the section again, and the keyboard on its first control. */
+  { surface: "telegram", name: "sender-removed", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => {
+    await pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"');
+    const actions = page.locator("[data-telegram-sending-bot-page] [data-settings-row='actions'] button");
+    await actions.first().click();
+    await actions.first().click();
+    await page.waitForFunction(() => document.activeElement?.closest("[data-settings-scroller], [data-mobile2-sheet-body]") && !document.querySelector("[data-settings-back]")?.textContent?.includes("Atlas Reports"), undefined, { timeout: 10_000 });
+  }, defining: "[data-telegram-bot-row]", absent: /atlas_reports_bot/ },
+  { surface: "telegram", name: "nine-bots", scene: "telegram-nine", section: "telegram", defining: '[data-telegram-sending-bot="atlas_sender_8_bot"]' },
+  { surface: "telegram", name: "add-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-add-bot"), defining: "[data-telegram-add-bot-page] input[type=password]" },
+  { surface: "telegram", name: "chat-ok", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-posts-as]" },
+  { surface: "telegram", name: "chat-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-telegram-delivery='refused']", absent: /switch posting on|увімкніть дописи/ },
+  { surface: "telegram", name: "chat-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-telegram-chat-bot='Nova']" },
+  { surface: "telegram", name: "chat-no-suggestion", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000505"'), defining: "[data-telegram-chat-alias]" },
+  { surface: "telegram", name: "chat-post-refused", scene: "telegram-rest", query: "refuse=1", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-telegram-chat-test]").click(); }, defining: "[data-telegram-failure]" },
+  { surface: "telegram", name: "chat-long-title", scene: "telegram-long", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-chat-name]" },
+  { surface: "telegram", name: "add-chat", scene: "telegram-rest", section: "telegram", steps: async (page) => { await pressRow(page, "data-telegram-add-chat-row"); await page.locator("[data-telegram-add-chat-input]").fill("-1000000000808"); await page.locator("[data-telegram-add-chat-submit]").click(); await page.locator("[data-telegram-add-chat-added]").waitFor(); }, defining: "[data-telegram-add-chat-added]" },
+  { surface: "telegram", name: "inactive-fold", scene: "telegram-rest", section: "telegram", steps: async (page) => { await page.locator("[data-telegram-inactive-fold]").scrollIntoViewIfNeeded(); await page.locator("[data-telegram-inactive-fold]").click(); }, defining: '[data-telegram-chat-row="-1000000000606"]' },
+  { surface: "telegram", name: "reports", scene: "telegram-rest", section: "telegram", steps: async (page) => page.locator("[data-telegram-project-reports-warning]").scrollIntoViewIfNeeded(), defining: "[data-telegram-project-reports-warning]" },
+  { surface: "telegram", name: "reports-name-needed", scene: "telegram-rest", section: "telegram", steps: async (page) => { await page.locator('[data-telegram-project-report="forge"] select').selectOption("atlas-team"); }, defining: '[data-telegram-project-report="forge"] input' },
+  { surface: "telegram", name: "reports-link-error", scene: "telegram-rest", section: "telegram", steps: async (page) => { const row = page.locator('[data-telegram-project-report="atlas"]'); await row.locator("select").waitFor({ state: "attached" }); await row.locator("select").selectOption({ index: (await row.locator("option").count()) - 1 }); await row.locator("input").first().fill("https://t.me/bad"); await row.locator("button[type=submit]").click(); await row.locator("[role=alert]").waitFor(); }, defining: '[data-telegram-project-report="atlas"] [role=alert]' },
+  { surface: "telegram", name: "folders-custom", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-folders-row"), defining: "[data-telegram-document-root] [data-settings-literal]" },
+  { surface: "telegram", name: "folders-default", scene: "telegram-default-folder", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-folders-row"), defining: "[data-telegram-document-root]" },
+  { surface: "telegram", name: "details", scene: "telegram-rest", section: "telegram", details: true, defining: "[data-settings-details]" },
+  { surface: "telegram", name: "chat-details", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), details: true, defining: "[data-settings-details]" },
+  /* Voice. */
+  { surface: "voice", name: "off", scene: "voice-off", section: "voice", query: "dev=default", defining: "[data-voice-companion-enable][aria-checked=false]" },
+  { surface: "voice", name: "codex-plan", scene: "voice-codex", section: "voice", query: "dev=chosen", defining: "[data-voice-companion-plan]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-details", scene: "voice-codex", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-no-call", scene: "voice-nocall", section: "voice", query: "dev=default", defining: "[data-voice-companion-codex]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-limit", scene: "voice-limit", section: "voice", query: "dev=default", defining: "[data-voice-companion-plan]" },
+  { surface: "voice", name: "api-file", scene: "voice-file", section: "voice", query: "dev=default", defining: "[data-voice-companion-key]" },
+  { surface: "voice", name: "api-env", scene: "voice-env", section: "voice", query: "dev=default", defining: "[data-key-source='env']" },
+  { surface: "voice", name: "api-missing", scene: "voice-missing", section: "voice", query: "dev=default", defining: "[data-key-source='missing']" },
+  { surface: "voice", name: "popover-key", scene: "voice-missing", section: "voice", query: "dev=default", steps: async (page) => openDot(page, "data-voice-companion-key"), defining: "[data-settings-dot-popover]" },
+  { surface: "voice", name: "cap-usage", scene: "voice-file", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-reserved", scene: "voice-reserved", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-reached", scene: "voice-reached", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-incomplete", scene: "voice-incomplete", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-last-call]" },
+  { surface: "voice", name: "cap-refused", scene: "voice-file", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await pressRow(page, "data-voice-companion-cap-row"); const field = page.locator("[data-voice-companion-cap-input]"); await field.fill("35"); await field.press("Enter"); }, defining: "[data-voice-companion-setting-error]" },
+  { surface: "voice", name: "held", scene: "voice-held", section: "voice", query: "dev=default", defining: "[data-voice-companion-stay]" },
+  /* The held line's key action lands on «Keys» at the OpenAI key. */
+  { surface: "voice", name: "held-opens-keys", scene: "voice-held", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-companion-held-key]").click(), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
+  { surface: "voice", name: "uncertain", scene: "voice-uncertain", section: "voice", query: "dev=default", defining: "[data-voice-companion-uncertain]" },
+  { surface: "voice", name: "devices-permission", scene: "voice-codex", section: "voice", query: "dev=noperm", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-devices-allow]" },
+  { surface: "voice", name: "devices-denied", scene: "voice-codex", section: "voice", query: "dev=denied", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='input']" },
+  { surface: "voice", name: "devices-missing", scene: "voice-codex", section: "voice", query: "dev=gone", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-device-state='missing']" },
+  /* A chosen device's long name reads whole: in the window's wide select, and on the sheet in the line under it. */
+  { surface: "voice", name: "devices-chosen", scene: "voice-codex", section: "voice", query: "dev=chosen", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device='input'] select" },
+  { surface: "voice", name: "devices-no-speakers", scene: "voice-codex", section: "voice", query: "dev=nosink", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='output']" },
+  { surface: "voice", name: "timer-on", scene: "voice-timer", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-timer-telegram]").scrollIntoViewIfNeeded(), defining: "[data-timer-telegram] [role=switch][aria-checked=true]" },
+  { surface: "voice", name: "memory-empty", scene: "voice-codex", section: "voice", query: "dev=default&calls=empty", steps: async (page) => page.locator("[data-call-memory-row-open]").scrollIntoViewIfNeeded(), defining: "[data-call-memory-row-open]" },
+  { surface: "voice", name: "memory-list", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-call-memory-row-open"), defining: "[data-call-memory-list]" },
+  { surface: "voice", name: "memory-error", scene: "voice-memory-error", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-call-memory-status]").scrollIntoViewIfNeeded(), defining: "[data-call-memory-status]" },
+  { surface: "voice", name: "tools-empty", scene: "voice-tools-empty", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-add]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-load-error", scene: "voice-tools-error", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-sign-in", scene: "voice-tools-signin", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-list", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-add]").scrollIntoViewIfNeeded(), defining: "[data-voice-tool-add]" },
+  /* A tool whose dry run passed is told in words from one still waiting. */
+  { surface: "voice", name: "tools-ready-word", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-ready]").first().scrollIntoViewIfNeeded(), defining: "[data-voice-tool-ready]" },
+  { surface: "voice", name: "popover-tool", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => openDot(page, 'data-voice-tool-server="calendar"'), defining: "[data-settings-dot-popover]" },
+  { surface: "voice", name: "tool-pending-secret", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-needs"), defining: "[data-voice-tool-reference]" },
+  { surface: "voice", name: "tool-containment", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), defining: "[data-voice-tool-uncontained]" },
+  { surface: "voice", name: "tool-passed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-passed"), defining: "[data-voice-tool-action='approve']:enabled" },
+  { surface: "voice", name: "tool-enabled-filter", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("calendar"), defining: "[data-voice-tool-filter]" },
+  { surface: "voice", name: "tool-filter-empty", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-filter]").fill("zzzz-no-such-tool"); }, defining: "[data-voice-tool-filter-none]" },
+  { surface: "voice", name: "tool-changed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("notes"), defining: "[data-voice-tool-state='changed']" },
+  { surface: "voice", name: "tool-rejected", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("drive"), defining: "[data-voice-tool-state='rejected']" },
+  { surface: "voice", name: "tool-refused", scene: "voice-codex", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-ask]").click(); }, defining: "[data-voice-tools-refused]" },
+  { surface: "voice", name: "tool-details", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), details: true, defining: "[data-settings-details]" },
+  /* Remove on a tool's page: the section again, the list without the tool or its «No tools» line, and the keyboard on it. */
+  { surface: "voice", name: "tool-removed", scene: "voice-codex", section: "voice", query: "dev=default", steps: removeTool("drive"), landed: true, defining: "[data-voice-tools-list]", absent: /Reads shared files|Читає спільні файли/ },
+  { surface: "voice", name: "tool-removed-last", scene: "voice-tools-one", section: "voice", query: "dev=default", steps: removeTool("drive"), landed: true, defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "details-api", scene: "voice-file", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]" },
+];
+
+const SETTINGS_COMBOS = [
+  { lang: "uk", theme: "light" }, { lang: "en", theme: "dark" }, { lang: "en", theme: "light" }, { lang: "uk", theme: "dark" },
+] as const;
+/* A landscape phone is short: the sheet opens there too (MOBILE_LAYOUT_QUERY), with the sheet's 44 px targets. */
+const SETTINGS_DEVICES = { desktop: { width: 1440, height: 900 }, mid: { width: 900, height: 800 }, short: { width: 1000, height: 700 }, phone: { width: 390, height: 844 }, landscape: { width: 844, height: 390 } } as const;
+
+/** Measures the open surface: the brief's §5 numbers, the rules of a settings surface, and what a person would see cut. */
+function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null; landed: boolean }) {
+  const { phone, defining, absent, landed } = args;
+  const failures: string[] = [];
+  const surface = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']");
+  if (!surface) return { failures: ["no settings surface"], end: null, scrolls: false };
+  const scroller = surface.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!;
+  const vw = innerWidth, vh = innerHeight;
+  const inView = (r: DOMRect) => r.width > 0 && r.height > 0 && r.left >= -0.5 && r.right <= vw + 0.5 && r.top >= -0.5 && r.bottom <= vh + 0.5;
+  /* The title and × stay on screen. */
+  const close = surface.querySelector<HTMLElement>("[data-settings-close], [data-mobile2-close]");
+  if (!close || !inView(close.getBoundingClientRect())) failures.push("close is off the screen");
+  /* Nothing lies over the window: a press on its × reaches it. */
+  else {
+    const box = close.getBoundingClientRect();
+    if (!surface.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) failures.push("the window is covered");
+  }
+  /* The defining element is on the first screen or scrolled whole. */
+  if (defining) {
+    const element = document.querySelector<HTMLElement>(defining);
+    /* Its top and bottom are read from its text where it has any, so a padding above the first line is no cut line; its sides
+       from its box, since a truncated line's range runs past the clip. */
+    const textBox = (target: HTMLElement): DOMRect => {
+      const rects: DOMRect[] = [];
+      const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+      for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+        if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
+      }
+      const own = target.getBoundingClientRect();
+      if (!rects.length) return own;
+      const top = Math.min(...rects.map((rect) => rect.top));
+      return new DOMRect(own.left, top, own.width, Math.max(...rects.map((rect) => rect.bottom)) - top);
+    };
+    const box = element ? textBox(element) : undefined;
+    const scrollerBox = scroller.getBoundingClientRect();
+    /* One about as tall as the scroller (a short landscape sheet) cannot stand whole, since the end of the scroll starts on a row's
+       top and keeps up to 64 px under the last row: its start or its end is on the screen, or it fills it. */
+    const tall = scroller.contains(element!) && box !== undefined && box.height > scrollerBox.height - 64;
+    const fills = tall && box!.top <= scrollerBox.top + 1 && box!.bottom >= scrollerBox.bottom - 1;
+    const starts = tall && ((box!.top >= scrollerBox.top - 1 && box!.top < scrollerBox.bottom - 16) || (box!.bottom <= scrollerBox.bottom + 1 && box!.bottom > scrollerBox.top + 16));
+    if (!box) failures.push(`defining element missing: ${defining}`);
+    else if (tall ? !(fills || starts) || box.left < -0.5 || box.right > vw + 0.5 : !inView(box) || (scroller.contains(element!) && (box.top < scrollerBox.top - 1 || box.bottom > scrollerBox.bottom + 1))) failures.push(`defining element not in view: ${defining} at ${Math.round(box.top)}-${Math.round(box.bottom)}, scroller ${Math.round(scrollerBox.top)}-${Math.round(scrollerBox.bottom)}`);
+  }
+  /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
+  for (const element of scroller.querySelectorAll<HTMLElement>("*")) {
+    if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-memory-page], [data-header-menu-workers]")) continue;
+    const style = getComputedStyle(element);
+    if (["Top", "Right", "Bottom", "Left"].every((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0) && element.getBoundingClientRect().height > 44) failures.push(`bordered box: ${element.tagName} ${element.className}`);
+  }
+  if (surface.querySelector("button button, button a, a button, button input, button select, label button")) failures.push("a control inside a control");
+  /* Text is never cut sideways, and no line stands apart from its name. */
+  const ranges: { text: string; rects: DOMRect[]; face: boolean }[] = [];
+  const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    /* A select's face truncates as a native select does; the row's own line names the device whole. */
+    ranges.push({ text: (node.textContent ?? "").trim().slice(0, 48), rects: [...range.getClientRects()], face: Boolean(node.parentElement?.closest("[data-settings-choice-face], .truncate")) });
+  }
+  const scrollerBox = scroller.getBoundingClientRect();
+  for (const { text, rects, face } of ranges) if (!face) for (const rect of rects) if (rect.right > scrollerBox.right + 0.5 || rect.left < scrollerBox.left - 0.5) failures.push(`cut sideways: ${text}`);
+  /* In the window a select's chosen value reads whole: its text fits inside the face beside the native arrow. */
+  if (!phone) {
+    const context = document.createElement("canvas").getContext("2d")!;
+    for (const select of scroller.querySelectorAll<HTMLSelectElement>("[data-settings-row='choice'] select")) {
+      const text = select.selectedOptions[0]?.textContent ?? "";
+      const style = getComputedStyle(select);
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+      const needs = context.measureText(text).width;
+      if (needs > room) failures.push(`select cuts its value: ${text.slice(0, 48)} needs ${Math.ceil(needs)} px, has ${Math.floor(room)}`);
+    }
+  }
+  /* A landscape phone's wide select reads the device whole. */
+  if (phone && vw > vh) for (const face of scroller.querySelectorAll<HTMLElement>("[data-voice-device] [data-settings-choice-face]")) if (face.scrollWidth > face.clientWidth) failures.push(`device select cuts: ${face.textContent}`);
+  /* A select drawn over its face stays invisible, disabled or not: the face alone shows the value once. */
+  for (const select of scroller.querySelectorAll<HTMLSelectElement>("[data-settings-choice-face]")) {
+    const native = select.parentElement?.querySelector("select");
+    if (native && getComputedStyle(native).opacity !== "0") failures.push(`native select is painted over its face (opacity ${getComputedStyle(native).opacity}): ${select.textContent}`);
+  }
+  /* A hint's lines keep the muted line's step, whatever stands inline in them: a link does not grow its line. */
+  for (const hint of scroller.querySelectorAll<HTMLElement>("[data-voice-device-hint]")) {
+    const tops: number[] = [];
+    const lineWalk = document.createTreeWalker(hint, NodeFilter.SHOW_TEXT);
+    for (let node = lineWalk.nextNode(); node; node = lineWalk.nextNode()) {
+      if (!(node.textContent ?? "").trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 0 && !tops.some((top) => Math.abs(top - rect.top) < 2)) tops.push(rect.top);
+    }
+    tops.sort((a, b) => a - b);
+    for (let index = 1; index < tops.length; index += 1) if (tops[index] - tops[index - 1] > 18.5) failures.push(`hint line step ${(tops[index] - tops[index - 1]).toFixed(1)} px: ${hint.getAttribute("data-voice-device-hint")}`);
+  }
+  /* A name field and its Save button beside a select wear that select's height and type. */
+  for (const report of scroller.querySelectorAll<HTMLElement>("[data-telegram-project-report]")) {
+    const face = report.querySelector<HTMLElement>("[data-settings-choice-face]")?.parentElement;
+    if (!phone || !face) continue;
+    const reference = face.getBoundingClientRect().height;
+    const field = report.querySelector<HTMLElement>("form [data-settings-field-face]");
+    if (field && Math.abs(field.getBoundingClientRect().height - reference) > 2) failures.push(`reports field ${field.getBoundingClientRect().height} px beside a select ${reference} px`);
+    const save = report.querySelector<HTMLElement>("form [data-settings-button-face]");
+    if (save && Math.abs(save.getBoundingClientRect().height - reference) > 2) failures.push(`reports Save ${save.getBoundingClientRect().height} px beside a select ${reference} px`);
+    const faceSize = parseFloat(getComputedStyle(face).fontSize);
+    if (save && Math.abs(parseFloat(getComputedStyle(save).fontSize) - faceSize) > 0.5) failures.push(`reports Save type ${getComputedStyle(save).fontSize} beside a select's ${faceSize}px`);
+  }
+  /* A chat page's field and select wear one height, and what stands under a field is the field's own. */
+  const field = scroller.querySelector<HTMLElement>("[data-settings-field-face]");
+  const choice = scroller.querySelector<HTMLElement>("[data-settings-row='choice'] [data-settings-choice-face]")?.parentElement;
+  if (field && choice && Math.abs(field.getBoundingClientRect().height - choice.getBoundingClientRect().height) > 2) failures.push(`field ${field.getBoundingClientRect().height} px beside a select ${choice.getBoundingClientRect().height} px`);
+  if (scroller.querySelector("[data-telegram-chat-page] [data-settings-row='field'] + [data-settings-row='text']")) failures.push("a line stands under the alias as its hint");
+  /* The reset's words stay with its date. */
+  for (const reset of scroller.querySelectorAll<HTMLElement>("[data-plan-reset]")) if (new Set([...reset.getClientRects()].map((rect) => Math.round(rect.top))).size > 1) failures.push(`plan reset splits: ${reset.textContent}`);
+  if (scroller.querySelector("[data-voice-companion-settings]") && /·\s\d+:\d{2}/.test(scroller.innerText)) failures.push("a duration reads as a clock time");
+  /* The cap once on its row, and one red line at the cap. */
+  const capRow = scroller.querySelector<HTMLElement>("[data-voice-companion-cap-row]");
+  if (capRow && (capRow.innerText.match(/\$20\.00/g) ?? []).length > 1) failures.push("the cap reads twice on its row");
+  const capPage = scroller.querySelector<HTMLElement>("[data-voice-companion-cap]");
+  if (capPage && capPage.querySelectorAll(".text-danger, [style*='danger']").length > 1) failures.push("two red lines on the cap page");
+  /* One main action in the held state. */
+  const heldKey = scroller.querySelector<HTMLElement>("[data-voice-companion-held-key]");
+  const stay = scroller.querySelector<HTMLElement>("[data-voice-companion-stay]");
+  if (heldKey && stay && getComputedStyle(heldKey).backgroundColor === getComputedStyle(stay).backgroundColor) failures.push("the held state's two actions look alike");
+  /* Neighbouring tool states differ in words. */
+  const ready = scroller.querySelector("[data-voice-tool-ready]")?.textContent;
+  const waiting = scroller.querySelector("[data-voice-tool-state='pending']:not([data-voice-tool-ready])")?.textContent;
+  if (ready && ready === waiting) failures.push("a passed tool and a waiting one read alike");
+  /* A literal breaks only between its parts. */
+  for (const part of scroller.querySelectorAll<HTMLElement>("[data-settings-literal] > span.whitespace-nowrap")) {
+    const tops = new Set([...part.getClientRects()].map((rect) => Math.round(rect.top)));
+    if (tops.size > 1) failures.push(`literal part broken: ${part.textContent}`);
+  }
+  /* The first screen and the end of the scroll fall between lines. */
+  const cutByEdge = () => {
+    const box = scroller.getBoundingClientRect();
+    const cut: string[] = [];
+    const walk = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+      if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select, [data-settings-dot-popover]")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if ((rect.top < box.top - 0.5 && rect.bottom > box.top + 0.5) || (rect.top < box.bottom - 0.5 && rect.bottom > box.bottom + 0.5)) cut.push((node.textContent ?? "").trim().slice(0, 40));
+    }
+    return [...new Set(cut)];
+  };
+  const held = scroller.scrollTop;
+  if (landed) for (const text of cutByEdge()) failures.push(`where it landed cuts: ${text}`);
+  scroller.scrollTop = 0;
+  for (const text of cutByEdge()) failures.push(`first screen cuts: ${text}`);
+  const scrolls = scroller.scrollHeight > scroller.clientHeight + 1;
+  /* While more follows, the hairline stands above the window's own edge; a landscape phone keeps no wide blank band under it. */
+  if (scrolls) {
+    const band = Math.min(surface.getBoundingClientRect().bottom, vh) - scroller.getBoundingClientRect().bottom;
+    if (band < (phone && vw > vh ? 3.5 : 8)) failures.push(`hairline ${band.toFixed(1)} px above the window's edge`);
+    if (phone && vw > vh && band >= 48) failures.push(`blank band of ${Math.round(band)} px under the first screen`);
+  }
+  scroller.scrollTop = scroller.scrollHeight;
+  for (const text of cutByEdge()) failures.push(`end of scroll cuts: ${text}`);
+  /* The foot under the last text at the end of a surface. */
+  let lastBottom = 0;
+  const foot = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+  for (let node = foot.nextNode(); node; node = foot.nextNode()) {
+    if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) lastBottom = Math.max(lastBottom, rect.bottom);
+  }
+  const under = scroller.getBoundingClientRect().bottom - lastBottom;
+  const details = scroller.querySelector("[data-settings-details]");
+  if (details && under < 16 - 0.5 && scroller.scrollHeight > scroller.clientHeight) failures.push(`foot under open Details is ${under.toFixed(1)} px`);
+  /* One right edge at 390: a switch's track, a select's face, a chevron. */
+  if (phone) {
+    const edges = new Set<number>();
+    for (const track of scroller.querySelectorAll<HTMLElement>("[data-settings-row='switch'] [role=switch] > span")) edges.add(Math.round(track.getBoundingClientRect().right));
+    for (const face of scroller.querySelectorAll<HTMLElement>("[data-settings-row='choice'] select")) edges.add(Math.round(face.getBoundingClientRect().right));
+    for (const chevron of scroller.querySelectorAll<SVGElement>("[data-settings-chevron]")) edges.add(Math.round(chevron.getBoundingClientRect().right));
+    const list = [...edges];
+    if (list.length && Math.max(...list) - Math.min(...list) > 1) failures.push(`right edges differ: ${list.join(",")}`);
+    /* A 44 px target for each control, read from the point a thumb lands on. */
+    scroller.scrollTop = held;
+    for (const control of surface.querySelectorAll<HTMLElement>("button, select, input")) {
+      /* A radio's target is the label it sits in. */
+      const box = (control.matches("input[type=radio]") ? control.closest("label") ?? control : control).getBoundingClientRect();
+      /* Keys, Memory and the worker limit are hosted unchanged, with their own recipes. */
+      if (box.width === 0 || control.closest("[data-keys-page], [data-memory-page], [data-telegram-add-chat], [data-header-menu-workers]")) continue;
+      if (box.height < 43.5 || (box.width < 43.5 && !control.matches("input"))) {
+        /* A button may draw a smaller face over a 44 px target (a pseudo-element around it): the target is proven from the points a thumb lands on, 44 by 44 around its centre. */
+        let missed = "";
+        if (control.matches("button")) {
+          control.scrollIntoView({ block: "center" });
+          const now = control.getBoundingClientRect();
+          const cx = now.left + now.width / 2, cy = now.top + now.height / 2;
+          const reach = (dx: number, dy: number) => { let n = 0; while (n < 40 && control.contains(document.elementFromPoint(cx + dx * (n + 1), cy + dy * (n + 1)))) n += 1; return n; };
+          const tall = reach(0, -1) + reach(0, 1) + 1, wide = reach(-1, 0) + reach(1, 0) + 1;
+          if (tall < 43.5 || wide < 43.5) missed = ` (a thumb reaches it over ${tall}x${wide} px)`;
+        } else missed = " ";
+        if (missed) failures.push(`target ${Math.round(box.width)}x${Math.round(box.height)}: ${control.getAttribute("aria-label") ?? control.textContent?.slice(0, 30)}${missed}`);
+      }
+    }
+    scroller.scrollTop = held;
+    for (const dot of surface.querySelectorAll<HTMLElement>("[data-settings-dot]")) {
+      const box = dot.getBoundingClientRect();
+      const scrollBox = scroller.getBoundingClientRect();
+      if (box.top < scrollBox.top || box.bottom > scrollBox.bottom) continue;
+      /* Three pixels in from each corner, inside the button's rounding. */
+      for (const [x, y] of [[box.left + 3, box.top + 3], [box.right - 3, box.top + 3], [box.left + 3, box.bottom - 3], [box.right - 3, box.bottom - 3]]) {
+        const hit = document.elementFromPoint(x, y);
+        /* An open popover may lie over a target's corners: the glyph stays pressable, and a press outside it closes it. */
+        if (!dot.contains(hit) && !hit?.closest("[data-settings-dot-popover]")) failures.push(`dot's target covered at ${Math.round(x)},${Math.round(y)} by ${hit?.tagName} ${hit?.getAttribute("class")?.slice(0, 60)}`);
+      }
+    }
+  }
+  scroller.scrollTop = held;
+  /* The popover stays inside the window and leaves its dot in view. */
+  const popover = document.querySelector<HTMLElement>("[data-settings-dot-popover]");
+  if (popover) {
+    const box = popover.getBoundingClientRect();
+    if (!inView(box)) failures.push("popover leaves the window");
+    const own = document.querySelector<HTMLElement>("[data-settings-dot][aria-expanded=true]")?.closest<HTMLElement>("[data-settings-unit]");
+    const ownBox = own?.getBoundingClientRect();
+    /* Wider than its 240 px only to lie over its own row's muted line. */
+    if (box.width > 241 && !(ownBox && box.left >= ownBox.left && box.right <= ownBox.right)) failures.push(`popover is ${Math.round(box.width)} px wide`);
+    const lines = new Set<number>();
+    for (const node of popover.childNodes) { const range = document.createRange(); range.selectNodeContents(node); for (const rect of range.getClientRects()) lines.add(Math.round(rect.top)); }
+    if (lines.size > 2) failures.push(`popover takes ${lines.size} lines`);
+    const background = getComputedStyle(popover).backgroundColor;
+    if (/rgba\(.*, 0\)|transparent/.test(background)) failures.push("popover is not opaque");
+    /* It covers no words of another row, and of its own row a line whole or not at all. */
+    const under: string[] = [];
+    const cutWords: string[] = [];
+    if (own) {
+      const ownWords = document.createTreeWalker(own, NodeFilter.SHOW_TEXT);
+      for (let node = ownWords.nextNode(); node; node = ownWords.nextNode()) {
+        if (!(node.textContent ?? "").trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          const touches = rect.width > 0 && rect.left < box.right - 0.5 && rect.right > box.left + 0.5 && rect.top < box.bottom - 0.5 && rect.bottom > box.top + 0.5;
+          const whole = rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5;
+          if (touches && !whole) cutWords.push((node.textContent ?? "").trim().slice(0, 40));
+        }
+      }
+    }
+    if (cutWords.length) failures.push(`popover leaves a fragment of its own row: ${[...new Set(cutWords)].join(" | ")}`);
+    /* It says what the row does not. */
+    const word = own?.querySelector("[data-settings-row-value]")?.textContent?.trim().toLowerCase();
+    if (word && (popover.textContent ?? "").toLowerCase().includes(word)) failures.push(`popover repeats its row's word: ${word}`);
+    const words = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = words.nextNode(); node; node = words.nextNode()) {
+      if (!(node.textContent ?? "").trim() || own?.contains(node) || node.parentElement?.closest("option, select")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 0 && rect.left < box.right - 0.5 && rect.right > box.left + 0.5 && rect.top < box.bottom - 0.5 && rect.bottom > box.top + 0.5) under.push((node.textContent ?? "").trim().slice(0, 40));
+    }
+    if (under.length) failures.push(`popover covers another row's words: ${[...new Set(under)].join(" | ")}`);
+  }
+  /* What a page must not mention. */
+  if (absent) {
+    const pattern = new RegExp(absent, "i");
+    const text = scroller.innerText ?? "";
+    const hit = text.match(pattern);
+    if (hit) failures.push(`mentions "${text.slice(Math.max(0, hit.index! - 40), hit.index! + 40)}"`);
+  }
+  return { failures: [...new Set(failures)], end: under, scrolls };
+}
+
+export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean, only?: (frame: string) => boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const devices = (phone ? ["phone", "landscape"] : ["desktop", "mid", "short"]) as (keyof typeof SETTINGS_DEVICES)[];
+  const jobs: { frame: SettingsFrame; device: keyof typeof SETTINGS_DEVICES; lang: "en" | "uk"; theme: "light" | "dark"; key: string }[] = [];
+  for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of SETTINGS_FRAMES) {
+    /* Every state in all four combinations at the named widths; the between and short heights read in two, at rest and with Details open. */
+    if ((device === "mid" || device === "short" || device === "landscape") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
+    const key = `${frame.surface}-${device}-${frame.name}-${lang}-${theme}`;
+    if (only && !only(key)) continue;
+    jobs.push({ frame, device, lang, theme, key });
+  }
+  const readings: { key: string; failures: string[]; end: number | null; scrolls: boolean; frames: string[] }[] = [];
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const job = jobs[next++];
+      if (!job) return;
+      const { frame, device, lang, theme, key } = job;
+      const url = `${base}?settings=${frame.scene}${frame.query ? `&${frame.query}` : ""}#p=atlas`;
+      const context = await browser.newContext({ viewport: SETTINGS_DEVICES[device], colorScheme: theme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+      const reading: (typeof readings)[number] = { key, failures: [], end: null, scrolls: false, frames: [] };
+      try {
+        await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv_theme", theme); }, { lang, theme });
+        await context.addInitScript(stubVoiceDevicesForSettings);
+        const page = await context.newPage();
+        page.on("pageerror", (error) => reading.failures.push(`page error: ${error.message}`));
+        await page.goto(url);
+        await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor({ timeout: 120_000 });
+        if (frame.section) {
+          await page.evaluate((section) => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section } })), frame.section);
+          await page.locator("[data-settings-window], [data-mobile2-sheet='settings']").waitFor();
+        }
+        if (frame.steps) await frame.steps(page, phone);
+        if (frame.details) {
+          const toggle = page.locator("[data-settings-details-toggle]").last();
+          await toggle.scrollIntoViewIfNeeded();
+          await toggle.click();
+          await page.locator("[data-settings-details]").waitFor();
+          await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+        }
+        if (frame.defining) await page.locator(frame.defining).first().waitFor({ timeout: 20_000 }).catch(() => reading.failures.push(`never appeared: ${frame.defining}`));
+        await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+        /* The fold's own height moved the scroller's end, and the whole-rows fit can answer after the first scroll: the frame reads the end as it settled. */
+        if (frame.details) await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+        /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it; where the
+           window scrolled itself, the frame reads the screen it landed on. */
+        if (frame.defining && !frame.details && !frame.landed) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
+        const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null, landed: frame.landed === true });
+        reading.failures.push(...read.failures);
+        reading.end = read.end;
+        reading.scrolls = read.scrolls;
+        await page.screenshot({ path: path.join(out, `${key}.png`) });
+        reading.frames.push(`${key}.png`);
+        /* Scrolled to its end, the page's last screen. */
+        if (read.scrolls && !frame.details && !page.isClosed()) {
+          await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+          await page.screenshot({ path: path.join(out, `${key}-end.png`) });
+          reading.frames.push(`${key}-end.png`);
+        }
+      } catch (error) {
+        reading.failures.push(`driver: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+      readings.push(reading);
+    }
+  };
+  await Promise.all(Array.from({ length: Number(process.env.LLV_SETTINGS_WINDOW_PAGES ?? 4) }, worker));
+  readings.sort((a, b) => a.key.localeCompare(b.key));
+  const failures = readings.flatMap((reading) => reading.failures.map((failure) => `${reading.key}: ${failure}`));
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2));
+  /* The record: how many frames were read, what failed, and the shallowest foot under an open «Details». */
+  const feet = readings.filter((reading) => reading.key.includes("details") && reading.scrolls && reading.end !== null).map((reading) => reading.end!);
+  fs.mkdirSync("evidence/settings-window", { recursive: true });
+  fs.writeFileSync(`evidence/settings-window/${phone ? "phone" : "desktop"}.json`, `${JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", states: SETTINGS_FRAMES.length, frames: readings.flatMap((reading) => reading.frames).length, readings: readings.length, failures, shallowestFootUnderDetails: feet.length ? Math.min(...feet) : null }, null, 2)}\n`);
+  return { readings, failures };
 }
 
 /** The setup states the evidence fixture draws, and what each must read. */
@@ -2016,6 +2909,324 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
     fs.rmSync(repoRoot, { recursive: true, force: true });
   }
   fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+  return { readings, failures };
+}
+
+/** The task album's Files view and the preview it opens (docs/design/task-file-preview.md §11.5).
+ *  The page's list and content requests are answered by the real route handlers over a real
+ *  repository the driver builds in a temporary directory, so every frame shows real
+ *  authorization, modes, sizes and bytes. Called by the board and phone cases. */
+export async function captureTaskFilesFrames(browser: Browser, out: string, phone: boolean) {
+  const os = await import("node:os");
+  const { NextRequest } = await import("next/server");
+  const sharp = (await import("sharp")).default;
+  const { translate } = await import("@/lib/i18n");
+  const { LANE_BRANCH } = await import("@/lib/laneReview/gitFixture");
+  const { createTaskFixture } = await import("@/lib/taskFiles/fixture");
+  const { createTaskFilesCaches } = await import("@/lib/taskFiles/cache");
+  const { taskFilesGET, taskFileContentGET } = await import("@/lib/taskFiles/http");
+  const { realExec } = await import("@/lib/workflows/provision");
+
+  const TASK = "t-search";
+  const LANE = "p-search";
+  const fixture = createTaskFixture();
+  const repoRoot = fixture.dir;
+  /* A valid one-page PDF, so the PDF pane has a document to draw. */
+  const pdf = (() => {
+    const stream = "BT /F1 24 Tf 40 120 Td (Handoff report) Tj ET";
+    const objects = [
+      "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+      `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    let body = "%PDF-1.4\n";
+    const offsets: number[] = [];
+    objects.forEach((object, index) => { offsets.push(body.length); body += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+    const xref = body.length;
+    body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}`;
+    return Buffer.from(`${body}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  })();
+  const overview = [
+    "# Search rebuild: handoff", "", "The index rebuild keeps **search results** in step with the board. See [the summary](handoff/summary.md) and [the data](../data/table.csv).", "",
+    "## Checklist", "", "- one **new** index", "- one old index kept for rollback", "  - nested note", "1. ordered step", "2. second step", "",
+    "## Timings", "", `| ${["Step", "Cold", "Warm", "Notes", "Owner", "State", "Run"].join(" | ")} |`, `|${" --- |".repeat(7)}`,
+    `| ${["list", "52 ms", "1 ms", "lane of 36 files", "builder", "done", "3"].join(" | ")} |`, "",
+    "```ts", "export const answer = 42;", "```", "", "> Raw markup stays text: <script>window.ran = 1</script>", "", "[not a link](javascript:window.ran=2)", "",
+  ].join("\n");
+  fixture.git("checkout", "-q", LANE_BRANCH);
+  fixture.write("docs/overview.md", overview);
+  fixture.write("docs/report.pdf", pdf);
+  fixture.write("img/shot.png", await sharp({ create: { width: 640, height: 400, channels: 3, background: "#3b5b92" } }).png().toBuffer());
+  fixture.write("data/huge.txt", Buffer.alloc(9 * 1024 * 1024, 0x61));
+  const tip = fixture.commit("driver documents");
+  for (let index = 0; index < 230; index += 1) fixture.write(`bulk/file-${String(index).padStart(3, "0")}.txt`, `${index}\n`);
+  const bulkTip = fixture.commit("many files");
+  fixture.git("checkout", "-q", "--detach");
+  const emptyTip = fixture.git("rev-parse", "refs/remotes/origin/main");
+  const setHead = (sha: string) => fixture.git("update-ref", `refs/heads/${LANE_BRANCH}`, sha);
+
+  type Phase = "ok" | "forced" | "missing" | "empty" | "truncated" | "failed" | "slow";
+  let phase: Phase = "ok";
+  let release: () => void = () => {};
+  let hold: Promise<void> | null = null;
+  const lane = () => ({ ...fixture.lane(), id: LANE, taskIds: [TASK], stages: [{ id: "implement", name: "implement", outputs: ["docs/handoff"] }] }) as unknown as import("@/lib/pipelines/types").Pipeline;
+  let caches = createTaskFilesCaches();
+  const deps = () => ({
+    task: (id: string) => (id === TASK ? { id } : null),
+    pipeline: (id: string) => (id === LANE ? (phase === "missing" ? { ...lane(), repoDir: `${repoRoot}-absent` } : lane()) : null),
+    scope: () => null,
+    exec: realExec,
+    caches,
+  });
+  const server = await serveEvidenceFixture(out, undefined, {
+    [`/api/tasks/${TASK}/files`]: async (request: Request) => {
+      if (phase === "failed") return Response.json({ error: "boom" }, { status: 500 });
+      if (phase === "slow") { hold ??= new Promise<void>((resolve) => { release = resolve; }); await hold; }
+      const response = await taskFilesGET(new NextRequest(request), TASK, deps());
+      if (phase !== "forced") return response;
+      /* A direct open of a link and of an oversized file: the list marks them openable, the route still decides. */
+      const body = await response.json() as { lanes: Array<{ files?: Array<{ path: string; previewable: boolean }> }> };
+      for (const entry of body.lanes) for (const file of entry.files ?? []) if (["link.md", "data/huge.txt"].includes(file.path)) file.previewable = true;
+      return Response.json(body);
+    },
+    [`/api/tasks/${TASK}/files/content`]: (request: Request) => taskFileContentGET(new NextRequest(request), TASK, deps()),
+    /* The PDF pane's worker, which the page's bundle resolves beside its own script. */
+    "/pdfjs-dist/build/pdf.worker.min.mjs": () => new Response(Bun.file(path.resolve("node_modules/pdfjs-dist/build/pdf.worker.min.mjs")), { headers: { "content-type": "text/javascript" } }),
+  });
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  const widths = phone ? [390] : [1440, 820];
+  const prepare = (next: Phase) => {
+    phase = next;
+    hold = null;
+    caches = createTaskFilesCaches();
+    setHead(next === "empty" ? emptyTip : next === "truncated" ? bulkTip : tip);
+  };
+  try {
+    for (const width of widths) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+      const height = phone ? 844 : 900;
+      const label = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}`;
+      const fail = (text: string) => failures.push(`${label}: ${text}`);
+      const tr = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+      prepare("ok");
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?album=1`, { width, height }, theme, lang, "reduce", phone);
+      const shot = (name: string) => page.screenshot({ path: path.join(out, `${label}-${name}.png`) });
+      /* One state's frame: its defining text is on the first screen and nothing covers it. */
+      const frame = async (state: string, selector: string, expected: string | RegExp) => {
+        const target = page.locator(selector).first();
+        await target.waitFor({ timeout: 20_000 });
+        await target.scrollIntoViewIfNeeded();
+        const reading = await target.evaluate((element, viewport) => {
+          const box = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(Math.min(viewport.width - 1, Math.max(0, box.left + Math.min(box.width / 2, 40))), Math.min(viewport.height - 1, Math.max(0, box.top + box.height / 2)));
+          return { text: (element.textContent ?? "").replace(/\s+/g, " ").trim(), inView: box.top >= 0 && box.left >= 0 && box.bottom <= viewport.height && box.right <= viewport.width && box.width > 0, hitInside: Boolean(hit && (element === hit || element.contains(hit) || hit.contains(element))) };
+        }, { width, height });
+        /* Ukrainian copy holds no-break spaces; the reading folds every space. */
+        const wanted = typeof expected === "string" ? expected.replace(/\s+/g, " ") : expected;
+        if (!(typeof wanted === "string" ? reading.text.includes(wanted) : wanted.test(reading.text))) fail(`${state}: ${selector} reads ${JSON.stringify(reading.text)}, expected ${String(expected)}`);
+        if (!reading.inView) fail(`${state}: ${selector} is not on the first screen`);
+        if (!reading.hitInside) fail(`${state}: ${selector} is covered at its centre`);
+        await shot(state);
+        readings.push({ label, state, ...reading });
+      };
+      /* Geometry of the open Files view: nothing cut, nothing sideways, targets as large as the platform asks. */
+      const geometry = async (state: string) => {
+        const reading = await page.evaluate((isPhone) => {
+          const body = document.querySelector<HTMLElement>("[data-album-files-body]")!;
+          const box = body.getBoundingClientRect();
+          const rows = [...body.querySelectorAll<HTMLElement>("[data-task-file]")];
+          const cut: string[] = [];
+          for (const row of rows) {
+            row.scrollIntoView({ block: "nearest" });
+            const rect = row.getBoundingClientRect();
+            if (rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5 || rect.left < box.left - 0.5 || rect.right > box.right + 0.5) cut.push(row.dataset.taskFile!);
+            for (const fixed of row.querySelectorAll<HTMLElement>("span.shrink-0")) if (fixed.scrollWidth > fixed.clientWidth + 1) cut.push(`${row.dataset.taskFile}: ${fixed.textContent}`);
+          }
+          body.scrollTop = 0;
+          const small = [...document.querySelectorAll<HTMLElement>("[data-task-album] button")].filter((button) => button.getBoundingClientRect().width > 0 && Math.min(button.getBoundingClientRect().height, button.getBoundingClientRect().width) < (isPhone ? 44 : 28)).map((button) => button.dataset.taskFile ?? button.textContent?.trim() ?? "?");
+          const dialog = document.querySelector<HTMLElement>("[data-task-album] [role=dialog]")!.getBoundingClientRect();
+          return { sideways: body.scrollWidth - body.clientWidth, cut, small, rows: rows.length, dialog: [dialog.left, dialog.top, dialog.right, dialog.bottom].map(Math.round), viewport: [innerWidth, innerHeight] };
+        }, phone);
+        readings.push({ label, state: `${state}-geometry`, ...reading });
+        if (reading.sideways > 0) fail(`${state}: the list scrolls sideways by ${reading.sideways}`);
+        if (reading.cut.length) fail(`${state}: cut or clipped: ${reading.cut.join("; ")}`);
+        if (reading.small.length) fail(`${state}: targets under the floor: ${reading.small.join("; ")}`);
+        if (reading.dialog[2]! > reading.viewport[0]! || reading.dialog[3]! > reading.viewport[1]!) fail(`${state}: the dialog leaves the window`);
+      };
+      const closeAlbum = async () => { await page.locator("[data-album-close]").click(); await page.locator("[data-task-album]").waitFor({ state: "detached" }); };
+      const openFiles = async () => {
+        if (phone) await page.locator(`[data-phone-task-files="${TASK}"]`).click();
+        else { await page.locator(`${"[data-kanban-board]"} .card[data-id="task:${TASK}"] [data-album-button="${TASK}"]`).click(); await page.waitForSelector("[data-album-view]"); await page.locator("[data-album-view='files']").click(); }
+      };
+      const enter = async (next: Phase) => {
+        if (await page.locator("[data-task-album]").count()) await closeAlbum();
+        prepare(next);
+        await openFiles();
+      };
+      try {
+        /* The entry. */
+        if (phone) {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+          const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+          if (await tab.count()) await tab.first().click();
+          await page.waitForTimeout(500);
+          const phoneCard = page.locator(`[data-phone-card="task:${TASK}"]`).first();
+          await phoneCard.scrollIntoViewIfNeeded();
+          await phoneCard.click();
+          const row = page.locator(`[data-phone-task-files="${TASK}"]`);
+          await row.waitFor({ timeout: 10_000 });
+          await row.scrollIntoViewIfNeeded();
+          await shot("entry");
+          const entry = await row.evaluate((element) => ({ text: element.textContent, height: Math.round(element.getBoundingClientRect().height) }));
+          readings.push({ label, state: "entry", ...entry });
+          if (!entry.text?.includes(tr("files.title")) || entry.height < 44) fail(`the task screen's Files row reads ${JSON.stringify(entry)}`);
+        } else {
+          const button = page.locator(`[data-kanban-board] .card[data-id="task:${TASK}"] [data-album-button="${TASK}"]`);
+          await button.waitFor({ timeout: 30_000 });
+          /* The picture count arrives with the board's summary read. */
+          await page.waitForFunction((id) => /\d/.test(document.querySelector(`[data-album-button="${id}"]`)?.textContent ?? ""), TASK, { timeout: 30_000 });
+          const withPictures = await button.evaluate((element) => ({ aria: element.getAttribute("aria-label"), text: element.textContent }));
+          /* A task with lanes and no pictures: the Files entry alone. */
+          const bare = page.locator(`[data-kanban-board] .card[data-id="task:t-upload"] [data-album-button="t-upload"]`);
+          await bare.waitFor({ timeout: 10_000 });
+          await page.locator(`[data-kanban-board] .card[data-id="task:t-upload"]`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.waitForTimeout(300);
+          await page.locator(`[data-kanban-board] .card[data-id="task:t-upload"]`).screenshot({ path: path.join(out, `${label}-entry-files-only.png`) });
+          const bareReading = await bare.evaluate((element) => ({ aria: element.getAttribute("aria-label"), digits: /\d/.test(element.textContent ?? "") }));
+          readings.push({ label, state: "entry", withPictures, bareReading });
+          if (bareReading.digits || !bareReading.aria?.startsWith(tr("album.buttonAriaFilesOnly", { title: "" }).split("«")[0]!)) fail(`the picture-less card's entry reads ${JSON.stringify(bareReading)}`);
+          if (!withPictures.aria || !/\d/.test(withPictures.text ?? "")) fail(`the card with pictures says ${JSON.stringify(withPictures)}`);
+        }
+
+        /* The list, every state. */
+        await enter("slow");
+        await frame("loading", "[data-task-files] [role=status]", tr("common.loadingCap"));
+        release();
+        await page.waitForSelector("[data-task-file]", { timeout: 20_000 });
+        await frame("list", "[data-task-file='docs/handoff/summary.md']", "summary.md");
+        await geometry("list");
+        const listText = await page.locator("[data-task-files]").innerText();
+        for (const word of [tr("files.at", { sha: "" }).trim().split(" ")[0]!, tr("files.running")]) if (!listText.includes(word)) fail(`list: missing «${word}»`);
+        const declared = await page.locator("[data-task-file-declared]").first().innerText();
+        if (!declared.includes(tr("files.declared", { stage: "" }).replace(/[: ]+$/, "").replace(/\{.*$/, "").trim().split(" ").pop() ?? "")) fail(`list: the declared mark reads ${declared}`);
+        if ((await page.locator("[data-task-file='link.md'] button, [data-task-file='vendor/module.md'] button, [data-task-file='data/huge.txt'] button").count()) !== 0) fail("list: a row that cannot open is a button");
+        const order = await page.locator("[data-task-file]").evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.taskFile));
+        if (order[0] !== "docs/handoff/notes.md" || order[1] !== "docs/handoff/summary.md") fail(`list: the order starts ${JSON.stringify(order.slice(0, 3))}`);
+        await page.locator("[data-task-files-fold]").click();
+        await frame("folded-open", "[data-task-files-fold]", tr("files.less"));
+        await geometry("folded-open");
+        await page.locator("[data-task-file='src/gone.ts']").scrollIntoViewIfNeeded();
+        await shot("folded-rows");
+        await enter("truncated");
+        await frame("truncated", "[data-task-files-truncated]", lang === "en" ? /more files? not listed/ : /не показано/);
+        await geometry("truncated");
+        await enter("empty");
+        await frame("empty", "[data-task-files-empty]", tr("files.empty"));
+        await enter("missing");
+        await frame("unavailable", "[data-task-files-unavailable]", tr("files.unavailable.repository"));
+        await enter("failed");
+        await frame("failed", "[data-task-files-failed]", tr("files.failed"));
+
+        /* The preview: Markdown, source, text, image, PDF, and the route's refusals. */
+        await enter("forced");
+        const open = async (file: string) => {
+          const row = page.locator(`[data-task-file="${file}"] button`);
+          await row.scrollIntoViewIfNeeded();
+          await row.focus();
+          await row.click();
+        };
+        const sheetReading = async (state: string) => {
+          const reading = await page.evaluate(({ isPhone, width: w, height: h }) => {
+            const sheet = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+            const box = sheet.getBoundingClientRect();
+            const album = document.querySelector<HTMLElement>("[data-task-album] [role=dialog]")!.getBoundingClientRect();
+            const probeX = Math.min(w - 2, Math.max(box.left + 2, isPhone ? w / 2 : box.left + 20));
+            const probeY = Math.max(0, Math.min(h - 2, box.top + box.height / 2));
+            const hit = document.elementFromPoint(probeX, probeY);
+            const controls = [...sheet.querySelectorAll<HTMLElement>("header a, header button, :scope > div:first-of-type a, :scope > div:first-of-type button")].map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0);
+            const md = sheet.querySelector<HTMLElement>("[data-md-scroll]");
+            return {
+              state: sheet.dataset.artifactState, kind: sheet.dataset.artifactKind, z: Number(getComputedStyle(sheet).zIndex),
+              albumZ: Number(getComputedStyle(document.querySelector<HTMLElement>("[data-task-album]")!).zIndex),
+              box: [box.left, box.top, box.right, box.bottom].map(Math.round), album: [album.left, album.right].map(Math.round),
+              hitInside: Boolean(hit && sheet.contains(hit)), inViewport: box.left >= 0 && box.top >= 0 && box.right <= w + 0.5 && box.bottom <= h + 0.5,
+              controlMin: controls.length ? Math.round(Math.min(...controls.map((rect) => Math.min(rect.width, rect.height)))) : null,
+              sideways: md ? md.scrollWidth - md.clientWidth : 0,
+              text: (sheet.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200),
+              scripts: sheet.querySelectorAll("script, iframe, object, embed").length, ran: (window as unknown as { ran?: number }).ran ?? null,
+            };
+          }, { isPhone: phone, width, height });
+          readings.push({ label, step: `${state}-sheet`, ...reading });
+          if (reading.z <= reading.albumZ) fail(`${state}: the sheet (z ${reading.z}) is not above the album (z ${reading.albumZ})`);
+          if (!reading.hitInside) fail(`${state}: the album shows through the sheet at its centre`);
+          if (!reading.inViewport) fail(`${state}: the sheet leaves the window ${reading.box.join(",")}`);
+          if (phone && (reading.box[0] !== 0 || reading.box[2] !== width)) fail(`${state}: the sheet does not take the phone screen`);
+          if (phone && reading.controlMin !== null && reading.controlMin < 44) fail(`${state}: a sheet control is ${reading.controlMin}px`);
+          if (reading.scripts || reading.ran !== null) fail(`${state}: active content ran or rendered (${reading.scripts} nodes, ran ${reading.ran})`);
+          return reading;
+        };
+        await open("docs/overview.md");
+        await page.waitForSelector("[data-md-scroll]", { timeout: 20_000 });
+        await page.waitForTimeout(300);
+        const md = await sheetReading("markdown");
+        if (md.state !== "ready" || !md.text.includes("Search rebuild")) fail(`markdown: ${JSON.stringify(md)}`);
+        if (md.sideways > 0) fail(`markdown: the document scrolls sideways by ${md.sideways}`);
+        await shot("markdown");
+        /* The wide table scrolls inside its own frame; the page does not. */
+        const tableFits = await page.evaluate(() => { const md = document.querySelector<HTMLElement>("[data-md-scroll]")!; return md.scrollWidth <= md.clientWidth + 1; });
+        if (!tableFits) fail("markdown: the table widens the document");
+        await page.locator("[data-preview-mode='source']").click();
+        await page.waitForSelector("[data-line-number]", { timeout: 10_000 });
+        /* The frame shows the source, not the moment it starts loading: wait until the footer no longer reads zero bytes loaded. */
+        const nothingLoaded = tr("preview.loadedOf", { loaded: "0 B", size: "" }).trim();
+        await page.waitForFunction((zero) => { const sheet = document.querySelector("[data-artifact-preview]"); return Boolean(sheet && !(sheet.textContent ?? "").includes(zero)); }, nothingLoaded, { timeout: 20_000 });
+        await shot("markdown-source");
+        /* Modal: Tab from the sheet never reaches the album rows behind it. */
+        for (let press = 0; press < 14; press += 1) await page.keyboard.press("Tab");
+        const trapped = await page.evaluate(() => Boolean(document.activeElement?.closest("[data-artifact-preview]")));
+        if (!trapped) fail("markdown: Tab left the sheet for the album behind it");
+        await page.keyboard.press("Escape");
+        await page.locator("[data-artifact-preview]").waitFor({ state: "detached" });
+        const focused = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.closest("[data-task-file]")?.getAttribute("data-task-file") ?? null);
+        if (focused !== "docs/overview.md") fail(`focus after Escape is on ${focused}`);
+        if (!await page.locator("[data-task-album]").count()) fail("Escape closed the album with the sheet");
+        for (const [state, file, wait] of [["text", "data/table.csv", "[data-line-number]"], ["image", "img/shot.png", "[data-preview-image], img[src^='blob:']"], ["pdf", "docs/report.pdf", "canvas"]] as const) {
+          await open(file);
+          await page.waitForSelector(wait, { timeout: 30_000 });
+          await page.waitForTimeout(500);
+          const reading = await sheetReading(state);
+          if (reading.state !== "ready") fail(`${state}: the sheet reads ${reading.state}`);
+          await shot(state);
+          await page.keyboard.press("Escape");
+          await page.locator("[data-artifact-preview]").waitFor({ state: "detached" });
+        }
+        /* A binary file with a text extension lists as a row that cannot open, so it never reaches a sheet whose header and body disagree. */
+        if ((await page.locator("[data-task-file='docs/binary.md'] button").count()) !== 0) fail("list: the binary file with a text extension is a button");
+        for (const [state, file, expected] of [["denied", "link.md", "denied"], ["oversized", "data/huge.txt", "oversized"]] as const) {
+          await open(file);
+          await page.waitForSelector(`[data-artifact-state="${expected}"]`, { timeout: 20_000 });
+          const reading = await sheetReading(state);
+          if (reading.state !== expected) fail(`${state}: the sheet reads ${reading.state}`);
+          await shot(state);
+          await page.keyboard.press("Escape");
+          await page.locator("[data-artifact-preview]").waitFor({ state: "detached" });
+        }
+        if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        fail(String(error).split("\n").slice(0, 4).join(" "));
+        await page.screenshot({ path: path.join(out, `${label}-error.png`) }).catch(() => undefined);
+      } finally {
+        release();
+        await context.close();
+      }
+    }
+  } finally {
+    server.stop();
+    fixture.cleanup();
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+  void os;
   return { readings, failures };
 }
 

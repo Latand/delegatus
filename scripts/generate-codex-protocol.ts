@@ -29,7 +29,7 @@ try {
     digests[name] = createHash("sha256").update(raw).digest("hex");
   }
   fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify({ version, generator: "codex app-server generate-json-schema", sha256: digests }, null, 2) + "\n");
-  if (version === "0.162.1") {
+  if (version === "0.162.1" || version === "0.167.0") {
     const types = path.join(scratch, "types");
     run("app-server", "generate-ts", "--experimental", "--out", types);
     // Keep only the request router's transitive type closure. Client payloads are schema-validated.

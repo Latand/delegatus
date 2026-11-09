@@ -6,7 +6,7 @@ import type { NextRequest } from "next/server";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } from "./taskExecutor";
-import { mcpHttpRefusal as refusal } from "./httpResponse";
+import { mcpHttpRefusal as refusal, MCP_REFUSAL_HEADER, MCP_CHECK_HEADER, MCP_CHECK_PATTERN } from "./httpResponse";
 import { MCP_MAX_REQUEST_BODY_BYTES } from "./inputLimits";
 import { logCallerIdentificationError } from "./callerIdentification";
 
@@ -145,6 +145,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
      Neither access credential replaces the launch identity checked below. */
   const crossOrigin = rejectCrossOrigin(request);
   if (crossOrigin) return crossOrigin;
+  const suppliedCheck = request.headers.get(MCP_CHECK_HEADER);
+  const check = suppliedCheck?.length === 36 && MCP_CHECK_PATTERN.test(suppliedCheck) ? suppliedCheck : undefined;
 
   let body: unknown;
   let nativePeer: import("@/lib/processIdentity").ProcessIdentity | undefined;
@@ -197,18 +199,19 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
       ? testDependencies.conversationForCapability(capability)
       : await productionConversationForCapability(capability);
   } catch (error) {
-    logCallerIdentificationError(error, capability);
-    return refusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.", { "retry-after": "1" });
+    logCallerIdentificationError(error, capability, "failed", { check });
+    return refusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.", { "retry-after": "1", [MCP_REFUSAL_HEADER]: "caller-identification" });
   }
   if (!executorAuthenticates && !conversationId) {
-    return refusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch.");
+    return refusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch.", { [MCP_REFUSAL_HEADER]: "capability-unknown" });
   }
 
   let service: McpToolService;
   try {
     service = await (testDependencies ? testDependencies.service() : productionService());
-  } catch {
-    return refusal(503, -32002, "The Viewer MCP tool service is not available yet; retry the call.");
+  } catch (error) {
+    logCallerIdentificationError(error, capability, "failed", { check, phase: "tool-service" });
+    return refusal(503, -32002, "The Viewer MCP tool service is not available yet; retry the call.", { [MCP_REFUSAL_HEADER]: "tool-service" });
   }
 
   try {
