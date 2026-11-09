@@ -2796,7 +2796,15 @@ export async function recoverStagedStructuredLaunch(
           spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] staged role-memory preparation deferred", {
             launchId, phase: recovery.phase, cause: reason,
           });
-          await persist({ ...recovery, reason });
+          try {
+            await persist({ ...recovery, reason });
+          } catch (diagnosticWriteError) {
+            // A lost diagnostic ACK cannot replace the original privacy refusal
+            // or skip the fenced cleanup of this already-dispatched launch.
+            spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] staged role-memory recovery diagnostic write failed", {
+              launchId, phase: recovery.phase, cause: stagedRecoveryFailureReason(diagnosticWriteError),
+            });
+          }
         }
         const failed = await failStagedResume(launchId, registry, client, privacyDeferral, {
           ...options.reap, assertActive: options.assertActive,

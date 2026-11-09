@@ -117,6 +117,17 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
     }
     return result;
   });
+  const originalRecoveryWrite = registry.deliveryWriteOrBusy.bind(registry);
+  let recoveryAckLost = false;
+  const recoveryWrite = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (options, operation) => {
+    const result = await originalRecoveryWrite(options, operation);
+    if (stagedPreparation && !recoveryAckLost && options.label === "registry.staged-recovery"
+      && registry.spawnReceipt(launches[0]!)?.error?.includes("role memory could not be read or filtered")) {
+      recoveryAckLost = true;
+      throw new Error("fixture recovery diagnostic acknowledgement lost");
+    }
+    return result;
+  });
   const failure = spyOn(registry, "failStructuredSpawnOffLoop").mockImplementation(async (...args) => {
     if (mode === "late-native" && observing && !lateNative) {
       lateNative = true;
@@ -654,6 +665,14 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
       for (let tick = 0; tick < 6; tick++) {
         h.advanceWallClock(1_000); setSystemTime(new Date(h.ports.now())); await tickPipelines([], h.ports);
       }
+      if (stagedPreparation) {
+        expect(recoveryAckLost).toBe(true);
+        expect(registry.spawnReceipt(launches[0]!)!.state).toBe("failed");
+        expect(launches).toHaveLength(2);
+        expect(sent.map(entry => entry.id)).toEqual([`spawn_message_${launches[1]}`]);
+        expect(loadPipelines()[0]!.state).toBe("running");
+        expect(journal.operationResult(originalId)).toBeNull();
+      }
       expect(registry.spawnReceipt(launches[0]!)!.error).toBe(stagedPreparation ? ROLE_MEMORY_PREPARATION_MESSAGE : ROLE_MEMORY_CHANGED_MESSAGE);
       expect(launches).toHaveLength(scenario.includes("native") ? 1 : 2);
       expect(sent).toHaveLength(scenario.includes("native") ? 0 : 1);
@@ -759,7 +778,7 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
   } finally {
     if (termination) { if (termination.exitCode === null) termination.stdin.end(); await termination.exited; }
     for (const clock of preparationClocks) clock.mockRestore();
-    admissionRelease.mockRestore(); failure.mockRestore(); deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
+    recoveryWrite.mockRestore(); admissionRelease.mockRestore(); failure.mockRestore(); deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
     ids.mockRestore();
     setSystemTime();
     setAgentRegistryForTests(null);
