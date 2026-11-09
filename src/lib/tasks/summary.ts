@@ -1,3 +1,4 @@
+import { textLengthError } from "@/lib/textLimits";
 import {
   TASK_SUMMARY_HEADLINE_LIMIT, TASK_SUMMARY_TEXT_LIMIT, TASK_SUMMARY_LEFT_LIMIT,
   type TaskSummaryContent, type TaskSummary, type TaskSummaryAuthor,
@@ -19,10 +20,11 @@ export function normalizeTaskSummary(input: unknown): { value: TaskSummaryConten
   const value: TaskSummaryContent = { headline: "", text: "" };
   for (const field of ["headline", "text", "left"] as const) {
     if (field === "left" && raw[field] === undefined) continue;
-    if (typeof raw[field] !== "string") return { error: `summary.${field} must be a string of at most ${fields[field]} characters` };
-    if (field !== "text" && /[\r\n]/.test(raw[field])) return { error: `summary.${field} must be one line of at most ${fields[field]} characters` };
+    if (typeof raw[field] !== "string") return { error: `summary.${field} must be a string of at most ${fields[field]} UTF-16 code units` };
+    if (field !== "text" && /[\r\n]/.test(raw[field])) return { error: `summary.${field} must be one line of at most ${fields[field]} UTF-16 code units` };
     const text = collapseSpaces(raw[field]);
-    if (text.length > fields[field] || (field !== "left" && !text)) return { error: `summary.${field} must be ${field === "left" ? "at most" : "1 to"} ${fields[field]} characters` };
+    if (text.length > fields[field]) return { error: textLengthError(`summary.${field}`, text.length, fields[field], "UTF-16 code units") };
+    if (field !== "left" && !text) return { error: `summary.${field} must be ${field === "left" ? "at most" : "1 to"} ${fields[field]} UTF-16 code units` };
     if (field !== "left" || text) value[field] = text;
   }
   return { value };

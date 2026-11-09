@@ -1,10 +1,11 @@
-import { readTaskHold, storedTaskHold } from "./hold";
+import { textLengthError } from "@/lib/textLimits";
+import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
 import type { TaskHold, TaskStep } from "./types";
 
 export const TASK_STEPS_LIMIT = 20;
 const STEP_ID = /^[a-zA-Z0-9_-]{1,40}$/;
 
-export type TaskStepsResult = { ok: true; steps?: TaskStep[] } | { ok: false; error: string; status: 400; code: "TASK_INVALID_FIELD"; field: "steps" };
+export type TaskStepsResult = { ok: true; steps?: TaskStep[] } | { ok: false; error: string; status: 400; code: "TASK_INVALID_FIELD"; field: string };
 
 export interface DerivedTaskStep extends TaskStep {
   effectiveState: TaskStep["state"];
@@ -80,6 +81,9 @@ export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], c
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return fail();
     const raw = item as Record<string, unknown>;
+    if (typeof raw.text === "string" && raw.text.trim().length > 120) return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: `steps.${steps.length}.text`, error: textLengthError(`steps.${steps.length}.text`, raw.text.trim().length, 120, "UTF-16 code units") };
+    const holdError = validateTaskHoldInput(raw.hold, `steps.${steps.length}.hold`);
+    if (holdError) return holdError;
     if (typeof raw.id !== "string" || !STEP_ID.test(raw.id) || seen.has(raw.id)
       || typeof raw.text !== "string" || !raw.text.trim() || raw.text.trim().length > 120
       || !["done", "open", "dropped"].includes(String(raw.state))) return fail();

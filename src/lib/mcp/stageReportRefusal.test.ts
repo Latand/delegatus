@@ -3,6 +3,8 @@ import { createMcpToolService, MCP_TOOL_NAMES, McpToolRefusal, MemoryMcpReceiptS
 
 test.each([
   ["STAGE_REPORT_SETTLED", false],
+  ["STAGE_REPORT_INVALID", false],
+  ["STAGE_REPORT_CONTRADICTORY", false],
   ["STAGE_REPORT_NOT_AN_ATTEMPT", false],
   ["STAGE_REPORT_NOT_HELD", false],
   ["STAGE_REPORT_SUPERSEDED", false],

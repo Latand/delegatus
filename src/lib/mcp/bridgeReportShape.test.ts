@@ -212,6 +212,24 @@ test("a report too large to relay whole is refused with a request to split it: n
   for (const item of many) expect(spoken).toContain(item);
 });
 
+test("complete report byte boundary preserves multibyte text and refuses one extra byte with its count", async () => {
+  const { completeBytes } = await import("@/lib/bridge/reportComplete");
+  const summary = "Boundary report";
+  const prefix = "я 🧭e\u0301 ".repeat(500);
+  const overhead = completeBytes({ summary, sections: [{ heading: "In progress", items: [prefix] }] });
+  const exact = prefix + "a".repeat(8192 - overhead);
+  const over = await file({ key: "byte-over", summary, sections: { inProgress: [exact + "a"] } });
+  expect(over).toMatchObject({ ok: false, code: "report_too_large", retryable: false });
+  for (const part of ["complete report", "8192 UTF-8 bytes", "actual length is 8193"]) expect(over.error).toContain(part);
+  expect(readBridgeReportLog().reports).toEqual([]);
+  expect(transport.callsOf("sendMessage")).toHaveLength(0);
+  const accepted = await file({ key: "byte-corrected", summary, sections: { inProgress: [exact] } });
+  expect(accepted.recorded).toBe(true);
+  const complete = readBridgeReportLog().reports[0]!.complete!;
+  expect(completeBytes(complete)).toBe(8192);
+  expect(complete.sections[0]!.items).toEqual([exact]);
+});
+
 test("an older caller's long body line keeps its tail fact through the store, the voice admission and its speech", async () => {
   const legacyBody = `${"The first fact. ".repeat(20)}TAIL_FACT: deployment is waiting.`;
   const answer = await file({ key: "legacy-tail", class: "completed", correlatesDirective: "voice-fixture", summary: "Report.", body: legacyBody });

@@ -1,3 +1,4 @@
+import { textLengthError } from "@/lib/textLimits";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { ROLE_IDS } from "@/lib/roles/types";
 
@@ -57,7 +58,7 @@ function text(value: unknown, field: string, min: number, max: number): string {
   if (typeof value !== "string") throw new RoleMemoryRefusal("LESSON_INVALID", `${field} must be text`);
   const trimmed = lessonText(value);
   const length = lessonTextLength(trimmed);
-  if (length < min || length > max) throw new RoleMemoryRefusal("LESSON_INVALID", `${field} must be ${min}–${max} characters; it has ${length}`);
+  if (length < min || length > max) throw new RoleMemoryRefusal("LESSON_INVALID", textLengthError(field, length, max, "normalized Unicode code points", min));
   return trimmed;
 }
 

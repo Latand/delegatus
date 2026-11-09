@@ -1,3 +1,4 @@
+import { textLengthError } from "@/lib/textLimits";
 import { AsyncResource } from "node:async_hooks";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -1991,8 +1992,8 @@ async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
   const receipt = operationId.startsWith("seatmsg_") ? seatMessageReceipt(operationId) : await resolveSendReceipt(operationId);
   if (!receipt) {
     throw new McpToolRefusal(
-      "no accepted send is recorded under that operationId",
-      { code: "OPERATION_UNKNOWN" },
+      "No accepted send is recorded under that operationId. Copy operationId from the send acknowledgement; launchId, pipelineId and clientRequestId belong to other receipt families. For uncertain sends recover with the original send tool, key and arguments; absence here does not prove no effect.",
+      { code: "OPERATION_UNKNOWN", retryable: false },
     );
   }
   /* Why it is still waiting, or why it settled, as the delivery queue
@@ -2679,6 +2680,15 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
     if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
+    // Invalid arguments require a corrected call; an unchanged automatic retry
+    // cannot fix them. Preserve diagnostics without asserting that no effect ran.
+    if (result.status === 400) throw new McpToolRefusal(message, {
+      code: result.code ?? (["publish", "takeover", "set-delivery-remote"].includes(action) ? "delivery_refused" : ["attach-link", "detach-link"].includes(action) ? "WORK_LINK_INVALID" : "PIPELINE_INVALID_FIELD"),
+      field: result.field ?? (["attach-link", "detach-link"].includes(action) ? "link" : undefined), status: 400, retryable: false,
+      ...(result.details ? { details: result.details } : {}),
+      ...(result.close ? { close: result.close } : {}),
+      ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
+    });
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
@@ -2688,7 +2698,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (action === "publish" || action === "takeover" || action === "set-delivery-remote") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
     /* A stale guard names what moved, so the caller re-reads before retrying. */
-    if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status });
+    if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status, retryable: false });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
@@ -2764,7 +2774,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
 function retryStageLaunch(request: Record<string, unknown>, pipeline: Pipeline | null): void {
   if (typeof request.stageId !== "string" || request.launchId !== undefined || !pipeline) return;
   if (request.expectedStageId !== undefined && request.expectedStageId !== request.stageId) {
-    throw new McpToolRefusal(`retry-stage names stage ${request.stageId} and expectedStageId ${String(request.expectedStageId)}; name one stage`, { code: "STAGE_CHANGED", field: "expectedStageId", status: 400 });
+    throw new McpToolRefusal(`retry-stage names stage ${request.stageId} and expectedStageId ${String(request.expectedStageId)}; name one stage`, { code: "STAGE_CHANGED", field: "expectedStageId", status: 400, retryable: false });
   }
   request.expectedStageId = request.stageId;
   if (request.expectedAttempt === undefined) request.expectedAttempt = latestOperationalStageAttempt(pipeline, request.stageId)?.n ?? 0;
@@ -2880,7 +2890,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     }
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
-      throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409 });
+      throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409, retryable: false });
     }
     throw error;
   }
@@ -4148,7 +4158,7 @@ async function bridgeReport(
        refused before anything is stored, never shortened. */
     if (rendered.tooLarge || (rendered.complete && !bridgeReportComplete(rendered.complete))) {
       throw new McpToolRefusal(
-        `The report is longer than ${BRIDGE_REPORT_COMPLETE_MAX_BYTES} bytes as a whole, so it cannot be relayed without leaving items out. Nothing was recorded. Split it into several reports, each with its own key, or shorten the items.`,
+        textLengthError("complete report", rendered.completeByteLength, BRIDGE_REPORT_COMPLETE_MAX_BYTES, "UTF-8 bytes") + " Nothing was recorded. Split it into several reports with distinct keys, preserving complete items, or shorten whole items.",
         { code: "report_too_large", retryable: false, warnings: rendered.warnings },
       );
     }

@@ -1,3 +1,4 @@
+import { textLengthError } from "@/lib/textLimits";
 import { normalizeMaintenanceWindow, type MaintenanceWindow } from "@/lib/boardMaintenance/window";
 import { changeRelease, normalizeRelease, type ReleaseSetting, type ReleaseSettingChange } from "@/lib/release/settings";
 import fs from "node:fs";
@@ -290,7 +291,7 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
        written under a wider or older rule still has to load. Refusing is the
        writer's job, above, where the caller is there to hear it. */
     monitorPrompt: typeof raw.monitorPrompt === "string" && raw.monitorPrompt.trim()
-      ? raw.monitorPrompt.slice(0, SEAT_TICK_PROMPT_LIMIT)
+      ? raw.monitorPrompt
       : null,
     until: isoOrNull(raw.until),
     updatedAt: isoOrNull(raw.updatedAt),
@@ -617,7 +618,7 @@ export function applySeatTickSettingsChange(
   let instructionLines = seatTickInstructionLines(current);
   if (Object.hasOwn(change, "reason") || removing) {
     const author = context.instructionActor ?? context.actor;
-    const overLimit = (count: number) => ({ ok: false as const, error: `instructions (reason) are ${count} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` });
+    const overLimit = (count: number) => ({ ok: false as const, error: textLengthError("instructions (reason)", count, REASON_LIMIT, "UTF-16 code units") });
     /* The panel's counter runs this same preview over its draft. */
     const previewOf = (text: string | null | undefined) => previewSeatTickInstructions(current, {
       ...(text !== undefined ? { text } : {}),
@@ -662,7 +663,7 @@ export function applySeatTickSettingsChange(
     else {
       const redacted = redactMonitorText(raw).trim();
       if (raw.length > SEAT_TICK_PROMPT_LIMIT || redacted.length > SEAT_TICK_PROMPT_LIMIT) {
-        return { ok: false, error: `monitorPrompt is ${raw.length} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}. Nothing was stored — shorten the note and send it again` };
+        return { ok: false, error: textLengthError("monitorPrompt", Math.max(raw.length, redacted.length), SEAT_TICK_PROMPT_LIMIT, "UTF-16 code units") };
       }
       monitorPrompt = redacted || null;
     }

@@ -1,5 +1,100 @@
 # MCP input budgets
 
+## Preparing bounded text and guarded writes
+
+Read the current tool schema, copy the target identifiers and guards from its
+read tool, then measure the field using its declared unit. A recommended target
+leaves drafting space below the real maximum. Values above the target and at
+or below the maximum remain valid. A rejected authoritative field must be
+rewritten explicitly; no length repair may discard a condition, identifier,
+receipt or provenance.
+
+| Input | Hard maximum | Recommended target | Measurement |
+| --- | ---: | ---: | --- |
+| Lesson/rewrite rule | 300 (minimum 20) | 240 | Unicode code points after trimming and collapsing whitespace |
+| Lesson/rewrite reason, closing `none` | 160 | 120 | Same normalized code points; rule and reason also need 16 letters or digits |
+| Problem statement / evidence | 300 / 1000 | 240 / 750 | Same normalized code points |
+| Task title/body | 6000 | 4500 | UTF-16 code units after task text normalization |
+| Task note | 280 | 220 | UTF-16 code units after collapsing whitespace and trimming |
+| Task details, including the result of line edits | 20000 | 15000 | UTF-16 code units; replacements trim, line edits preserve indentation |
+| Task step text | 120 | 90 | UTF-16 code units after trimming; at most 20 steps |
+| Task summary headline / text / left | 120 / 600 / 200 | 90 / 450 / 150 | UTF-16 code units; domain writer collapses whitespace |
+| Hold note / reference | 200 / 500 | 150 / exact reference | Note collapses whitespace; reference is preserved exactly, in UTF-16 code units |
+| Monitor authored instructions (combined) | 500 | 375 | UTF-16 code units of the merged instruction text |
+| Monitor prompt | 16000 | 12000 | Both raw and trimmed/redacted UTF-16 code units must fit |
+| Decision question / option label | 300 / 120 | 240 / 90 | UTF-16 code units after trimming |
+| Decision answer (`resolve-decision`) | 12000 | 9000 | UTF-16 code units; key at most 200 units |
+| Stage summary / blocked reason | 2000 | 1500 | UTF-16 code units; domain normalizer trims |
+| Stage result | 160 | 120 | UTF-16 code units; domain normalizer collapses whitespace |
+| Stage finding text | 1995 | 1500 | UTF-16 code units; severity prefix makes the stored bound 2000; at most 50 findings |
+| Complete bridge report | 8192 | 6000 | UTF-8 bytes of summary, headings and items joined by newlines |
+
+An astral scalar occupies one Unicode code point, two UTF-16 code units and
+four UTF-8 bytes. Combining marks are separate code points. These limits count
+neither grapheme clusters nor the escaped JSON representation. Existing
+UTF-16 bounds remain unchanged. The affected schemas publish their unit explicitly;
+normalized lesson bounds use `x-normalized-minLength` and
+`x-normalized-maxLength`, because a raw JSON Schema `maxLength` would reject
+valid padded input before normalization. UTF-16 schemas retain their Zod
+bound and expose `x-length-unit` alongside it; JSON Schema's scalar-counting
+`maxLength` alone cannot describe that existing validator.
+
+The protocol can check a raw field before a domain writer normalizes it.
+Draft within the raw bound as well as the normalized one. Task details line
+edits are checked against the resulting whole field atomically. New hold and
+nested step writes refuse overages before persistence; readers preserve legacy
+full hold references, reasons and monitor prompts so recovery loses no text.
+Only task/pr/issue/external holds retain a reference. Unsupported hold kinds
+still normalize to `unstated` with a warning.
+
+`update_task` requires `expectedProject` and `expectedRevision` together when
+either is supplied, for hide/restoreHold and for guarded position/placement
+writes. Copy both from `get_task`; a mismatch requires a fresh read and a new
+decision. The schema publishes the dependencies and checks them before a
+receipt or mutation. `pipeline_action resolve-decision` requires `answer`,
+`expectedStageId`, positive `expectedAttempt` and `expectedRevision` from
+`get_pipeline`. Other actions keep their own guards: graph edits use
+`expectedStageDigest`, and retrying a failed launch uses its own launch identity.
+
+Deterministic pipeline argument errors and stale guards preserve their code
+and field and refuse unchanged automatic retries. Invalid stage reports do the
+same. A retryability flag supplies no proof that an earlier effect never ran.
+
+After a deterministic no-effect refusal, correct the named field using the
+reported limit and actual length, then submit the changed payload with a new
+key. For uncertain execution, keep the original key and arguments or use the
+operation's recovery read. `message_receipt` takes the accepted send's
+`operationId`; pipeline, launch and client request identifiers name other
+families. An unknown receipt is a non-retryable lookup error and supplies no
+proof that an original effect did not happen.
+
+For bridge reports, 120 summary units and 200 item units are display targets.
+The full report remains recoverable within the 8192-byte bound. An over-limit
+whole report is refused with its actual byte count before recording or
+delivery. Summarize whole items or split complete reports under distinct keys,
+preserving every owed decision.
+
+The contract paths are:
+
+- MCP discovery and SDK admission: `src/lib/mcp/server.ts`, shared by HTTP,
+  stdio and task execution; internal service calls still use domain validation.
+- Lessons: `roleStage.ts` and `roleProblems.ts`, then the role store and its
+  existing curation/replay paths. Curation shares the lesson schema.
+- Tasks: create/patch commands and nested step parsing, then the store and its
+  hold/summary readers; full details and line edits share the whole-field bound.
+- Forms: `prototypeReview/input.ts` is shared by MCP and publication parsing.
+- Stage completion: SDK schema and `pipelines/verdict.ts`, then persisted stage
+  reports. Summary overages are refused rather than silently sliced.
+- Monitor notes: settings writer and legacy reader, then wake composition.
+- Bridge reports: renderer measures the complete retained representation;
+  binding admission precedes storage and delivery.
+
+`src/lib/mcp/textLimits.test.ts` drives the production SDK/service builders and
+domain writers at the maximum and one over, including Unicode, corrected
+retries, zero dispatch on refusal, nested holds and persisted readback. The
+existing bridge, monitor, hold and stage-verdict files cover their complete
+production paths. No hard maximum is raised and no performance gain is claimed.
+
 ## Observation before implementation
 
 Observed on 2026-10-21 against main revision `bb9bf4a4`. `package.json` and
@@ -97,16 +192,17 @@ From an isolated scratch export with the frozen dependencies, run these explicit
 files through the stage's owned `gate-slot.sh` wrapper:
 
 ```sh
-bun test ./src/lib/mcp/inputLimits.test.ts
-bun test ./src/lib/mcp/http.test.ts
-bun test ./src/lib/mcp/http.cancellation.test.ts
-bun test ./src/lib/mcp/schemaParity.test.ts
-bun test ./src/lib/mcp/answerSizes.test.ts
+bun run test ./src/lib/mcp/textLimits.test.ts
+bun run test ./src/lib/mcp/inputLimits.test.ts
+bun run test ./src/lib/mcp/http.test.ts
+bun run test ./src/lib/mcp/http.cancellation.test.ts
+bun run test ./src/lib/mcp/schemaParity.test.ts
+bun run test ./src/lib/mcp/answerSizes.test.ts
 ```
 
 The test preload creates private HOME, config, temporary and state roots.
-Set `TMPDIR=/tmp`, omit an inherited state owner/directory so the preload
-allocates a fresh state root, and set `LLV_VIEWER_CONTROL_URL` to a closed
-loopback port before the test process starts. The census prints its measured
+Set `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR` to separate
+private roots inside the stage's owned scratch directory, and set
+`LLV_VIEWER_CONTROL_URL` to a closed loopback port before the test process starts. The census prints its measured
 counts and bytes. The byte-boundary and element-boundary cases also prove
 that refusals leave the service able to accept another valid request.

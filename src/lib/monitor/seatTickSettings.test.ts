@@ -340,22 +340,36 @@ test("a prompt over the limit is refused with the limit and its own length, and 
   const result = change(kept, { monitorPrompt: "w".repeat(SEAT_TICK_PROMPT_LIMIT + 500) });
   expect(result).toEqual({
     ok: false,
-    error: `monitorPrompt is ${SEAT_TICK_PROMPT_LIMIT + 500} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}. Nothing was stored — shorten the note and send it again`,
+    error: expect.stringContaining(`actual length is ${SEAT_TICK_PROMPT_LIMIT + 500}`),
   });
   /* The refusal is a refusal of the whole change: the record it was applied to
      is untouched, there is no truncated version of the note anywhere. */
   expect(kept.monitorPrompt).toBe("the note that stands");
 });
 
-test("an over-long prompt already on disk still loads, clamped, so an old file never stops a check (#1450)", () => {
+test("an over-long prompt already on disk retains its complete text for recovery", () => {
   const file = settingsFile();
   fs.writeFileSync(file, JSON.stringify({
     version: 1,
     projects: { [PROJECT]: { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "n".repeat(SEAT_TICK_PROMPT_LIMIT + 5), updatedAt: new Date(NOW).toISOString() } },
   }));
   const loaded = readSeatTickSettings(PROJECT, file);
-  expect(loaded.monitorPrompt).toHaveLength(SEAT_TICK_PROMPT_LIMIT);
+  expect(loaded.monitorPrompt).toHaveLength(SEAT_TICK_PROMPT_LIMIT + 5);
   expect(loaded.updatedAt).toBe(new Date(NOW).toISOString());
+});
+
+test("monitor raw UTF-16 boundary refuses one over and retains the prior record", () => {
+  const exact = "🧭".repeat(SEAT_TICK_PROMPT_LIMIT / 2);
+  const kept = settingsOf(change(defaultSeatTickSettings(PROJECT), { monitorPrompt: exact }));
+  expect(kept.monitorPrompt).toBe(exact);
+  for (const over of [exact + "я", " " + exact]) {
+    const refused = change(kept, { monitorPrompt: over });
+    expect(refused).toMatchObject({ ok: false, error: expect.stringContaining("actual length is 16001") });
+    if (refused.ok) throw Error("accepted an overage");
+    expect(refused.error).toContain("monitorPrompt");
+    expect(refused.error).toContain("16000 UTF-16 code units");
+    expect(kept.monitorPrompt).toBe(exact);
+  }
 });
 
 test("the prompt is untouched by the settings around it: quieting, restoring, and the expiry", () => {
@@ -526,7 +540,7 @@ test("the operator's field claims lines with no known author: 495 + «читай
   const legacy = { ...defaultSeatTickSettings(PROJECT), reason: LEGACY };
   expect(LEGACY.length).toBe(495);
   const over = asOperator(legacy, { reason: `${LEGACY}\nчитай`, clearUnknownInstructions: true });
-  expect(over).toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+  expect(over).toEqual({ ok: false, error: "instructions (reason) must be at most 500 UTF-16 code units; actual length is 501. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance." });
   expect(legacy.reason).toBe(LEGACY);
   const shortened = settingsOf(asOperator(legacy, { reason: `${LEGACY.slice(0, 200)}\nчитай`, clearUnknownInstructions: true }));
   expect(shortened.reason).toBe(`${LEGACY.slice(0, 200)}\nчитай`);
@@ -638,7 +652,7 @@ test("the panel's preview of an edit is what the server stores, and the limit co
   const overPreview = previewSeatTickInstructions(current, { ...edit, text: over }, OPERATOR, NEXT_AT);
   expect(overPreview.ok && overPreview.lines.map(line => line.text).join("\n").length).toBe(501);
   expect(asOperator(current, { reason: over, clearUnknownInstructions: true, removeSeatNotes: edit.removeSeatNotes }))
-    .toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+    .toEqual({ ok: false, error: "instructions (reason) must be at most 500 UTF-16 code units; actual length is 501. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance." });
 });
 
 test("a field alone over the limit is refused with the total the panel previews, seat notes included", async () => {
