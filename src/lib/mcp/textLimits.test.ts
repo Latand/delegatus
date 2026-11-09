@@ -18,10 +18,10 @@ const task: BoardTask = { id: "limit-task", project: "fixture", text: "Keep comp
 const scalarText = (length: number) => "я".repeat(16) + "🧭".repeat(length - 16);
 const unitText = (length: number) => "🧭".repeat(Math.floor(length / 2)) + (length % 2 ? "я" : "");
 
-async function protocol(run: (client: Client, dispatched: Array<{ name: string; args: Record<string, unknown> }>) => Promise<void>) {
+async function protocol(run: (client: Client, dispatched: Array<{ name: string; args: Record<string, unknown> }>) => Promise<void>, overrides: Partial<McpToolBindings> = {}) {
   const dispatched: Array<{ name: string; args: Record<string, unknown> }> = [];
   const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async (args: Record<string, unknown>) => { dispatched.push({ name, args }); return {}; }])) as McpToolBindings;
-  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const server = createViewerMcpServer(createMcpToolService({ ...bindings, ...overrides }, new MemoryMcpReceiptStore()));
   const client = new Client({ name: "text-limit-contract", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -51,6 +51,8 @@ test.each([
   ["update_task", "details", 20000, (value: string) => ({ taskId: task.id, details: value }), unitText],
   ["update_task", "hold.note", 200, (value: string) => ({ taskId: task.id, hold: { kind: "external", note: value } }), unitText],
   ["update_task", "hold.ref", 500, (value: string) => ({ taskId: task.id, hold: { kind: "external", ref: value } }), unitText],
+  ["update_task", "steps.0.id", 40, (value: string) => ({ taskId: task.id, steps: [{ id: value, text: "Verify", state: "open" }] }), (length: number) => "a".repeat(length)],
+  ["update_task", "steps.0.ref", 200, (value: string) => ({ taskId: task.id, steps: [{ id: "verify", text: "Verify", state: "open", ref: value }] }), unitText],
   ["seat_tick_settings", "monitorPrompt", 16000, (value: string) => ({ monitorPrompt: value }), unitText],
   ["curate_rules", "rewrite.0.rule", 300, (value: string) => ({ action: "apply", scopes: [{ scope: "machine", revision: 0, order: [] }], rewrite: [{ id: "r_original", rule: value, why: lesson.why, note: "Keep the full invariant." }] }), scalarText],
   ["curate_rules", "rewrite.0.why", 160, (value: string) => ({ action: "apply", scopes: [{ scope: "machine", revision: 0, order: [] }], rewrite: [{ id: "r_original", rule: lesson.rule, why: value, note: "Keep the full invariant." }] }), scalarText],
@@ -196,6 +198,7 @@ test.each([
   ["details", 20000, (value: string) => ({ details: value })],
   ["text", 6000, (value: string) => ({ text: value })],
   ["steps.0.text", 120, (value: string) => ({ steps: [{ id: "check", text: value, state: "open" }] })],
+  ["steps.0.ref", 200, (value: string) => ({ steps: [{ id: "check", text: "Verify", state: "open", ref: value }] })],
   ["summary.headline", 120, (value: string) => ({ summary: { headline: value, text: "The result is complete." } })],
   ["summary.text", 600, (value: string) => ({ summary: { headline: "Result", text: value } })],
   ["summary.left", 200, (value: string) => ({ summary: { headline: "Result", text: "The result is complete.", left: value } })],
@@ -207,6 +210,22 @@ test.each([
   if (refused.ok) throw Error("accepted an overage");
   for (const part of [field, String(max), `actual length is ${max + 1}`, "UTF-16 code units"]) expect(refused.error).toContain(part);
   expect(task).not.toHaveProperty("note");
+});
+
+test("checklist count at twenty is preserved and twenty-one is refused with its count", async () => {
+  const steps = Array.from({ length: 21 }, (_, index) => ({ id: `check-${index}`, text: "Verify", state: "open" }));
+  expect(patchTask([task], task.id, { steps: steps.slice(0, 20) }, now)).toMatchObject({ ok: true, task: { steps: steps.slice(0, 20) } });
+  const refused = patchTask([task], task.id, { steps }, now);
+  expect(refused).toMatchObject({ ok: false, field: "steps", error: expect.stringContaining("actual count is 21") });
+  await protocol(async (client, dispatched) => {
+    const over = await client.callTool({ name: "update_task", arguments: { clientRequestId: "too-many-steps", taskId: task.id, steps } });
+    expect(over.isError).toBe(true);
+    for (const part of ["steps", "20", "actual count is 21"]) expect(JSON.stringify(over.content)).toContain(part);
+    expect(dispatched).toEqual([]);
+    const corrected = await client.callTool({ name: "update_task", arguments: { clientRequestId: "twenty-steps", taskId: task.id, steps: steps.slice(0, 20) } });
+    expect(corrected.isError).not.toBe(true);
+    expect(dispatched).toHaveLength(1);
+  });
 });
 
 test.each(["note", "ref"] as const)("hold %s survives create, patch, nested step and store without clipping", field => {
@@ -240,6 +259,28 @@ test.each(["note", "ref"] as const)("hold %s survives create, patch, nested step
     const file = path.join(directory, "legacy.json");
     saveTasks([{ ...task, hold: { ...holder(over), since: now, by: "operator" } }], file);
     expect(loadTasks(file)[0]!.hold?.[field]).toBe(over);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a stored opaque hold reference reaches the production get_task protocol response in full", async () => {
+  const ref = "a1b2c3d4" + "e".repeat(56);
+  const created = createTask([], { project: "fixture", text: "Wait for the exact reference", placement: "unplaced", hold: { kind: "external", note: "After verification", ref }, dueAt: "2026-12-01T10:00:00.000Z", dueTz: "UTC" }, [], { now: () => now, id: () => "hold-reference" });
+  if (!created.ok) throw Error(created.error);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hold-protocol-"));
+  try {
+    const file = path.join(directory, "tasks.json");
+    saveTasks(created.tasks, file);
+    const rows = loadTasks(file);
+    const control = { get: async () => { throw Error("unexpected network read"); }, post: async () => { throw Error("unexpected network write"); } };
+    const bindings = viewerMcpBindings(undefined, control, {
+      taskSelectionSource: () => null, pipelineSelectionSource: () => null,
+      listTaskRecords: () => rows, listPipelineRecords: () => [],
+    } as never);
+    await protocol(async client => {
+      const result = await client.callTool({ name: "get_task", arguments: { taskId: created.task.id } });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ ok: true, task: { hold: { ref } } });
+    }, { get_task: bindings.get_task });
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 

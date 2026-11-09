@@ -17,6 +17,7 @@ receipt or provenance.
 | Task title/body | 6000 | 4500 | UTF-16 code units after task text normalization |
 | Task note | 280 | 220 | UTF-16 code units after collapsing whitespace and trimming |
 | Task details, including the result of line edits | 20000 | 15000 | UTF-16 code units; replacements trim, line edits preserve indentation |
+| Task step id / reference | 40 / 200 | exact identity | ASCII bytes for ids; UTF-16 code units after trimming references |
 | Task step text | 120 | 90 | UTF-16 code units after trimming; at most 20 steps |
 | Task summary headline / text / left | 120 / 600 / 200 | 90 / 450 / 150 | UTF-16 code units; domain writer collapses whitespace |
 | Hold note / reference | 200 / 500 | 150 / exact reference | Note collapses whitespace; reference is preserved exactly, in UTF-16 code units |
@@ -29,8 +30,8 @@ receipt or provenance.
 | Stage finding text | 1995 | 1500 | UTF-16 code units; severity prefix makes the stored bound 2000; at most 50 findings |
 | Complete bridge report | 8192 | 6000 | UTF-8 bytes of summary, headings and items joined by newlines |
 
-NFKC is used only for the recognisability counter; stored rule and provenance
-text retain their Unicode spelling.
+The recognisability counter applies NFKC to its matching view; stored rule and
+provenance text retain their Unicode spelling.
 
 An astral scalar occupies one Unicode code point, two UTF-16 code units and
 four UTF-8 bytes. Combining marks are separate code points. These limits count
@@ -47,7 +48,9 @@ Draft within the raw bound as well as the normalized one. Task details line
 edits are checked against the resulting whole field atomically. New hold and
 nested step writes refuse overages before persistence; readers preserve legacy
 full hold references, reasons and monitor prompts so recovery loses no text.
-Only task/pr/issue/external holds retain a reference. Unsupported hold kinds
+Opaque `ref` values also remain complete in MCP answers; display abbreviation
+does not turn an external reference into an unusable prefix. Only
+task/pr/issue/external holds retain a reference. Unsupported hold kinds
 still normalize to `unstated` with a warning.
 
 `update_task` requires `expectedProject` and `expectedRevision` together when
