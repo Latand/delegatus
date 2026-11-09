@@ -82,7 +82,7 @@ test("real pre-commit hook checks staged source, stops failures, and supports th
   const f = hookFixture(); writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n"); f.git("add", "example.ts");
   const failed = spawnSync("git", ["commit", "-m", "blocked"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "scripts/eslint-changes.ts" }, encoding: "utf8" });
   expect(failed.status).not.toBe(0);
-  expect(f.calls().some(call => call.args.includes("--paths") && call.args.includes("example.ts") && call.known?.endsWith("privacy-known-value-fingerprints.json"))).toBeTrue();
+  expect(f.calls().some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeFalse();
   expect(f.calls().some(call => call.args.includes("--check-commits"))).toBeFalse();
   f.git("commit", "-m", "accepted");
   writeFileSync(path.join(f.dir, "example.ts"), "export const value = 3;\n"); f.git("add", "example.ts");
@@ -177,7 +177,7 @@ test("a push that changes nothing checks every pushed commit for privacy and run
   // the merge base is empty whatever main has become since.
   const steps = plan("pre-push", [], context({ linux: true, runtime: true, native: true }));
   expect(steps.map(step => step.name)).toEqual(["privacy"]);
-  expect(steps[0]!.command).toEqual(["bun", "scripts/privacy-publication-gate.ts", "--base", "base", "--require-known-values", "--check-commits"]);
+  expect(steps[0]!.command).toEqual(["bun", "scripts/privacy-publication-gate.ts", "--base", "base", "--require-known-values", "--check-commits", "--added-lines", "--defer-unavailable-media"]);
   expect(discover(root, "HEAD", []).linux).toBeFalse();
 });
 test("a push that changes one document keeps privacy and leaves main's types and tests alone", () => {
@@ -485,3 +485,18 @@ test.skipIf(process.platform !== "linux")("the real unadmitted hook owns its san
     if (child.exitCode === null) child.kill("SIGTERM");
   }
 }, 35_000);
+
+test("a staged credential commits without privacy and is refused before push", () => {
+  const f = hookFixture();
+  writeFileSync(path.join(f.dir, "example.ts"), `// ${["api_token", "=", "synthetic".repeat(3)].join("")}\n`);
+  f.git("add", "example.ts");
+  const commit = spawnSync("git", ["commit", "-m", "Synthetic credential"], { cwd: f.dir,
+    env: { ...f.env, HOOK_FAIL: "scripts/privacy-publication-gate.ts" }, encoding: "utf8" });
+  expect(commit.status, commit.stdout + commit.stderr).toBe(0);
+  const result = spawnSync(process.execPath, [path.join(root, "scripts/privacy-publication-gate.ts"),
+    "--repository", f.dir, "--base", "origin/main", "--added-lines", "--check-commits", "--require-known-values"], {
+    cwd: root, env: { ...f.env, LLV_PRIVACY_KNOWN_VALUES_FILE: undefined,
+      LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json") }, encoding: "utf8" });
+  expect(result.status, result.stdout + result.stderr).toBe(1);
+  expect(result.stdout).toContain("credential:");
+});

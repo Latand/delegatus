@@ -1,4 +1,6 @@
+import { structuredDeliveryMcpObservation } from "@/lib/runtime/structuredDeliveryController";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { bindResumedSeatTick } from "./resumedSeatTick";
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { SeatTickWork, outsideSeatTickWork, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkDetail, seatTickSkippedSources, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -1269,7 +1271,7 @@ async function reconcileOutstandingWake(context: {
       try {
         outcome = await dispatchCall.run({ clientMessageId: wake.clientMessageId, token }, () => context.deliver!({
           pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" }));
+          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "context-or-queue" }));
         redispatched = deliveryOutcomeLabel(outcome);
         redispatchReason = sendRefusalDetail(outcome);
       } catch (error) {
@@ -1764,9 +1766,10 @@ async function check(
       const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
       const health = dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
         ?? seatMcpHealth(receipt, seat.designatedAt ?? null,
-          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
+          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio",
+          structuredDeliveryMcpObservation(seat.conversationId, sources.registry()));
       return { ...health, ...(receipt?.viewerMcpTransport ? { transport: receipt.viewerMcpTransport } : {}) };
-    } catch { return { status: "untracked", detail: "MCP liveness could not be read" }; }
+    } catch { return { status: "dead", detail: "MCP liveness could not be read" }; }
   };
   // A missing MCP heartbeat cannot distinguish a finished dead host from a
   // live host with a broken pipe. Only the liveness plane can admit recovery.
@@ -2356,10 +2359,10 @@ async function check(
             if (accounting && !token) throw new Error("wake dispatch already claimed");
             const admission = await admissionFor(input.seat);
             if (!admission) throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
-            /* A wake waits for the seat to go idle: the default policy would
-               interrupt a turn the seat or the operator has running. */
+            /* The executor chooses native context on a supported running host,
+               or a normal wake when idle, under this one durable key. */
             const message = { pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "queue" as const,
+              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "context-or-queue" as const,
               admissionGuard: admission.guard, recoveryAuthorityGuard: admission.authorityGuard };
             outcome = token ? await dispatchCall.run({ clientMessageId, token }, () => deliverWake(message)) : await deliverWake(message);
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
@@ -2636,11 +2639,22 @@ function kickTurboWork(project: string, kick: ((project: string) => void) | unde
   }
 }
 
-export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord[]> {
-  const sweepGeneration = tickHost.__llvSeatTickGeneration;
+/** A resumed conversation may request only its current designated project. */
+export async function reconcileResumedSeatTick(conversationId: string, dependencies: SeatTickControllerDependencies = {}): Promise<void> {
+  const sources = dependencies.sources ?? defaultSeatTickSources();
+  const project = sources.activeSeats().find(project => sources.seatFor(project).active?.conversationId === conversationId);
+  if (project) await reconcileSeatTick({ ...dependencies, sources }, [project]);
+}
+
+export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}, requestedProjects?: readonly string[]): Promise<SeatTickRunRecord[]> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
-  if (!await (dependencies.ownsTraffic ?? releaseOwnsTraffic)()) {
+  const generation = tickHost.__llvSeatTickGeneration;
+  const ownsTraffic = await (dependencies.ownsTraffic ?? releaseOwnsTraffic)();
+  // Admission may outlive this clock. Its continuation may neither start work
+  // after stop nor withdraw a replacement clock on a stale refusal.
+  if (generation !== tickHost.__llvSeatTickGeneration) return [];
+  if (!ownsTraffic) {
     const refusal = "this release no longer owns viewer traffic, so the seats belong to the promoted one";
     console.error(`[seat tick] refused: ${refusal}`);
     try {
@@ -2664,14 +2678,16 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     stopSeatTick();
     return [];
   }
+  // A foreground resume uses the same handoff/drain fence as the clock.
+  if (requestedProjects && (activeRestartGate(statePath("self-update", "auto-admission.json")) || activeDrain())) return [];
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
-  const projects = new Set(seatTickProjects(sources));
+  const projects = new Set(requestedProjects?.map(canonicalOrchestratorProject) ?? seatTickProjects(sources));
   // Recovery must settle a curator whose project no longer has a seat or open work.
   const incumbent = machinePass();
-  if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
+  if (incumbent && !requestedProjects) projects.add(canonicalOrchestratorProject(incumbent.project));
   const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
-  const curation = curator ? curationForSweep(curator, [...projects].sort(), () => sweepGeneration === tickHost.__llvSeatTickGeneration) : null;
+  const curation = curator ? curationForSweep(curator, [...projects].sort(), () => generation === tickHost.__llvSeatTickGeneration) : null;
   // Each project starts independently. Its own deadline includes every phase;
   // an overdue project never holds the roster behind its await.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
@@ -2836,6 +2852,10 @@ export function startSeatTick(ports: {
   const timer = schedule(run, policy.checkIntervalMs / 2);
   timer.unref?.();
   tickHost.__llvSeatTickTimer = timer;
+  bindResumedSeatTick(async conversationId => {
+    if (generation !== tickHost.__llvSeatTickGeneration || handoffHeld() || drainHeld()) return;
+    await reconcileResumedSeatTick(conversationId, { policy });
+  });
   // Read durable stall observations immediately; a restart owes no new interval.
   run();
   return true;
@@ -2848,6 +2868,7 @@ export function seatTickIdle(): boolean {
 /** Test seam: the timer is process-global, so a suite must be able to start
     from an unstarted one without reaching into module internals. */
 export function stopSeatTick(): void {
+  bindResumedSeatTick(null);
   tickHost.__llvSeatTickGeneration = (tickHost.__llvSeatTickGeneration ?? 0) + 1;
   for (const entry of tickHost.__llvSeatTickProjects?.values() ?? []) entry.work?.close();
   tickHost.__llvSeatTickProjects?.clear();

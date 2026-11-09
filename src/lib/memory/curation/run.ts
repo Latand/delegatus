@@ -15,7 +15,7 @@ import { outsideSeatTickWork } from "@/lib/monitor/seatTickWork";
 
 const LAUNCH_GRACE_MS = 15 * 60_000;
 export interface CurationController {
-  reconcile(project: string): Promise<string | null>;
+  reconcile(project: string, sweepIsCurrent?: () => boolean): Promise<string | null>;
   launchIfDue(input: SeatTickCheckInput): Promise<string | null>;
   /** Internal sweep coordination; production controllers add these methods. */
   finishProject?(project: string): void;
@@ -30,8 +30,8 @@ export interface CurationPorts extends CurationAdmissionPorts {
 
 /** One ephemeral owner per seat sweep. It waits for every project's refreshed
  * wake state before making one machine-wide choice. A new sweep reads all
- * authority again; launch/recovery keep their own admission fences, with the
- * launch also carrying the sweep's release-generation fence. */
+ * authority again; shared recovery and launch outlive individual project
+ * checks and retain admission and release-generation fences. */
 export function curationForSweep(controller: CurationController, projects: readonly string[] = [], sweepIsCurrent: () => boolean = () => true): CurationController {
   let reconcile: Promise<string | null> | undefined;
   const expected = new Set(projects);
@@ -46,7 +46,8 @@ export function curationForSweep(controller: CurationController, projects: reado
   };
   let launch: Promise<string | null> | undefined;
   return {
-    reconcile: project => reconcile ??= controller.reconcile(project),
+    reconcile: project => reconcile ??= outsideSeatTickWork(() =>
+      sweepIsCurrent() ? controller.reconcile(project, sweepIsCurrent) : Promise.resolve(null)),
     finishProject: markReady,
     fresh: project => curationForSweep(controller, [project], sweepIsCurrent),
     // Each check publishes its fully updated wake state before the single
@@ -104,21 +105,24 @@ async function launch(pass: CuratorPass, ports: CurationPorts, sweepIsCurrent: (
   patchPass(pass.id, { state: response.body.state === "starting" ? "launching" : "running", launchId: typeof response.body.launchId === "string" ? response.body.launchId : null, conversationId: typeof response.body.conversationId === "string" ? response.body.conversationId : null, transcriptPath: typeof response.body.path === "string" ? response.body.path : null });
   return `curation: launched ${pass.id}`;
 }
-export async function reconcileCuration(project: string, ports: CurationPorts): Promise<string | null> {
+export async function reconcileCuration(project: string, ports: CurationPorts, sweepIsCurrent: () => boolean = () => true): Promise<string | null> {
+  if (!sweepIsCurrent()) return null;
   // Every sweep checks the incumbent's own host project before recovery.
   let pass = machinePassAuthority() ?? currentPassAuthority(project);
   if (!pass || !passIsLive(pass)) return null;
   const host = await hostAdmission(pass.project, ports, pass);
+  if (!sweepIsCurrent()) return null;
   if (host.held !== null) return settle(pass, ports, `abandoned: ${host.held}`);
-  if (pass.state === "claimed" || !pass.launchedAt) return launch(pass, ports);
+  if (pass.state === "claimed" || !pass.launchedAt) return launch(pass, ports, sweepIsCurrent);
   const observed = await (ports.observe ?? (p => observeSpawnedTurn(p, ports.sources, undefined, LAUNCH_GRACE_MS)))(pass);
+  if (!sweepIsCurrent()) return null;
   const ineligibleAfterObserve = host.guard();
   if (ineligibleAfterObserve) return settle(pass, ports, `abandoned: ${ineligibleAfterObserve}`);
   if (observed.conversationId) pass = patchPass(pass.id, { conversationId: observed.conversationId, launchId: observed.launchId ?? pass.launchId, transcriptPath: observed.path ?? pass.transcriptPath })!;
   if (observed.state === "failed") return settle(pass, ports, observed.failure?.kind ?? "launch-failed");
   if (observed.state === "ended") return settle(pass, ports, observed.turnError ? "turn-error" : null, observed.finalText);
   if (curationTimedOut(pass, ports.sources.now())) return settle(pass, ports, "timed-out");
-  if (pass.state === "launching" && !pass.conversationId) return launch(pass, ports);
+  if (pass.state === "launching" && !pass.conversationId) return launch(pass, ports, sweepIsCurrent);
   return null;
 }
 export async function launchCurationIfDue(input: SeatTickCheckInput, ports: CurationPorts): Promise<string | null> {
@@ -159,5 +163,5 @@ export async function launchCurationIfDue(input: SeatTickCheckInput, ports: Cura
 }
 export function productionCurationController(sources: SeatTickSources, overrides: Omit<CurationPorts, "sources"> = {}): CurationController {
   const ports = { sources, ...overrides };
-  return { reconcile: project => reconcileCuration(project, ports), launchIfDue: input => launchCurationIfDue(input, ports) };
+  return { reconcile: (project, sweepIsCurrent) => reconcileCuration(project, ports, sweepIsCurrent), launchIfDue: input => launchCurationIfDue(input, ports) };
 }

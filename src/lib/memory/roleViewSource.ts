@@ -15,6 +15,8 @@ import { performanceSpans } from "@/lib/performanceSpans";
 const owner = globalThis as typeof globalThis & {
   __llvCurationVersionReader?: { file: string; db: Database; generation: number };
   __llvRoleViewReader?: { file: string; db: Database; generation: number };
+  __llvProfileBasisReader?: { file: string; db: Database; generation: number };
+  __llvPrivacyRevisionReader?: { file: string; db: Database; generation: number };
   __llvRoleViewGeneration?: number;
   __llvCurationRules?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: CurationRuleInput | null; bytes: number }> };
@@ -23,20 +25,38 @@ const owner = globalThis as typeof globalThis & {
   __llvCurationScopeProjection?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: RoleMemoryScopeRow; bytes: number }> };
 };
-function reader(slot: "__llvRoleViewReader" | "__llvCurationVersionReader" = "__llvRoleViewReader") {
+type ReaderSlot = "__llvRoleViewReader" | "__llvCurationVersionReader" | "__llvProfileBasisReader" | "__llvPrivacyRevisionReader";
+function reader(slot: ReaderSlot = "__llvRoleViewReader") {
   const file = statePath("state.sqlite");
   if (owner[slot]?.file === file) return owner[slot].db;
   owner[slot]?.db.close();
   owner[slot] = undefined;
   const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = openCurrentDatabase(file, () => {
-    const opened = observeSqlite(new sqlite.Database(file, { readonly: true, strict: true }), "memory.view");
+    const opened = observeSqlite(new sqlite.Database(file, { readonly: true, strict: true }), slot === "__llvPrivacyRevisionReader" ? "memory.privacy.revision" : "memory.view");
     opened.exec("PRAGMA busy_timeout = 0");
     return opened;
   });
   const generation = owner.__llvRoleViewGeneration = (owner.__llvRoleViewGeneration ?? 0) + 1;
   owner[slot] = { file, db, generation };
   return db;
+}
+
+/** Rule rows include archived texts and reasons. Request and scope bookkeeping
+ * cannot invalidate privacy work. This reader never shares a history snapshot. */
+export function privacyRuleRevision(): string {
+  const file = statePath("state.sqlite");
+  const identity = databaseFileIdentity(file)!;
+  const db = reader("__llvPrivacyRevisionReader");
+  db.exec("BEGIN");
+  try {
+    const meta = db.query<{ imported_at: string }, []>(
+      "SELECT imported_at FROM state_collections WHERE collection='role_memory'").get();
+    if (!meta) return "";
+    const clock = db.query<{ revision: string }, []>(
+      "SELECT CAST(revision AS TEXT) AS revision FROM role_memory_privacy_revision WHERE singleton=1").get();
+    return JSON.stringify([identity, meta.imported_at, clock?.revision ?? "0"]);
+  } finally { db.exec("ROLLBACK"); }
 }
 
 /** Version tokens belong to the same shared connection as the memo's reads.
@@ -54,8 +74,8 @@ function readVersion(slot: "__llvRoleViewReader" | "__llvCurationVersionReader")
   const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
   return `${owner[slot]!.generation}:${databaseFileIdentity(file)}:${version}:${schema}`;
 }
-function keys(prefix: string, predicate = "1", bindings: SQLQueryBindings[] = []): string[] {
-  return reader().query<{ row_key: string }, SQLQueryBindings[]>(`
+function keys(prefix: string, predicate = "1", bindings: SQLQueryBindings[] = [], slot: ReaderSlot = "__llvRoleViewReader"): string[] {
+  return reader(slot).query<{ row_key: string }, SQLQueryBindings[]>(`
     SELECT row_key FROM state_rows WHERE collection = 'role_memory'
     AND row_key > ? AND row_key < ? AND (${predicate}) ORDER BY row_order, row_key
   `).all(prefix, `${prefix}\uffff`, ...bindings).map(row => row.row_key);
@@ -132,6 +152,11 @@ export function projectViewUnaffectedByChanges(project: string, from: number | u
 /** Inspect scope identities without decoding their potentially large histories. */
 export function roleScopeKeys(): string[] {
   return roleMemoryCollection() ? keys("s:").map(key => key.slice(2)) : [];
+}
+
+/** Profile reads cannot inherit a cooperative history cursor's old snapshot. */
+export function profileScopeKeys(): string[] {
+  return roleMemoryCollection() ? keys("s:", "1", [], "__llvProfileBasisReader").map(key => key.slice(2)) : [];
 }
 
 /** Curation selects one scope family in key order. This covered key lookup
@@ -707,4 +732,25 @@ export function activeRoleRuleRows(input: { project?: string; terms?: string[]; 
     const text = row.rule.toLowerCase();
     return normalizedTerms.every(term => text.includes(term) || row.id.includes(term));
   }).slice(0, input.limit);
+}
+
+
+/** Saved profile freshness needs active membership and revision stamps only.
+ * Preserve each scope's active order without decoding histories or provenance. */
+export function activeProfileBasis(scopes: readonly string[]): Map<string, Array<Pick<RoleMemoryRule, "id" | "changedAt">>> {
+  const basis = new Map(scopes.map(scope => [scope, [] as Array<Pick<RoleMemoryRule, "id" | "changedAt">>]));
+  if (!scopes.length || !roleMemoryCollection()) return basis;
+  const rows = reader("__llvProfileBasisReader").query<{ scope: string; id: string; changedAt: string }, [string]>(`
+    SELECT wanted.value AS scope, json_extract(r.value_json, '$.id') AS id,
+      json_extract(r.value_json, '$.changedAt') AS changedAt
+    FROM json_each(?) wanted CROSS JOIN state_rows s
+    CROSS JOIN json_each(s.value_json, '$.active') a CROSS JOIN state_rows r
+    WHERE s.collection='role_memory' AND s.row_key='s:' || wanted.value
+      AND json_extract(s.value_json, '$.kind')='scope'
+      AND r.collection='role_memory' AND r.row_key='r:' || a.value
+      AND json_extract(r.value_json, '$.kind')='rule'
+    ORDER BY CAST(wanted.key AS INTEGER), CAST(a.key AS INTEGER)
+  `).all(JSON.stringify(scopes));
+  for (const row of rows) basis.get(row.scope)!.push({ id: row.id, changedAt: row.changedAt });
+  return basis;
 }

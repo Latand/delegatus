@@ -521,3 +521,18 @@ test("a fork whose remote is a bare URL names the fork once, and a named remote 
   }
   expect(rows).toEqual(["fork contributor/project", "owner/project · mirror", undefined]);
 });
+
+
+test.each(["accepted", "revoked"] as const)("a %s result never opens an editable builder", async state => {
+  globalThis.fetch = Object.assign(async () => Response.json({ ok: true, repoDir: "/canonical/repo" }), { preconnect: () => {} });
+  let opened = 0, closed = 0;
+  const host = mount(<PipelineTemplatePicker repoDir="/fixture/repo"
+    onCreate={async () => ({ pipeline, accepted: true, current: () => state !== "revoked" })}
+    onCreated={() => { opened++; }} onClose={() => { closed++; }} />);
+  await settle();
+  const template = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Plan → Build → Review"))!;
+  flushSync(() => template.click());
+  await settle();
+  expect(opened).toBe(0);
+  expect(closed).toBe(state === "accepted" ? 1 : 0);
+});

@@ -1040,3 +1040,20 @@ test("a child-held writer leaves the initial host checkpoint loop below 50 ms", 
     expect(maxGap).toBeLessThan(50);
   } finally { clearInterval(pulse); await holder.close(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+
+test("engine MCP observations bypass cursor debounce and survive a failed checkpoint", async () => {
+  const registry = new RecordingRegistry();
+  const host = new RecordingHost();
+  const stop = await binders[0]![1](registry as unknown as AgentRegistry, host, { cursorDebounceMs: 60_000, checkpointRetryMs: 1 });
+  try {
+    const viewerMcp = { seq: 1, observedAt: "2026-11-01T00:00:00.000Z", denied: [{ tool: "get_task", seq: 1 }], unverified: false };
+    registry.checkpointError = new Error("synthetic write failure");
+    host.emit({ eventCursor: 1, viewerMcp });
+    await registry.waitForCheckpoint(2);
+    registry.checkpointError = null;
+    await stop.flush();
+    expect(registry.writes.at(-1)?.columns.viewerMcp).toEqual(viewerMcp);
+    expect(host.releaseCalls).toBe(0);
+  } finally { await stop(); }
+});

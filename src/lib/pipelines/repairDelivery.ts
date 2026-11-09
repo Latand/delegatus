@@ -11,13 +11,16 @@ export async function stageRepairDelivery(
 ): Promise<PipelineRepairDelivery> {
   const admission = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
   if (admission.outcome !== "admitted") return { operationId: null,
-    state: admission.outcome === "not-executed" ? "unreserved" : "unavailable",
+    state: admission.outcome === "not-executed"
+      ? (ports.now?.() ?? Date.now()) >= deadline ? "failed" : "unreserved"
+      : (ports.now?.() ?? Date.now()) >= deadline ? "failed" : "unavailable",
     safeToReplace: admission.outcome === "not-executed" };
   if ((ports.now?.() ?? Date.now()) >= deadline && admission.state === "held") {
     await registry.deliveryWriteOrBusy({ label: "pipeline.repair-delivery-expiry", operationId: admission.operationId }, () =>
       registry.withdrawHeldDelivery(admission.deliveryId, admission.operationId, "pipeline repair delivery did not start before its deadline"));
   }
   const receipt = await resolveSendReceipt(admission.operationId, { ...ports, registry, absoluteDeadline: deadline });
-  return { operationId: admission.operationId, state: receipt?.state ?? "unavailable",
+  const settledAt = ports.now?.() ?? Date.now();
+  return { operationId: admission.operationId, state: receipt?.state ?? (settledAt >= deadline ? "failed" : "unavailable"),
     safeToReplace: receipt?.state === "failed" && receipt.duplicateRisk === false };
 }

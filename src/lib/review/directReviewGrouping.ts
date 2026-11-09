@@ -33,35 +33,36 @@ export function claimedReviewerRoundPaths(flows: readonly Flow[]): Set<string> {
   return set;
 }
 
-/** Newest matching assignment timestamp for a conversation across a task. */
-function assignmentAt(task: BoardTask, conversationId: string, path: string | null): string | null {
-  let newest: string | null = null;
-  for (const assignment of task.assignments) {
-    const matches = assignment.conversationId === conversationId || (path !== null && assignment.path === path);
-    if (!matches) continue;
-    if (newest === null || assignment.at > newest) newest = assignment.at;
-  }
-  return newest;
-}
-
 /** The board task owning a conversation: the task with the NEWEST matching
-    assignment wins, so a re-assigned conversation follows its latest task. */
+    assignment wins, so a re-assigned conversation follows its latest task.
+    Callers use one immutable task snapshot for a projection. Index its
+    assignments once instead of rescanning every task for each title. */
 export function taskOwnerResolver(
   tasks: readonly BoardTask[],
 ): (conversationId: string | null, path: string | null) => BoardTask | null {
+  type Match = { task: BoardTask; at: string; order: number };
+  const byConversation = new Map<string, Match>();
+  const byPath = new Map<string, Match>();
+  const preferred = (left: Match | undefined, right: Match | undefined): Match | undefined => {
+    if (!left) return right;
+    if (!right) return left;
+    // Evaluate equal timestamps in task order, as the original traversal did.
+    const [first, second] = left.order <= right.order ? [left, right] : [right, left];
+    return second.at > first.at || (second.at === first.at && second.task.updatedAt > first.task.updatedAt)
+      ? second : first;
+  };
+  tasks.forEach((task, order) => {
+    for (const assignment of task.assignments) {
+      const match = { task, at: assignment.at, order };
+      if (typeof assignment.conversationId === "string") {
+        byConversation.set(assignment.conversationId, preferred(byConversation.get(assignment.conversationId), match)!);
+      }
+      if (typeof assignment.path === "string") byPath.set(assignment.path, preferred(byPath.get(assignment.path), match)!);
+    }
+  });
   return (conversationId, path) => {
     if (!conversationId && !path) return null;
-    let best: BoardTask | null = null;
-    let bestAt = "";
-    for (const task of tasks) {
-      const at = assignmentAt(task, conversationId ?? "", path);
-      if (at === null) continue;
-      if (best === null || at > bestAt || (at === bestAt && task.updatedAt > best.updatedAt)) {
-        best = task;
-        bestAt = at;
-      }
-    }
-    return best;
+    return preferred(byConversation.get(conversationId ?? ""), path === null ? undefined : byPath.get(path))?.task ?? null;
   };
 }
 

@@ -81,31 +81,36 @@ settings apply to newly launched agents after the next deploy.
 
 ## Release tags from pipeline stages
 
-A run stage using the Deployer role with `mode=release` owns its approved tag
-publication. After current approval and the project's release preflight, use
-`git push origin refs/tags/vX.Y.Z`. The native stage guard admits only that
-annotated tag: its name must match `package.json` in the lane's last passed,
-published commit, and its direct target must be that commit. The lane must have
-accepted that exact head through a passing review or explicit head acceptance.
-A successful fix after an exhausted review requires a new passing review or
-explicit acceptance of its final commit before tag publication. Publication is
-checked against the live delivery ref, including retries whose cached publication
-field was cleared. The worktree HEAD
-and the delivery branch on the bound remote must still name the same commit.
-The admitted worktree, ownership proof and release binding must survive hook
-lookup and project hooks; lost proof or a replaced checkout refuses the push.
-The installation's declared GitHub App transport for that same repository is
-also admitted; the live publication check still uses the bound delivery remote.
-An existing matching local tag from an earlier attempt may be pushed as it is.
-If the remote tag already matches, verify it without pushing again.
+Release preparation merges current `origin/main` before review, bringing the
+current verifier and project hook into older production cuts. The release lane
+ends after the shots and release reviews pass. The ordinary merge queue admits
+that completed lane, refreshes its branch when main moves, waits for protection
+checks and merges the PR without an admin bypass.
+
+The release controller reads the queue's persisted `merge.state`, `mergeCommit`
+and `prNumber` on its next reconciliation. It retains the same live release
+record and task, then creates a separate publish lane at that main commit with
+a durable replay key. Hold, release/tick/merge switches, gap and change-count
+gates still apply. The integrated main tree receives a passing review before
+the Deployer's `mode=release` stage can publish. A moved checkout requires review.
+
+Run `bun scripts/release-verify.ts --preflight --cut <cut-sha> --tag vX.Y.Z --pr <number>`.
+An open PR stops publication. Preflight refreshes `origin/main` and requires the
+merged commit to be an ancestor of main with the reviewed checkout's tree. It
+checks release-only changes against the merge's first parent so inherited main
+changes do not block an older cut. Create the annotated tag on its explicit
+`tagCommit`, then use `git push origin refs/tags/vX.Y.Z`. The native stage guard
+requires a passing review, the exact published delivery head and tree, and the
+tag target already on main. An existing matching local tag can be pushed as
+it is; a matching remote tag is verified without another push. The project hook
+accepts an identical-tree main ancestor even when a squash has a different SHA.
+Both npm and Docker workflows refuse off-main release tags.
 
 The guard refuses lightweight or nested tags, other names or targets, tag
 deletion or replacement, and every branch push from this release stage. Other
 roles and modes have no tag exception; ordinary branch publication and its
 attempt receipts retain their existing rules. The controller's approval and
-preflight instructions still apply. This exception keeps the existing release
-stage responsible for its tag and post-publication checks, without adding a
-second publication workflow to the pipeline engine.
+preflight instructions still apply. The separate publish lane owns its tag and post-publication checks.
 
 ## GitHub writes from launched agents and from the engine
 
@@ -265,10 +270,15 @@ the project's own commands. After the batch lands, run `resolve N` for each
 deferred PR, resolve its conflicts in the recorded worktree, stage only those
 resolutions and run `resolve N` again to gate and fast-forward its branch.
 
-Every tuple change voids the entire validation: restart every gate, native test
+Full local validation belongs to the ordered PR numbers, exact reviewed heads
+and immutable stable patch-ids. A main-only move rebuilds those same patches,
+preserves the actual validated tuple and records the carried main, tip and time.
+Trusted candidate and PR-body privacy run before each publication; all required
+hosted checks must finish green on the newest tip under strict protection.
+Any membership change voids the validation: restart every gate, native test
 inventory, changed reviewed detector snapshots and fresh native-main baseline;
-carry no corpus, samples, pass list or detector selection as evidence. Rebuild the
-touched-path union from the candidate diff and every input PR's immutable
+carry no corpus, samples, pass list or detector selection into that validation.
+Rebuild the touched-path union from the candidate diff and every input PR's immutable
 reviewed patch base and head, including withheld, moved and deferred PRs. Use
 `touchedTests` to select changed tests and adjacent `.test.ts`/`.test.tsx` files
 from the actual merged candidate. Select reviewed test blobs only for files a
@@ -280,6 +290,15 @@ adaptation and corpus selection. Full browser campaigns are opt-in
 (`gate --browser`): each UI PR ran its own browser checks in review. Unrelated repository tests are
 outside this gate. Deduplicate identical file versions only within that
 validation.
+
+Membership revalidation retains its three-round cap. Main-only refreshes spend
+the finite `land` polling budget, persisted across command restarts. An
+unattributable hosted red on a carried tip gets one full local attribution
+gate within the revalidation cap; a red on a locally validated tip still stops.
+Immediately before merging, the script rechecks paginated human reviews for
+each member and the batch PR. An outstanding member request returns that PR
+to its lane as a review culprit and fully gates the remainder. A human request
+on the batch PR prevents its merge; bot requests alone do not veto it.
 
 Failures, errors and between-test errors that a test file produces on native
 main are pre-existing and never stop the batch; a file main cannot complete is
@@ -321,10 +340,15 @@ Enable once in each clone (linked worktrees inherit the setting):
 git config core.hooksPath .githooks
 ```
 
-Pre-commit checks staged whitespace, privacy using the committed known-value
-fingerprints, and eslint on staged source files. These checks read working-tree
-content, including unstaged edits in a partially staged file. Pre-push checks
-publication including commit messages and identities, incremental TypeScript,
+Pre-commit checks staged whitespace and eslint on staged source files. ESLint
+reads working-tree content, including unstaged edits in a partially staged file.
+Pre-push privacy reads each commit in the publication range: added lines with
+three context lines, and each new binary blob, including content removed before
+HEAD. It retains the committed known-value fingerprints, supplied learned-rule
+texts, commit messages and identities. Working-tree, staged and untracked edits
+are outside that privacy selection. `bun run privacy:check` uses the same
+selection; commit the intended changes before running it. The required hosted
+privacy check retains whole-file coverage. Pre-push also checks incremental TypeScript,
 changed-file lint, and touched test files. ESLint in both hooks and the merger
 compares each changed file with its version at the merge base with `origin/main`.
 Only additional errors block: counts are matched per file, rule and message,
@@ -664,7 +688,10 @@ block. Missing or incomplete comparison evidence is a check gap to resolve,
 never proof that a failure existed on the base. Other independently evidenced
 defects in the diff retain their findings.
 
-`LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
+`LLV_SKIP_HOOKS=1` skips both hooks for a recorded false positive. The batch
+script also publishes its own batch branch and deferred resolutions after
+trusted privacy with hooks skipped, like the engine's base updates; publish
+integration branches through the script. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns
 when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
 CI OCR. The two required privacy checks remain strict and unchanged; local

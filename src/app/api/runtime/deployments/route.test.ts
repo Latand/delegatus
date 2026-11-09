@@ -12,6 +12,7 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
+import { POST as reconcilePost } from "./reconcile/route";
 import { beginSeatDeployment, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
@@ -32,7 +33,7 @@ const originalStateDir = process.env.LLV_STATE_DIR;
 const originalSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
 const originalRollback = process.env.LLV_RUNTIME_EVENTS;
 
-let requested: { revision?: string; ref?: string; idempotencyKey: string }[] = [];
+let requested: { revision?: string; ref?: string; idempotencyKey: string; reconcileOnly?: boolean }[] = [];
 
 beforeEach(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deployments-route-"));
@@ -74,6 +75,18 @@ function deployRequest(body: unknown): NextRequest {
 }
 
 describe.serial("HTTP deployment route", () => {
+test("the reconciliation address forces observation even when the body asks for admission", async () => {
+  expect((await reconcilePost(deployRequest({ revision: SHA, idempotencyKey: "force-reconcile", reconcileOnly: false }))).status).toBe(202);
+  expect(requested).toEqual([{ revision: SHA, idempotencyKey: "force-reconcile", reconcileOnly: true }]);
+});
+
+test("cross-origin reconciliation reaches no deployment backend", async () => {
+  const request = deployRequest({ revision: SHA, idempotencyKey: "foreign-reconcile" });
+  request.headers.set("origin", "http://foreign.example");
+  expect((await reconcilePost(request)).status).toBe(403);
+  expect(requested).toEqual([]);
+});
+
 test.each(["adopted", "rejected", "revoked-during-admission"] as const)("attributable deployment rechecks proactive authority: %s", async phase => {
   const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
   const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");

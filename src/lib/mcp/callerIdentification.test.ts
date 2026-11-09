@@ -67,6 +67,7 @@ async function worker(f: ReturnType<typeof fixture>, request: Record<string, unk
   onLog?: (line: string) => void;
   afterReply?: (reply: Reply, index: number) => Promise<Record<string, unknown> | null>;
   deadlineMs?: number;
+  cancelWhenWaiting?: boolean;
 } = {}) {
   const child = ownFixtureChild(Bun.spawn([process.execPath, "--preload", OWNERSHIP_PRELOAD, "src/lib/mcpTask.worker.ts"], {
     env: { ...f.environment(), LLV_STATE_OWNER: "mcp", LLV_TOKEN: "",
@@ -84,7 +85,9 @@ async function worker(f: ReturnType<typeof fixture>, request: Record<string, unk
       const text = decoder.decode(next.value, { stream: true }); stderr += text; pending += text;
       let newline: number;
       while ((newline = pending.indexOf("\n")) >= 0) {
-        options.onLog?.(pending.slice(0, newline)); pending = pending.slice(newline + 1);
+        const line = pending.slice(0, newline); pending = pending.slice(newline + 1);
+        if (options.cancelWhenWaiting && line.includes('"outcome":"waiting-for-registry"')) child.stdin.write('{"cancel":1}\n');
+        options.onLog?.(line);
       }
     }
   })();
@@ -133,7 +136,9 @@ test("worker logs the registry exception with its caller-identification phase", 
   try {
     fs.writeFileSync(path.join(f.directory, "agent-registry.backend.json"), "{");
     const result = await worker(f, {});
-    expect(result.reply.error).toBeDefined();
+    expect(result.reply.error).toBe("task executor could not identify the caller (registry-read-failed)");
+    expect(String(result.reply.error)).not.toContain(capability);
+    expect(String(result.reply.error)).not.toContain(f.sandbox.home);
     expect(result.stderr).toContain("caller-identification");
     expect(result.stderr).toContain("RegistryBackendIdentityError");
     expect(result.stderr).toContain("not valid JSON");
@@ -264,11 +269,35 @@ test("a registry wait expires under its request deadline and a fresh worker can 
     for (let generation = 0; generation < 2; generation++) {
       const result = await worker(f, {}, { deadlineMs: 1_000 });
       expect(result.reply.error).toBeDefined();
+      expect(String(result.reply.error)).toMatch(/\((registry-busy|deadline)\)$/);
+      expect(String(result.reply.error)).not.toContain(capability);
+      expect(String(result.reply.error)).not.toContain(f.sandbox.home);
       expect(result.stderr).toContain("waiting-for-registry");
       expect(fs.existsSync(f.filename)).toBe(true);
     }
     f.migrate();
     expect((await worker(f, {})).reply.result).toEqual({ conversationId });
+  } finally { f.sandbox.release(); }
+});
+
+test("the worker retains registry-busy when its bounded registry wait expires before the request", async () => {
+  const f = fixture();
+  try {
+    const result = await worker(f, {}, { deadlineMs: 7_000 });
+    expect(result.reply.error).toBe("task executor could not identify the caller (registry-busy)");
+    expect(String(result.reply.error)).not.toContain(capability);
+    expect(String(result.reply.error)).not.toContain(f.sandbox.home);
+    expect(fs.existsSync(f.filename)).toBe(true);
+  } finally { f.sandbox.release(); }
+});
+
+test("the real worker reports deadline when admission aborts during registry identification", async () => {
+  const f = fixture();
+  try {
+    const result = await worker(f, {}, { cancelWhenWaiting: true });
+    expect(result.reply.error).toBe("task executor could not identify the caller (deadline)");
+    expect(String(result.reply.error)).not.toContain(capability);
+    expect(String(result.reply.error)).not.toContain(f.sandbox.home);
   } finally { f.sandbox.release(); }
 });
 
@@ -292,31 +321,89 @@ for (const ingress of ["identity", "http"] as const) test(`${ingress} rechecks a
   } finally { f.sandbox.release(); }
 });
 
-test("the HTTP boundary logs a bounded, redacted caller-identification exception", async () => {
+const checkId = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+
+for (const phase of ["caller-identification", "tool-service", "capability-unknown"] as const) {
+  for (const [headerCase, supplied] of [["valid", checkId], ["capability", capability], ["oversized", "x".repeat(37)],
+    ["path", path.join(process.env.HOME!, "private")], ["version", checkId.replace("4000", "3000")],
+    ["variant", checkId.replace("8000", "7000")], ["newline", checkId + "\n"], ["absent", undefined]] as const) {
+    test(`HTTP ${phase} bounds and validates check context ${headerCase}`, async () => {
+      const { handleMcpHttpRequest, setMcpHttpDependenciesForTests } = await import("./http");
+      const { MCP_CHECK_HEADER, MCP_REFUSAL_HEADER } = await import("./httpResponse");
+      const { NextRequest } = await import("next/server");
+      const logs: string[] = [];
+      const secret = "credential".repeat(4);
+      const filename = path.join(process.env.HOME!, "private", "registry.sqlite");
+      const logging = spyOn(console, "error").mockImplementation(value => { logs.push(String(value)); });
+      const { trackMcpClaim } = await import("../../../bin/mcp-lifecycle.mjs");
+      const pending = Array.from({ length: 256 }, (_, index) => trackMcpClaim(`get_task:pending-${index}`, "fixture"));
+      const fail = () => { throw new Error(`${capability} ${filename}\nAuthorization: Bearer ${secret}\n${"Ω".repeat(5_000)}`); };
+      setMcpHttpDependenciesForTests({ service: async () => fail(), conversationForCapability: () => {
+        if (phase === "caller-identification") return fail();
+        return phase === "tool-service" ? conversationId : null;
+      } });
+      try {
+        const request = new NextRequest("http://127.0.0.1/api/mcp", { method: "POST",
+          headers: { host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": capability,
+            ...(supplied === undefined || supplied.includes("\n") ? {} : { [MCP_CHECK_HEADER]: supplied }) },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+        });
+        // Native Headers rejects newlines. Exercise the receiver's validation
+        // too without changing any other request field or method.
+        const get = request.headers.get.bind(request.headers);
+        if (supplied?.includes("\n")) spyOn(request.headers, "get").mockImplementation(name => name === MCP_CHECK_HEADER ? supplied : get(name));
+        const response = await handleMcpHttpRequest(request);
+        expect(response.status).toBe(phase === "capability-unknown" ? 403 : 503);
+        expect(response.headers.get(MCP_REFUSAL_HEADER)).toBe(phase);
+        expect(response.headers.has(MCP_CHECK_HEADER)).toBe(false);
+        if (phase === "caller-identification") expect(response.headers.get("retry-after")).toBe("1");
+        if (phase === "capability-unknown") { expect(logs).toEqual([]); return; }
+        expect(logs).toHaveLength(1);
+        const line = JSON.parse(logs[0]!.slice(logs[0]!.indexOf("{") ));
+        expect(line.phase).toBe(phase);
+        expect(line.operation).toBe(phase === "tool-service" ? "service-construction" : "registry-read");
+        expect(line.check).toBe(supplied === checkId ? checkId : undefined);
+        for (const value of [capability, secret, filename]) expect(logs[0]).not.toContain(value);
+        expect(Buffer.byteLength(logs[0]!)).toBeLessThan(4096);
+      } finally { for (const release of pending) release(); setMcpHttpDependenciesForTests(null); logging.mockRestore(); }
+    });
+  }
+}
+
+test("identification classes distinguish bounded registry waits, deadlines and read failures", async () => {
+  const { callerIdentificationFailureClass, identifyCallerWhenReady } = await import("./callerIdentification");
+  const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
+  const { StateLockDeferredError } = await import("@/lib/state/lockWait");
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  const signal = new AbortController();
+  try {
+    const expired = await identifyCallerWhenReady(() => null, capability, 0, signal.signal).catch(error => error);
+    expect(callerIdentificationFailureClass(expired, 0, signal.signal)).toBe("deadline");
+    signal.abort(new Error("private abort reason"));
+    const aborted = await identifyCallerWhenReady(() => null, capability, Date.now() + 5000, signal.signal).catch(error => error);
+    expect(callerIdentificationFailureClass(aborted, Date.now() + 5000, signal.signal)).toBe("deadline");
+    for (const error of [new FileTransactionBusyError("private busy reason"), new StateLockDeferredError("fixture")]) {
+      expect(callerIdentificationFailureClass(error, 0, signal.signal)).toBe("registry-busy");
+    }
+    expect(callerIdentificationFailureClass(new Error("private read reason"), Date.now() + 5000, new AbortController().signal)).toBe("registry-read-failed");
+  } finally { logging.mockRestore(); }
+});
+
+for (const phase of ["caller-identification", "tool-service"] as const) test(`${phase} never logs parser input or stack frames`, async () => {
   const { handleMcpHttpRequest, setMcpHttpDependenciesForTests } = await import("./http");
   const { NextRequest } = await import("next/server");
   const logs: string[] = [];
-  const secret = "credential".repeat(4);
-  const filename = path.join(process.env.HOME!, "private", "registry.sqlite");
   const logging = spyOn(console, "error").mockImplementation(value => { logs.push(String(value)); });
-  const { trackMcpClaim } = await import("../../../bin/mcp-lifecycle.mjs");
-  const pending = Array.from({ length: 256 }, (_, index) => trackMcpClaim(`get_task:pending-${index}`, "fixture"));
-  setMcpHttpDependenciesForTests({ service: async () => { throw new Error("unexpected service construction"); },
-    conversationForCapability() { throw new Error(`${capability} ${filename}\nAuthorization: Bearer ${secret}\n${"Ω".repeat(5_000)}`); } });
+  const fail = () => { const error = new SyntaxError("private-parser-frame"); error.stack = "private-stack-frame"; throw error; };
+  setMcpHttpDependenciesForTests({ service: async () => fail(), conversationForCapability: () => phase === "caller-identification" ? fail() : conversationId });
   try {
     const response = await handleMcpHttpRequest(new NextRequest("http://127.0.0.1/api/mcp", { method: "POST",
       headers: { host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": capability },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
     }));
-    expect(response.status).toBe(503);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toContain("caller-identification");
-    expect(logs[0]).toContain("registry-read");
-    expect(logs[0]).not.toContain(capability);
-    expect(logs[0]).not.toContain(secret);
-    expect(logs[0]).not.toContain(filename);
-    expect(Buffer.byteLength(logs[0]!)).toBeLessThan(4096);
-  } finally { for (const release of pending) release(); setMcpHttpDependenciesForTests(null); logging.mockRestore(); }
+    expect(response.status).toBe(503); expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("SyntaxError"); expect(logs[0]).not.toContain("private-parser-frame"); expect(logs[0]).not.toContain("private-stack-frame");
+  } finally { logging.mockRestore(); setMcpHttpDependenciesForTests(null); }
 });
 
 test("an HTTP MCP client initializes and discovers tools on migrated state across executor restarts", async () => {

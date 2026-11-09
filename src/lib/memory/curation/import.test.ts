@@ -224,6 +224,36 @@ test("completed redispositions after Undo cannot starve the next pending batch",
   expect(selectImportBatch(IMPORT_PROJECT)?.candidates).toEqual([rows[80].id]);
 });
 
+test("import selection looks up each disposition's pass by its complete key", async () => {
+  const { selectImportBatch } = await import("../importCuration");
+  const first = importCandidate(1), next = importCandidate(2);
+  await seedImport([first, next]);
+  const p = pass();
+  patchPass(p.id, { state: "succeeded", endedAt: IMPORT_AT });
+  importCollection()!.boundedPatch(2, tx => tx.put({ ...candidateById(IMPORT_ID, first.id)!, dispositions: [
+    { at: IMPORT_AT, pass: p.id, kind: "drop", ruleIds: [], occurrences: ids(first), reason: "stale", note: "Already accounted for." },
+  ] }));
+  const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const prototype = sqlite.Database.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "query")!;
+  let selection: string | undefined;
+  Object.defineProperty(prototype, "query", { ...descriptor, value: function (this: unknown, sql: string) {
+    if (sql.includes("$.dispositions") && sql.includes("$.loadedAtStart")) selection = sql;
+    return Reflect.apply(descriptor.value, this, [sql]);
+  } });
+  try { expect(selectImportBatch(IMPORT_PROJECT)?.candidates).toEqual([next.id]); }
+  finally { Object.defineProperty(prototype, "query", descriptor); }
+  expect(selection).toBeDefined();
+  const db = new sqlite.Database(path.join(root, "state.sqlite"), { readonly: true });
+  try {
+    const plan = db.query<{ detail: string }, [string, string, string, string]>(`EXPLAIN QUERY PLAN ${selection!}`)
+      .all(`c:${IMPORT_ID}:`, `c:${IMPORT_ID}:\uffff`, IMPORT_PROJECT, JSON.stringify([IMPORT_PROJECT]));
+    // This is an execution-plan bound: visiting every pass before iterating
+    // candidate dispositions made a cold rules read stall for seconds.
+    expect(plan.some(row => /SEARCH p\b.*collection=\? AND row_key=\?/.test(row.detail))).toBe(true);
+  } finally { db.close(); }
+});
+
 test.each(["rewrite", "ranking", "merge", "split", "none"] as const)("pass undo derives candidate state after later %s and prevents duplicate adoption", async later => {
   const candidate = importCandidate(1); await seedImport([candidate]); const p = pass(); const id = await adoptOne(candidate, p);
   patchPass(p.id, { state: "succeeded", endedAt: new Date(NOW + 1).toISOString() });
@@ -330,4 +360,53 @@ test.each(["none", "rewrite"] as const)("GET /api/memory/source tells an undone 
     patchPass(r.id, { state: "succeeded", endedAt: new Date(NOW + 48 * 60 * 60_000 + 1).toISOString() });
     expect((await read()).import.undo).toBeUndefined();
   }
+});
+
+
+test.each(["role_memory", "role_memory_curation", "role_memory_import"])("keyed import rolls back %s failures and replays adoption ids without another disposition", async collection => {
+  const { Database } = await import("bun:sqlite");
+  const { readCurationOperation } = await import("./apply");
+  const candidate = importCandidate(1);
+  await seedImport([candidate]);
+  const p = pass(); await readCuration(p, "imports");
+  const owned = patchPass(p.id, { conversationId: "conversation_import-witness" })!;
+  const operation = { pass: p.id, conversationId: owned.conversationId!, project: owned.project,
+    requestId: "import-keyed-apply", digest: "b".repeat(64), assertCurrent: () => {} };
+  const plan = scopeInput({ [candidate.suggestedScope]: [`adopt:${candidate.id}:0`] }, { adopt: [adopt(candidate)] });
+  const held = roleMemoryCollection(true)!, before = held.snapshot();
+  const original = candidateById(IMPORT_ID, candidate.id)!;
+  const db = new Database(path.join(root, "state.sqlite"));
+  try {
+    db.exec(`CREATE TRIGGER refuse_import BEFORE INSERT ON state_rows WHEN NEW.collection='${collection}' BEGIN SELECT RAISE(ABORT, 'fixture import refusal'); END`);
+    expect(() => applyCuration(owned, plan, IMPORT_AT, { operation })).toThrow(/fixture import refusal/);
+    expect(held.snapshot()).toEqual(before);
+    expect(candidateById(IMPORT_ID, candidate.id)).toEqual(original);
+    expect(readCurationOperation(operation)).toBeNull();
+    db.exec("DROP TRIGGER refuse_import");
+    const first = applyCuration(owned, plan, IMPORT_AT, { operation });
+    expect(first).toMatchObject({ disposition: "committed", counts: { calls: 1, changed: 1 } });
+    expect(first.placeholders[`adopt:${candidate.id}:0`]).toBeDefined();
+    const committed = held.snapshot();
+    expect(applyCuration(owned, plan, IMPORT_AT, { operation })).toEqual(first);
+    expect(held.snapshot()).toEqual(committed);
+    expect(candidateById(IMPORT_ID, candidate.id)!.dispositions).toHaveLength(1);
+    expect(readPass(p.id)!.counts.calls).toBe(1);
+  } finally { db.close(); }
+});
+
+
+test("a candidate gaining an occurrence after the read refuses a stale disposition with no witness", async () => {
+  const { readCurationOperation } = await import("./apply");
+  const candidate = importCandidate(1); await seedImport([candidate]);
+  const p = pass(); await readCuration(p, "imports");
+  const owned = patchPass(p.id, { conversationId: "conversation_import-drift" })!;
+  const operation = { pass: p.id, conversationId: owned.conversationId!, project: owned.project,
+    requestId: "import-drift", digest: "c".repeat(64), assertCurrent: () => {} };
+  const original = candidateById(IMPORT_ID, candidate.id)!;
+  importCollection()!.boundedPatch(2, tx => tx.put({ ...original, occurrences: [...original.occurrences, { ...original.occurrences[0], id: "o_additional-occurrence" }] }));
+  const plan = scopeInput({ [candidate.suggestedScope]: [`adopt:${candidate.id}:0`] }, { adopt: [adopt(candidate)] });
+  expect(() => applyCuration(owned, plan, IMPORT_AT, { operation })).toThrow(/every candidate/);
+  expect(candidateById(IMPORT_ID, candidate.id)!.dispositions).toEqual([]);
+  expect(readCurationOperation(operation)).toBeNull();
+  expect(roleMemoryCollection()?.get(`s:${candidate.suggestedScope}`)).toBeNull();
 });

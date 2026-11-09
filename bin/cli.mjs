@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
+import { boundedWait, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -642,7 +643,12 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     if (tailscaleProcessRef?.current) {
       await stopChild(tailscaleProcessRef.current);
     }
-    await Promise.all([runtimeHostSupervisor.stop(), state.retired]);
+    try {
+      await boundedWait(Promise.all([runtimeHostSupervisor.stop(), state.retired]), 2 * STOP_TIMEOUT_MS, "Viewer shutdown timed out");
+    } catch (error) {
+      console.error(error.message);
+      process.exit(1);
+    }
 
     if (state.sawAddressInUse) {
       process.exit(1);
@@ -1017,37 +1023,45 @@ async function stopChild(processHandle) {
   if (state.spawnError && child.pid === undefined) return;
 
   if (child.exitCode !== null || child.signalCode !== null) {
-    await state.retired;
+    await boundedWait(state.retired, STOP_TIMEOUT_MS, "Viewer retirement timed out");
     return;
   }
 
-  await new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
+  let timeout;
+  let onExit;
+  try {
+    await boundedWait(new Promise((resolve) => {
+      timeout = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, 2_000);
+
+      onExit = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      child.once("exit", onExit);
+
+      if (!child.killed) {
+        child.kill("SIGTERM");
       }
-    }, 2_000);
-
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-
-    if (!child.killed) {
-      child.kill("SIGTERM");
-    }
-  });
+    }), STOP_TIMEOUT_MS, "Launcher child exit was not observed before its deadline");
+  } finally {
+    clearTimeout(timeout);
+    if (onExit) child.removeListener("exit", onExit);
+  }
   /* A Viewer is stopped once its generation is retired. */
-  await state.retired;
+  await boundedWait(state.retired, STOP_TIMEOUT_MS, "Viewer retirement timed out");
 }
 
 /* Stopping the Viewer waits for its generation's retirement (stopChild). */
 async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
-  await Promise.all([
+  await boundedWait(Promise.all([
     serverProcess ? stopChild(serverProcess) : Promise.resolve(),
     tailscaleProcess ? stopChild(tailscaleProcess) : Promise.resolve(),
     runtimeHostSupervisor ? runtimeHostSupervisor.stop() : Promise.resolve(),
-  ]);
+  ]), 2 * STOP_TIMEOUT_MS, "Launcher child shutdown timed out");
 }
 
 /* `serverRef.current` is whichever web process runs at shutdown: a
@@ -1275,6 +1289,7 @@ async function main() {
   }
 
   assertLauncherAvailable(selfUpdate);
+  relaunch.assertStarting();
   if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
     fail(m.portBusy(options.port));
   }
@@ -1303,6 +1318,7 @@ async function main() {
      A packaged install records its children too, and the surface reads the
      record's missing checkout as "updates come from the package manager". */
   await takeOverOrphanHost(selfUpdate, runtimeHostConfig);
+  relaunch.assertStarting();
   const launcherRevision = headRevision(dirname(cliDir)) ?? releaseNow().sha;
   // Adoption and bind checks yielded: verify custody once more before writing.
   assertLauncherAvailable(selfUpdate);
@@ -1351,6 +1367,7 @@ async function main() {
   }
 
   const launchWeb = (release, restarting) => {
+    relaunch.assertStarting();
     const handle = startServer(
       resolveServer(release.dir, options.hostname),
       options,
@@ -1443,7 +1460,7 @@ async function main() {
   delete runtimeHostEnvironment.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY;
   delete process.env.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY;
   serverProcess.state.restarting = false;
-  relaunch.succeeded();
+  await relaunch.succeeded();
   // This start settled the handoff it took. A later relaunch inherits the
   // settings and must not ask for custody that the settlement released.
   delete process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
@@ -1458,7 +1475,7 @@ async function main() {
       }
       if (!recoverWeb) return "shutdown";
       /* A Viewer that crashed is replaced only once its generation is retired. */
-      await serverRef.current?.state.retired;
+      await boundedWait(serverRef.current?.state.retired, STOP_TIMEOUT_MS, "Viewer retirement timed out");
       if (!recoverWeb) return "shutdown";
       const handle = launchWeb(release, true);
       const readiness = createReadinessJournal(selfUpdate.readiness, { revision: release.sha, pid: handle.child.pid });
@@ -1617,7 +1634,8 @@ async function main() {
    install identity and the fallback when no published build is valid. The
    marker makes the release's own cli.mjs run its body without another hop. */
 function headRevision(dir) {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8",
+    timeout: 2000, killSignal: "SIGKILL" });
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
@@ -1677,18 +1695,45 @@ function handOffLauncher({ checkout, entry, record }) {
       cwd: checkout, env, stdio: "inherit",
     });
     let forwarded = false;
+    let startupSettled = false;
+    let signalStopTimer;
+    let signalKillTimer;
     const forward = (signal) => {
       if (forwarded) return;
       forwarded = true;
-      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill(signal);
+        if (startupSettled) {
+          signalStopTimer = setTimeout(() => {
+            if (child.exitCode !== null || child.signalCode !== null) return;
+            child.kill("SIGKILL");
+            signalKillTimer = setTimeout(() => {
+              if (child.exitCode === null && child.signalCode === null) child.unref();
+              finish(true);
+            }, STOP_TIMEOUT_MS);
+            signalKillTimer.unref?.();
+          }, STOP_TIMEOUT_MS);
+          signalStopTimer.unref?.();
+        }
+      }
     };
     process.on("SIGINT", forward);
     process.on("SIGTERM", forward);
     let spawnError = null;
-    child.once("error", (error) => { spawnError = error; });
-    child.once("close", (code, signal) => {
+    let timer;
+    let finished = false;
+    const finish = started => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      clearTimeout(signalStopTimer);
+      clearTimeout(signalKillTimer);
       process.off("SIGINT", forward);
       process.off("SIGTERM", forward);
+      done(started);
+    };
+    child.once("error", (error) => { spawnError = error; });
+    child.once("close", (code, signal) => {
       const status = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
       let recorded = false;
       if (child.pid) {
@@ -1697,12 +1742,82 @@ function handOffLauncher({ checkout, entry, record }) {
       const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
-        done(false);
+        finish(false);
       } else {
         process.exitCode = status;
-        done(true);
+        finish(true);
       }
     });
+    const json = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
+    const directory = dirname(record);
+    const suffix = record.slice(record.lastIndexOf("launcher-") + 9);
+    const trialFile = join(directory, `trial-${suffix}`);
+    const applyFile = join(directory, "apply.json");
+    const trial = json(trialFile), apply = json(applyFile);
+    const active = !!(trial && apply && trial.requestId === apply.requestId && trial.target === apply.target
+      && trial.target === json(join(directory, `release-${suffix}`))?.sha
+      && apply.state === "switching");
+    const persistedDeadline = active
+      ? Math.min(switchDeadline(apply), Number.isFinite(trial.switchDeadlineAt) ? trial.switchDeadlineAt : Infinity)
+      : Infinity;
+    const deadline = Math.min(Date.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+      Number.isFinite(persistedDeadline) ? persistedDeadline : Infinity);
+    timer = setTimeout(() => { void (async () => {
+      timer = undefined;
+      const observed = json(record);
+      const childIsHealthy = startupHandoffSucceeded(child.pid, child.exitCode == null && child.signalCode == null, forwarded, observed);
+      // The startup bound ends when this exact child has published a complete
+      // healthy generation. Its normal lifetime is then governed by close.
+      if (childIsHealthy) { startupSettled = true; return; }
+      const switchOverrun = active && Date.now() >= persistedDeadline;
+      const detail = switchOverrun
+        ? SWITCH_OVERRUN
+        : "The replacement launcher did not become ready before its startup deadline";
+      if (active) {
+        const refusedTrial = switchOverrun ? { ...trial, switchOverrun: trial.switchOverrun ?? SWITCH_OVERRUN } : trial;
+        if (switchOverrun) writeFileSync(trialFile, `${JSON.stringify(refusedTrial)}\n`, { mode: 0o600 });
+        const pointer = join(directory, `release-${suffix}`);
+        if (json(pointer)?.sha === trial.target) {
+          if (trial.rollbackPointer === null) {
+            try { rmSync(pointer, { force: true }); } catch { /* refusal remains durable */ }
+          } else if (typeof trial.rollbackPointer === "string") {
+            const temporary = `${pointer}.${process.pid}.rollback`;
+            try { writeFileSync(temporary, trial.rollbackPointer, { mode: 0o600 }); renameSync(temporary, pointer); }
+            catch { try { rmSync(temporary, { force: true }); } catch { /* refusal remains durable */ } }
+          }
+        }
+        try { writeLauncherRefusal({ record, trial: trialFile, request: join(directory, `request-${suffix}`), releasePointer: pointer }, refusedTrial, detail); }
+        catch (error) { console.error(`[self-update] terminal handoff refusal could not be persisted: ${error.message}`); }
+      }
+      const currentRecord = json(record);
+      const childOwnsRecord = child.pid && child.exitCode == null && child.signalCode == null
+        && currentRecord?.launcher?.pid === child.pid && typeof currentRecord.launcher.startIdentity === "string";
+      if (currentRecord && (active || childOwnsRecord)) {
+        try {
+          const cleanup = import("./launcher-adoption.mjs").then(({ stopRecorded }) => {
+            const latest = json(record), latestApply = json(applyFile), latestTrial = json(trialFile);
+            const refusalStillOwned = active && latestApply?.requestId === trial.requestId && latestApply.target === trial.target
+              && latestApply.state === "failed" && latestTrial?.requestId === trial.requestId && latestTrial.refused === true;
+            const childStillOwnsRecord = childOwnsRecord && latest?.launcher?.pid === child.pid
+              && latest.launcher.startIdentity === currentRecord.launcher.startIdentity;
+            if (!latest || (!refusalStillOwned && !childStillOwnsRecord)) return [];
+            return Promise.all([
+              stopRecorded(latest.web, latest.socket, latest.port, checkout, join(directory, `release-${suffix}`)),
+              stopRecorded(latest.runtimeHost, latest.socket),
+            ]);
+          });
+          await boundedWait(cleanup, STOP_TIMEOUT_MS + 5000, "The replacement launcher's recorded services did not stop before fallback");
+        } catch (error) { console.error(`[self-update] replacement service cleanup exceeded its deadline: ${error.message}`); }
+      }
+      if (child.pid && child.exitCode == null && child.signalCode == null) {
+        const closed = new Promise(resolve => child.once("close", resolve));
+        child.kill("SIGKILL");
+        try { await boundedWait(closed, STOP_TIMEOUT_MS, "The replacement launcher did not exit after SIGKILL"); }
+        catch (error) { console.error(`[self-update] replacement launcher cleanup exceeded its deadline: ${error.message}`); }
+      }
+      finish(true);
+    })(); }, Math.max(1, deadline - Date.now()));
+    timer.unref?.();
   });
 }
 
@@ -1716,6 +1831,7 @@ async function checkoutLauncher() {
   if (!launcherCheckout && existsSync(original)) {
     const committed = spawnSync("git", ["show", "HEAD:bin/cli.mjs"], {
       cwd: checkout, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 4 * 1024 * 1024,
+      timeout: 2000, killSignal: "SIGKILL",
     });
     try {
       savedLauncherIsCurrent = committed.status === 0 && readFileSync(original).equals(committed.stdout);

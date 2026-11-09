@@ -33,7 +33,7 @@ test("a run with no overall yet shows what is happening, names each pending leve
     return Response.json(profileView(rules, "en", "sample", null));
   }) as typeof fetch;
   try {
-    flushSync(() => root.render(<MemoryProfile rules={rules} onDrill={open => drills.push(open)} renderRules={scope => <div data-rules-stub="">{scope.scope}</div>} />));
+    flushSync(() => root.render(<MemoryProfile project={rules.project} rules={rules} onDrill={open => drills.push(open)} renderRules={scope => <div data-rules-stub="">{scope.scope}</div>} />));
     await tick(); await tick();
     expect(container.textContent).toContain(translate("en", "memoryProfile.noneTitle"));
     flushSync(() => container.querySelector<HTMLButtonElement>("[data-profile-summarize]")!.click());
@@ -72,7 +72,7 @@ test("level cards follow the All rules order and a topic list says which topic i
     answer: { headline: "Clearer samples", text: "Agents check sample colors.", topics: [{ title: "Isolated tests", text: "Tests run apart.", ruleIds: ["one", "three"] }] } };
   globalThis.fetch = (async () => Response.json({ ...base, overall })) as unknown as typeof fetch;
   try {
-    flushSync(() => root.render(<MemoryProfile rules={reordered} renderRules={(scope, ids, heading) => { headings.push([scope.scope, heading?.title]); return <div data-rules-stub="">{ids?.join(",")}</div>; }} />));
+    flushSync(() => root.render(<MemoryProfile project={reordered.project} rules={reordered} renderRules={(scope, ids, heading) => { headings.push([scope.scope, heading?.title]); return <div data-rules-stub="">{ids?.join(",")}</div>; }} />));
     await tick(); await tick();
     const names = [...container.querySelectorAll("[data-profile-slice]")].map(slice => slice.querySelector("h4")!.textContent);
     expect(names).toEqual([
@@ -104,7 +104,7 @@ for (const [model, name] of [["claude-opus-5-5", "Opus 5.5"], ["claude-haiku-5-5
       answer: { headline: "Clearer samples", text: "Agents check sample colors.", topics: [] },
     } })) as unknown as typeof fetch;
     try {
-      flushSync(() => root.render(<MemoryProfile rules={rules} renderRules={() => null} />));
+      flushSync(() => root.render(<MemoryProfile project={rules.project} rules={rules} renderRules={() => null} />));
       await tick(); await tick();
       expect(container.textContent).toContain(name);
       expect(container.textContent).not.toContain(model);
@@ -127,7 +127,7 @@ test("while the first profile answer is pending the card reads, offers no Summar
     await new Promise<void>(resolve => { answer = resolve; });
     return Response.json(profileView(rules, "en", "sample", null));
   }) as typeof fetch;
-  const draw = (value: typeof rules) => flushSync(() => root.render(<MemoryProfile rules={value} renderRules={() => <div />} />));
+  const draw = (value: typeof rules) => flushSync(() => root.render(<MemoryProfile project={value.project} rules={value} renderRules={() => <div />} />));
   try {
     draw(rules);
     await tick();
@@ -160,7 +160,7 @@ test("a refused first profile read ends the reading state, shows the error with 
     return new Response("{}", { status: 500 });
   }) as typeof fetch;
   try {
-    flushSync(() => root.render(<MemoryProfile rules={rules} renderRules={() => <div />} />));
+    flushSync(() => root.render(<MemoryProfile project={rules.project} rules={rules} renderRules={() => <div />} />));
     await tick(); await tick(); await tick();
     expect(container.textContent).not.toContain(translate("en", "memoryProfile.reading"));
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
@@ -170,4 +170,23 @@ test("a refused first profile read ends the reading state, shows the error with 
     flushSync(() => root.unmount());
     globalThis.fetch = originalFetch;
   }
+});
+
+
+test("a failed profile read with pending rules does not invent empty memory or offer paid generation", async () => {
+  setLocale("en");
+  const originalFetch = globalThis.fetch;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const methods: string[] = [];
+  globalThis.fetch = (async (_url, init) => { methods.push(init?.method ?? "GET"); return new Response("{}", { status: 500 }); }) as typeof fetch;
+  try {
+    flushSync(() => root.render(<MemoryProfile project="garden" rules={null} renderRules={() => null} />));
+    await tick(); await tick(); await tick();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(container.textContent).not.toContain(translate("en", "memoryProfile.emptyTitle"));
+    expect(container.textContent).not.toContain(translate("en", "memoryProfile.reading"));
+    expect(container.querySelector("[data-profile-summarize]")).toBeNull();
+    expect(methods).toEqual(["GET"]);
+  } finally { flushSync(() => root.unmount()); globalThis.fetch = originalFetch; }
 });

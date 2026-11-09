@@ -1,3 +1,5 @@
+import { settleClosedPipelineAttempts } from "./closeAttempts";
+import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
@@ -29,7 +31,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
@@ -688,7 +690,7 @@ function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
   const owner = plan.owner;
   return typeof plan.id === "string" && !!plan.id && ["pending", "running", "settled"].includes(plan.phase)
     && (plan.hosts === undefined || (Array.isArray(plan.hosts) && plan.hosts.every((item) => item && host(item.target)
-      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && typeof item.evidence.startedAt === "string"
+      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && isNullableString(item.evidence.startedAt)
       && typeof item.evidence.state === "string" && isNullableString(item.evidence.error)
       && isNullableString(item.evidence.completedAt) && isVerdict(item.evidence.verdict)
       && isUnresolvedTermination(item.evidence.unresolvedTermination))))
@@ -1591,7 +1593,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
           .filter((attempt) => Boolean(attempt.verdict || attempt.completedAt))
           .map((attempt) => `${run.stageId}:${attempt.n}`))
       : []);
-  return {
+  const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
@@ -1679,6 +1681,20 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
         : [],
     })),
   };
+  settleClosedPipelineAttempts(revived, (pipeline, stageId, attempt) => {
+    if (attempt.spawnCalls === 0) return "none";
+    try {
+      const base = `pipeline_${pipeline.id}_${stageId}_${attempt.n}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
+      const receipts = agentRegistry().pipelineSpawnHistory(base);
+      if (!receipts.length) return attempt.spawnCalls === undefined && attempt.startedAt ? "uncertain" : "none";
+      if (receipts.every(receipt => receipt.state === "failed" && receipt.membershipAdmitted === false
+        && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath)) return "no-host";
+      return receipts.some(receipt => receipt.state === "starting") ? "uncertain" : "launched";
+    } catch {
+      return "uncertain";
+    }
+  });
+  return revived;
 }
 
 /** Detach every nested field before a mutable reader or session sees a shared
@@ -2411,6 +2427,21 @@ export function pipelineRecordReader(pipelineId: string) {
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
+}
+
+/** Task-local history, including archived lanes, without materializing every
+    unrelated stage and attempt in the installation. */
+export function loadPipelinesForTask(taskId: string): Pipeline[] {
+  const filename = stateDatabaseFile();
+  // Preserve the store's migration and schema admission for legacy installs.
+  const rows = stateCollectionsInitialized(filename, pipelineStateCollectionSeeds())
+    ? readPipelineRowsForTask(filename, taskId) : null;
+  if (rows === null) return [...loadPipelinesForList(), ...loadArchivedPipelinesForList()]
+    .filter(pipeline => pipeline.taskIds.includes(taskId));
+  return rows.flatMap(row => {
+    const pipeline = decodePipeline(row);
+    return pipeline?.taskIds.includes(taskId) ? [pipeline] : [];
+  });
 }
 
 /** Bounded feed for consumers that need task membership changes without loading

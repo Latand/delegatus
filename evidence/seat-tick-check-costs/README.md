@@ -140,9 +140,10 @@ path, recipient filter, alias handling, message key, shared selection, due
 launch, controller ownership, span cap, CPU delta, queue boundary and journal
 reader. Mutations were confined to scratch exports and restored after each run.
 
-Current post-review-fence results and final source hashes are in
-`verification.json`. Verification commands use `bun run test <explicit-file>`
-individually with a fresh isolated environment, log and exit status. Whole-project types use
+The predecessor's post-review-fence results and source hashes are in
+`verification.json`; they describe PR #3692 before the successor's shared
+recovery cancellation fix. Its verification commands used `bun run test <explicit-file>`
+individually with a fresh isolated environment, log and exit status. Its whole-project typecheck used
 `bash scripts/gate-slot.sh bun node_modules/typescript/bin/tsc --noEmit
---incremental false` as a background job. The local publication privacy gate
-checks the staged changes before the plain commit. The pipeline owns publication.
+--incremental false` as a background job. Its local publication privacy gate
+checked staged changes before the plain commit. The pipeline owns publication.

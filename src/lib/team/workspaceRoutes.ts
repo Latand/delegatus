@@ -193,6 +193,8 @@ export const WORKSPACE_ROUTES = {
   "/api/tasks/[id]/album": "project",
   "/api/tasks/[id]/album/image": "project",
   "/api/tasks/[id]/assignment": "project",
+  "/api/tasks/[id]/files": "project",
+  "/api/tasks/[id]/files/content": "project",
   "/api/tasks/[id]/proactive": "owner",
   "/api/tasks/[id]/prototypes": "project",
   "/api/tasks/[id]/prototypes/[reviewId]/video/[mediaId]": "project",
