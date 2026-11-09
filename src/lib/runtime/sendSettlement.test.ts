@@ -3919,3 +3919,161 @@ test.each(["throw", "timeout"] as const)("retirement during a preparation %s lea
     process.env.LLV_STATE_DIR = priorState;
   }
 });
+
+/* 2026-11-09: a Claude send ran out of its 30-second confirmation budget, and
+   the journal, refusing the absorbing `uncertain`, took `failed` with the
+   "started, unverified" reason instead. Claude had absorbed the message into
+   its running turn: the echo arrived a minute after the write, and the
+   transcript recorded the input as a `queued_command` attachment naming the
+   echoed id. These cases replay that record. */
+const LATE_TIMEOUT_REASON = "delivery was started and the structured host did not answer; whether it reached the recipient is unverified: Claude delivery confirmation timed out; outcome is uncertain";
+
+function queuedCommandRecords(uuid: string, text: string, at: string): string {
+  return [
+    { type: "queue-operation", operation: "remove", timestamp: at, sessionId: "fixture-session", reason: "absorbed_mid_turn", commandUuid: uuid },
+    { type: "attachment", uuid: `${uuid}-attachment`, timestamp: at, entrypoint: "sdk-cli", sessionId: "fixture-session",
+      attachment: { type: "queued_command", commandMode: "prompt", prompt: [{ type: "text", text }], source_uuid: uuid } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n";
+}
+
+test("a journal `failed` written for a send it could not answer for keeps its duplicate risk", async () => {
+  const { journalVerdict } = await import("./sendSettlement");
+  expect(journalVerdict("failed", LATE_TIMEOUT_REASON)).toEqual({ state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON });
+  /* Every other `failed` still proves the send never reached the engine. */
+  expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: SEND_LOST_REASON });
+});
+
+test("a send whose projection was owed when the journal failed it unverified is never called safe to resend", async () => {
+  const active = fixture("owed-unverified-failure", { engine: "claude" });
+  try {
+    const { operationId } = acceptSend(active, { text: "keep the release held" });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "failed", { reason: LATE_TIMEOUT_REASON });
+    /* The registry has not heard yet: a busy writer left the projection owed. */
+    expect(sendReceiptFor(active.registry.readOnlySnapshot(), operationId)?.state).toBe("in-flight");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, progress: null }))
+      .toMatchObject({ state: "failed", resend: "verify-first", duplicateRisk: true });
+  } finally { active.close(); }
+});
+
+for (const projection of ["recorded", "owed"] as const) {
+  test(`a late queued_command echo settles the original operation the journal failed unverified (${projection}), with no second write`, async () => {
+    const active = fixture(`late-queued-command-${projection}`, { engine: "claude" });
+    try {
+      const text = "pause the deploy and report";
+      const { operationId, deliveryId } = acceptSend(active, { text });
+      const ledger = new FileClaudeDeliveryLedger();
+      ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "failed", { reason: LATE_TIMEOUT_REASON });
+      /* The controller projects the journal's answer as it writes it; under a
+         busy registry writer that projection can still be owed. */
+      if (projection === "recorded") active.registry.recordDeliveryOutcome(deliveryId, "failed", LATE_TIMEOUT_REASON);
+      expect(sendReceiptFor(active.registry.readOnlySnapshot(), operationId))
+        .toMatchObject(projection === "recorded" ? { state: "failed", duplicateRisk: true } : { state: "in-flight" });
+      /* The host's live echo, after the operation ended, and Claude's record of it. */
+      const uuid = "ecbe8eba-fixture-echo";
+      expect(ledger.confirmDelivered(active.generationId, operationId, uuid, "inferred")).toBe("accepted");
+      fs.writeFileSync(active.transcriptPath, queuedCommandRecords(uuid, text, new Date(Date.now() + 1_000).toISOString()));
+      const { settleEchoedSend } = await import("./sendSettlement");
+      const sleeps: number[] = [];
+      const settled = await settleEchoedSend(operationId, { registry: active.registry, client: active.client, progress: null,
+        delaysMs: [0, 1_000, 5_000], sleep: async ms => { sleeps.push(ms); } });
+      /* A recorded ending settles on the first look; an owed one waits one delay
+         before the journal is asked, as an echo of a send in progress does. */
+      expect(sleeps).toEqual(projection === "recorded" ? [] : [1_000]);
+      expect(settled).toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+      expect(sendReceiptFor(active.registry.readOnlySnapshot(), operationId)?.state).toBe("delivered");
+      expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
+      /* Nothing went to the engine again: the ledger holds the one write and
+         the journal holds no effect that could make another. */
+      expect(new FileClaudeDeliveryLedger().load(active.generationId).filter(state => state.entry.id === operationId))
+        .toMatchObject([{ delivered: true, engineMessageId: uuid }]);
+      expect(active.journal.effectBatch(100)).toEqual([]);
+    } finally { active.close(); }
+  });
+}
+
+test("an echo settles nothing it has no evidence for, and leaves a proven loss and a delivered send alone", async () => {
+  const { settleEchoedSend } = await import("./sendSettlement");
+  const active = fixture("echo-without-evidence", { engine: "claude" });
+  try {
+    const text = "the transcript never shows this";
+    const { operationId, deliveryId } = acceptSend(active, { text, clientMessageId: "no-evidence" });
+    new FileClaudeDeliveryLedger().recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "failed", { reason: LATE_TIMEOUT_REASON });
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", LATE_TIMEOUT_REASON);
+    const sleeps: number[] = [];
+    expect(await settleEchoedSend(operationId, { registry: active.registry, client: active.client, progress: null,
+      delaysMs: [0, 1_000, 5_000], sleep: async ms => { sleeps.push(ms); } }))
+      .toMatchObject({ state: "failed", duplicateRisk: true });
+    expect(sleeps).toEqual([1_000, 5_000]);
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+
+    const lost = acceptSend(active, { text: "never left the queue", clientMessageId: "proven-loss" });
+    active.journal.transitionOperation(lost.operationId, "failed", { reason: "fixture host refused the send" });
+    active.registry.recordDeliveryOutcome(lost.deliveryId, "failed", SEND_LOST_REASON, "lost");
+    const lostSleeps: number[] = [];
+    expect(await settleEchoedSend(lost.operationId, { registry: active.registry, client: active.client, progress: null,
+      delaysMs: [0, 1_000], sleep: async ms => { lostSleeps.push(ms); } })).toMatchObject({ state: "failed", resend: "safe" });
+    expect(lostSleeps).toEqual([]);
+  } finally { active.close(); }
+});
+
+/* An echo settlement whose owner retires while its record write waits for
+   another process's registry writer writes nothing once the lock is granted,
+   and one retired after its write sends no acknowledgement. */
+for (const retiredAt of ["writer-wait", "after-commit"] as const) {
+  test(`a late-echo settlement whose owner retires ${retiredAt === "writer-wait" ? "while its write waits for the registry writer commits nothing" : "after its write sends no acknowledgement"}`, async () => {
+    const { settleEchoedSend } = await import("./sendSettlement");
+    const active = fixture(`retired-echo-${retiredAt}`, { engine: "claude", sqlite: true });
+    const holder = registryLockHolder(active.registryPath.replace(/\.json$/, ".sqlite"));
+    let owned = true;
+    let entered!: () => void;
+    const writing = new Promise<void>(resolve => { entered = resolve; });
+    const original = active.registry.deliveryWrite.bind(active.registry);
+    const write = spyOn(active.registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+      entered();
+      const written = await original(...args);
+      if (retiredAt === "after-commit") owned = false;
+      return written;
+    }) as never);
+    const acknowledged: string[] = [];
+    const client = { ...active.client, acknowledgeTerminalProjection: async (ids: readonly string[]) => { acknowledged.push(...ids); return ids.length; } } as RuntimeHostClient;
+    let task: Promise<unknown> | undefined;
+    let held = false;
+    try {
+      const text = "fixture late evidence";
+      const { operationId, deliveryId } = acceptSend(active, { text });
+      const ledger = new FileClaudeDeliveryLedger();
+      ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "failed", { reason: LATE_TIMEOUT_REASON });
+      active.registry.recordDeliveryOutcome(deliveryId, "failed", LATE_TIMEOUT_REASON);
+      ledger.confirmDelivered(active.generationId, operationId, "fixture-late-echo", "inferred");
+      fs.writeFileSync(active.transcriptPath, queuedCommandRecords("fixture-late-echo", text, new Date(Date.now() + 1_000).toISOString()));
+      if (retiredAt === "writer-wait") { await holder.hold(); held = true; }
+      task = settleEchoedSend(operationId, { registry: active.registry, client, progress: null, delaysMs: [0],
+        assertActive: () => { if (!owned) throw new Error("echo settlement owner retired"); } }).then(value => value, error => error);
+      await writing;
+      if (retiredAt === "writer-wait") {
+        owned = false;
+        await holder.release();
+        held = false;
+      }
+      const outcome = await task;
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toBe("echo settlement owner retired");
+      expect(acknowledged).toEqual([]);
+      expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state)
+        .toBe(retiredAt === "writer-wait" ? "failed" : "delivered");
+    } finally {
+      if (held) await holder.release();
+      if (task) await task;
+      write.mockRestore();
+      await holder.close();
+      active.close();
+    }
+  }, 20_000);
+}
