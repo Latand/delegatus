@@ -16586,7 +16586,12 @@ export function capturePipelineDecisionLaunch(pipelineId: string, stageId: strin
       || (attempt.launchId == null && reservedIdentity?.launchId === successor.launchId);
     const conversationMatches = successor.conversationId === attempt.conversationId
       || (attempt.conversationId == null && reservedIdentity?.conversationId === successor.conversationId);
-    if (!launchMatches || !conversationMatches || successor.providerFallbackRetries !== attempt.providerFallbackRetries) throw new ActivationSuperseded();
+    const recoveryBudget = (value: PipelineStageAttempt["providerRecoveryBudget"]) => value
+      ? JSON.stringify([value.tries, value.startedAt, value.engine ?? null, value.triedAccounts ?? null, value.failedAccounts ?? null])
+      : null;
+    if (!launchMatches || !conversationMatches || successor.providerFallbackRetries !== attempt.providerFallbackRetries
+      || recoveryBudget(successor.providerRecoveryBudget) !== recoveryBudget(attempt.providerRecoveryBudget)
+      || pipelineSurvivorRefusal(current)) throw new ActivationSuperseded();
     authority(current);
     if (current.workspace && !workspacePrincipalAllows(current.workspace, current.project)) throw new ActivationSuperseded();
     const actor = answer.actor;
