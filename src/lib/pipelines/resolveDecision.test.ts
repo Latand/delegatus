@@ -1040,3 +1040,42 @@ test("a stale pending answer cannot settle another creator's receipt", async () 
   expect(attemptsOf("build")).toHaveLength(2);
   expect(h.spawnedStages).toEqual(["build", "build"]);
 });
+
+
+test.each(["allowed", "session-replaced", "account-replaced", "answer-removed", "takeover"] as const)("decision reservation retains its own runtime binding: %s", async boundary => {
+  const h = await parked();
+  expect((await patchPipeline(h.id, { ...h.request, expectedRevision: pipelineDecisionRevision(current())! }, h.ports, manager)).error).toBeUndefined();
+  let reservations = 0, effects = 0, replacement: Pipeline | undefined;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    input.assertCurrent?.();
+    await onReserved({ launchId: "reserved-launch", conversationId: "reserved-conversation", accountId: "account-a" });
+    reservations++;
+    // The same guard captured before reservation must admit its known binding.
+    input.assertCurrent?.();
+    expect(attemptsOf("build")[1]).toMatchObject({ launchId: "reserved-launch", conversationId: "reserved-conversation", accountId: "account-a", sessionId: null });
+    if (boundary !== "allowed") {
+      await Promise.resolve();
+      if (boundary === "takeover") {
+        expect((await patchPipeline(h.id, { action: "takeover", expectedOwner: h.id, expectedEpoch: 1,
+          reason: "Replace delivery control" }, { ...h.ports, remoteActionSupported: () => true }, { kind: "operator" })).error).toBeUndefined();
+        expect(current().remoteAction).toMatchObject({ action: "takeover", state: "pending" });
+      } else {
+        const rows = loadPipelines(), successor = rows[0]!.runs[0]!.attempts[1]!;
+        if (boundary === "session-replaced") successor.sessionId = "replacement-session";
+        else if (boundary === "account-replaced") successor.accountId = "replacement-account";
+        else delete successor.decisionAnswerId;
+        savePipelines(rows);
+      }
+      replacement = current();
+    }
+    input.assertCurrent?.();
+    effects++;
+    return { launchId: "reserved-launch", conversationId: "reserved-conversation", accountId: "account-a",
+      sessionId: "reserved-session", transcript: "/codex/reserved.jsonl", paneId: "%2" };
+  };
+  await tickPipelines([], h.ports);
+  expect(reservations).toBe(1);
+  expect(effects).toBe(boundary === "allowed" ? 1 : 0);
+  if (replacement) expect(current()).toEqual(replacement);
+  else expect(attemptsOf("build")[1]).toMatchObject({ accountId: "account-a", sessionId: "reserved-session" });
+});

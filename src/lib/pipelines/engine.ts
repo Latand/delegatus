@@ -7858,6 +7858,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
               });
             };
             let finished = false;
+            let superseded = false;
             let admissionHeld = false;
             try {
               if (activation.phase === "settled") {
@@ -7882,6 +7883,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
               // downstream key so release can recover it without another attempt.
               if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; return; }
               if (!(error instanceof ActivationSuperseded)) throw error;
+              superseded = true;
               // The callback has not granted a permit when its fresh-state CAS fails.
               finished = true;
             } finally {
@@ -7908,7 +7910,8 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
                 if (close) live.activationCloseRequested = true;
                 // A decision executor that sent nothing cannot rewrite the
                 // replacement whose authority made it refuse.
-                if (!dispatched && current.decisionAnswerId && activationFence(live) !== activation.fence) return;
+                if (attempt.decisionAnswerId && (!dispatched || superseded)
+                  && (activationFence(live) !== activation.fence || JSON.stringify(current) !== expectedAttempt)) return;
                 const unchanged = activationFence(live) === activation.fence && JSON.stringify(current) === expectedAttempt;
                 if (unchanged) {
                   for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
@@ -8238,7 +8241,7 @@ async function spawnRunStage(
   ports: PipelinePorts, persist: () => void | Promise<void>,
   prepareInput = false,
 ): Promise<void> {
-  let reservationIdentity: { launchId: string; conversationId: string } | undefined;
+  let reservationIdentity: DecisionLaunchReservation | undefined;
   const assertDecisionLaunch = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n, () => reservationIdentity);
   assertDecisionLaunch?.();
   const recoveringReservation = attempt.activation?.replay === true;
@@ -8456,7 +8459,7 @@ async function spawnRunStage(
           if (attempt.activation) attempt.activation.phase = "dispatching";
           attempt.launchId = reservation.launchId;
           attempt.conversationId = reservation.conversationId;
-          reservationIdentity = { launchId: reservation.launchId, conversationId: reservation.conversationId };
+          reservationIdentity = { launchId: reservation.launchId, conversationId: reservation.conversationId, accountId: reservation.accountId };
           attempt.accountId = reservation.accountId ?? attempt.accountId ?? null;
           /* The reservation committed this stage's membership (#1586); a
              fallback task it minted is the pipeline's task from here on,
@@ -9513,7 +9516,8 @@ function priorWriterStopKey(pipeline: Pipeline, waitingStageId: string, attempt:
 /** Cloud I/O owns a bounded controller job, never the lane mutation lease.
  * Only this attempt's unchanged durable cloud intent may consume its result. */
 function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, phaseDone?: Promise<void>): boolean {
-  const assertDecisionCurrent = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n);
+  let reservationIdentity: DecisionLaunchReservation | undefined;
+  const assertDecisionCurrent = capturePipelineDecisionLaunch(pipeline.id, stage.id, attempt.n, () => reservationIdentity);
   const original = structuredClone(attempt.cloud!);
   const id = pipeline.id, stageId = stage.id, n = attempt.n;
   const runtime = attemptCloudRuntime(stage, attempt), label = cloudLabel(runtime), engine = cloudEngine(runtime);
@@ -9545,6 +9549,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (failedReceipt) { current.cloud.phase = "failed"; current.cloud.error = priorError ?? current.error ?? `${label} stage failed`; }
         if (accountId) current.accountId = accountId;
         await persist([lane]);
+        if (accountId) reservationIdentity = { launchId: attempt.launchId, conversationId: attempt.conversationId, accountId };
         expected = structuredClone(current.cloud);
         return true;
       }, undefined, true));
@@ -16502,7 +16507,7 @@ export function decisionAnswerActorRefusal(
 export function captureDecisionAuthority(pipeline: Pipeline, actor: PauseResumeActor | null, key: unknown): (current: Pipeline) => void {
   const identity = (p: Pipeline) => JSON.stringify([p.id, p.project, p.srcConversationId, p.srcPath,
     p.srcDeputyConversationId, p.workspace && [p.workspace.memberId, p.workspace.workspaceId],
-    p.repoDir, p.worktreeDir, p.branch, p.controlGeneration, p.closedAt, p.hiddenAt, p.activationCloseRequested,
+    p.repoDir, p.worktreeDir, p.branch, p.controlGeneration, p.remoteAction, p.closedAt, p.hiddenAt, p.activationCloseRequested,
     p.delivery && [[p.delivery.target.repository, p.delivery.target.remote, p.delivery.target.branch,
       p.delivery.target.pr, p.delivery.target.prRepository, p.delivery.target.rejectedHead],
       p.delivery.ownerId, p.delivery.epoch, p.delivery.active, p.delivery.publish, p.delivery.disposition]]);
@@ -16537,7 +16542,7 @@ function decisionLaunchFence(p: Pipeline): string {
     p.spec, p.inputContext, p.taskIds, p.finishesTaskIds, p.baseRef, p.baseBranch,
     p.baseRefPinned, p.lastPassedCommit, p.publication, p.publishedCommit, p.stages, p.graphEdits?.at(-1)?.seq,
     p.reviewGrants, p.reviewAcceptances, p.reviewPending, p.legacyReviewConversions, p.refreshOf, p.creationRequest, p.decisionAnswers,
-    p.task, p.proactiveTaskIds, p.publicationAdmission, p.delivery?.operation,
+    p.task, p.proactiveTaskIds, p.publicationAdmission, p.delivery?.operation, p.remoteAction,
     p.runs.map(run => [run.stageId, run.attempts.map(item => [item.n, item.historical, item.legacyReview, item.activatedBy,
       item.budgetSpent, item.reviewedHead, item.expectedReviewHeadSha, item.reviewHeadSha, item.acceptedForReview,
       item.input, item.effectiveRole, item.decisionAnswerId, item.launchedBy,
@@ -16547,10 +16552,12 @@ function decisionLaunchFence(p: Pipeline): string {
           item.runtimeSwitches, item.publicationRepair, item.commitRepair, item.providerRecoveryBudget, item.providerFallbackRetries]])])]);
 }
 
+type DecisionLaunchReservation = Pick<PipelineStageAttempt, "launchId" | "conversationId" | "accountId">;
+
 /** Reconstructed from the accepted answer and current durable successor. No
  * callback is persisted, and recovery keeps the same original answer owner. */
 export function capturePipelineDecisionLaunch(pipelineId: string, stageId: string, attemptNumber: number,
-  receiptIdentity?: { launchId: string; conversationId: string } | (() => { launchId: string; conversationId: string } | undefined)): (() => void) | undefined {
+  receiptIdentity?: DecisionLaunchReservation | (() => DecisionLaunchReservation | undefined)): (() => void) | undefined {
   const original = findPipelineRecord(pipelineId);
   const attempt = original && currentAttempt(original, stageId);
   if (!original) return;
@@ -16586,10 +16593,15 @@ export function capturePipelineDecisionLaunch(pipelineId: string, stageId: strin
       || (attempt.launchId == null && reservedIdentity?.launchId === successor.launchId);
     const conversationMatches = successor.conversationId === attempt.conversationId
       || (attempt.conversationId == null && reservedIdentity?.conversationId === successor.conversationId);
+    // Only the reservation made by this call may fill an unbound account.
+    // Session binding occurs after native startup; preparation cannot replace it.
+    const sessionMatches = successor.sessionId === attempt.sessionId;
+    const accountMatches = (successor.accountId ?? null) === (attempt.accountId ?? null)
+      || (attempt.accountId == null && reservedIdentity?.accountId != null && reservedIdentity.accountId === successor.accountId);
     const recoveryBudget = (value: PipelineStageAttempt["providerRecoveryBudget"]) => value
       ? JSON.stringify([value.tries, value.startedAt, value.engine ?? null, value.triedAccounts ?? null, value.failedAccounts ?? null])
       : null;
-    if (!launchMatches || !conversationMatches || successor.providerFallbackRetries !== attempt.providerFallbackRetries
+    if (!launchMatches || !conversationMatches || !sessionMatches || !accountMatches || successor.providerFallbackRetries !== attempt.providerFallbackRetries
       || recoveryBudget(successor.providerRecoveryBudget) !== recoveryBudget(attempt.providerRecoveryBudget)
       || pipelineSurvivorRefusal(current)) throw new ActivationSuperseded();
     authority(current);

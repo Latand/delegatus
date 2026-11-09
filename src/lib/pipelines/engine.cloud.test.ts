@@ -1671,9 +1671,10 @@ for (const pendingSource of [false, true]) test(pendingSource
 });
 
 
-test.each([false, true])("a decision successor retains authority through configured local fallback (replaced %s)", async replaced => {
+test.each(["fallback", "fallback-replaced", "cloud"] as const)("a decision successor retains authority through configured runtime: %s", async mode => {
+  const replaced = mode === "fallback-replaced";
   const { pipelineDecisionRevision } = await import("./store");
-  const { h } = await fixture({ stages: [{ ...stage, runtime: "local" }] });
+  const { h, submits } = await fixture({ stages: [{ ...stage, runtime: "local" }] });
   for (let n = 0; n < 8 && !h.spawnInputs.length; n++) await step(h);
   expect(h.spawnInputs).toHaveLength(1);
   const { reportStageCompletion } = await import("./engine");
@@ -1692,6 +1693,14 @@ test.each([false, true])("a decision successor retains authority through configu
   const answered = await patchPipeline(lane().id, { action: "resolve-decision", clientRequestId: "cloud-format", answer: "Use Markdown.",
     expectedRevision: pipelineDecisionRevision(lane())!, expectedStageId: stage.id, expectedAttempt: 1 }, h.ports);
   expect(answered.error).toBeUndefined();
+  if (mode === "cloud") {
+    await submitted(h);
+    expect(submits).toHaveLength(1);
+    expect(submits[0]!.prompt).toContain("Use Markdown.");
+    expect(attempt().accountId).toBe(attempt().cloud!.accountId);
+    expect(h.spawnInputs).toHaveLength(1);
+    return;
+  }
   h.ports.cloudClient = undefined;
   const native = h.ports.spawnAgent; let reached = false, replacement = "";
   h.ports.spawnAgent = async (...args) => {
