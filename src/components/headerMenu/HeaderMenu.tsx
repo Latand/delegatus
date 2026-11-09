@@ -1,59 +1,36 @@
 "use client";
 
 import {
-  Activity, AudioLines, Bell, Brain, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleArrowUp, Compass, KeyRound, Languages, LifeBuoy, Link2,
-  ListChecks, LogOut, MessagesSquare, Mic, Power, QrCode, Route, Settings, ShieldCheck, SlidersHorizontal, Users, type LucideIcon,
+  Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleArrowUp, Compass, LifeBuoy,
+  ListChecks, LogOut, Power, QrCode, Route, Settings, Users, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { AccessQrButton } from "@/components/AccessQrButton";
 import { activityMobileMenuEntry } from "@/components/activity/menuEntry";
-import { openExternalRelaySettings } from "@/components/externalRelay/openExternalRelaySettings";
-import { KeepAwakeMenuRow, useKeepAwake } from "@/components/KeepAwakeControl";
-import { LanguageToggle } from "@/components/LanguageToggle";
-import { openLinkedSettings } from "@/components/links/openLinkedSettings";
-import { KeysImportPage, KeysMenuPage, KeysStateWord } from "@/components/keys/KeysSection";
-import { featureName, OpenAiFeaturePage, type ServiceFeature } from "@/components/keys/OpenAiServices";
-import { onOpenKeys, pendingKeys, settleKeys } from "@/components/keys/openKeys";
-import { MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
-import { MemorySourceRow } from "@/components/memory/MemorySourceRow";
+import { MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
 import { MobileMenuSheet, type MobileMenuEntry } from "@/components/mobile/MobileMenuSheet";
 import type { MobileNav } from "@/components/mobile/mobileNav";
 import { onboardingMobileMenuEntries } from "@/components/onboarding/menuEntries";
 import { openOnboarding } from "@/components/onboarding/useOnboarding";
 import { startInterfaceWalk } from "@/components/onboarding/walkStop";
-import { PushBell } from "@/components/PushBell";
 import { selfUpdateMobileMenuEntry } from "@/components/selfUpdate/menuEntry";
 import { openSelfUpdate } from "@/components/selfUpdate/openSelfUpdate";
-import { SoundToggle } from "@/components/SoundToggle";
+import { openSettings } from "@/components/settings/openSettings";
 import { teamMobileMenuEntry } from "@/components/team/menuEntry";
 import { useTeamView } from "@/components/team/teamClient";
-import { openTelemetrySettings } from "@/components/telemetry/TelemetrySettings";
 import { showPhoneVoice, usePhoneVoice } from "@/components/voiceCompanion/phoneVoiceStore";
-import { openVoiceCompanionSettings } from "@/components/voiceCompanion/VoiceCompanionSetting";
 import { useLocale, type MessageKey } from "@/lib/i18n";
-import type { KeyId } from "@/lib/keys/shared";
-import { WorkerLimitSettingsRow } from "@/components/orchestrator/WorkerLimitChip";
 
-import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
+import { HEADER_LAYOUTS, settingsSectionsOf } from "./headerMenuModel";
 
 /* The app header's ⋯ (docs/design/header-menu.md): variant 2's row of icon
    cells for the three places opened most, and variant 3's rows under it.
-   Settings is a page of the menu with a back row
-   (in place it would pass the menu's 360 px), and its memory and keys rows
-   open a page each, «Keys» with «Import keys» under it
-   (docs/design/keys-settings.md, Варіант 1) and a page for each feature the
-   OpenAI key can serve (docs/design/openai-key-services.md, variant 3); Help
-   and learning opens in place.
+   Settings opens the one Settings window (docs/design/settings-redo/build-brief.md),
+   whose sections hold every setting; Help and learning opens in place.
    Every entry calls the handler it called before the regrouping. */
 
-type View = "rest" | "settings" | "memory" | "keys" | "keysImport" | "service";
-/** The page a back row returns to. */
-const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", keys: "settings", keysImport: "keys", service: "keys" };
-type PhoneView = View | "help" | "rules" | "stop";
-/* The phone's «Stop Delegatus» asks on a page of its own: under its row the
-   question would make the Settings page scroll. */
-const PHONE_PARENT: Record<Exclude<PhoneView, "rest">, PhoneView> = { ...PARENT, help: "rest", rules: "rest", stop: "settings" };
+type PhoneView = "rest" | "help" | "rules";
 
 /** Ends this browser's member session and goes to the sign-in page. */
 async function signOutMember(): Promise<void> {
@@ -90,14 +67,14 @@ const STOP_REFUSALS: Record<string, MessageKey> = {
 };
 
 /** «Stop Delegatus» (`delegatus stop --all`, src/lib/stopAll.ts) is the owner's alone on a team install. */
-function useMayStop(): boolean {
+export function useMayStop(): boolean {
   const team = useTeamView({ load: false });
   return team?.mode !== "team" || team.me?.role === "owner";
 }
 
 /** The question and, once asked, the answer, which stays in place: the page
     that asked stops answering soon after. */
-function StopAllQuestion({ phone = false, onCancel, onPhase }: { phone?: boolean; onCancel: () => void; onPhase?: (phase: StopPhase["phase"]) => void }) {
+export function StopAllQuestion({ phone = false, onCancel, onPhase }: { phone?: boolean; onCancel: () => void; onPhase?: (phase: StopPhase["phase"]) => void }) {
   const { t, locale } = useLocale();
   const [state, setState] = useState<StopPhase>({ phase: "confirm" });
   useEffect(() => { onPhase?.(state.phase); }, [state.phase, onPhase]);
@@ -155,184 +132,57 @@ function StopAllRow() {
 
 /** The desktop panel's contents; the trigger and the dismissal stay with the rail's header. */
 export function HeaderMenuPanel({ project, onClose }: { project: string | null; onClose: () => void }) {
-  const { t, locale } = useLocale();
-  /* A place that asked for a key opened this menu on «Keys» at that key. */
-  const [view, setView] = useState<View>(() => pendingKeys() ? "keys" : "rest");
-  const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
-  const [focusSeq, setFocusSeq] = useState(0);
-  /* The feature whose provider page is open, and the one whose row back returns focus to. */
-  const [service, setService] = useState<ServiceFeature>("asks");
-  useEffect(() => {
-    settleKeys();
-    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setFocusSeq((seq) => seq + 1); setView("keys"); });
-  }, []);
+  const { t } = useLocale();
   const [helpOpen, setHelpOpen] = useState(false);
   /* Passive: the app's session guard loads the team view once per page. */
   const team = useTeamView({ load: false });
   const teamMe = team?.mode === "team" ? team.me : null;
-  const [push, setPush] = useState({ supported: false, enabled: false });
-  const onPushStatus = useCallback((status: { supported: boolean; enabled: boolean }) => setPush(status), []);
-  const panel = useRef<HTMLDivElement | null>(null);
-  /* Where focus goes after a swap: the back row of a page that opened, or the row that opened the page left. */
-  const focusNext = useRef<string | null>(null);
-  useEffect(() => {
-    if (!focusNext.current) return;
-    panel.current?.querySelector<HTMLElement>(focusNext.current)?.focus();
-    focusNext.current = null;
-  }, [view]);
-  const open = (next: View) => { focusNext.current = "[data-rail-menu-back]"; setFocusKey(null); setView(next); };
-  const back = () => {
-    if (view === "rest") return;
-    /* «Import keys» has no row of its own on the page it returns to: focus lands on that page's back row. */
-    focusNext.current = view === "keysImport" ? "[data-rail-menu-back]" : view === "service" ? `[data-openai-service="${service}"]` : `[data-rail-menu-${view}]`;
-    setView(PARENT[view]);
-  };
   const act = (run: () => void) => () => { onClose(); run(); };
-  const pushLabel = !push.supported ? t("rail.menuNotificationsUnavailable") : push.enabled ? t("rail.menuNotificationsOn") : t("rail.menuNotificationsOff");
-  const settingsItems = HEADER_LAYOUTS.desktop.rows.flatMap((row) => (row.kind === "page" ? row.items : []))
-    .filter((item) => item !== "memory" || project);
+  const sectionCount = settingsSectionsOf(HEADER_LAYOUTS.desktop).length;
   const helpItems = HEADER_LAYOUTS.desktop.rows.flatMap((row) => (row.kind === "fold" ? row.items : []));
-
-  const settingsRow = (item: HeaderItem): ReactNode => {
-    switch (item) {
-      case "language":
-        return (
-          <div key={item} data-header-menu-language="" className={STILL}>
-            <Icon icon={Languages} />
-            <Title>{t("rail.menuLanguage")}: {locale === "en" ? "English" : "Українська"}</Title>
-            <LanguageToggle />
-          </div>
-        );
-      case "push":
-        return (
-          <div key={item} data-header-menu-push="" className={STILL}>
-            <Icon icon={Bell} />
-            <Title>{pushLabel}</Title>
-            <PushBell onStatus={onPushStatus} />
-          </div>
-        );
-      case "memory":
-        return (
-          <button key={item} type="button" data-rail-menu-memory="" className={`${ROW} py-1`} onClick={() => open("memory")}>
-            <Icon icon={Brain} />
-            <TwoLines title={t("headerMenu.memory")} state={<MemoryStateWord />} />
-            <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-          </button>
-        );
-      case "memorySource":
-        return <MemorySourceRow key={item} />;
-      case "key":
-        return (
-          <button key={item} type="button" data-rail-menu-keys="" className={`${ROW} py-1`} onClick={() => open("keys")}>
-            <Icon icon={KeyRound} />
-            <TwoLines title={t("keys.title")} state={<KeysStateWord />} />
-            <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-          </button>
-        );
-      case "mapping":
-        return <button key={item} type="button" data-rail-menu-agent-mapping="" className={ROW} onClick={act(() => openOnboarding("mapping"))}><Icon icon={SlidersHorizontal} /><Title>{t("headerMenu.mapping")}</Title></button>;
-      case "workers":
-        return <WorkerLimitSettingsRow key={item} project={project} />;
-      case "dictation":
-        return <button key={item} type="button" data-rail-menu-dictation="" className={ROW} onClick={act(() => openOnboarding("voice"))}><Icon icon={Mic} /><Title>{t("onboarding.menu.voice")}</Title></button>;
-      case "voice":
-        return <button key={item} type="button" data-rail-menu-voice-companion="" className={ROW} onClick={act(openVoiceCompanionSettings)}><Icon icon={AudioLines} /><Title>{t("voiceCompanion.settings.label")}</Title></button>;
-      case "linked":
-        return <button key={item} type="button" data-rail-menu-linked-settings="" className={ROW} onClick={act(openLinkedSettings)}><Icon icon={Link2} /><Title>{t("links.title")}</Title></button>;
-      case "relay":
-        return <button key={item} type="button" data-rail-menu-external-relay="" className={ROW} onClick={act(openExternalRelaySettings)}><Icon icon={MessagesSquare} /><Title>{t("headerMenu.relay")}</Title></button>;
-      case "ping":
-        return <button key={item} type="button" data-rail-menu-ping="" className={ROW} onClick={act(openTelemetrySettings)}><Icon icon={ShieldCheck} /><Title>{t("headerMenu.ping")}</Title></button>;
-      default:
-        return null;
-    }
-  };
-
-  const backRow = (title: string) => (
-    <button
-      type="button"
-      data-rail-menu-back=""
-      className={`mb-1 flex w-full min-h-[30px] items-center gap-1.5 rounded-t-[8px] border-b border-border px-2 py-1.5 text-left text-[12px] hover:bg-sunken ${FOCUS}`}
-      onClick={back}
-    >
-      <ChevronLeft className="h-4 w-4 shrink-0 text-secondary" aria-hidden />
-      <span className="shrink-0 font-semibold text-secondary">{t("headerMenu.back")}</span>
-      <span aria-hidden className="shrink-0 text-muted">·</span>
-      <span className="min-w-0 flex-1 truncate font-bold text-primary">{title}</span>
-    </button>
-  );
 
   return (
     <MemoryReadingProvider project={project}>
-      <div ref={panel} data-header-menu="" data-header-menu-view={view}>
-        {view === "settings" ? (
-          <div data-header-menu-page="settings">
-            {backRow(t("headerMenu.settings"))}
-            {settingsItems.map(settingsRow)}
+      <div data-header-menu="" data-header-menu-view="rest">
+        <div role="group" aria-label={t("headerMenu.cells")} data-header-menu-cells="" className="grid grid-cols-3 gap-0.5 pb-1">
+          {/* Your time and your agents' time, per day and per project. */}
+          <a href="/activity" data-rail-menu-activity="" title={t("activity.menu")} className={CELL}><Activity className="h-4 w-4 shrink-0" aria-hidden /><span className="max-w-full truncate">{t("headerMenu.cell.activity")}</span></a>
+          {/* Members, who did what, sessions and invitations (sign-in-and-team §6.9). */}
+          <a href="/team" data-rail-menu-team="" title={t("team.menu")} className={CELL}><Users className="h-4 w-4 shrink-0" aria-hidden /><span className="max-w-full truncate">{t("headerMenu.cell.team")}</span></a>
+          {/* #2007: how this install updates itself. */}
+          <button type="button" data-rail-menu-update="" title={t("selfUpdate.menu")} className={CELL} onClick={act(openSelfUpdate)}><CircleArrowUp className="h-4 w-4 shrink-0" aria-hidden /><span className="max-w-full truncate">{t("headerMenu.cell.update")}</span></button>
+        </div>
+        <div data-header-menu-qr="" className={STILL}>
+          <Icon icon={QrCode} />
+          <Title>{t("headerMenu.openOnPhone")}</Title>
+          <AccessQrButton />
+        </div>
+        <button type="button" data-rail-menu-settings="" className={`${ROW} ${project ? "py-1" : ""}`} onClick={act(() => openSettings())}>
+          <Icon icon={Settings} />
+          {project ? <TwoLines title={t("headerMenu.settings")} state={<MemoryStateWord short />} /> : <Title>{t("headerMenu.settings")}</Title>}
+          <Count n={sectionCount} />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+        </button>
+        {/* #1876: the setup guide; #2166: the interface walk. */}
+        <button type="button" data-rail-menu-help="" aria-expanded={helpOpen} className={ROW} onClick={() => setHelpOpen((was) => !was)}>
+          <Icon icon={LifeBuoy} />
+          <Title>{t("headerMenu.help")}</Title>
+          <Count n={helpItems.length} />
+          {helpOpen ? <ChevronUp className="h-4 w-4 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-4 w-4 shrink-0 text-muted" aria-hidden />}
+        </button>
+        {helpOpen ? (
+          <div role="group" aria-label={t("headerMenu.help")}>
+            <button type="button" data-rail-menu-setup-guide="" className={`${ROW} ${WITHIN}`} onClick={act(() => openOnboarding("guide"))}><Icon icon={Compass} /><Title>{t("onboarding.menu.guide")}</Title></button>
+            <button type="button" data-rail-menu-interface-walk="" className={`${ROW} ${WITHIN}`} onClick={act(startInterfaceWalk)}><Icon icon={Route} /><Title>{t("onboarding.menu.walk")}</Title></button>
           </div>
-        ) : view === "memory" ? (
-          <div data-header-menu-page="memory">
-            {backRow(t("headerMenu.memory"))}
-            <MemoryPanel />
-          </div>
-        ) : view === "keys" ? (
-          <div data-header-menu-page="keys">
-            {backRow(t("keys.title"))}
-            <KeysMenuPage focusKey={focusKey} focusSeq={focusSeq} onImport={() => open("keysImport")} onOpenService={(feature) => { setService(feature); open("service"); }} />
-          </div>
-        ) : view === "service" ? (
-          <div data-header-menu-page="openai-service">
-            {backRow(featureName(t, service))}
-            <OpenAiFeaturePage feature={service} />
-          </div>
-        ) : view === "keysImport" ? (
-          <div data-header-menu-page="keys-import">
-            {backRow(t("keys.import"))}
-            <KeysImportPage />
-          </div>
-        ) : (
-          <>
-            <div role="group" aria-label={t("headerMenu.cells")} data-header-menu-cells="" className="grid grid-cols-3 gap-0.5 pb-1">
-              {/* Your time and your agents' time, per day and per project. */}
-              <a href="/activity" data-rail-menu-activity="" title={t("activity.menu")} className={CELL}><Activity className="h-4 w-4 shrink-0" aria-hidden /><span className="max-w-full truncate">{t("headerMenu.cell.activity")}</span></a>
-              {/* Members, who did what, sessions and invitations (sign-in-and-team §6.9). */}
-              <a href="/team" data-rail-menu-team="" title={t("team.menu")} className={CELL}><Users className="h-4 w-4 shrink-0" aria-hidden /><span className="max-w-full truncate">{t("headerMenu.cell.team")}</span></a>
-              {/* #2007: how this install updates itself. */}
-              <button type="button" data-rail-menu-update="" title={t("selfUpdate.menu")} className={CELL} onClick={act(openSelfUpdate)}><CircleArrowUp className="h-4 w-4 shrink-0" aria-hidden /><span className="max-w-full truncate">{t("headerMenu.cell.update")}</span></button>
-            </div>
-            <div data-header-menu-qr="" className={STILL}>
-              <Icon icon={QrCode} />
-              <Title>{t("headerMenu.openOnPhone")}</Title>
-              <AccessQrButton />
-            </div>
-            <button type="button" data-rail-menu-settings="" className={`${ROW} ${project ? "py-1" : ""}`} onClick={() => open("settings")}>
-              <Icon icon={Settings} />
-              {project ? <TwoLines title={t("headerMenu.settings")} state={<MemoryStateWord short />} /> : <Title>{t("headerMenu.settings")}</Title>}
-              <Count n={settingsItems.length} />
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-            </button>
-            {/* #1876: the setup guide; #2166: the interface walk. */}
-            <button type="button" data-rail-menu-help="" aria-expanded={helpOpen} className={ROW} onClick={() => setHelpOpen((was) => !was)}>
-              <Icon icon={LifeBuoy} />
-              <Title>{t("headerMenu.help")}</Title>
-              <Count n={helpItems.length} />
-              {helpOpen ? <ChevronUp className="h-4 w-4 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-4 w-4 shrink-0 text-muted" aria-hidden />}
-            </button>
-            {helpOpen ? (
-              <div role="group" aria-label={t("headerMenu.help")}>
-                <button type="button" data-rail-menu-setup-guide="" className={`${ROW} ${WITHIN}`} onClick={act(() => openOnboarding("guide"))}><Icon icon={Compass} /><Title>{t("onboarding.menu.guide")}</Title></button>
-                <button type="button" data-rail-menu-interface-walk="" className={`${ROW} ${WITHIN}`} onClick={act(startInterfaceWalk)}><Icon icon={Route} /><Title>{t("onboarding.menu.walk")}</Title></button>
-              </div>
-            ) : null}
-            <StopAllRow />
-            {teamMe ? (
-              <button type="button" data-rail-menu-sign-out="" className={`${ROW} text-secondary hover:text-primary`} onClick={act(() => void signOutMember())}>
-                <Icon icon={LogOut} />
-                <Title>{t("team.signOut", { name: teamMe.name })}</Title>
-              </button>
-            ) : null}
-          </>
-        )}
+        ) : null}
+        <StopAllRow />
+        {teamMe ? (
+          <button type="button" data-rail-menu-sign-out="" className={`${ROW} text-secondary hover:text-primary`} onClick={act(() => void signOutMember())}>
+            <Icon icon={LogOut} />
+            <Title>{t("team.signOut", { name: teamMe.name })}</Title>
+          </button>
+        ) : null}
       </div>
     </MemoryReadingProvider>
   );
@@ -373,34 +223,22 @@ export function HeaderMenuSheet(props: {
 
 function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClose }: Parameters<typeof HeaderMenuSheet>[0]) {
   const { t } = useLocale();
-  const keepAwake = useKeepAwake();
   const voice = usePhoneVoice();
   /* As on the desktop: a page that opens takes focus on its back row, and back returns it to the row that opened the page. */
-  const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>(() => pendingKeys() ? { view: "keys", focus: null } : { view: "rest", focus: null });
-  const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
-  const [focusSeq, setFocusSeq] = useState(0);
-  const [service, setService] = useState<ServiceFeature>("asks");
-  useEffect(() => {
-    settleKeys();
-    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setFocusSeq((seq) => seq + 1); setPlace({ view: "keys", focus: null }); });
-  }, []);
+  const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>({ view: "rest", focus: null });
   useEffect(() => {
     if (!focus) return;
-    /* A feature's page returns focus to that feature's row under the OpenAI key. */
-    const selector = focus.startsWith("service:") ? `[data-openai-service='${focus.slice(8)}']` : `[data-mobile2-menu-row='${focus}']`;
-    document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] ${selector}`)?.focus();
+    document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${focus}']`)?.focus();
   }, [view, focus]);
-  const go = (next: Exclude<PhoneView, "rest">) => { setFocusKey(null); setPlace({ view: next, focus: "back" }); };
-  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view === "keysImport" ? "back" : view === "stop" ? "stop-all" : view === "service" ? `service:${service}` : view }); };
+  const go = (next: Exclude<PhoneView, "rest">) => setPlace({ view: next, focus: "back" });
+  const back = () => { if (view !== "rest") setPlace({ view: "rest", focus: view }); };
   const close = onClose;
   /* The rows the phone has always had for these entries, with their handlers, icons and test ids. */
-  const [guide, walk, mapping, dictation] = onboardingMobileMenuEntries(t, close);
+  const [guide, walk] = onboardingMobileMenuEntries(t, close);
   const activity = activityMobileMenuEntry(t, nav);
   const team = teamMobileMenuEntry(t, nav);
   const update = selfUpdateMobileMenuEntry(t, close);
-  const mayStop = useMayStop();
-  const settingsItems = HEADER_LAYOUTS.phone.rows.flatMap((row) => (row.kind === "page" && row.id === "settings" ? row.items : []))
-    .filter((item) => (item !== "memory" || project) && (item !== "awake" || keepAwake) && (item !== "stop" || mayStop));
+  const sectionCount = settingsSectionsOf(HEADER_LAYOUTS.phone).length;
   const helpItems = [guide, walk].filter((entry): entry is Extract<MobileMenuEntry, { kind: "row" }> => entry?.kind === "row");
 
   const backRow = (label: string): MobileMenuEntry => ({
@@ -418,58 +256,9 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   const chevron = <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />;
   const row = (key: string, icon: LucideIcon, label: string, onSelect: () => void, trailing?: ReactNode): MobileMenuEntry => ({ kind: "row", key, icon: glyph(icon), label, onSelect, trailing });
 
-  const settingsEntry = (item: HeaderItem): MobileMenuEntry | null => {
-    switch (item) {
-      case "sound":
-        return {
-          kind: "custom",
-          key: "sound",
-          node: (
-            <div className="flex min-h-11 items-center gap-2 px-4">
-              <span className="min-w-0 flex-1 text-body font-semibold text-primary">{t("mobile2.menu.sound")}</span>
-              <SoundToggle />
-            </div>
-          ),
-        };
-      case "awake":
-        /* «Keep screen awake» (issue #712) reads the Viewer-level controller that outlives this sheet. */
-        return { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> };
-      case "memory":
-        return row("memory", Brain, t("headerMenu.memory"), () => go("memory"), <><MemoryStateWord size="sheet" />{chevron}</>);
-      case "memorySource":
-        return { kind: "custom", key: "memory-source", node: <MemorySourceRow phone /> };
-      case "key":
-        return row("keys", KeyRound, t("keys.title"), () => go("keys"), <><KeysStateWord size="sheet" />{chevron}</>);
-      case "mapping":
-        return mapping?.kind === "row" ? { ...mapping, label: t("headerMenu.mapping") } : null;
-      case "workers":
-        return { kind: "custom", key: "workers", node: <WorkerLimitSettingsRow project={project} phone /> };
-      case "dictation":
-        return dictation ?? null;
-      case "voice":
-        return row("voice-companion", AudioLines, t("voiceCompanion.settings.label"), () => { close(); openVoiceCompanionSettings(); });
-      case "linked":
-        return row("linked-settings", Link2, t("links.title"), () => { close(); openLinkedSettings(); });
-      case "relay":
-        return row("external-relay", MessagesSquare, t("headerMenu.relay"), () => { close(); openExternalRelaySettings(); });
-      case "ping":
-        return row("ping", ShieldCheck, t("headerMenu.ping"), () => { close(); openTelemetrySettings(); });
-      case "stop":
-        return row("stop-all", Power, t("headerMenu.stopAll"), () => go("stop"), chevron);
-      default:
-        return null;
-    }
-  };
-
   let entries: MobileMenuEntry[];
-  if (view === "settings") entries = [backRow(t("headerMenu.settings")), ...settingsItems.flatMap((item) => settingsEntry(item) ?? [])];
-  else if (view === "memory") entries = [backRow(t("headerMenu.memory")), { kind: "custom", key: "memory-page", node: <MemoryPanel size="sheet" /> }];
-  else if (view === "keys") entries = [backRow(t("keys.title")), { kind: "custom", key: "keys-page", node: <KeysMenuPage size="sheet" focusKey={focusKey} focusSeq={focusSeq} onImport={() => go("keysImport")} onOpenService={(feature) => { setService(feature); go("service"); }} /> }];
-  else if (view === "service") entries = [backRow(featureName(t, service)), { kind: "custom", key: "openai-service-page", node: <OpenAiFeaturePage feature={service} size="sheet" /> }];
-  else if (view === "keysImport") entries = [backRow(t("keys.import")), { kind: "custom", key: "keys-import-page", node: <KeysImportPage size="sheet" /> }];
-  else if (view === "help") entries = [backRow(t("headerMenu.help")), ...helpItems];
+  if (view === "help") entries = [backRow(t("headerMenu.help")), ...helpItems];
   else if (view === "rules") entries = [backRow(t("headerMenu.rules")), ...rules];
-  else if (view === "stop") entries = [backRow(t("headerMenu.stopAll")), { kind: "custom", key: "stop-all-page", node: <StopAllQuestion phone onCancel={back} /> }];
   else {
     /* A row of the sheet drawn as a cell: its icon over a short caption, its full label for a screen reader. */
     const cell = (entry: MobileMenuEntry | undefined, caption?: string) => entry?.kind === "row" ? (
@@ -500,7 +289,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
       },
       /* The voice head the operator hid comes back from here, only while it is hidden (docs/design/phone-voice-head-build.md). */
       ...(voice.available && voice.hidden ? [row("voice-show", AudioLines, t("voiceCompanion.show"), () => { close(); showPhoneVoice(); })] : []),
-      row("settings", Settings, t("headerMenu.settings"), () => go("settings"), <>{project ? <MemoryStateWord short size="sheet" /> : null}<span className="tabular-nums">{settingsItems.length}</span>{chevron}</>),
+      /* The Settings window takes the sheet's place: a sheet opened from a sheet replaces it. */
+      row("settings", Settings, t("headerMenu.settings"), () => openSettings(), <>{project ? <MemoryStateWord short size="sheet" /> : null}<span className="tabular-nums">{sectionCount}</span>{chevron}</>),
       row("help", LifeBuoy, t("headerMenu.help"), () => go("help"), <><span className="tabular-nums">{helpItems.length}</span>{chevron}</>),
       ...(ruleCount ? [row("rules", ListChecks, t("headerMenu.rules"), () => go("rules"), <><span className="tabular-nums">{ruleCount}</span>{chevron}</>)] : []),
     ];
