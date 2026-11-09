@@ -85,7 +85,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -136,6 +136,9 @@ interface HostRegistration {
 }
 
 const DELIVERY_DRAIN_COALESCE_MS = 25;
+/** Echo settlements one controller runs at once; an echo past the bound is
+    settled by the next receipt read instead. */
+const ECHO_SETTLEMENT_CAPACITY = 64;
 const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
 /** How often the delivery watchdog looks for stalls, overdue wakes and lanes
     to reconcile. */
@@ -926,6 +929,27 @@ export async function bindStructuredDeliveryQueue(
   });
   initializeSendFailureNotices();
   const progressStore = dependencies.progress ?? deliveryProgressStore();
+  /* An engine echo that arrives after its send already ended unverified
+     settles that send from the evidence it left (2026-11-09). One settlement
+     per operation at a time, bounded, off the event pump: the pump never waits
+     for it, and a retired generation's settlements stop at their next check. */
+  const echoSettlements = new Set<string>();
+  const settleEcho = (operationId: string) => {
+    const retired = () => stopped || state.activeQueue !== queue;
+    if (retired() || echoSettlements.has(operationId) || echoSettlements.size >= ECHO_SETTLEMENT_CAPACITY) return;
+    echoSettlements.add(operationId);
+    const assertActive = () => { if (retired()) throw new Error("echo settlement owner retired"); };
+    withoutOperationLease(() => void settleEchoedSend(operationId, {
+      registry, client, assertActive,
+      progress: { get: id => progressStore.get(id), settle: (...args) => { if (!retired()) progressStore.settle(...args); } },
+    }).then(receipt => {
+      if (receipt?.state === "delivered" && !retired()) { requestDrain(); requestFailureNotices(); }
+    }, error => {
+      if (!retired()) controllerDiagnosticError("[structured delivery] echo settlement failed", {
+        operationId, error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => { echoSettlements.delete(operationId); }));
+  };
   /* The first record of an operation carries its original key and admission
      time off the delivery record, so the record answers for the key the
      operator holds. */
@@ -2002,6 +2026,7 @@ export async function bindStructuredDeliveryQueue(
         if (next.value.kind === "item" && next.value.deliveryEcho) {
           const echo = next.value.deliveryEcho;
           observeDeliveryEcho(progressStore, conversationId, echo, !echo.memberOperationIds || next.value.seq > initialState.eventCursor);
+          for (const operationId of echo.memberOperationIds ?? [echo.operationId]) settleEcho(operationId);
         }
         /* Before the journal append, which retries for as long as the runtime
            host is away: a request nobody can answer is answered now. */

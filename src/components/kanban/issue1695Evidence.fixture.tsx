@@ -41,6 +41,7 @@ import { DraftRuntimePill } from "@/components/draft/DraftRuntimePill";
 import { RunsOnRow } from "@/components/orchestrator/RunsOnRow";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { SETTINGS_SCENE, settingsEvidenceRoute } from "@/components/settings/settingsEvidence.fixture";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
@@ -4185,6 +4186,11 @@ const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 const serverFetch = window.fetch.bind(window);
 const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (SETTINGS_SCENE) {
+    const asked = new URL(input instanceof Request ? input.url : String(input), location.href);
+    const answer = await settingsEvidenceRoute(asked, input instanceof Request ? input.method : init?.method ?? "GET", init);
+    if (answer) return answer;
+  }
   const url = new URL(String(input), location.origin);
   if (SCENARIO === "accepted-creation" && (url.pathname.startsWith("/api/pipelines") || url.pathname.startsWith("/fixture/")
     || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);

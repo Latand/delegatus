@@ -2200,6 +2200,74 @@ test("an expired explicit kill settles during startup deferral without terminati
   expect(transitions).toEqual([["expired-kill", "failed"]]);
 });
 
+for (const recoverable of [false, true]) {
+  test(`an explicit interrupt held by startup deferral settles at its ceiling${recoverable ? " when recipient recovery is permitted" : ""}`, async () => {
+    const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+    setSystemTime(admittedAt + 1_000);
+    const statuses = new Map<string, string>();
+    const reasons = new Map<string, string | null | undefined>();
+    const queue = new StructuredDeliveryQueue({
+      deferTarget: () => true,
+      canRecoverDeferredTarget: () => recoverable,
+      effects: async () => statuses.has("held-interrupt") ? [] : [{ id: "held-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+        operationId: "held-interrupt", conversationId: "conversation-held", turnId: "turn-held",
+      } }],
+      status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() }),
+      transition: async (id, status, details) => { statuses.set(id, status); reasons.set(id, details?.reason); },
+    }, () => null);
+    try {
+      await queue.drain();
+      expect(statuses.has("held-interrupt")).toBeFalse();
+      setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+      await queue.drain();
+      expect(statuses.get("held-interrupt")).toBe("failed");
+      expect(reasons.get("held-interrupt")).toBe("interrupt control exceeded its 2-minute settlement deadline; retry from the current conversation state");
+    } finally { queue.retire(); }
+  });
+}
+
+test("an interrupt queued before a send cannot keep a deferred idle recipient from recovery", async () => {
+  const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+  setSystemTime(admittedAt + 1_000);
+  const statuses = new Map<string, string>();
+  const sent: string[] = [];
+  let recoveries = 0;
+  let recovered = false;
+  const effects: StructuredDeliveryEffect[] = [
+    { id: "stuck-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+      operationId: "stuck-interrupt", conversationId: "conversation-idle", turnId: "turn-gone",
+    } },
+    { id: "operator-send", kind: "runtime.send", eventSeq: 2, payload: {
+      operationId: "operator-send", conversationId: "conversation-idle", text: "resume and read this", policy: "queue",
+    } },
+  ];
+  const queue = new StructuredDeliveryQueue({
+    deferTarget: () => !recovered,
+    canRecoverDeferredTarget: () => true,
+    effects: async () => effects.filter(effect => !["failed", "interrupted", "delivered"].includes(statuses.get(effect.id) ?? "")),
+    status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() }),
+    hostClaim: async () => "owner:idle",
+    transition: async (id, status) => { statuses.set(id, status); },
+  }, () => recovered ? host(async entry => {
+    sent.push(entry.id);
+    return { outcome: "turn-started", turnId: "operator-turn" };
+  }) : null, undefined, undefined, async () => { recoveries += 1; recovered = true; return true; });
+  try {
+    await queue.drain();
+    // Inside its ceiling the interrupt still holds the send behind it, in order.
+    expect(statuses.has("stuck-interrupt")).toBeFalse();
+    expect(recoveries).toBe(0);
+    expect(sent).toEqual([]);
+    setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+    await queue.drain();
+    expect(statuses.get("stuck-interrupt")).toBe("failed");
+    expect(recoveries).toBe(1);
+    await queue.drain();
+    expect(sent).toEqual(["operator-send"]);
+    expect(statuses.get("operator-send")).toBe("delivered");
+  } finally { queue.retire(); }
+});
+
 test("startup recovery does not let an explicit send overtake deferred configuration or automatic work", async () => {
   let deferred = true;
   const statuses = new Map<string, string>();

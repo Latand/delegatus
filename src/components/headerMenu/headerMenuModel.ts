@@ -3,6 +3,7 @@
    rows below it. This file says where every entry of the menu stands; the
    components draw it and call each entry's own handler. */
 
+import type { SettingsSection } from "@/components/settings/openSettings";
 import type { MemorySettingView } from "@/lib/memory/viewTypes";
 
 /** Every entry of today's header menu (the design note's inventory), with the
@@ -11,14 +12,14 @@ import type { MemorySettingView } from "@/lib/memory/viewTypes";
     (docs/design/memory-source-switch.md §3.4), on the overview too. */
 export const HEADER_ITEMS = [
   "activity", "team", "update", "qr", "language", "push", "memory", "memorySource", "key",
-  "mapping", "workers", "dictation", "voice", "linked", "relay", "ping", "guide", "walk", "signOut", "sound", "awake", "stop",
+  "mapping", "workers", "dictation", "telegram", "voice", "linked", "relay", "ping", "guide", "walk", "signOut", "sound", "awake", "stop",
 ] as const;
 export type HeaderItem = (typeof HEADER_ITEMS)[number];
 export type HeaderSurface = "desktop" | "phone";
 
 export type HeaderRow =
   | { kind: "item"; item: HeaderItem }
-  /** Opens as a page of the menu with a back row: in place it would pass the menu's 360 px. */
+  /** Settings opens the Settings window, whose sections hold these items; Help is a page of the phone's menu. */
   | { kind: "page"; id: "settings" | "help"; items: readonly HeaderItem[] }
   /** Opens in place under its own row. */
   | { kind: "fold"; id: "help"; items: readonly HeaderItem[] };
@@ -36,13 +37,14 @@ const HELP_ITEMS = ["guide", "walk"] as const;
    header, keeps sound and keep-awake in this menu, and signs out on the Team
    page. The voice companion is a window on the desktop and a head on the phone,
    whose «Показати голос» row is drawn by the phone menu itself while the head is
-   hidden; its settings on both surfaces also show the last call and monthly spend. */
+   hidden; its settings on both surfaces also show the last call and, through the
+   API, the monthly spend. The settings items stand in the Settings window's sections. */
 export const HEADER_LAYOUTS: Record<HeaderSurface, HeaderLayout> = {
   desktop: {
     cells: CELLS,
     rows: [
       { kind: "item", item: "qr" },
-      { kind: "page", id: "settings", items: ["language", "push", "memory", "memorySource", "key", "mapping", "workers", "dictation", "voice", "linked", "relay", "ping"] },
+      { kind: "page", id: "settings", items: ["language", "push", "memory", "memorySource", "key", "mapping", "workers", "dictation", "ping", "telegram", "voice", "linked", "relay"] },
       { kind: "fold", id: "help", items: HELP_ITEMS },
       /* `delegatus stop --all` from the page: with the session-ending row. */
       { kind: "item", item: "stop" },
@@ -53,12 +55,24 @@ export const HEADER_LAYOUTS: Record<HeaderSurface, HeaderLayout> = {
     cells: CELLS,
     rows: [
       /* The sheet at rest has no room left, so stopping is the last row of Settings. */
-      { kind: "page", id: "settings", items: ["sound", "awake", "memory", "memorySource", "key", "mapping", "workers", "dictation", "voice", "linked", "relay", "ping", "stop"] },
+      { kind: "page", id: "settings", items: ["sound", "awake", "stop", "memory", "memorySource", "key", "mapping", "workers", "dictation", "ping", "telegram", "voice", "linked", "relay"] },
       /* A page on the phone: the sheet at rest already stands near today's 743 px, and in place it would scroll. */
       { kind: "page", id: "help", items: HELP_ITEMS },
     ],
   },
 };
+
+const SECTION_OF: Partial<Record<HeaderItem, SettingsSection>> = {
+  language: "general", push: "general", sound: "general", awake: "general", stop: "general",
+  memory: "memory", memorySource: "memory", key: "keys", mapping: "roles", workers: "roles",
+  dictation: "dictation", ping: "privacy", telegram: "telegram", voice: "voice", linked: "linked", relay: "relay",
+};
+
+/** The Settings window's sections, in the order the layout's items first reach them. */
+export function settingsSectionsOf(layout: HeaderLayout): SettingsSection[] {
+  const items = layout.rows.flatMap((row) => (row.kind === "page" && row.id === "settings" ? row.items : []));
+  return [...new Set(items.flatMap((item) => SECTION_OF[item] ?? []))];
+}
 
 /** Where an entry stands on a surface, and how many presses from the closed menu reach it. */
 export function headerHome(surface: HeaderSurface, item: HeaderItem): { where: "cell" | "rest" | "settings" | "help"; presses: number } | null {

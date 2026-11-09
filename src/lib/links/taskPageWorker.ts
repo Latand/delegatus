@@ -1,5 +1,7 @@
 import { PrivacyWorkError, privacyFailureCode, privacyFailureOf, type PrivacyFailure } from "@/lib/memory/privacyFailure";
 import { privacyWorkTimeoutMs } from "@/lib/memory/privacyRetry";
+import { currentOperationLease } from "@/lib/operationLease";
+import { observePrivacyWorkerJob, privacyWorkerObservations } from "@/lib/memory/privacyDiagnostics";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { PrivacyRequest, PrivacyResult } from "@/lib/memory/privacyWork";
 import type { ChildProcess } from "node:child_process";
@@ -23,7 +25,7 @@ export function taskPageWorkerLaunch(cwd = process.cwd()) {
 }
 export type TaskPageWorkerRuntime = { cwd?: string; env?: Partial<NodeJS.ProcessEnv>; launch?: ReturnType<typeof taskPageWorkerLaunch>; timeoutMs?: number; onPhase?: (phase: "compile" | "match") => void };
 type WorkResult = PageBuildResult | PrivacyResult;
-type Job = { id: number; settled: boolean; phaseDone?: () => void; finish(error?: Error, result?: WorkResult): void };
+type Job = { id: number; settled: boolean; observation: ReturnType<typeof observePrivacyWorkerJob>; phaseDone?: () => void; finish(error?: Error, result?: WorkResult): void };
 type Resident = { child: ChildProcess; closed: Promise<void>; buffer: string; files?: ReturnType<typeof lastScannedFiles> };
 const unavailable = (failure: PrivacyFailure = "worker-unavailable") => Object.assign(new PrivacyWorkError(failure), { code: "LESSON_PRIVACY_UNAVAILABLE" });
 
@@ -49,20 +51,33 @@ export class TaskPageWorker {
     return this.submit(request) as Promise<PrivacyResult>;
   }
   private submit(request: PageRequest | PrivacyRequest, filter?: FeedFilter): Promise<WorkResult> {
-    if (this.jobs.size >= 16) return Promise.reject(unavailable("worker-queue-full"));
+    const budgetMs = Math.min(this.runtime.timeoutMs ?? 60_000, privacyWorkTimeoutMs());
+    if (this.jobs.size >= 16) {
+      observePrivacyWorkerJob(budgetMs).emit("settled", "worker-queue-full");
+      return Promise.reject(unavailable("worker-queue-full"));
+    }
     return withViewerOperation(filter ? "links.task-export" : request.kind === "curation-undo" ? "memory.import.curation" : "memory.privacy.worker", () => performanceSpans.wait("privacy.worker", () => new Promise<WorkResult>((resolve, reject) => {
       let complete!: () => void;
       const completed = new Promise<void>(done => { complete = done; });
-      const job: Job = { id: ++this.nextId, settled: false, finish: (error, result) => {
+      const diagnostic = observePrivacyWorkerJob(budgetMs);
+      const signal = currentOperationLease()?.abort.signal;
+      const cancelled = () => diagnostic.emit("cancelled");
+      const job: Job = { id: ++this.nextId, observation: diagnostic, settled: false, finish: (error, result) => {
         if (job.settled) return;
         job.settled = true; job.phaseDone?.(); clearTimeout(timer); this.jobs.delete(job);
+        signal?.removeEventListener("abort", cancelled);
+        const failure = error instanceof RoleMemoryRefusal && (error.code === "CURATE_LIVE" || error.code === "CURATE_INVALID")
+          ? error.code : error ? privacyFailureOf(error) : undefined;
+        diagnostic.emit(failure === "worker-timeout" ? "timeout" : "settled", failure);
         if (error) reject(error); else resolve(result!);
         complete();
       } };
       const timer = setTimeout(() => {
         job.finish(unavailable("worker-timeout"));
         if (this.active === job && this.resident) this.retire(this.resident);
-      }, Math.min(this.runtime.timeoutMs ?? 60_000, privacyWorkTimeoutMs()));
+      }, budgetMs);
+      signal?.addEventListener("abort", cancelled, { once: true });
+      if (signal?.aborted) cancelled();
       this.jobs.add(job);
       this.tail = this.tail.then(async () => {
         if (job.settled) return;
@@ -92,9 +107,10 @@ export class TaskPageWorker {
             includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview,
             filePath: filter.filePath, projects: [...filter.projects].sort(),
           }, ...(observation ? { files: observation } : {}) } : request;
-          const encoded = JSON.stringify({ id: job.id, request: wire });
+          const encoded = JSON.stringify({ id: job.id, correlation: diagnostic.correlation, request: wire });
           if (!filter && Buffer.byteLength(encoded) > 2 * 1024 * 1024) throw unavailable("worker-input-too-large");
           leasedHelperInput(worker.child).write(`${encoded}\n`);
+          diagnostic.emit("dispatched");
           worker.files = files;
           await completed;
           await this.waitForRetirement();
@@ -134,9 +150,19 @@ export class TaskPageWorker {
           const frame = JSON.parse(line);
           const job = this.active;
           if (!job || job.settled || job.id !== frame.id) throw unavailable("worker-invalid-reply");
+          // Older fixtures/retained worker replies may lack an acknowledgement;
+          // their execution duration stays explicitly unknown. A supplied token
+          // must agree with this exact job before any phase/result is consumed.
+          if (frame.correlation !== undefined && (frame.correlation?.requestId !== job.observation.correlation.requestId
+            || frame.correlation?.jobId !== job.observation.correlation.jobId)) throw unavailable("worker-invalid-reply");
+          if (frame.phase === "started") {
+            if (!frame.correlation) throw unavailable("worker-invalid-reply");
+            job.observation.emit("started"); continue;
+          }
           if (frame.phase === "compile" || frame.phase === "match") {
             job.phaseDone?.();
             const phase = frame.phase as "compile" | "match";
+            job.observation.emit(phase);
             this.runtime.onPhase?.(phase);
             void withViewerOperation(`memory.privacy.${phase}`, () => performanceSpans.wait(`privacy.${phase}`, () => new Promise<void>(done => { job.phaseDone = done; })));
             continue;
@@ -192,7 +218,7 @@ export async function readScanPageInWorker(after: string, filter: FeedFilter): P
 export async function readLogPageInWorker(after: Position, filter: FeedFilter): Promise<LogPage> { return await page({ kind: "log", after }, filter) as LogPage; }
 export async function shutdownTaskPageWorker() { await pool.worker?.shutdown(); pool.worker = null; pool.directory = ""; }
 
-export function taskPageWorkerDiagnostics() { return { builds: pool.worker?.builds ?? 0, cpu: pool.worker?.lastCpu ?? null }; }
+export function taskPageWorkerDiagnostics() { return { builds: pool.worker?.builds ?? 0, cpu: pool.worker?.lastCpu ?? null, privacy: privacyWorkerObservations() }; }
 
 export async function runPrivacyWork(request: PrivacyRequest): Promise<PrivacyResult> {
   // A missing collection is an affirmative empty revision. Reading this

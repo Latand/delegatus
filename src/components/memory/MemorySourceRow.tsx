@@ -1,6 +1,5 @@
 "use client";
 
-import { BookMarked } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { SettingSwitch } from "@/components/ProjectSettingRow";
@@ -120,21 +119,19 @@ export function MemorySourceRow({ phone = false, readEveryMs = READ_MS }: { phon
   const line = memorySourceLine(view, readFailed, t, locale);
   const enabled = view?.choice === "delegatus";
   const title = t("memorySource.title");
-  /* The geometry of the sibling rows: the sheet's 44 px row (18 px icon, 12 px gap, body title) on the
-     phone, the panel's still row (16 px icon, 8 px gap, 12 px title) on the desktop; the line hangs
-     under the title, as the worker limit's does, and wraps at word boundaries. */
+  /* A switch row of the Settings window: the title and its line in one block, the switch centred beside them and
+     its track on the edge every other switch, select and chevron ends on. */
   return (
-    <div data-header-menu-memory-source="" data-memory-source-state={state} className={phone ? "flex w-full flex-col px-4 pb-0.5" : "flex w-full flex-col rounded-[8px] px-2 py-1"}>
-      <div className={`flex items-center font-semibold text-primary ${phone ? "min-h-11 gap-3 text-body" : "min-h-6 gap-2 text-[12px]"}`}>
-        <BookMarked className={`shrink-0 text-secondary ${phone ? "h-[18px] w-[18px]" : "h-4 w-4"}`} aria-hidden data-memory-source-icon="" />
-        <span data-memory-source-title="" className="min-w-0 flex-1 leading-4">{title}</span>
-        <SettingSwitch enabled={enabled} size={phone ? "sheet" : "row"} aria-label={title} aria-describedby={stateId} disabled={!view}
-          data-memory-source-switch="" onClick={() => void press()} />
-      </div>
-      <span id={stateId} role="status" data-memory-source-line="" className={`font-medium ${phone ? "pl-[30px] text-label leading-snug" : "pl-6 text-[11px] leading-[14px]"}`}>
-        {saveFailed ? <span data-memory-source-failed="" className="text-danger">{t("memorySource.saveFailed")} </span> : null}
-        <span className={readFailed ? "text-warning" : "text-muted"}>{line}</span>
+    <div data-header-menu-memory-source="" data-memory-source-state={state} className={`flex w-full items-center gap-3 ${phone ? "min-h-11 px-4 py-1.5" : "min-h-10 px-5 py-1.5"}`}>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-body">
+        <span data-memory-source-title="" className="font-semibold text-primary">{title}</span>
+        <span id={stateId} role="status" data-memory-source-line="" className="text-ui font-normal leading-snug">
+          {saveFailed ? <span data-memory-source-failed="" className="text-danger">{t("memorySource.saveFailed")} </span> : null}
+          <span className={readFailed ? "text-warning" : "text-muted"}>{line}</span>
+        </span>
       </span>
+      <SettingSwitch enabled={enabled} size={phone ? "sheet" : "row"} className={phone ? "-mr-1.5" : ""} aria-label={title} aria-describedby={stateId} disabled={!view}
+        data-memory-source-switch="" onClick={() => void press()} />
     </div>
   );
 }
