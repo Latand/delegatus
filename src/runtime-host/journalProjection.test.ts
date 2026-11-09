@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { runtimeScope } from "@/lib/runtime/contracts";
-import { RuntimeJournal } from "./journal";
+import { RuntimeJournal, RUNTIME_ENTITY_READ_CACHE_BYTES, RUNTIME_ENTITY_READ_CACHE_ENTRIES } from "./journal";
 
 const now = Date.parse("2026-10-28T00:00:00Z");
 function status(journal: RuntimeJournal, id: string, turn = "idle") {
@@ -85,8 +85,28 @@ test("rolled-back local SQL edits evict safely and a later edit cannot replay th
   } finally { journal.close(); }
 });
 
+test("a population above the former 8192-row cap rebuilds from one changed row", () => {
+  // Sessions plus their edges exceeded the old row cap on a busy install, so
+  // each rebuild evicted and re-read every stored row.
+  const journal = new RuntimeJournal(":memory:", { now: () => now });
+  const state = journal as unknown as { db: Database };
+  try {
+    const insert = state.db.query("INSERT INTO entities(kind,id,revision,state_json,checkpoint_seq) VALUES ('task',?,1,?,1)");
+    state.db.exec("BEGIN");
+    for (let index = 0; index < 9000; index++) insert.run(`task-${String(index).padStart(5, "0")}`, JSON.stringify({ id: `task-${index}`, text: "x" }));
+    state.db.exec("COMMIT");
+    const first = journal.snapshotJson();
+    expect(JSON.parse(first).tasks).toHaveLength(9000);
+    const reads = journal.snapshotProjectionReads;
+    state.db.run("UPDATE entities SET state_json = ? WHERE kind = 'task' AND id = 'task-04500'", [JSON.stringify({ id: "task-4500", text: "changed" })]);
+    const second = JSON.parse(journal.snapshotJson());
+    expect(journal.snapshotProjectionReads - reads).toBe(1);
+    expect(second.tasks.filter((task: { value?: { text: string }; text?: string }) => (task.value ?? task).text === "changed")).toHaveLength(1);
+  } finally { journal.close(); }
+});
+
 test("row and byte limits bound cache registrations across a real-process restart", () => {
-  for (const [rows, textSize] of [[8200, 1], [18, 1024 * 1024], [1, 17 * 1024 * 1024]]) {
+  for (const [rows, textSize] of [[RUNTIME_ENTITY_READ_CACHE_ENTRIES + 8, 1], [66, 1024 * 1024], [1, 17 * 1024 * 1024]]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projection-bounds-"));
     const filename = path.join(root, "journal.sqlite");
     const journal = new RuntimeJournal(filename, { now: () => now });
@@ -100,8 +120,8 @@ test("row and byte limits bound cache registrations across a real-process restar
       state.db.exec("COMMIT");
       const snapshot = journal.snapshot();
       expect(snapshot.tasks).toHaveLength(rows!);
-      expect(state.entityReadBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
-      expect(state.entityReads.size).toBeLessThanOrEqual(8192);
+      expect(state.entityReadBytes).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_BYTES);
+      expect(state.entityReads.size).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_ENTRIES);
       expect(state.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM snapshot_entity_keys").get()!.n).toBe(state.entityReads.size);
       expect(journal.snapshot()).toEqual(snapshot);
       const digest = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
@@ -121,8 +141,8 @@ test("row and byte limits bound cache registrations across a real-process restar
       expect(restarted.tasks).toBe(rows!);
       expect(restarted.digest).toBe(digest);
       expect(restarted.reads).toBe(rows!);
-      expect(restarted.bytes).toBeLessThanOrEqual(16 * 1024 * 1024);
-      expect(restarted.variants).toBeLessThanOrEqual(8192);
+      expect(restarted.bytes).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_BYTES);
+      expect(restarted.variants).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_ENTRIES);
       expect(restarted.keys).toBe(restarted.variants);
     } finally {
       if (!closed) journal.close();
