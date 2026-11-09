@@ -52,6 +52,60 @@ function replaceSourceCut(obligations: string, cut: unknown, id: string) {
     .run(JSON.stringify(cut), collection, id));
 }
 
+for (const cold of [false, true])
+for (const warmed of [false, true])
+for (const ambiguity of ["recipient", "escaped-recipient", "state", "owner", "seat", "checkpoint", "stage"] as const)
+test(`ambiguous canonical ${ambiguity} refuses incoming-recipient-first evidence, cold=${cold}, warmed=${warmed}`, async () => {
+  const obligations = path.join(directory, "ambiguous-authority");
+  const cut = interruptionObligationStore(obligations).record({ ...releaseCut,
+    seat: { project: "cut-seat", seatEpoch: 1 }, stage: { pipelineId: "cut-pipeline", stageId: "build", attempt: 1 },
+  }).obligation;
+  await initializeRecipientInterruptionIndex(obligations);
+  if (warmed) expect(recipientInterruptionEvidence(obligations, ["conversation_incoming"]).records).toEqual([]);
+  const json = JSON.stringify({ ...cut, conversationId: "conversation_decoy" });
+  const payload = ambiguity === "recipient" ? json.slice(0, -1) + ',"conversationId":"conversation_incoming"}'
+    : ambiguity === "escaped-recipient" ? json.slice(0, -1) + ',"conversation\\u0049d":"conversation_incoming"}'
+    : ambiguity === "state" ? json.slice(0, -1) + ',"state":"discharged"}'
+    : ambiguity === "owner" ? json.replace('"pid":4242', '"pid":4242,"pid":4243')
+    : ambiguity === "seat" ? json.replace('"seatEpoch":1', '"seatEpoch":1,"seatEpoch":2')
+    : ambiguity === "checkpoint" ? json.replace('"lastEventKind":"tool-call"', '"lastEventKind":"tool-call","lastEventKind":"end-turn"')
+    : json.replace('"pipelineId":"cut-pipeline"', '"pipelineId":"cut-pipeline","pipelineId":"other-pipeline"');
+  expect(payload).not.toBe(json);
+  sourceSql(obligations, (db, collection) => db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?")
+    .run(payload, collection, cut.id));
+  if (cold) {
+    // Run the same reader and backend in a new process, without first asking
+    // for the outgoing recipient or invoking any initializer.
+    const backend = new Database(":memory:");
+    let version: string;
+    try { version = (backend.query("SELECT sqlite_version() AS version").get() as { version: string }).version; }
+    finally { backend.close(); }
+    const library = version.startsWith("3.39.")
+      ? (await import("@/lib/state/minimumSqlite.fixture")).minimumSqliteLibrary() : "";
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      if (process.argv[2]) {
+        const {minimumSqliteModule}=await import('./src/lib/state/minimumSqlite.fixture.ts');
+        const sqlite=minimumSqliteModule(process.argv[2]), builtin=process.getBuiltinModule.bind(process);
+        process.getBuiltinModule=id=>id==='bun:sqlite'?sqlite:builtin(id);
+      }
+      const {Database}=process.getBuiltinModule('bun:sqlite');
+      const db=new Database(':memory:');
+      console.error('backend='+db.query('SELECT sqlite_version() AS version').get().version); db.close();
+      const {recipientInterruptionEvidence:read}=await import('./src/lib/runtime/interruptionObligations.ts');
+      try { read(process.argv[1],['conversation_incoming']); process.exit(11); }
+      catch (error) { console.error(error.message); process.exit(12); }
+    `, obligations, library], { cwd: process.cwd(), env: process.env });
+    expect(child.exitCode).toBe(12);
+    expect(child.stderr.toString()).toContain(`backend=${version}`);
+    expect(child.stderr.toString()).toContain("recipient interruption evidence is unavailable or incomplete");
+  } else expect(() => recipientInterruptionEvidence(obligations, ["conversation_incoming"])).toThrow("incomplete");
+  // A supported replacement restores the same source row and indexed answer.
+  replaceSourceCut(obligations, { ...cut, conversationId: "conversation_incoming" }, cut.id);
+  expect(recipientInterruptionEvidence(obligations, ["conversation_incoming"]).records).toEqual([
+    { ...cut, conversationId: "conversation_incoming" },
+  ]);
+});
+
 test("recipient cuts require initialization and read all matching reasons without unrelated records, cold and warm", async () => {
   const obligations = path.join(directory, "recipient-cuts");
   const store = interruptionObligationStore(obligations);
@@ -113,6 +167,34 @@ test("recipient cut writers maintain settlement, deletion and guard consumers af
   expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records.map(row => row.id)).toEqual([guardCut.id]);
 });
 
+test("recipient evidence preserves supported optional writer fields and refuses unknown extensions", async () => {
+  const obligations = path.join(directory, "optional-cut-fields");
+  await initializeRecipientInterruptionIndex(obligations);
+  const store = interruptionObligationStore(obligations);
+  const cut = store.record({ ...releaseCut,
+    owner: { ...releaseCut.owner!, ...{ bootEpoch: "writer-boot" } },
+    checkpoint: { ...releaseCut.checkpoint, backgroundTasks: ["retained-tool"] },
+    stage: { pipelineId: "cut-pipeline", stageId: "build", attempt: 1 },
+  }).obligation;
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toEqual([cut]);
+  replaceSourceCut(obligations, { ...cut, futureAuthority: "requires-upgrade" }, cut.id);
+  expect(store.list()).toEqual([{ ...cut, futureAuthority: "requires-upgrade" }]);
+  expect(() => recipientInterruptionEvidence(obligations, ["conversation_incoming"])).toThrow("incomplete");
+});
+
+test("an older recipient index refuses until fenced initialization installs the current expression", async () => {
+  const obligations = path.join(directory, "old-recipient-index");
+  const cut = interruptionObligationStore(obligations).record(releaseCut).obligation;
+  await initializeRecipientInterruptionIndex(obligations);
+  sourceSql(obligations, db => db.exec(`DROP INDEX state_rows_interruption_recipient_v3;
+    CREATE INDEX state_rows_interruption_recipient_v2 ON state_rows(collection,
+      json_extract(value_json,'$.conversationId'),row_key) WHERE collection GLOB 'interruption_obligations:*'`));
+  expect(() => recipientInterruptionEvidence(obligations, ["conversation_incoming"])).toThrow("incomplete");
+  await initializeRecipientInterruptionIndex(obligations);
+  expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toEqual([cut]);
+  expect(sourceSql(obligations, db => db.query("SELECT name FROM sqlite_master WHERE name='state_rows_interruption_recipient_v2'").get())).toBeNull();
+});
+
 for (const corruption of ["source", "index", "manifest", "unknown-state"] as const) test(
   `recipient cuts refuse ${corruption} evidence and reconcile only through initialization`, async () => {
     const obligations = path.join(directory, "recipient-incomplete");
@@ -120,7 +202,7 @@ for (const corruption of ["source", "index", "manifest", "unknown-state"] as con
     await initializeRecipientInterruptionIndex(obligations);
     const marker = fs.readFileSync(obligations, "utf8");
     if (corruption === "source") sourceSql(obligations, (db, collection) => db.query("UPDATE state_rows SET value_json='{' WHERE collection=?").run(collection));
-    if (corruption === "index") sourceSql(obligations, db => db.exec("DROP INDEX state_rows_interruption_recipient_v2"));
+    if (corruption === "index") sourceSql(obligations, db => db.exec("DROP INDEX state_rows_interruption_recipient_v3"));
     if (corruption === "manifest") fs.writeFileSync(obligations, JSON.stringify({ format: "unknown" }));
     if (corruption === "unknown-state") replaceSourceCut(obligations, { ...cut, state: "unknown" }, cut.id);
     expect(() => recipientInterruptionEvidence(obligations, ["conversation_incoming"])).toThrow("incomplete");
@@ -269,7 +351,7 @@ test("an unrelated write cannot bless an absent source index", async () => {
   const store = interruptionObligationStore(obligations);
   const cut = store.record(releaseCut).obligation;
   await initializeRecipientInterruptionIndex(obligations);
-  sourceSql(obligations, db => db.exec("DROP INDEX state_rows_interruption_recipient_v2"));
+  sourceSql(obligations, db => db.exec("DROP INDEX state_rows_interruption_recipient_v3"));
   store.record({ ...releaseCut, turnRef: "second-cut", boundary: "second-boundary", owner: { pid: 99, startIdentity: "second" } });
   expect(() => recipientInterruptionEvidence(obligations, [cut.conversationId])).toThrow("incomplete");
   await initializeRecipientInterruptionIndex(obligations);
@@ -351,7 +433,7 @@ for (const fault of ["schema", "migration", "collection-missing", "index-replace
     if (fault === "schema") sourceSql(obligations, (db, collection) => db.query("UPDATE state_collections SET schema_version=99 WHERE collection=?").run(collection));
     if (fault === "collection-missing") sourceSql(obligations, (db, collection) => db.query("DELETE FROM state_collections WHERE collection=?").run(collection));
     if (fault === "migration") sourceSql(obligations, (db, collection) => db.query("UPDATE state_collections SET migration_id='unknown' WHERE collection=?").run(collection));
-    if (fault === "index-replacement") sourceSql(obligations, db => db.exec("DROP INDEX state_rows_interruption_recipient_v2; CREATE INDEX state_rows_interruption_recipient_v2 ON state_rows(row_key)"));
+    if (fault === "index-replacement") sourceSql(obligations, db => db.exec("DROP INDEX state_rows_interruption_recipient_v3; CREATE INDEX state_rows_interruption_recipient_v3 ON state_rows(row_key)"));
     if (fault === "source-missing") fs.renameSync(obligations, `${obligations}.missing`);
     if (fault === "database-replacement") {
       const filename = path.join(path.dirname(obligations), "state.sqlite");

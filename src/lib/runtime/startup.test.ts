@@ -1228,7 +1228,7 @@ for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline
         if (field === "seat") seats=[];
         else if (field === "cut-index") {
           const db = new Database(path.join(directory, "state.sqlite"));
-          try { db.exec("DROP INDEX state_rows_interruption_recipient_v2"); } finally { db.close(); }
+          try { db.exec("DROP INDEX state_rows_interruption_recipient_v3"); } finally { db.close(); }
         } else if (field === "cut-source") {
           const source = interruptionObligationDirectory(registry.filename);
           fs.writeFileSync(source, JSON.stringify({ ...JSON.parse(fs.readFileSync(source, "utf8")), epoch: "replacement-source" }));
@@ -1268,12 +1268,12 @@ for (const field of ["owner", "epoch", "writer", "generation", "seat", "pipeline
   }
 });
 
-for (const kind of ["unhosted", "live"] as const)
+for (const kind of ["unhosted", "live", "stamped"] as const)
 for (const phase of ["census", "restart-cut", "pipeline evidence"] as const)
 for (const race of ["none", "publication-owner", "publication-generation", "publication-writer", "publication-epoch", "publication-seat", "publication-cut",
   "dispatch-owner", "dispatch-generation", "dispatch-writer", "dispatch-epoch", "dispatch-seat", "dispatch-cut",
-  "dispatch-unrelated-pipeline", "dispatch-recipient-pipeline"] as const)
-if (phase === "census" || race === "none")
+  "dispatch-unrelated-pipeline", "dispatch-recipient-pipeline", "claim-stamp"] as const)
+if ((phase === "census" || race === "none") && (race !== "claim-stamp" || kind === "stamped"))
   test.skipIf(process.platform === "win32")(`addressed ${kind} recovery delivers the original HTTP operation to its socket transcript before the ${phase} (${race})`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-wire-"));
   const oldState = process.env.LLV_STATE_DIR;
@@ -1284,7 +1284,8 @@ if (phase === "census" || race === "none")
   const socketDirectory = path.join(directory,"socket"); fs.mkdirSync(socketDirectory,{mode:0o700});
   const socketPath = path.join(socketDirectory,"rpc.sock");
   const configFile=path.join(directory,"engine.json");
-  fs.writeFileSync(configFile,JSON.stringify({socket:socketPath,threadId:sessionId,transcriptPath:artifactPath,recipient:true}));
+  fs.writeFileSync(configFile,JSON.stringify({socket:socketPath,threadId:sessionId,transcriptPath:artifactPath,recipient:true,
+    completeRecipientTurns:kind === "stamped"}));
   const engine=ownFixtureTree(spawn(process.execPath,[path.join(import.meta.dir,"fixtures/codexCallbackProcess.ts"),"engine-socket",directory,
     path.join(directory,"writes.jsonl"),configFile],{env:process.env,stdio:["ignore","pipe","pipe"]}));
   const ready=Promise.withResolvers<{endpoint:string;process:ReturnType<typeof captureProcessIdentity>}>();
@@ -1300,14 +1301,22 @@ if (phase === "census" || race === "none")
   const identity=socketOwner.process;
   const endpoint=socketOwner.endpoint;
   const owner=captureProcessIdentity(process.pid);
-  const writes=() => fs.readFileSync(artifactPath,"utf8").trim().split("\n").filter(Boolean).length;
+  const messages = () => fs.readFileSync(artifactPath,"utf8").trim().split("\n").filter(Boolean)
+    .map(line => JSON.parse(line)).filter(row => row.payload?.type === "user_message");
+  const writes = () => messages().length;
   if (kind === "live") {
     const entry = registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!;
     registry.upsert({...entry,status:"idle",structuredHost:{...entry.structuredHost!,endpoint,process:identity,protocolVersion:"0.162.1"}});
   }
   const journal = new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
   const client = runtimeJournalClient(journal);
-  let seats = [activeSeat("recipient-wire",1,conversation.id,artifactPath)];
+  let seats = kind === "stamped" ? [] : [activeSeat("recipient-wire",1,conversation.id,artifactPath)];
+  if (kind === "stamped") {
+    const retained = registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]!;
+    registry.upsert({...retained,status:"live"});
+    fs.writeFileSync(artifactPath,JSON.stringify({type:"event_msg",timestamp:"2026-10-22T00:00:00Z",
+      payload:{type:"task_complete",turn_id:"old-turn"}})+"\n");
+  }
   let replacement: ReturnType<AgentRegistry["startupHostSnapshot"]>["entries"][string] | undefined;
   let raced = false;
   let replacementSequence = 0;
@@ -1370,7 +1379,7 @@ if (phase === "census" || race === "none")
     return readTail(file, ...args);
   });
   const { recoverDeadStructuredConversation } = await import("./structuredRecovery");
-  const { bindCodexHostPersistence, codexHostColumns } = await import("./registry");
+  const { bindCodexHostPersistence } = await import("./registry");
   const { handleRuntimeCommand } = await import("./http");
   let host: CodexAppServerHost | undefined;
   let spawns = 0, finished = false;
@@ -1379,13 +1388,17 @@ if (phase === "census" || race === "none")
     resolveAccount:() => ({engine:"codex",accountId:"default",kind:"legacy",home:directory,transcriptRoot:directory,env:{NODE_ENV:"test"}}),
     spawn:async input => {
       spawns++;
-      host = await CodexAppServerHost.adopt(sessionId,{cwd:directory,codexHome:directory,
-        socketOwner:{endpoint,process:identity},readProtocolVersion:() => "0.162.1",mcpServers:[]});
-      const health = await host.health();
+      await Promise.resolve();
+      if (race === "claim-stamp") {
+        raced = true;
+        fs.appendFileSync(artifactPath,JSON.stringify({type:"event_msg",payload:{type:"task_started",turn_id:"racing-turn"}})+"\n");
+      }
       input.resumeAdmission?.beforeClaim();
-      const claim = registry.claimStructuredHost(key,owner,{allowUnhosted:true,setupHost:codexHostColumns(health,0)});
+      const claim = registry.claimStructuredHost(key,owner,{allowUnhosted:true});
       if (!claim?.claimOwner) throw new Error("fixture recovery claim is unavailable");
       input.resumeAdmission?.claimed(claim);
+      host = await CodexAppServerHost.adopt(sessionId,{cwd:directory,codexHome:directory,
+        socketOwner:{endpoint,process:identity},readProtocolVersion:() => "0.162.1",mcpServers:[]});
       await bindCodexHostPersistence(registry,key,host,claim.claimOwner,claim.claimEpoch);
       await publishStructuredDeliveryHost({key,host,writerEpoch:claim.claimEpoch},
         async () => { await input.authorize?.(); return registry.ownsStructuredHostClaim(key,claim.claimOwner!,claim.claimEpoch); });
@@ -1417,7 +1430,6 @@ if (phase === "census" || race === "none")
       await kickStructuredDeliveryQueue();
       expect(finished).toBe(false);
       expect(writes()).toBe(0);
-      expect(fs.readFileSync(artifactPath,"utf8")).toBe("");
       if (replacement) expect(registry.startupHostSnapshot(key).entries[`codex:${sessionId}`]).toMatchObject({
         claimOwner:replacement.claimOwner,claimEpoch:replacement.claimEpoch,
         structuredHost:{writerClaimEpoch:replacement.structuredHost!.writerClaimEpoch}});
@@ -1429,14 +1441,30 @@ if (phase === "census" || race === "none")
       operations:journal.snapshot().recentOperations,spawns,writes:writes()})); }
     expect(finished).toBe(false);
     if (race === "dispatch-unrelated-pipeline") expect(raced).toBe(true);
-    expect(spawns).toBe(kind === "unhosted" ? 1 : 0);
+    expect(spawns).toBe(kind === "live" ? 0 : 1);
     expect(writes()).toBe(1);
-    const transcript = fs.readFileSync(artifactPath,"utf8").trim().split("\n").map(line => JSON.parse(line));
+    const transcript = messages();
     expect(transcript).toHaveLength(1);
     expect(transcript[0].payload).toMatchObject({id:"recipient-original"});
     expect(JSON.stringify(transcript[0].payload.input)).toContain("original addressed message");
     await kickStructuredDeliveryQueue();
     expect(writes()).toBe(1);
+    if (kind === "stamped") {
+      const later = await handleRuntimeCommand(new NextRequest("http://localhost/api/runtime/send",{method:"POST",
+        headers:{host:"localhost","content-type":"application/json"},body:JSON.stringify({operationId:"recipient-later",
+          idempotencyKey:"recipient-later",conversationId:conversation.id,text:"later addressed message",policy:"queue"})}),"send",{
+        enabled:() => true,structuredEnabled:() => true,client:() => client,registry:() => registry,
+        recordOperatorAdmission:() => false,
+        enqueue:request => enqueueStructuredMessage(request,{enabled:() => true,client:() => client,registry:() => registry,recover}),
+        kick:() => kickStructuredDeliveryQueue(),
+      });
+      expect(later.ok).toBe(true);
+      await kickStructuredDeliveryQueue();
+      await waitFor(() => journal.operationResult("recipient-later")?.receipt.status === "delivered",5000);
+      expect(finished).toBe(false);
+      expect(messages().map(row => row.payload.id)).toEqual(["recipient-original","recipient-later"]);
+      expect(spawns).toBe(1);
+    }
   } finally {
     census.mockRestore(); pipelineRead.mockRestore(); tail.mockRestore(); dispatch.mockRestore(); release.resolve(); await startup;
     const { structuredDeliveryHostForConversation } = await import("./structuredDeliveryController");

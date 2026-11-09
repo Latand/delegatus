@@ -1480,7 +1480,8 @@ export async function bindStructuredDeliveryQueue(
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return false;
-      let startupAdmission: Pick<import("./structuredRecovery").StructuredRecoveryRequest, "admissionGuard" | "authorityGuard"> = {};
+      let startupAdmission: Pick<import("./structuredRecovery").StructuredRecoveryRequest,
+        "admissionGuard" | "authorityGuard" | "acceptSuccessorClaim"> = {};
       if (startupPending && !startupRecoveryReady) {
         if (!startupRecipientGuards.has(conversation.id) && startupRecipientGuards.size >= 256) {
           throw new (await import("./structuredRecovery")).StructuredRecoveryHeldForUpdateError("recipient startup preparations are at capacity");

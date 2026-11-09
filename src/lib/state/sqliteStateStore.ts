@@ -404,9 +404,24 @@ const PIPELINE_INTEGRATION_FORMAT = `collection IN ('pipelines','pipelines_archi
 
 /** Invalid cut payloads occupy the NULL bucket, so a keyed absence lookup
  * also has a bounded proof that no uninterpretable source can name its target.
- * SQLite maintains this expression from the canonical row on every write. */
+ * SQLite maintains this expression from the canonical row on every write.
+ * Removing each supported member once must leave an empty object. Duplicate
+ * or escaped member names otherwise let SQLite's first value disagree with
+ * the JavaScript decoder's last value. Unknown extensions also need a reader
+ * upgrade before this index can certify complete authority. */
 const interruptionRecipientExpression = `CASE WHEN json_valid(value_json) THEN CASE WHEN
   json_extract(value_json,'$.version')=1 AND json_extract(value_json,'$.id')=row_key
+  AND json_remove(value_json,'$.version','$.id','$.conversationId','$.engine','$.hostKey','$.path',
+    '$.owner','$.claimEpoch','$.turnRef','$.boundary','$.reason','$.recordedAt','$.checkpoint','$.seat','$.stage',
+    '$.state','$.operationId','$.attempts','$.resolvedAt','$.resolution')='{}'
+  AND (json_type(value_json,'$.owner')='null' OR
+    json_extract(json_remove(value_json,'$.owner.pid','$.owner.startIdentity','$.owner.bootEpoch'),'$.owner')='{}')
+  AND json_extract(json_remove(value_json,'$.checkpoint.lastEventAt','$.checkpoint.lastEventKind',
+    '$.checkpoint.backgroundTasks'),'$.checkpoint')='{}'
+  AND (json_type(value_json,'$.seat')='null' OR
+    json_extract(json_remove(value_json,'$.seat.project','$.seat.seatEpoch'),'$.seat')='{}')
+  AND (json_type(value_json,'$.stage') IS NULL OR json_type(value_json,'$.stage')='null' OR
+    json_extract(json_remove(value_json,'$.stage.pipelineId','$.stage.stageId','$.stage.attempt'),'$.stage')='{}')
   AND row_key GLOB 'interruption-continuation-*'
   AND json_type(value_json,'$.conversationId')='text'
   AND json_extract(value_json,'$.engine') IN ('codex','claude')
@@ -432,7 +447,7 @@ const interruptionRecipientExpression = `CASE WHEN json_valid(value_json) THEN C
   AND json_type(value_json,'$.attempts')='integer' AND json_extract(value_json,'$.attempts') BETWEEN 0 AND 9007199254740991
   AND json_type(value_json,'$.resolvedAt') IN ('null','text') AND json_type(value_json,'$.resolution') IN ('null','text')
   THEN json_extract(value_json,'$.conversationId') END END`;
-const interruptionRecipientIndex = `CREATE INDEX IF NOT EXISTS state_rows_interruption_recipient_v2
+const interruptionRecipientIndex = `CREATE INDEX IF NOT EXISTS state_rows_interruption_recipient_v3
   ON state_rows(collection, ${interruptionRecipientExpression}, row_key)
   WHERE collection GLOB 'interruption_obligations:*'`;
 
@@ -731,6 +746,7 @@ function openRawDatabase(filename: string): Database {
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
+        db.exec("DROP INDEX IF EXISTS state_rows_interruption_recipient_v2");
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         for (const sql of stateSchema) db.exec(sql);
         if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);
@@ -2207,19 +2223,19 @@ export class SqliteStateCollection<T> {
     this.readDb.exec("BEGIN");
     try {
       const index = this.readDb.query<{ sql: string }, []>(
-        "SELECT sql FROM sqlite_master WHERE type='index' AND name='state_rows_interruption_recipient_v2'").get();
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='state_rows_interruption_recipient_v3'").get();
       if (index?.sql !== interruptionRecipientIndex.replace("IF NOT EXISTS ", "")
         || this.collectionMeta()?.schema_version !== this.options.schemaVersion
         || this.readDb.query<{ migration_id: string }, [string]>("SELECT migration_id FROM state_collections WHERE collection=?")
           .get(this.options.collection)?.migration_id !== "interruption-source-v2") throw new Error("interruption source index is incomplete or incompatible");
-      const invalid = this.readDb.query(`SELECT row_key FROM state_rows INDEXED BY state_rows_interruption_recipient_v2
+      const invalid = this.readDb.query(`SELECT row_key FROM state_rows INDEXED BY state_rows_interruption_recipient_v3
         WHERE collection=? AND collection GLOB 'interruption_obligations:*'
           AND ${interruptionRecipientExpression} IS NULL LIMIT 1`).get(this.options.collection);
       if (invalid) throw new Error("interruption source contains unknown authority");
       const records: T[] = [];
       for (const recipient of new Set(recipients)) {
         const rows = this.readDb.query<{ value_json: string }, [string, string, number]>(`
-          SELECT value_json FROM state_rows INDEXED BY state_rows_interruption_recipient_v2
+          SELECT value_json FROM state_rows INDEXED BY state_rows_interruption_recipient_v3
           WHERE collection=? AND collection GLOB 'interruption_obligations:*'
             AND ${interruptionRecipientExpression}=? ORDER BY row_key LIMIT ?
         `).all(this.options.collection, recipient, limit + 1 - records.length);

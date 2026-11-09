@@ -11,6 +11,7 @@ import { Database } from "bun:sqlite";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
 import { UNKNOWN_RESET_RECHECK_MS } from "./accountPark";
@@ -2104,9 +2105,9 @@ test("resume waits for a short account mutation and starts one successor", async
    snapshot here rebuilt retained history on the serving loop: 0.3-0.4 s for
    the candidate, 3 s inside writer admission for the predecessor epoch. Each
    check names one host and one launch, so each is a keyed read. */
-test("resume reads its candidate, claim epoch and admission custody without a whole registry snapshot", async () => {
-  const sessionId = crypto.randomUUID();
-  const cwd = path.join(sandbox, `keyed-${sessionId}`);
+test.each(["current", "owner", "epoch", "writer", "operation"] as const)("resume checks %s custody before handing predecessor evidence to its successor without a whole registry snapshot", async boundary => {
+  const sessionId = ["c0000000", "0000", "4000", "8000", "000000000005"].join("-");
+  const cwd = path.join(sandbox, `keyed-${boundary}`);
   const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
   fs.mkdirSync(cwd, { recursive: true });
   fs.writeFileSync(artifactPath, "");
@@ -2124,7 +2125,16 @@ test("resume reads its candidate, claim epoch and admission custody without a wh
     });
     const admitted: number[] = [];
     try {
-      const result = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+      const handoffs: string[] = [];
+      let replacement: ReturnType<AgentRegistry["structuredRecoveryFacts"]>["entries"][string] | undefined;
+      const recovery = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
+        acceptSuccessorClaim: key => {
+          const entry = registry.structuredRecoveryFacts(key).entries[sessionKeyId(key)]!;
+          expect(entry.claimEpoch).toBe(5);
+          expect(entry.structuredHost?.writerClaimEpoch).toBe(5);
+          handoffs.push(sessionKeyId(key));
+        },
+      }, {
         registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
         resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
         spawn: async (input) => {
@@ -2134,15 +2144,33 @@ test("resume reads its candidate, claim epoch and admission custody without a wh
             return registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
           });
           if (!claim?.claimOwner) throw new Error("fixture resume claim is unavailable");
+          if (boundary !== "current") {
+            replacement = { ...claim,
+              claimOwner: boundary === "owner" ? "replacement-owner" : claim.claimOwner,
+              claimEpoch: claim.claimEpoch + (boundary === "epoch" ? 1 : 0),
+              structuredHostOperationId: boundary === "operation" ? "replacement-launch" : claim.structuredHostOperationId,
+              structuredHost: { ...claim.structuredHost!, writerClaimEpoch: claim.claimEpoch + (boundary === "writer" ? 1 : 0) },
+            };
+            registry.upsert(replacement);
+            replacement = structuredClone(registry.structuredRecoveryFacts(key).entries[sessionKeyId(key)]);
+            expect(replacement).toBeDefined();
+          }
           input.resumeAdmission!.claimed(claim);
           admitted.push(claim.claimEpoch);
           return { ok: true, target: null, path: artifactPath, launchId: input.receipt.launchId, conversationId: conversation.id,
             launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
         }, requestDeliveryDrain: () => {},
       });
-      expect(result).toMatchObject({ spawned: true, conversationId: conversation.id });
-      // The successor took the next epoch after the predecessor read under admission.
-      expect(admitted).toEqual([5]);
+      if (boundary === "current") {
+        expect(await recovery).toMatchObject({ spawned: true, conversationId: conversation.id });
+        expect(admitted).toEqual([5]);
+        expect(handoffs).toEqual([sessionKeyId(key)]);
+      } else {
+        await expect(recovery).rejects.toBeInstanceOf(DeliveryAdmissionRefusedError);
+        expect(handoffs).toEqual([]);
+        expect(admitted).toEqual([]);
+        expect(registry.structuredRecoveryFacts(key).entries[sessionKeyId(key)]).toEqual(replacement);
+      }
       expect(wholeSnapshot).not.toHaveBeenCalled();
     } finally { wholeSnapshot.mockRestore(); }
   } finally { registry.close(); }

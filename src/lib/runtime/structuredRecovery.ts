@@ -50,6 +50,9 @@ export interface StructuredRecoveryRequest {
   admissionGuard?: DeliveryAdmissionGuard;
   /** Seat authority after reservation, independent of this launch's new identity. */
   authorityGuard?: () => void;
+  /** Hand predecessor evidence to the verified successor before attachment
+      writes its ledger. Called synchronously after this recovery proves custody. */
+  acceptSuccessorClaim?: (key: SessionKey) => void;
   path: string;
   conversationId?: string | null;
   origin?: MessageOrigin;
@@ -479,6 +482,7 @@ async function recoverCandidate(
               if (!registry.ownsStructuredHostClaim(current.key, claim.claimOwner, claim.claimEpoch)) {
                 throw new StructuredRecoverySupersededError();
               }
+              request.acceptSuccessorClaim?.(current.key);
               request.admissionGuard?.(current.key);
               authorize();
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
@@ -692,6 +696,8 @@ async function recoverCandidate(
               }
             };
             claimed = true;
+            admissionGuard();
+            request.acceptSuccessorClaim?.(current.key);
             admissionGuard();
           },
         },

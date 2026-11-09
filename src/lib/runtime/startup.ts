@@ -107,7 +107,8 @@ let adoptedHosts: AdoptedStructuredHost[] = [];
 let retryAdoptedHosts: AdoptedStructuredHost[] = [];
 /* The retry runner logs each failure; this diagnostic names the deferred work once. */
 let deferredAdoptionLogged = false;
-type RecipientStartupAuthority = { admissionGuard: import("@/lib/deliveryAdmission").DeliveryAdmissionGuard; authorityGuard: () => void };
+type RecipientStartupAuthority = Required<Pick<import("./structuredRecovery").StructuredRecoveryRequest,
+  "admissionGuard" | "authorityGuard" | "acceptSuccessorClaim">>;
 type StartupPassState = {
   recipients?: Map<string, Promise<RecipientStartupAuthority>>;
   recipientDependencies?: StructuredStartupDependencies;
@@ -2380,7 +2381,14 @@ async function prepareStructuredStartupRecipientOnce(
   finally { clearTimeout(timer); signal.removeEventListener("abort",onAbort); }
   check();
   prepared = true;
-  return { authorityGuard: () => check(false), admissionGuard: advanced => {
+  return { authorityGuard: () => check(false), acceptSuccessorClaim: advanced => {
+    if (sessionKeyId(advanced) !== hostKey) refuse("recipient recovery changed its generation");
+    check(false);
+    // Recovery has synchronously verified the successor's claim. Its attach
+    // and subsequent turns may now update these predecessor files; the
+    // recovery guard retains the exact successor owner, writer and reservation.
+    stamp = undefined;
+  }, admissionGuard: advanced => {
     if (advanced) {
       if (sessionKeyId(advanced) !== hostKey) refuse("recipient recovery changed its generation");
       initialOwner = fingerprint(startupHostSnapshot(registry,key,true).entries[hostKey]);

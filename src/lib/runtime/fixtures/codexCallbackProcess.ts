@@ -66,9 +66,13 @@ if (mode === "engine-socket") {
           if (!config.recipient) { send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } }); break; }
           fs.appendFileSync(config.transcriptPath, JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T00:00:00Z",
             payload: { type: "user_message", id: message.params.clientUserMessageId, input: message.params.input } }) + "\n");
-          reply({ turn: { id: "recipient-turn" } });
-          send({ method: "item/completed", params: { threadId: thread, turnId: "recipient-turn",
+          const turnId = `recipient-turn-${message.params.clientUserMessageId}`;
+          reply({ turn: { id: turnId } });
+          send({ method: "item/completed", params: { threadId: thread, turnId,
             item: { type: "userMessage", clientId: message.params.clientUserMessageId, content: message.params.input } } });
+          if (config.completeRecipientTurns) send({ method: "turn/completed", params: {
+            threadId: thread, turn: { id: turnId, status: "completed" },
+          } });
           break;
         }
         case "thread/resume": {

@@ -1277,6 +1277,21 @@ request checks that bucket and reads only its matching rows, with a fixed bound.
 It also validates the database identity, collection format and exact index
 revision. Missing, incompatible or unreadable authority refuses recovery.
 
+The index accepts one occurrence of each supported JSON member, including
+owner, seat, checkpoint and stage members. Duplicate members, escaped member
+names and unknown extensions enter the unknown bucket, because SQLite and
+JavaScript can otherwise read different authority from the same bytes. Existing
+optional boot metadata and background task fields remain supported. Global
+readers preserve these source bytes; recipient evidence refuses until a
+supported writer replaces the row. The fenced initializer installs index
+revision three; a reader facing an older index refuses without rebuilding it.
+
+Predecessor ledger and transcript freshness lasts through the verified claim
+boundary. Recovery checks the exact successor reservation, owner, generation
+and writer before handing over that evidence, then permits attachment and later
+turns to update the session files. Seat, pipeline and interruption authority
+remain guarded through publication and dispatch.
+
 The cutover replaces the old directory path with a format marker. Existing
 per-record paths then fail with `ENOTDIR`; an older file writer cannot change a
 canonical cut through them. A named backup retains the pre-cutover files. The fenced rename retires the legacy source; readers refuse until the SQLite
