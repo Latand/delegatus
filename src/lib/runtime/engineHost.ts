@@ -136,7 +136,7 @@ export type RuntimeEvent =
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
   /** History can infer interruption after a lost process; it carries no operator pause intent. */
-  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; seq: number }
+  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; claudeResultUuid?: string; seq: number }
   | { kind: "attention"; id: string; method: string; attention: unknown; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "limits"; snapshot: unknown; seq: number }
