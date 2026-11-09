@@ -34,7 +34,7 @@ function write(rule: string) {
 }
 afterEach(shutdownTaskPageWorker);
 
-test.each(["preparation-codex", "preparation-claude", "preparation-lost-transition-codex", "preparation-lost-dead-codex", "preparation-lost-receipt-codex", "before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
+test.each(["preparation-codex", "preparation-claude", "preparation-lost-transition-codex", "preparation-lost-dead-codex", "preparation-lost-receipt-codex", "preparation-lost-admission-codex", "preparation-staged-codex", "before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
   "replay-codex", "replay-claude", "replay-native-codex", "replay-native-claude",
   "before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling",
   ...["exact", "suffix", "exact-native", "suffix-native"].flatMap(mode =>
@@ -45,6 +45,7 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
     ["codex", "claude"].map(engine => `unsettled-${mode}-${engine}`))] as const)(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
   const preparation = scenario.startsWith("preparation-");
+  const stagedPreparation = scenario === "preparation-staged-codex";
   const laterFailure = scenario.startsWith("later-failure-");
   const laterNative = laterFailure && scenario.includes("-native-");
   const timing = laterFailure ? scenario.includes("-exact-") ? "before-dispatch" : "before-authorization" : scenario.startsWith("before-handoff") || scenario.startsWith("replay") ? "before-handoff" : scenario;
@@ -105,8 +106,17 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
   let lateNative = false;
   let refusedWrites = 0;
   let journalReadFailed = false;
+  const preparationClocks: Array<{ mockRestore: () => void }> = [];
   const journalMode = manual || ["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified"].includes(mode!);
   const failSpawn = registry.failStructuredSpawnOffLoop.bind(registry);
+  const deliveryWrite = registry.deliveryWrite.bind(registry);
+  const admissionRelease = spyOn(registry, "deliveryWrite").mockImplementation(async (options, operation) => {
+    const result = await deliveryWrite(options, operation);
+    if (scenario === "preparation-lost-admission-codex" && options.label === "spawn.admission.release" && launches.length === 1) {
+      throw new Error("fixture admission release acknowledgement lost");
+    }
+    return result;
+  });
   const failure = spyOn(registry, "failStructuredSpawnOffLoop").mockImplementation(async (...args) => {
     if (mode === "late-native" && observing && !lateNative) {
       lateNative = true;
@@ -311,6 +321,7 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
     let preparationTime = 0;
     const preparationClock = preparation && launches.length === 1
       ? spyOn(performance, "now").mockImplementation(() => preparationTime) : undefined;
+    if (preparationClock && stagedPreparation) preparationClocks.push(preparationClock);
     try { return await realSpawn({ ...input, ...(preparation && launches.length === 1 ? {
       preparePrompt: async () => {
         changed = true;
@@ -382,12 +393,19 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
           }
         };
       },
-      publishHost: async () => async () => {
+      publishHost: async () => {
+        if (stagedPreparation && launches.length === 1 && !changed) {
+          changed = true;
+          write(newRule);
+          throw Object.assign(new Error("fixture runtime publication returned HOST_BUSY"), { code: "HOST_BUSY" });
+        }
+        return async () => {
         if (["unregister", "refused-unregister"].includes(mode!) && launches.length === 1) throw new Error("fixture unregister refused");
+        };
       },
       processIdentity: () => ({ pid: process.pid, startIdentity: "privacy-fixture" }),
     }); } finally {
-      preparationClock?.mockRestore();
+      if (!stagedPreparation) preparationClock?.mockRestore();
       if (unknown && launches.length === 1) {
         const first = registry.spawnReceipt(input.receipt.launchId)!;
         if (unknownMode === "native") fs.writeFileSync(first.artifactPath!, JSON.stringify(engine === "codex"
@@ -415,7 +433,7 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
       finally { reader.releaseLock(); }
     }
     const h = harness();
-    if (scenario.startsWith("staged") || unsettled) h.advanceWallClock(Date.now() - Date.parse(h.ports.now()));
+    if (scenario.startsWith("staged") || stagedPreparation || unsettled) h.advanceWallClock(Date.now() - Date.parse(h.ports.now()));
     const defaults = defaultPipelinePorts();
     h.ports.spawnAgent = (input, reserved, prepare) => defaults.spawnAgent(input, async receipt => {
       await reserved(receipt);
@@ -464,7 +482,7 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
     expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
     expect(launches, loadPipelines()[0]!.stateDetail ?? "").toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
-    if (preparation) {
+    if (preparation && !stagedPreparation) {
       const first = registry.spawnReceipt(launches[0]!)!;
       if (scenario !== "preparation-lost-dead-codex") expect(first.error).toBe(ROLE_MEMORY_PREPARATION_MESSAGE);
       expect(journal.operationResult(originalId)).toBeNull();
@@ -630,13 +648,13 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
       expect(loadPipelines()[0]!.state).toBe("running");
       return;
     }
-    if (scenario.startsWith("staged")) {
+    if (scenario.startsWith("staged") || stagedPreparation) {
       expect(registry.spawnReceipt(launches[0]!)!.state).toBe("path-pending");
       expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.roleMemoryDispatchWait).toBeUndefined();
       for (let tick = 0; tick < 6; tick++) {
         h.advanceWallClock(1_000); setSystemTime(new Date(h.ports.now())); await tickPipelines([], h.ports);
       }
-      expect(registry.spawnReceipt(launches[0]!)!.error).toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+      expect(registry.spawnReceipt(launches[0]!)!.error).toBe(stagedPreparation ? ROLE_MEMORY_PREPARATION_MESSAGE : ROLE_MEMORY_CHANGED_MESSAGE);
       expect(launches).toHaveLength(scenario.includes("native") ? 1 : 2);
       expect(sent).toHaveLength(scenario.includes("native") ? 0 : 1);
       expect(loadPipelines()[0]!.state).toBe("running");
@@ -740,7 +758,8 @@ test.each(["preparation-codex", "preparation-claude", "preparation-lost-transiti
     expect(roleMemoryRevisionToken()).not.toBe(JSON.parse(originalEffect!).payload.roleMemoryRevision);
   } finally {
     if (termination) { if (termination.exitCode === null) termination.stdin.end(); await termination.exited; }
-    failure.mockRestore(); deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
+    for (const clock of preparationClocks) clock.mockRestore();
+    admissionRelease.mockRestore(); failure.mockRestore(); deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
     ids.mockRestore();
     setSystemTime();
     setAgentRegistryForTests(null);

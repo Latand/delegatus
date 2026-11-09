@@ -71,7 +71,7 @@ import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } 
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
-import { roleMemoryDeferralReason, RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { roleMemoryDeferralReason, RoleMemoryChanged, RoleMemoryPreparationDeferred, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
@@ -2789,8 +2789,16 @@ export async function recoverStagedStructuredLaunch(
       return read();
     } catch (error) {
       if (!current()) return read();
-      if (error instanceof RoleMemoryChanged) {
-        const failed = await failStagedResume(launchId, registry, client, error.message, {
+      const privacyDeferral = roleMemoryDeferralReason(error);
+      if (privacyDeferral) {
+        if (error instanceof RoleMemoryPreparationDeferred) {
+          const reason = stagedRecoveryFailureReason(error);
+          spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] staged role-memory preparation deferred", {
+            launchId, phase: recovery.phase, cause: reason,
+          });
+          await persist({ ...recovery, reason });
+        }
+        const failed = await failStagedResume(launchId, registry, client, privacyDeferral, {
           ...options.reap, assertActive: options.assertActive,
         });
         return failed.receipt ?? read();
@@ -2844,6 +2852,7 @@ export async function spawnStructuredConversation(
   let adoptionClaimContended = false;
   let durableSetupTimedOut = false;
   let durableSetupDeadline = 0;
+  let caughtFailure: unknown;
   let materializationPending = false;
   let durableSetupTimer: ReturnType<typeof setTimeout> | null = null;
   let durableSetupTimeout: Promise<never> | null = null;
@@ -3242,6 +3251,7 @@ export async function spawnStructuredConversation(
       transport: "structured",
     };
   } catch (error) {
+    caughtFailure = error;
     try { return await withoutOperationLease(async () => {
         clearDurableSetupTimeout();
         const pending = input.registry.spawnReceipt(operationId) ?? undefined;
@@ -3377,8 +3387,18 @@ export async function spawnStructuredConversation(
     // This call no longer advances setup, including when cleanup/projection
     // failed. Hand recovery back without releasing a newer admission owner.
     if (foregroundAdmissionOwner && !admissionDeferred) {
-      await withoutOperationLease(() => input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
-        () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner)));
+      try {
+        await withoutOperationLease(() => input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
+          () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner)));
+      } catch (releaseError) {
+        const privacyDeferral = roleMemoryDeferralReason(caughtFailure);
+        spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] structured admission owner release acknowledgement failed", {
+          launchId: operationId,
+          error: admissionTransportReason(releaseError),
+          ...(privacyDeferral ? { preservedFailure: privacyDeferral } : {}),
+        });
+        if (!privacyDeferral) throw releaseError;
+      }
     }
   }
 }
