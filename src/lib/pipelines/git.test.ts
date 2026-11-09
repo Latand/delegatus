@@ -1,5 +1,5 @@
 import { cpuPriorityFromEnv } from "../runtime/cpuPriority";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -3730,10 +3730,13 @@ test.each(["deadline", "deadline-delayed-marker", "ready-child-expiry", "cancell
   const abort = new AbortController();
   const sentinel = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
   let pending: ReturnType<typeof currentPipelineRemoteBranchHead> | undefined;
+  let advanceDeadline = false;
+  let restoreDeadlineControl: (() => void) | undefined;
   try {
     await git(root, "init", "--initial-branch=main");
     const bin = path.join(root, "bin"); fs.mkdirSync(bin);
-    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+    const nativeGit = process.platform === "win32" ? Bun.which("git")! : Bun.which("git", { PATH: "/usr/bin:/bin" })!;
+    fs.symlinkSync(nativeGit, path.join(bin, "git"));
     const marker = path.join(root, "transport-pids"), helper = path.join(root, "transport");
     fs.writeFileSync(helper, `#!/bin/sh\n${mode === "deadline-delayed-marker" ? '"' + Bun.which("sleep")! + '" 6\n' : ""}echo "$PPID $$" > "$TRANSPORT_PIDS"\n` +
       (mode === "denied" ? "echo 'Permission denied (publickey).' >&2\nexit 255\n"
@@ -3744,20 +3747,33 @@ test.each(["deadline", "deadline-delayed-marker", "ready-child-expiry", "cancell
     let actual: Awaited<ReturnType<typeof realExec>> | undefined;
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       expect(options?.timeoutMs).toBe(5_000);
-      actual = await realExec(command, args, cwd, { ...env, PATH: bin, GIT_SSH_COMMAND: helper, GIT_SSH_VARIANT: "ssh", TRANSPORT_PIDS: marker }, { ...options, timeoutMs: mode === "ready-child-expiry" ? 500 : options?.timeoutMs, signal: abort.signal });
+      if (mode === "ready-child-expiry") {
+        // Keep the executor's real timer running while its remote children start;
+        // cross the deadline only after both owned PIDs are recorded below.
+        const nativeNow = Date.now;
+        const startedAt = nativeNow();
+        const clock = spyOn(Date, "now").mockImplementation(() => startedAt + (advanceDeadline ? 10_000 : 0));
+        restoreDeadlineControl = () => clock.mockRestore();
+      }
+      actual = await realExec(command, args, cwd, { ...env, PATH: bin, GIT_SSH_COMMAND: helper, GIT_SSH_VARIANT: "ssh", TRANSPORT_PIDS: marker }, { ...options, signal: abort.signal });
       return actual;
     };
     expect(Bun.which("timeout", { PATH: bin })).toBeNull();
     expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
     pending = currentPipelineRemoteBranchHead(subject, exec);
     if (mode === "cancellation" || mode === "ready-child-expiry") {
-      for (let n = 0; n < 500 && !fs.existsSync(marker); n++) await Bun.sleep(10);
+      for (let n = 0; n < (mode === "ready-child-expiry" ? 1_500 : 500) && !fs.existsSync(marker); n++) await Bun.sleep(10);
       expect(fs.existsSync(marker)).toBe(true);
       if (mode === "cancellation") abort.abort();
+      if (mode === "ready-child-expiry") {
+        const pids = fs.readFileSync(marker, "utf8").trim().split(/\s+/).map(Number);
+        expect(pids).toHaveLength(2);
+        advanceDeadline = true;
+      }
     }
     const result = await pending;
     if (mode === "deadline" || mode === "deadline-delayed-marker" || mode === "ready-child-expiry" || mode === "cancellation") {
-      expect(actual).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "cancellation" ? "command cancelled" : `command timed out after ${mode === "ready-child-expiry" ? 500 : 5_000}ms` });
+      expect(actual).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "cancellation" ? "command cancelled" : "command timed out after 5000ms" });
       expect(result).toEqual({ ok: false, transient: true, error: "checking the remote pipeline branch: git remote read timed out after 5s" });
     } else {
       expect(actual?.code).toBe(128);
@@ -3784,10 +3800,11 @@ test.each(["deadline", "deadline-delayed-marker", "ready-child-expiry", "cancell
     expect(alive(sentinel.pid)).toBe(true);
   } finally {
     abort.abort(); await pending;
+    restoreDeadlineControl?.();
     sentinel.kill(); await sentinel.exited;
     fs.rmSync(root, { recursive: true, force: true });
   }
-}, 15_000);
+}, 30_000);
 
 test("publication pushes only the immutable accepted revision when the branch advances mid-publish", async () => {
   const box = (await publishSandbox());
