@@ -4,6 +4,10 @@ import type { ExternalRelayRequest } from "./protocol";
 type Message = ExternalRelayRequest["input"]["conversation"][number];
 const QUOTED_TEXT_BYTES = 4096;
 
+export class RelayMandatoryPromptTooLargeError extends StructuredEnvelopeTooLargeError {
+  constructor(public readonly mandatoryBytes: number) { super(); }
+}
+
 /** Clip optional quotations at Unicode boundaries; measure the final escaped
  * prompt separately, because JSON can expand even short source strings. */
 export function quotedRelayText(text: string, maxBytes = QUOTED_TEXT_BYTES): string {
@@ -23,6 +27,7 @@ export function quotedRelayText(text: string, maxBytes = QUOTED_TEXT_BYTES): str
  * Refuse before dispatch when mandatory content alone cannot fit. */
 export function boundedRelayPrompt<T extends string | { prompt: string }>(request: ExternalRelayRequest,
   render: (request: ExternalRelayRequest) => T, extraMessages: readonly Message[] = [], maxBytes = MAX_STRUCTURED_TEXT_BYTES,
+  requiredIds: readonly string[] = [],
 ): { request: ExternalRelayRequest; result: T } {
   let current = request;
   let result = render(current);
@@ -31,9 +36,19 @@ export function boundedRelayPrompt<T extends string | { prompt: string }>(reques
   const messages = new Map(request.input.conversation.map(message => [message.id, message]));
   for (const message of extraMessages) messages.set(message.id, message);
   const trigger = messages.get(request.input.respond_to ?? "");
-  const protectedIds = new Set([request.input.respond_to, trigger?.reply_to]);
-  current = { ...request, input: { ...request.input, conversation: [...messages.values()].map(message =>
-    message.author.self && !protectedIds.has(message.id) ? { ...message, text: quotedRelayText(message.text) } : message) } };
+  const protectedIds = new Set([request.input.respond_to, ...requiredIds]);
+  // Follow explicit links, including recovered parents and earlier requests.
+  // Selection cannot remove a row that explains the requested subject.
+  const visited = new Set<string>();
+  for (const id of [trigger?.id, ...requiredIds]) {
+    for (let message: Message | undefined = id ? messages.get(id) : undefined;
+      message?.reply_to && !visited.has(message.reply_to);) {
+      visited.add(message.reply_to);
+      protectedIds.add(message.reply_to);
+      message = messages.get(message.reply_to);
+    }
+  }
+  current = { ...request, input: { ...request.input, conversation: [...messages.values()] } };
   const refresh = () => { result = render(current); return fits(); };
   if (refresh()) return { request: current, result };
   // Local recovery can add older rows after the service window. Remove the
@@ -58,8 +73,12 @@ export function boundedRelayPrompt<T extends string | { prompt: string }>(reques
   removeOldest(optional.length);
   current.input.short_term_memory = null;
   if (refresh()) return { request: current, result };
+  const protectedRows = [...messages.values()].filter(message => protectedIds.has(message.id));
+  const mediaRefs = new Set(protectedRows.flatMap(message => message.media?.map(media => media.ref) ?? []));
   for (const document of current.input.documents.slice()) {
-    if (document.message_id && protectedIds.has(document.message_id)) continue;
+    if (document.message_id && protectedIds.has(document.message_id) || document.media_ref && mediaRefs.has(document.media_ref)
+      || !document.message_id && !document.media_ref && protectedRows.some(message =>
+        message.text.includes(`[Document attached; filename=${document.title};`))) continue;
     current.input.documents = current.input.documents.filter(row => row !== document);
     if (refresh()) return { request: current, result };
   }
@@ -68,11 +87,12 @@ export function boundedRelayPrompt<T extends string | { prompt: string }>(reques
   // their display summaries are shortened here.
   current.input.tool_guidance = undefined;
   if (refresh()) return { request: current, result };
-  current.input.tools = current.input.tools?.map(tool => ({ ...tool, summary: quotedRelayText(tool.summary, 256) }));
-  if (refresh()) return { request: current, result };
-  if (current.input.owner_instructions) current.input.owner_instructions = quotedRelayText(current.input.owner_instructions);
-  if (refresh()) return { request: current, result };
-  current.input.instructions = quotedRelayText(current.input.instructions);
-  if (refresh()) return { request: current, result };
-  throw new StructuredEnvelopeTooLargeError();
+  const tools = current.input.tools;
+  for (const cap of [256, 128, 64, 32, 0]) {
+    current.input.tools = tools?.map(tool => ({ ...tool, summary: cap ? quotedRelayText(tool.summary, cap) : "" }));
+    if (refresh()) return { request: current, result };
+  }
+  // Instructions, requested quotations, documents and tool identities are
+  // mandatory. Never silently shorten them to obtain a successful launch.
+  throw new RelayMandatoryPromptTooLargeError(Buffer.byteLength(typeof result === "string" ? result : result.prompt));
 }
