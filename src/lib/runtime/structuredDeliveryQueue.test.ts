@@ -2287,6 +2287,140 @@ for (const interleaving of ["current-owner", "retired", "update-handoff"] as con
   });
 }
 
+for (const waitAt of ["transition-ack", "fallback-status-read"] as const) {
+  for (const interleaving of ["current-owner", "retired", "update-handoff"] as const) {
+    test(`an expired startup control fences ${waitAt} after ${interleaving}`, async () => {
+      const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+      setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+      const transitions: Array<[string, string]> = [];
+      const progressWrites: string[] = [];
+      let handoff = false;
+      let statusReads = 0;
+      let releaseWait!: () => void;
+      let waitEntered!: () => void;
+      const entered = new Promise<void>(resolve => { waitEntered = resolve; });
+      const held = new Promise<void>(resolve => { releaseWait = resolve; });
+      let projections = 0;
+      const progress: DeliveryProgressSink = {
+        mark: id => { progressWrites.push(`mark:${id}`); },
+        note: id => { progressWrites.push(`note:${id}`); },
+        stalled: id => { progressWrites.push(`stalled:${id}`); },
+        deadline: id => { progressWrites.push(`deadline:${id}`); },
+        settle: (id, state) => { progressWrites.push(`settle:${id}:${state}`); },
+        get: () => null,
+        open: () => [],
+      };
+      const queue = new StructuredDeliveryQueue({
+        deferTarget: () => true,
+        canRecoverDeferredTarget: () => false,
+        handoffHeld: () => handoff,
+        progress,
+        effects: async () => transitions.length ? [] : [{ id: "expired-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+          operationId: "expired-interrupt", conversationId: "conversation-owned", turnId: "turn-owned",
+        } }],
+        status: async () => {
+          statusReads += 1;
+          if (waitAt === "fallback-status-read" && statusReads === 2) {
+            waitEntered();
+            await held;
+          }
+          return { status: statusReads > 1 ? "failed" : "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() };
+        },
+        transition: async (id, status) => {
+          transitions.push([id, status]);
+          if (waitAt === "transition-ack") {
+            waitEntered();
+            await held;
+          } else {
+            throw new Error("transition acknowledgement lost");
+          }
+        },
+        projectTerminal: async () => { projections += 1; return true; },
+      }, () => null);
+      try {
+        const pass = queue.drain();
+        await entered;
+        const writesBeforeRelease = progressWrites.length;
+        if (interleaving === "retired") queue.retire();
+        if (interleaving === "update-handoff") handoff = true;
+        releaseWait();
+        await pass;
+        if (interleaving === "current-owner") {
+          expect(transitions).toEqual([["expired-interrupt", "failed"]]);
+          expect(progressWrites).toContain("settle:expired-interrupt:failed");
+          expect(projections).toBe(waitAt === "fallback-status-read" ? 1 : 0);
+        } else {
+          expect(transitions).toEqual([["expired-interrupt", "failed"]]);
+          expect(progressWrites.slice(writesBeforeRelease).filter(write => write.endsWith(":expired-interrupt")
+            || write.startsWith("settle:expired-interrupt"))).toEqual([]);
+          expect(projections).toBe(0);
+        }
+      } finally { queue.retire(); }
+    });
+  }
+}
+
+for (const interleaving of ["current-owner", "retired", "update-handoff"] as const) {
+  test(`killed reconfigure settlement checks ownership after each transition (${interleaving})`, async () => {
+    const transitions: Array<[string, string, string | null | undefined]> = [];
+    let releaseFirst!: () => void;
+    let firstEntered!: () => void;
+    const entered = new Promise<void>(resolve => { firstEntered = resolve; });
+    const held = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let handoff = false;
+    let heldFirst = false;
+    let heldOperationId: string | null = null;
+    const reconfigures = ["configure-one", "configure-two"].map((operationId, index) => ({
+      id: operationId,
+      kind: "runtime.reconfigure",
+      eventSeq: index + 1,
+      payload: {
+        operationId,
+        conversationId: "conversation-killed",
+        sessionKey: { engine: "codex", sessionId: "thread-killed" },
+        model: "gpt-5.6-sol",
+        effort: "high",
+        fast: false,
+      },
+    }));
+    const kill = { id: "kill-one", kind: "runtime.kill", eventSeq: 3, payload: {
+      operationId: "kill-one", conversationId: "conversation-killed",
+      sessionKey: { engine: "codex", sessionId: "thread-killed" },
+    } };
+    const queue = new StructuredDeliveryQueue({
+      deferTarget: () => true,
+      effects: async () => [...reconfigures, kill],
+      status: async () => ({ status: "queued", revision: 1 }),
+      handoffHeld: () => handoff,
+      transition: async (operationId, status, details) => {
+        transitions.push([operationId, status, details?.reason]);
+        if (operationId.startsWith("configure-") && status === "failed" && !heldFirst) {
+          heldFirst = true;
+          heldOperationId = operationId;
+          firstEntered();
+          await held;
+        }
+      },
+    }, () => host(async () => ({ outcome: "turn-started", turnId: "unexpected" })), async () => true);
+    try {
+      const pass = queue.drain();
+      await entered;
+      if (interleaving === "retired") queue.retire();
+      if (interleaving === "update-handoff") handoff = true;
+      releaseFirst();
+      await pass;
+      const failedReconfigures = transitions
+        .filter(([id, status]) => id.startsWith("configure-") && status === "failed")
+        .map(([id]) => id);
+      if (interleaving === "current-owner") {
+        expect(failedReconfigures).toHaveLength(2);
+      } else {
+        expect(failedReconfigures).toEqual([heldOperationId]);
+      }
+    } finally { queue.retire(); }
+  });
+}
+
 test("an interrupt queued before a send cannot keep a deferred idle recipient from recovery", async () => {
   const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
   setSystemTime(admittedAt + 1_000);
