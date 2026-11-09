@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
-import { attemptReferencesClear } from "./attemptTempFilesystem";
+import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
+import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
+import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
+import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -32,6 +35,564 @@ test("a settled attempt removes its scratch without waiting for host release", a
   const f = fixture(); const directory = f.make("settled");
   try { expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse(); }
   finally { f.store.close(); }
+});
+
+type NamespacePath = "namespace-only" | "permission-fallback";
+type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control") {
+  const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
+  const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
+  fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
+  f.store.measure(directory, 8192); f.store.release(directory);
+  fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
+import fs from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "ps") process.exit(0);
+if (args[0] !== "run") process.exit(61);
+const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
+if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
+const script = args[args.indexOf("-c") + 1];
+if (script.includes("-delete")) {
+  for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
+  if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
+  if (${JSON.stringify(change)} === "root-replaced") {
+    fs.renameSync(source, source + "-original"); fs.mkdirSync(source);
+    fs.writeFileSync(source + "/payload", "replacement");
+  }
+  fs.writeFileSync(${JSON.stringify(completion)}, "done");
+}
+`, { mode: 0o700 });
+  const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  const nativeOpendir = fs.promises.opendir.bind(fs.promises);
+  const opendir = spyOn(fs.promises, "opendir").mockImplementation(async (target, options) => {
+    if (kind === "namespace-only" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)) === "private")
+      throw Object.assign(new Error("fixture private"), { code: "EACCES" });
+    return nativeOpendir(target, options);
+  });
+  const nativeRm = fs.promises.rm.bind(fs.promises);
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+    if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
+      throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+    return nativeRm(target, options);
+  });
+  try {
+    const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
+      state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
+        await filesystem.repositoryReferencesAttemptTemp(checkout, owner.directory, owner.directory, inventory);
+        return "closed";
+      },
+      authority: async () => ({ state: "closed", revision: "unchanged",
+        isCurrent: () => change !== "producer-changed" || !fs.existsSync(completion) }) });
+    expect(fs.existsSync(completion)).toBeTrue();
+    if (change !== "control") {
+      expect(report.removed).toBe(0);
+      expect(report.errors).toBe(change === "root-replaced" ? 1 : 0);
+      expect(report.outcomes[0].reason).toContain(change === "root-replaced"
+        ? "identity changed before namespace rmdir" : "authority changed before namespace rmdir");
+      expect(fs.existsSync(attemptTempJournalPath(directory))).toBeTrue();
+      expect(f.store.has(directory)).toBeTrue();
+      const trash = fs.readdirSync(f.root).find(name => name.startsWith(".delegatus-trash-") && !name.endsWith("-original"));
+      expect(trash).toBeDefined();
+      if (change === "root-replaced") expect(fs.readFileSync(path.join(f.root, trash!, "payload"), "utf8")).toBe("replacement");
+      else expect(fs.readdirSync(path.join(f.root, trash!))).toEqual([]);
+      return;
+    }
+    expect(report.errors).toBe(0);
+    expect(report.removed).toBe(1);
+    expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.readdirSync(f.root).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
+    expect(f.store.has(directory)).toBeFalse();
+    expect(f.store.bytes()).toBe(0);
+  } finally {
+    opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+  }
+}
+
+test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
+  "an unchanged integrated sweep finishes namespace cleanup in one pass (%s)", kind => integratedNamespaceSweep(kind));
+test.skipIf(process.platform !== "linux").each([
+  ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
+  ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
+] as const)("an integrated sweep refuses post-delete drift (%s, %s)", integratedNamespaceSweep);
+
+test.each(["absent", "unreadable", "restored-with-link"] as const)(
+  "the final producer read revalidates a changed consumer checkout (%s)", async change => {
+    const f = fixture(), directory = f.make(`consumer-${change}`);
+    const producer = path.join(f.root, "producer-checkout"), consumer = path.join(f.root, "consumer-checkout");
+    fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(consumer, ".git"), { recursive: true });
+    const cwd = path.join(consumer, "work"); fs.mkdirSync(cwd);
+    f.store.measure(directory, 4096); f.store.release(directory);
+    const previousConsumer = `${consumer}-previous`;
+    let now = NOW, stateReads = 0, inject = false, injected = false;
+    let sharedInventory: InstanceType<typeof filesystem.RepositoryLinkInventory> | undefined;
+    const readdirApi = fs.promises as unknown as {
+      readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+    };
+    const readdir = readdirApi.readdir.bind(readdirApi);
+    const mutateConsumer = () => {
+      if (change === "absent") fs.renameSync(consumer, previousConsumer);
+      else if (change === "unreadable") fs.chmodSync(consumer, 0);
+      else {
+        fs.renameSync(consumer, previousConsumer);
+        fs.mkdirSync(path.join(consumer, ".git"), { recursive: true });
+        fs.mkdirSync(path.join(consumer, "work"));
+        fs.symlinkSync(directory, path.join(consumer, "dependency"), "dir");
+      }
+    };
+    const observed = spyOn(readdirApi, "readdir").mockImplementation(async (target, options) => {
+      const entries = await readdir(target, options);
+      if (inject && !injected && path.resolve(String(target)) === producer) {
+        injected = true;
+        mutateConsumer();
+      }
+      return entries;
+    });
+    const scan = () => ({ ownNamespace: null, processes: [{ pid: 81, namespace: null, stamped: false, paths: [cwd] }] });
+    const sweep = () => sweepAttemptTemps(f.store, { now: () => now, maxRoots: 1, capBytes: 0,
+      scan,
+      state: async (owner, inventory) => {
+        stateReads++;
+        sharedInventory = inventory;
+        if (stateReads === 4) {
+          fs.writeFileSync(path.join(producer, "refresh-inventory"), "changed");
+          inject = true;
+        }
+        await repositoryReferencesAttemptTemp(producer, owner.directory, owner.directory, inventory);
+        return "closed";
+      },
+      references: (original, current, currentScan) => attemptReferencesClear(original, current, currentScan, async () => true, sharedInventory),
+    });
+    try {
+      // Seed the producer inventory, then arrange injection during the real
+      // awaited producer readdir at dispatch (the fourth state observation).
+      const first = await sweep();
+      expect(injected).toBeTrue();
+      expect(first).toMatchObject({ removed: 0, errors: 0, held: 1 });
+      expect(fs.readFileSync(path.join(directory, "data"))).toHaveLength(4096);
+      expect(fs.readFileSync(path.join(directory, ".delegatus-attempt-owner"), "utf8")).toContain("attempt-temp.sqlite");
+
+      if (change === "absent") fs.renameSync(previousConsumer, consumer);
+      if (change === "unreadable") fs.chmodSync(consumer, 0o700);
+      now += 60_001;
+      if (change === "restored-with-link") {
+        expect((await sweep()).removed).toBe(0);
+        expect(fs.readFileSync(path.join(directory, "data"))).toHaveLength(4096);
+        fs.unlinkSync(path.join(consumer, "dependency"));
+        now += 60_001;
+      }
+      expect((await sweep()).removed).toBe(1);
+      expect(fs.existsSync(directory)).toBeFalse();
+    } finally {
+      observed.mockRestore();
+      try { fs.chmodSync(consumer, 0o700); } catch { /* absent variant */ }
+      f.store.close();
+    }
+  });
+
+test("an absent root with an evidence hold stops contributing stale bytes", async () => {
+  const checks = await import("@/lib/recordedChecks/store");
+  const f = fixture(); const directory = f.make("gone");
+  f.store.measure(directory, 30 * 1024 ** 3);
+  fs.rmSync(directory, { recursive: true });
+  const held = spyOn(checks, "recordedRootHeld").mockImplementation(target => target === directory);
+  try {
+    const report = await f.sweep();
+    expect(report.bytes).toBe(0);
+    // Custody survives the missing directory; only physical accounting changes.
+    expect(f.store.owner(directory)?.bytes).toBe(0);
+  } finally { held.mockRestore(); f.store.close(); }
+});
+
+test("a failed completion receipt retains custody but never restores removed allocation", async () => {
+  const checks = await import("@/lib/recordedChecks/store");
+  const f = fixture(); const directory = f.make("receipt-failure");
+  const retirement = checks.recordRootRetirement;
+  const receipt = spyOn(checks, "recordRootRetirement").mockImplementation(async (...args) => {
+    if (args[3] === "completed") throw new Error("fixture completion receipt unavailable");
+    return retirement(...args);
+  });
+  try {
+    const report = await f.sweep("closed");
+    expect(report).toMatchObject({ removed: 1, errors: 1, bytes: 0, failedBytes: 0 });
+    expect(f.store.owner(directory)?.bytes).toBe(0);
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { receipt.mockRestore(); f.store.close(); }
+});
+
+test.each([false, true])("producer record revision drift preserves native removal and journal replay (journal replay=%s)", async replay => {
+  for (const transition of ["attempt-running", "closed-lane-running"] as const) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-producer-revision-"));
+    const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+    const pipeline = buildPipeline({ id: `producer-revision-${transition}`, task: "Producer revision", project: "fixture", repoDir: parent,
+      stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+      srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+    const producer = pipeline.worktreeDir!;
+    const producerExisted = fs.existsSync(producer);
+    pipeline.state = transition === "closed-lane-running" ? "closed" : "running";
+    if (transition === "closed-lane-running") {
+      pipeline.cursor = null;
+      pipeline.closedAt = "2026-10-22T12:00:00Z";
+    }
+    pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "revision-launch",
+      effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      verdict: null, error: null }] }];
+    if (transition !== "closed-lane-running") fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    savePipelines([pipeline]);
+    const directory = path.join(parent, "llv-stage-revision");
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "preserve me");
+    const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+    const owner = { directory, pipelineId: pipeline.id, launchId: "revision-launch", retainUntilClose: false, createdAt: 1 };
+    store.register(owner);
+    store.measure(directory, 4096); store.release(directory);
+    const trash = path.join(parent, ".delegatus-trash-llv-stage-revision-replay");
+    if (replay) {
+      const stat = fs.lstatSync(directory);
+      fs.renameSync(directory, trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({
+        directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true,
+      }));
+    }
+    const now = NOW;
+    let quarantineReferenceReads = 0, injected = false;
+    const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+      state: attemptTempState, authority: attemptTempAuthority, scan: () => ({ ownNamespace: null, processes: [] }),
+      references: async (_original, current) => {
+        await Promise.resolve();
+        if (path.basename(current).startsWith(".delegatus-trash-")
+          && ++quarantineReferenceReads === (replay ? 4 : 2)) {
+          injected = true;
+          if (transition === "closed-lane-running") pipeline.state = "running";
+          else pipeline.runs[0]!.attempts[0]!.state = "running";
+          savePipelines([pipeline]);
+        }
+        return true;
+      },
+    });
+    try {
+      const changed = await sweep();
+      expect(injected).toBeTrue();
+      expect(changed).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
+      expect(await attemptTempState(owner)).toBe(transition === "attempt-running" ? "live" : "unknown");
+      expect(fs.readFileSync(path.join(replay ? trash : directory, "payload"), "utf8")).toBe("preserve me");
+    } finally {
+      store.close(); savePipelines([]);
+      if (!producerExisted) fs.rmSync(producer, { recursive: true, force: true });
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  }
+});
+
+test.each([false, true])("post-eligibility producer and checkout changes preserve native removal and journal replay (journal replay=%s)", async replay => {
+  for (const change of ["revision", "checkout"] as const) {
+    const f = fixture(), directory = f.make(`dispatch-${change}-${replay}`);
+    const producer = path.join(f.root, "dispatch-producer"), retiredProducer = `${producer}-retired`;
+    fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    f.store.measure(directory, 4096); f.store.release(directory);
+    const trash = path.join(f.root, `.delegatus-trash-${path.basename(directory)}-replay`);
+    if (replay) {
+      const stat = fs.lstatSync(directory);
+      fs.renameSync(directory, trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({
+        directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true,
+      }));
+    }
+    let current = true, authorityReads = 0, injected = false;
+    let inventory: InstanceType<typeof filesystem.RepositoryLinkInventory>;
+    const sweep = () => sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, capBytes: 0,
+      state: async (_owner, observed) => { inventory = observed; return "closed"; },
+      authority: async () => {
+        const observedRead = ++authorityReads;
+        let checks = 0;
+        return { state: "closed" as const, revision: "revision-1", isCurrent: () => {
+          if (observedRead === (replay ? 2 : 3) && ++checks === 1) queueMicrotask(() => {
+            injected = true;
+            if (change === "revision") current = false;
+            else fs.renameSync(producer, retiredProducer);
+          });
+          return current;
+        } };
+      },
+      scan: () => ({ ownNamespace: null, processes: [] }),
+      references: async (original, currentPath) => {
+        await repositoryReferencesAttemptTemp(producer, original, currentPath, inventory);
+        return true;
+      },
+    });
+    try {
+      const result = await sweep();
+      expect(injected).toBeTrue();
+      expect(result.removed).toBe(0);
+      expect(fs.readFileSync(path.join(replay ? trash : directory, "data"), "utf8").length).toBe(4096);
+    } finally {
+      if (fs.existsSync(retiredProducer)) fs.renameSync(retiredProducer, producer);
+      f.store.close();
+    }
+  }
+});
+
+test.each([false, true])("final dispatch rechecks checkout discovery and external aliases (journal replay=%s)", async replay => {
+  for (const change of ["control", "absent-no-marker", "restore-no-marker", "alias-retarget"] as const) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-consumer-dispatch-"));
+    const directory = path.join(parent, "llv-stage-root");
+    const consumer = path.join(parent, "consumer"), cwd = path.join(consumer, "work");
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+    fs.mkdirSync(cwd, { recursive: true });
+    const alias = path.join(parent, "external-alias"), unrelated = path.join(parent, "unrelated");
+    fs.mkdirSync(unrelated);
+    if (change === "alias-retarget" || change === "control") fs.mkdirSync(path.join(consumer, ".git"));
+    if (change === "alias-retarget") {
+      fs.symlinkSync(unrelated, alias, "dir");
+      fs.symlinkSync(path.join(alias, path.basename(directory)), path.join(consumer, "dependency"), "dir");
+    }
+    const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+    const pipeline = buildPipeline({ id: "consumer-dispatch-lane", task: "Fixture", project: "fixture", repoDir: parent,
+      stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+      srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+    const producer = pipeline.worktreeDir!;
+    fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
+    pipeline.state = "running";
+    pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "fixture-launch",
+      effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      verdict: null, error: null }] }];
+    savePipelines([pipeline]);
+    const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+    store.register({ directory, pipelineId: pipeline.id, launchId: "fixture-launch", retainUntilClose: false, createdAt: 1 });
+    store.measure(directory, 4096); store.release(directory);
+    const trash = path.join(parent, ".delegatus-trash-llv-stage-root-replay");
+    if (replay) {
+      const stat = fs.lstatSync(directory);
+      fs.renameSync(directory, trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({
+        directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true,
+      }));
+    }
+    let changed = false, armed = false, now = NOW;
+    let inventory: InstanceType<typeof filesystem.RepositoryLinkInventory>;
+    const nativeRead = fs.promises.readdir.bind(fs.promises);
+    const readdirApi = fs.promises as unknown as {
+      readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+    };
+    const observed = spyOn(readdirApi, "readdir").mockImplementation(async (target, options) => {
+      const entries = await nativeRead(target, options);
+      if (armed && String(target) === producer) {
+        armed = false; changed = true;
+        if (change === "absent-no-marker") fs.renameSync(consumer, consumer + "-old");
+        if (change === "restore-no-marker") {
+          fs.renameSync(consumer, consumer + "-old");
+          fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(consumer, ".git"));
+          fs.symlinkSync(directory, path.join(consumer, "dependency"), "dir");
+        }
+        if (change === "alias-retarget") {
+          fs.unlinkSync(alias); fs.symlinkSync(parent, alias, "dir");
+        }
+      }
+      return entries;
+    });
+    const processes = [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }];
+    const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+      state: (owner, current) => {
+        inventory = current;
+        return attemptTempState(owner, current);
+      },
+      scan: () => ({ ownNamespace: null, processes }),
+      references: (original, current, scan) => {
+        if (!armed && !changed && change !== "control") {
+          fs.writeFileSync(path.join(producer, "force-fresh-inventory"), "refresh"); armed = true;
+        }
+        return attemptReferencesClear(original, current, scan, async () => true, inventory);
+      },
+    });
+    try {
+      const result = await sweep();
+      expect(changed).toBe(change !== "control");
+      expect(result.removed).toBe(change === "control" ? 1 : 0);
+      if (change !== "control") {
+        expect(fs.readFileSync(path.join(replay ? trash : directory, "payload"), "utf8")).toBe("keep");
+        if (change === "absent-no-marker") fs.renameSync(consumer + "-old", consumer);
+        if (change === "restore-no-marker") fs.unlinkSync(path.join(consumer, "dependency"));
+        if (change === "alias-retarget") { fs.unlinkSync(alias); fs.symlinkSync(unrelated, alias, "dir"); }
+        now += 60_001;
+        expect((await sweep()).removed).toBe(1);
+      }
+    } finally {
+      observed.mockRestore(); store.close(); savePipelines([]);
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a loaded 727-root sweep defers its remaining page without errors or holds", async () => {
+  const f = fixture();
+  for (let n = 0; n < 727; n++) f.store.measure(f.make(String(n).padStart(4, "0"), 86400000), 4096);
+  let now = NOW;
+  try {
+    const report = await f.sweep("closed", { now: () => now, capBytes: 0, maxRoots: 32,
+      onRetired: () => { now += 40_001; } });
+    expect(report).toMatchObject({ removed: 1, checked: 1, deferred: 31, held: 0, errors: 0 });
+    expect(report.deferredBytes).toBe(31 * 4096);
+    expect(report.unexaminedBytes).toBe(695 * 4096);
+    expect(f.store.due(now + 60000, 727)).toHaveLength(726);
+  } finally { f.store.close(); }
+});
+
+test.each(["budget-run", "budget-inventory", "budget-read"] as const)("%s deferral survives a helper restart with ledger accounting and fairness", async mode => {
+  const f = fixture();
+  const directories: string[] = [];
+  for (const name of ["first", "second"]) {
+    const directory = f.make(`restart-${mode}-${name}`);
+    directories.push(directory);
+    f.store.measure(directory, 4096); f.store.release(directory);
+  }
+  const repository = path.join(f.root, "budget-repository"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  f.store.close();
+  const run = async (at: number, budgetMode: string) => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), budgetMode], {
+      env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code).toBe(0); expect(stderr).toBe(""); return JSON.parse(stdout);
+  };
+  try {
+    const removed = mode === "budget-read" ? 0 : 1;
+    const deferred = await run(NOW, mode);
+    expect(deferred).toMatchObject({ removed, deferred: 2 - removed, errors: 0, held: 0 });
+    if (removed) expect(deferred.removedBytes).toBeGreaterThan(0);
+    else expect(deferred.outcomes.every((row: { reason: string }) => row.reason.includes("time budget"))).toBeTrue();
+    expect(deferred.deferredBytes).toBe(deferred.bytes);
+    expect(fs.existsSync(directories[0]!)).toBe(!removed); expect(fs.existsSync(directories[1]!)).toBeTrue();
+    const resumed = await run(NOW + 120_000, "--default-budget");
+    expect(resumed).toMatchObject({ removed: 2 - removed, errors: 0, bytes: 0 });
+    expect(resumed.removedBytes).toBeGreaterThan(0);
+    expect(fs.readdirSync(f.root).filter(name => name.startsWith("llv-stage-restart-"))).toHaveLength(0);
+  } finally {
+    const reopened = new AttemptTempStore(f.filename); reopened.close();
+  }
+});
+
+test("an incomplete real checkout inventory defers roots with their bytes instead of errors or live holds", async () => {
+  const f = fixture();
+  for (let n = 0; n < 18; n++) f.make(`inventory-${n}`);
+  const processes = ["first", "second"].map((name, n) => {
+    const repository = path.join(f.root, name); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+    return { pid: 1000 + n, namespace: null, stamped: false, paths: [repository] };
+  });
+  let now = NOW, advanced = false;
+  const targets = filesystem.RepositoryLinkInventory.prototype.targets;
+  const clock = spyOn(filesystem.RepositoryLinkInventory.prototype, "targets").mockImplementation(async function (this: filesystem.RepositoryLinkInventory, repository: string) {
+    const result = await targets.call(this, repository);
+    if (!advanced) { advanced = true; now += 30_001; }
+    return result;
+  });
+  try {
+    const report = await sweepAttemptTemps(f.store, { now: () => now, maxRoots: 18, capBytes: 0,
+      state: async () => "closed", scan: () => ({ ownNamespace: null, processes }) });
+    expect(report).toMatchObject({ checked: 18, removed: 0, deferred: 18, held: 0, errors: 0 });
+    expect(report.deferredBytes).toBeGreaterThanOrEqual(18 * 4096);
+    expect(report.liveHeldBytes).toBe(0);
+  } finally { clock.mockRestore(); f.store.close(); }
+});
+
+test("pressure retires the largest released settled roots first and reserves fair visits", async () => {
+  const f = fixture();
+  const oldest = f.make("oldest-unreleased", 10 * 86400000);
+  const small = f.make("a-small"), large = f.make("z-large");
+  fs.writeFileSync(path.join(large, "data"), Buffer.alloc(16 * 1024 ** 2));
+  f.store.measure(small, 4096); f.store.measure(large, 16 * 1024 ** 2);
+  f.store.release(small); f.store.release(large);
+  try {
+    const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
+    expect(first.removed).toBe(1); expect(fs.existsSync(large)).toBeFalse();
+    expect(first.removedBytes).toBeGreaterThanOrEqual(16 * 1024 ** 2);
+    const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
+    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
+test("current finished-lane authority runs before a larger released live root under pressure", async () => {
+  const f = fixture();
+  const live = f.make("released-live"), finished = f.make("finished", 2 * 86400000);
+  fs.writeFileSync(path.join(live, "data"), Buffer.alloc(16 * 1024 ** 2));
+  f.store.measure(live, 16 * 1024 ** 2); f.store.release(live); f.store.measure(finished, 4096);
+  let now = NOW;
+  try {
+    const report = await f.sweep("closed", { maxRoots: 2, capBytes: 0, now: () => now,
+      state: async (owner: { directory: string }) => owner.directory === live ? "live" : "closed",
+      onRetired: () => { now += 40_001; } });
+    expect(report).toMatchObject({ checked: 1, removed: 1, held: 0, deferred: 1, errors: 0 });
+    expect(fs.existsSync(live)).toBeTrue(); expect(fs.existsSync(finished)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
+test("pressure fairness survives real process restarts behind a failing released prefix and new arrivals", async () => {
+  const f = fixture();
+  for (let n = 0; n < 40; n++) {
+    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`);
+    f.store.measure(directory, (40 - n) * 1024 ** 2); f.store.release(directory);
+  }
+  const first = f.make("later-old-owner", 10 * 86400000), second = f.make("later-next-owner", 9 * 86400000);
+  f.store.measure(first, 4096); f.store.measure(second, 4096);
+  f.store.close();
+  for (let tick = 0; tick < 2; tick++) {
+    const at = NOW + tick * 60000;
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), "pressure"], {
+      env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code).toBe(0); expect(stderr).toContain("fixture authority failure");
+    const report = JSON.parse(stdout);
+    expect(report).toMatchObject({ checked: 4, removed: 1 });
+    expect(report.errors + report.held).toBe(3);
+    expect(fs.existsSync(tick === 0 ? first : second)).toBeFalse();
+    const reopened = new AttemptTempStore(f.filename);
+    try {
+      const directory = path.join(f.root, `llv-stage-blocked-arrival-${tick}`); fs.mkdirSync(directory);
+      reopened.register({ directory, pipelineId: "lane", launchId: "blocked-new", retainUntilClose: false, createdAt: at });
+      reopened.measure(directory, 100 * 1024 ** 2); reopened.release(directory);
+    } finally { reopened.close(); }
+  }
+});
+
+test("the report separates live, evidence and failed allocation with a readable cause", async () => {
+  const f = fixture();
+  const live = f.make("live"), evidence = f.make("evidence", 0, true), failed = f.make("failed");
+  try {
+    const report = await f.sweep("settled", { maxRoots: 3, state: async (owner: { directory: string }) => {
+      if (owner.directory === failed) throw new Error("fixture authority unavailable");
+      return owner.directory === live ? "live" : "settled";
+    } });
+    expect(report).toMatchObject({ held: 2, liveHeld: 1, evidenceHeld: 1, errors: 1, deferred: 0 });
+    expect(report.liveHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.evidenceHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.failedBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.outcomes.find(row => row.directory === evidence)?.reason).toContain("evidence");
+    expect(report.outcomes.find(row => row.directory === failed)?.reason).toContain("fixture authority unavailable");
+  } finally { f.store.close(); }
+});
+
+test("a budget deferral cannot hide a real retirement failure in the same reply", async () => {
+  const temps = await import("@/lib/tempSweep");
+  const f = fixture(); f.make("mixed-failure");
+  const sweep = spyOn(temps, "sweepStaleTempDirs").mockResolvedValue({
+    at: new Date(NOW).toISOString(), maxAgeHours: 0, roots: [f.root],
+    removed: [], removedBytes: 0, kept: { young: 0, inUse: 0, worktree: 0, deferred: 0 },
+    errors: ["attempt temp deferred: run budget exhausted", "fixture retirement refused"],
+  });
+  try {
+    const report = await f.sweep("closed");
+    expect(report).toMatchObject({ removed: 0, deferred: 0, held: 0, errors: 1 });
+    expect(report.failedBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.outcomes[0]?.reason).toContain("fixture retirement refused");
+  } finally { sweep.mockRestore(); f.store.close(); }
 });
 
 test("the capped sweep evicts old unowned roots oldest first within its tick budget", async () => {
@@ -144,7 +705,8 @@ test("unowned roots younger than the configured age stay even over cap", async (
 test("dry run records the decision without removing or spending the ledger", async () => {
   const f = fixture(); const directory = f.make("dry-run");
   try {
-    expect((await f.sweep("settled", { mode: "dry-run" })).removed).toBe(1); expect(fs.existsSync(directory)).toBeTrue();
+    const report = await f.sweep("settled", { mode: "dry-run" });
+    expect(report.removed).toBe(1); expect(report.unexaminedBytes).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     expect((await f.sweep("settled", { now: () => NOW + 60000 })).removed).toBe(1);
   } finally { f.store.close(); }
 });
@@ -170,7 +732,9 @@ test("a failed removal is recovered from its durable intent on the next tick", a
   try { expect((await f.sweep()).errors).toBe(1); }
   finally { refused.mockRestore(); }
   try {
-    const report = await f.sweep("settled", { now: () => NOW + 60000 });
+    const held = await f.sweep("live", { now: () => NOW + 60000 });
+    expect(held.removed).toBe(0); expect(held.bytes).toBeGreaterThanOrEqual(4096);
+    const report = await f.sweep("settled", { now: () => NOW + 120000 });
     expect(report.removed).toBe(1); expect(report.removedBytes).toBeGreaterThan(0); expect(report.held).toBe(0);
     expect(fs.readdirSync(f.root).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
   } finally { f.store.close(); }
