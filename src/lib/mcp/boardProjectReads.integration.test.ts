@@ -397,7 +397,7 @@ for (const tool of TOOLS) for (const workspace of [false, true]) for (const spel
       const first = await h.call(tool, args);
       expect(first).toMatchObject({ ok: true, total: 1, replayed: form === "replay" });
       if (form === "replay") expect(h.rowReads()).toBe(reads);
-    h.atSdkReturn(() => setBoardAliases({ "middle-alias": FOREIGN }));
+      h.atSdkReturn(() => setBoardAliases({ "middle-alias": FOREIGN }));
       refused(await h.call(tool, args), workspace ? "workspace_forbidden" : "project_scope_refused");
       if (form === "replay") expect(receipts()).toBe(before);
     } finally { db.close(); }
