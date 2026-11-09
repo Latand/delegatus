@@ -76,7 +76,8 @@ async function productionSourcePorts(sources: SeatTickSources): Promise<AuditSou
             candidates.delete(item);
           }
         }
-        return { records: page.records.map(record => {
+        const records = page.records as unknown as MessageRecord[];
+        return { records: records.map(record => {
           const anchor = anchors.get(record.seq);
           return anchor ? { ...record, deliveryKey: anchor.deliveryKey, ...(!record.author && !record.parts && anchor.kind === "operator" ? { author: { kind: "operator" } } : {}) } : record;
         }), hasMore: page.hasMore, cursor: nativePage.cursor, scanned: page.scanned };

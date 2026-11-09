@@ -784,7 +784,8 @@ test("real newest-first transcript pages resume at their durable unread byte cur
   const ports = {
     artifact: (file: string) => { const current = fs.statSync(file); return { artifact: `${current.dev}:${current.ino}:${current.birthtimeMs}`, size: current.size }; },
     read: async (_path: string, since: string, cursor?: string | import("@/lib/session/messagesPage").MessagesPageCursor, durableCursor?: import("@/lib/session/messagesPage").MessagesPageCursor | null) => {
-      let nativeCursor = durableCursor ?? cursor ?? null;
+      const encodedCursor = durableCursor ?? cursor ?? null;
+      const nativeCursor = (typeof encodedCursor === "string" ? JSON.parse(encodedCursor) : encodedCursor) as import("@/lib/session/messagesPage").MessagesPageCursor | null;
       if (nativeCursor && !Array.isArray(nativeCursor.r)) nativeCursor = { ...nativeCursor, r: [] };
       const page = readMessagesPage({ descriptor, size: stat.size, engine: "codex" }, { kinds: new Set(["message"]), roles: new Set(["user"]), since, limit: 200, maxChars: 16000, cursor: nativeCursor });
       return { ...page, records: page.records.map(record => ({ seq: record.seq, ts: record.ts, text: record.text, author: record.text.startsWith("agent insertion") ? { kind: "agent" } : { kind: "operator" } })) };
