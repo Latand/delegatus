@@ -2169,6 +2169,7 @@ test.each(["current", "owner", "epoch", "writer", "operation"] as const)("resume
         await expect(recovery).rejects.toBeInstanceOf(DeliveryAdmissionRefusedError);
         expect(handoffs).toEqual([]);
         expect(admitted).toEqual([]);
+        if (!replacement) throw new Error("fixture replacement was not persisted");
         expect(registry.structuredRecoveryFacts(key).entries[sessionKeyId(key)]).toEqual(replacement);
       }
       expect(wholeSnapshot).not.toHaveBeenCalled();
