@@ -172,7 +172,7 @@ test("switching files hides the previous file's actions while the new metadata i
 
   const previousFetch = globalThis.fetch;
   const pending = Promise.withResolvers<Response>();
-  globalThis.fetch = () => pending.promise;
+  globalThis.fetch = Object.assign(() => pending.promise, { preconnect: previousFetch.preconnect });
   try {
     await act(async () => openArtifactPreview("~/fixtures/next.md"));
     expect(surface()!.getAttribute("data-artifact-state")).toBe("loading");
