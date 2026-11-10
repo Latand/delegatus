@@ -22,8 +22,8 @@ const owner = globalThis as typeof globalThis & {
     rows: Map<string, { revision: number; row: CurationRuleInput | null; bytes: number }> };
   __llvCurationInputs?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { stamp: string; row: CurationScopeInput; calls: ScopeCalls; bytes: number }> };
-  __llvScopeReadMetadata?: { file: string; identity: string | null;
-    rows: Map<string, { revision: number; value: { revision: number; curatedAt: string | null; hasPass: boolean; departuresSince: string } }> };
+  __llvScopeHistoryDigests?: { file: string; identity: string | null; bytes: number;
+    rows: Map<string, { revision: number; digest: ScopeHistoryDigest; bytes: number }> };
   __llvCurationScopeProjection?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: RoleMemoryScopeRow; bytes: number }> };
 };
@@ -567,47 +567,84 @@ async function projectedScopeRowsCooperatively(rowKeys: readonly string[]): Prom
 }
 
 type ScopeReadMetadata = { revision: number; curatedAt: string | null; hasPass: boolean; departuresSince: string };
+/** What curation asks of a scope's retained history, without the history:
+ * which passes wrote to it and when each last did. */
+type ScopeHistoryDigest = { revision: number; curatedAt: string | null; stored: boolean;
+  /** Latest entry time of every pass, as Math.max over Date.parse leaves it. */
+  passAt: Map<string, number>;
+  /** Latest curator entry per pass; `unnamed` holds curator entries without one. */
+  curatorAt: Map<string, string>; unnamed: string | null };
 
-/** One answer per stored scope row, pass and database file. The query below
+/** One digest per stored scope row and database file. The statement below
  * parses the whole scope row, retained history included, on the serving loop:
- * tens of megabytes for a long-lived scope. A curator pages through one scope
- * at one stored revision, so every page after the first reads only the row's
- * revision column. */
-export function roleScopeReadMetadata(scope: string, pass: string): ScopeReadMetadata {
+ * tens of megabytes for a long-lived scope. Every curator page, every pass and
+ * every apply over an unchanged row then reads only its revision column. */
+function scopeHistoryDigest(scope: string): ScopeHistoryDigest {
   const file = statePath("state.sqlite"), rowKey = `s:${scope}`;
   const db = reader();
   const stored = () => db.query<{ row_revision: number }, [string]>(
     "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?").get(rowKey)?.row_revision;
   const identity = databaseFileIdentity(file), version = stored();
-  let cache = owner.__llvScopeReadMetadata;
+  let cache = owner.__llvScopeHistoryDigests;
   if (!cache || cache.file !== file || cache.identity !== identity) {
-    cache = owner.__llvScopeReadMetadata = { file, identity, rows: new Map() };
+    cache = owner.__llvScopeHistoryDigests = { file, identity, bytes: 0, rows: new Map() };
   }
-  const key = JSON.stringify([rowKey, pass]), held = cache.rows.get(key);
+  const held = cache.rows.get(rowKey);
   if (held && version !== undefined && held.revision === version) {
-    cache.rows.delete(key); cache.rows.set(key, held);
-    return { ...held.value };
+    cache.rows.delete(rowKey); cache.rows.set(rowKey, held);
+    return held.digest;
   }
-  if (held) cache.rows.delete(key);
-  const row = db.query<{ revision: number; curatedAt: string | null; hasPass: number; departuresSince: string | null }, [string, string, string]>(`
+  if (held) { cache.rows.delete(rowKey); cache.bytes -= held.bytes; }
+  const digest: ScopeHistoryDigest = { revision: 0, curatedAt: null, stored: false, passAt: new Map(), curatorAt: new Map(), unnamed: null };
+  if (version === undefined) return digest;
+  const entries = db.query<{ revision: number | null; curatedAt: string | null; entry: number | null; pass: unknown; by: unknown; at: unknown }, [string]>(`
     SELECT json_extract(s.value_json, '$.revision') AS revision,
-      json_extract(s.value_json, '$.curatedAt') AS curatedAt,
-      MAX(CASE WHEN json_extract(h.value, '$.pass')=? THEN 1 ELSE 0 END) AS hasPass,
-      MAX(CASE WHEN json_extract(h.value, '$.by')='curator' AND
-        (json_extract(h.value, '$.pass') IS NULL OR json_extract(h.value, '$.pass')<>?)
-        THEN json_extract(h.value, '$.at') END) AS departuresSince
+      json_extract(s.value_json, '$.curatedAt') AS curatedAt, h.key AS entry,
+      json_extract(h.value, '$.pass') AS pass, json_extract(h.value, '$.by') AS by, json_extract(h.value, '$.at') AS at
     FROM state_rows s LEFT JOIN json_each(s.value_json, '$.history') h
-    WHERE s.collection='role_memory' AND s.row_key=? GROUP BY s.row_key
-  `).get(pass, pass, rowKey);
-  const value: ScopeReadMetadata = row ? { revision: row.revision ?? 0, curatedAt: row.curatedAt, hasPass: !!row.hasPass, departuresSince: row.departuresSince ?? "" } :
-    { revision: 0, curatedAt: null, hasPass: false, departuresSince: "" };
-  // Keep the answer only when the row and the file stayed the same across the
-  // read; a peer write in between leaves the next call to read again.
-  if (row && version !== undefined && stored() === version && databaseFileIdentity(file) === identity) {
-    cache.rows.set(key, { revision: version, value: { ...value } });
-    while (cache.rows.size > 64) cache.rows.delete(cache.rows.keys().next().value!);
+    WHERE s.collection='role_memory' AND s.row_key=?
+  `).all(rowKey);
+  let bytes = rowKey.length * 2 + 128;
+  for (const entry of entries) {
+    digest.stored = true; digest.revision = entry.revision ?? 0; digest.curatedAt = entry.curatedAt;
+    if (entry.entry === null) continue;
+    const pass = typeof entry.pass === "string" ? entry.pass : null;
+    if (pass !== null) {
+      const at = Date.parse(entry.at as string);
+      if (!digest.passAt.has(pass)) bytes += pass.length * 2 + 32;
+      digest.passAt.set(pass, digest.passAt.has(pass) ? Math.max(digest.passAt.get(pass)!, at) : at);
+    }
+    if (entry.by !== "curator" || typeof entry.at !== "string") continue;
+    if (pass === null) { if (digest.unnamed === null || entry.at > digest.unnamed) digest.unnamed = entry.at; }
+    else {
+      const last = digest.curatorAt.get(pass);
+      if (last === undefined) bytes += pass.length * 2 + 64;
+      if (last === undefined || entry.at > last) digest.curatorAt.set(pass, entry.at);
+    }
   }
-  return value;
+  // Keep the digest only when the row and the file stayed the same across the
+  // read; a peer write in between leaves the next call to read again.
+  if (digest.stored && bytes <= 1024 * 1024 && stored() === version && databaseFileIdentity(file) === identity) {
+    cache.rows.set(rowKey, { revision: version, digest, bytes }); cache.bytes += bytes;
+    while (cache.rows.size > 256 || cache.bytes > 8 * 1024 * 1024) {
+      const oldest = cache.rows.keys().next().value!;
+      cache.bytes -= cache.rows.get(oldest)!.bytes; cache.rows.delete(oldest);
+    }
+  }
+  return digest;
+}
+
+export function roleScopeReadMetadata(scope: string, pass: string): ScopeReadMetadata {
+  const digest = scopeHistoryDigest(scope);
+  let departuresSince = digest.unnamed ?? "";
+  for (const [other, at] of digest.curatorAt) if (other !== pass && at > departuresSince) departuresSince = at;
+  return { revision: digest.revision, curatedAt: digest.curatedAt, hasPass: digest.passAt.has(pass), departuresSince };
+}
+
+/** Time of the latest entry one pass left in a scope's history, in epoch
+ * milliseconds; null when the pass never wrote there. */
+export function roleScopePassLastAt(scope: string, pass: string): number | null {
+  return scopeHistoryDigest(scope).passAt.get(pass) ?? null;
 }
 
 /** Decode the displayed scopes and their rule/task lineage, excluding unrelated

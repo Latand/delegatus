@@ -78,3 +78,17 @@ test("a scope that was never stored answers empty and is read again once it exis
   writeScope(scope, 1, null, []);
   expect(roleScopeReadMetadata(scope, "p_one")).toEqual({ revision: 1, curatedAt: null, hasPass: false, departuresSince: "" });
 });
+
+test("another pass over the same stored scope row reads no body", () => {
+  const scope = roleScope(PROJECT, "builder");
+  writeScope(scope, 2, "2026-10-11T00:00:05.000Z", [
+    { revision: 1, at: "2026-10-11T00:00:01.000Z", by: "curator", pass: "p_one" },
+    { revision: 2, at: "2026-10-11T00:00:05.000Z", by: "agent" },
+    { revision: 2, at: "2026-10-11T00:00:03.000Z", by: "curator" },
+  ]);
+  expect(bodyReads(() => roleScopeReadMetadata(scope, "p_one")).reads).toBe(1);
+  const other = bodyReads(() => roleScopeReadMetadata(scope, "p_two"));
+  expect(other.reads).toBe(0);
+  expect(other.value).toEqual({ revision: 2, curatedAt: "2026-10-11T00:00:05.000Z", hasPass: false, departuresSince: "2026-10-11T00:00:03.000Z" });
+  expect(roleScopeReadMetadata(scope, "p_one")).toEqual({ revision: 2, curatedAt: "2026-10-11T00:00:05.000Z", hasPass: true, departuresSince: "2026-10-11T00:00:03.000Z" });
+});
