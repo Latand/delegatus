@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 import http from "node:http";
 import { startClaudeProviderRelay } from "./claudeProviderRelay";
 
@@ -196,6 +197,37 @@ test("every text and tool escape split preserves safe spelling and redacts refle
   }, token);
 });
 
+test("a preceding backslash retains every possible credential escape prefix", async () => {
+  const token = "abcdefgh";
+  const safe = String.raw`safe \\u0041 \\q \\u00zz end`;
+  await streamFixture(async send => {
+    for (const prefix of ["\\", "\\\\", "\\u00"]) {
+      const value = prefix + String.raw`\u0061bcdefgh`;
+      for (const field of ["text", "thinking", "partial_json", "signature"]) {
+        const kind = field === "text" ? "text" : field === "partial_json" ? "tool_use" : "thinking";
+        const input = field === "partial_json" ? JSON.stringify({ value: value + " " + safe }) : value + " " + safe;
+        for (let split = 0; split <= input.length; split++) {
+          const wire = start + blockStart(kind) + delta(input.slice(0, split), field)
+            + delta(input.slice(split), field) + blockStop + stop;
+          if (field === "signature") {
+            await expect(send(wire)).rejects.toThrow();
+          } else {
+            const output = content(await send(wire), field);
+            if (field === "partial_json") {
+              expect(JSON.parse(output)).toEqual({ value: prefix + "[redacted] " + safe });
+            } else expect(output).toBe(prefix + "[redacted] " + safe);
+            const logical = field === "partial_json" ? JSON.parse(output).value : output;
+            expect(logical.replace(/\\u([\da-f]{4})/gi, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16))))
+              .not.toContain(token);
+          }
+        }
+      }
+    }
+    // A harmless signature must preserve all original escape spellings too.
+    expect(content(await send(start + blockStart("thinking") + delta(safe, "signature") + blockStop + stop), "signature")).toBe(safe);
+  }, token);
+});
+
 test("overlapping secret prefixes, markers, numeric tool values and JSON-escaped quotes", async () => {
   await streamFixture(async send => {
     expect(content(await send(start + blockStart() + delta("abcdefgh") + delta("ij tail") + blockStop + stop))).toBe("[redacted] tail");
@@ -287,45 +319,75 @@ test("blocks larger than the old total cap stream, while malformed and individua
 });
 
 test("ordinary content reaches the consumer before block stop", async () => {
-  let written = 0;
-  let stopped = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const frame = (body: unknown) => `data: ${JSON.stringify(body)}\n\n`;
-  const upstream = http.createServer((request, response) => {
-    request.resume();
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(frame({ type: "message_start", message: { type: "message" } }));
-    response.write(frame({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }));
-    written = performance.now();
-    response.write(frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ordinary first delta" } }));
-    timer = setTimeout(() => {
-      stopped = performance.now();
-      response.end(frame({ type: "content_block_stop", index: 0 }) + frame({ type: "message_stop" }));
-    }, 250);
-  });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  const address = upstream.address();
-  if (!address || typeof address === "string") throw new Error("Missing fixture port");
-  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "opaque-provider-8427", headers: {}, sessionId: "fixture" });
-  try {
-    const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
-    let received = "";
-    let first = 0;
-    const reader = response.body!.getReader();
+  const text = "ordinary first delta", safePrefix = text.slice(0, -1);
+  for (const aliasByte of [0xaa, 0xff]) for (let split = 0; split <= text.length; split++) for (const bytewise of [false, true]) {
+    let written = 0, first = 0, stopped = 0;
+    let release!: () => void;
+    const completion = new Promise<void>(resolve => { release = resolve; });
+    const upstream = http.createServer((request, response) => {
+      request.resume(); response.writeHead(200, { "content-type": "text/event-stream" });
+      written = performance.now();
+      const wire = start + blockStart() + delta(text.slice(0, split)) + delta(text.slice(split));
+      void (async () => {
+        for (const part of bytewise ? [...wire] : [wire]) {
+          if (response.destroyed) return;
+          response.write(part);
+          if (bytewise) await new Promise<void>(resolve => setImmediate(resolve));
+        }
+        await completion;
+        if (response.destroyed) return;
+        stopped = performance.now(); response.end(blockStop + stop);
+      })();
+    });
+    await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("Missing fixture port");
+    // Force both the alias that holds the final 'a' and one that releases it.
+    const random = spyOn(crypto, "randomBytes").mockImplementation(((size: number) => Buffer.alloc(size, aliasByte)) as typeof crypto.randomBytes);
+    let relay: Awaited<ReturnType<typeof startClaudeProviderRelay>>;
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += new TextDecoder().decode(value);
-        if (!first && received.includes("ordinary first delta")) first = performance.now();
-      }
-    } finally { reader.releaseLock(); }
-    console.info(JSON.stringify({ written, first, stopped, deltaMs: first - written, ...(first ? {} : { received }) }));
-    expect(first).toBeGreaterThan(written);
-    expect(first).toBeLessThan(stopped);
-  } finally {
-    clearTimeout(timer);
-    relay.close(); upstream.closeAllConnections(); upstream.close();
+      relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "opaque-provider-8427", headers: {}, sessionId: "fixture" });
+    } finally { random.mockRestore(); }
+    const abort = new AbortController();
+    // Only a deadlock bound: elapsed time never releases upstream completion.
+    const timer = setTimeout(() => abort.abort(new Error("No early safe content or stream completion")), 5000);
+    try {
+      const response = await fetch(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` }, signal: abort.signal });
+      const reader = response.body!.getReader(), decoder = new TextDecoder();
+      let pending = "", reconstructed = "";
+      const types: string[] = [];
+      try {
+        while (true) {
+          // Yield the reader independently of network and delta fragmentation.
+          await new Promise<void>(resolve => setImmediate(resolve));
+          const { done, value } = await reader.read();
+          if (done) { pending += decoder.decode(); break; }
+          pending += decoder.decode(value, { stream: true });
+          let boundary;
+          while ((boundary = pending.indexOf("\n\n")) >= 0) {
+            const complete = pending.slice(0, boundary + 2); pending = pending.slice(boundary + 2);
+            for (const event of events(complete)) {
+              types.push(event.type);
+              reconstructed += event.delta?.text ?? "";
+              if (!first && reconstructed.startsWith(safePrefix)) {
+                first = performance.now();
+                expect(stopped).toBe(0);
+                release();
+              }
+            }
+          }
+        }
+      } finally { reader.releaseLock(); }
+      expect(pending).toBe("");
+      expect(reconstructed).toBe(text);
+      expect(types[0]).toBe("message_start");
+      expect(types.slice(-2)).toEqual(["content_block_stop", "message_stop"]);
+      expect(first).toBeGreaterThan(written); expect(stopped).toBeGreaterThanOrEqual(first);
+      console.info(JSON.stringify({ aliasByte, split, bytewise, written, first, stopped }));
+    } finally {
+      clearTimeout(timer); release();
+      relay.close(); upstream.closeAllConnections(); upstream.close();
+    }
   }
 });
 

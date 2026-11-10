@@ -66,7 +66,11 @@ function escapeChannel(next, strict = false) {
         pending = [];
       } else {
         if (strict) throw new Error("Provider tool JSON escape is invalid");
+        // A failed escape can end at the start of the next one. Release only
+        // the disproven prefix and retain that backslash for the next write.
+        const restart = pending.at(-1).text === "\\" ? pending.pop() : undefined;
         deliver();
+        if (restart) pending.push(restart);
       }
     },
     end() {
