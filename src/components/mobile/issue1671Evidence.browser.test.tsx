@@ -8,7 +8,7 @@ import { chromium, type BrowserContext, type CDPSession, type Page } from "playw
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { deliverConversationMessage } from "@/lib/delivery";
+import { seedStoredDeliveredMessage } from "@/test-helpers/storedDelivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -18,7 +18,6 @@ import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/runtime/deliveredMessageOccurrences";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
-import type { FileEntry } from "@/lib/types";
 import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 import { firedSentence } from "@/lib/voiceCompanion/timerWords";
 import { captureProjectSetupHosts, captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, captureLaneReviewFrames, captureTaskTimelinePrototype } from "@/components/kanban/issue1695BrowserHarness";
@@ -1558,21 +1557,8 @@ async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unkn
     const recipient = registry.ensureConversation("claude", RUNNING_PATH, "default");
     const origin = agentMessageOrigin(registry.readOnlySnapshot(), sender.id, "orchestrator");
     const text = "The review found one issue. I am sending the handoff to this seat.";
-    let engineInput = "";
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: RUNNING_PATH, conversationId: recipient.id, text, images: [],
-      clientMessageId: "agent-label-evidence-delivery", origin,
-    }, {
-      recover: async () => null,
-      pathAllowed: () => true,
-      listFiles: async () => [{ root: "claude-projects", path: RUNNING_PATH, project: "wardrobe-agent", mtime: 0, size: 0 } as FileEntry],
-      resumeSpecFor: (() => ({ command: "resume", transcript: RUNNING_PATH, launchProfile: emptyLaunchProfile() })) as never,
-      deliver: async ({ payload }: { payload: string }) => {
-        engineInput = payload;
-        return { ok: true as const, outcome: "resumed" as const, target: "%7" };
-      },
-    });
-    if (!outcome.ok || engineInput !== text) throw new Error("agent evidence delivery did not settle");
+    const engineInput = text;
+    seedStoredDeliveredMessage(registry, { conversationId: recipient.id, text, clientMessageId: "agent-label-evidence-delivery", origin });
     const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === "agent-label-evidence-delivery");
     if (!delivery?.deliveredAt) throw new Error("agent evidence has no durable settlement");
     const feed = [

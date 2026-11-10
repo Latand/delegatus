@@ -170,7 +170,7 @@ function stubFetch(): void {
         files: FILES,
         projectCatalog: [LEDGER, ATLAS, MESH, NAMELESS].map((project) => ({ project, conversations: 2, smt: NOW - 30 })),
         projectDisplayNames: NAMES,
-        flows: [], pipelines: PIPELINES, workflows: [], tasks: TASKS, systemHealth: { tmux: { status: "healthy" } },
+        flows: [], pipelines: PIPELINES, workflows: [], tasks: TASKS, systemHealth: {},
       });
     }
     if (url.startsWith("/api/board")) {

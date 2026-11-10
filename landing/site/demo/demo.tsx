@@ -299,7 +299,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
       }),
       projectCwds: Object.fromEntries(projects.map((project) => [project, `/work/${project}`])),
-      flows: [], pipelines: world.pipelines, tasks: world.tasks, workflows: [], systemHealth: { tmux: { status: "healthy" } },
+      flows: [], pipelines: world.pipelines, tasks: world.tasks, workflows: [], systemHealth: {},
     });
   }
   if (path === "/api/task-icons") {

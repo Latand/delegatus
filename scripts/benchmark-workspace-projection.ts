@@ -38,7 +38,7 @@ try {
   const request = (etag?: string) => new Request("http://localhost/api/files?view=summary", { headers: { cookie: `${MEMBER_COOKIE}=${cookie}`, ...(etag ? { "if-none-match": etag } : {}) } });
   const catalog = Array.from({ length: 53_299 }, (_, i) => ({ path: path.join(root, "sessions", `${i}.jsonl`), root: "codex-sessions" as const, name: String(i), project: `repo-${i % 64}`, title: `Conversation ${i}`, firstPrompt: "Retained conversation context. ".repeat(8), engine: "codex" as const, kind: "session", fmt: "codex" as const, mtime: now / 1000, size: 4096 }));
   replaceConversationCatalog(catalog);
-  const board: FilesResponse = { files: catalog.map(entry => catalogEntryToFileEntry(entry, now)), tasks: [], flows: [], workflows: [], pipelines: [], systemHealth: { tmux: { status: "healthy" } } };
+  const board: FilesResponse = { files: catalog.map(entry => catalogEntryToFileEntry(entry, now)), tasks: [], flows: [], workflows: [], pipelines: [], systemHealth: {} };
   const body = JSON.stringify(board);
   const source = async (req: Request) => req.headers.get("if-none-match") === '"source"'
     ? new Response(null, { status: 304, headers: { etag: '"source"' } })

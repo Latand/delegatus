@@ -1082,7 +1082,6 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),
     systemHealth: {
-      tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,
       storage: { incidents: storageIncidents, writes: stateWriteHealth(stateDir()) },
     },

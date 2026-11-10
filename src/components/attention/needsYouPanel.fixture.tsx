@@ -480,7 +480,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/files") {
     return json({
       files, projectCatalog: Object.values(KEYS).map((project) => ({ project, conversations: files.filter((entry) => entry.project === project).length, smt: now - 20 })),
-      projectDisplayNames: NAMES, flows: [], pipelines, workflows: [], tasks, workLinks: { pipelines: {}, tasks: {} }, systemHealth: { tmux: { status: "healthy" } },
+      projectDisplayNames: NAMES, flows: [], pipelines, workflows: [], tasks, workLinks: { pipelines: {}, tasks: {} }, systemHealth: {},
     });
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });

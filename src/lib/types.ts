@@ -1,7 +1,6 @@
 import type { Flow, FlowAnnotation, ReviewVerdict } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { TmuxEndpointHealth } from "@/lib/tmux";
 import type { Workflow } from "@/lib/workflows/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
 import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
@@ -491,7 +490,6 @@ export interface FilesResponse {
   /** Resolved PR and issue links of the carried pipelines and tasks (#2059). */
   workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   systemHealth: {
-    tmux: TmuxEndpointHealth;
     registry?: Omit<
       import("@/lib/agent/registry").AgentRegistryStorageDiagnostics,
       "mirrorAgeMs" | "writerRatePerSecond"

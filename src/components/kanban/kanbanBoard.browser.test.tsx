@@ -98,7 +98,7 @@ describe("independent creation lock", () => {
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
       "/fixture/config": { task: "Independent accepted work", repoDir: "/fixture/repo", project: "atlas", autoStart: false, stages: [] },
-      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: { tmux: { status: "healthy" } } },
+      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: {} },
       "/api/tasks": { tasks: [] },
       "/api/pipelines": async (request: Request) => {
         if (request.method !== "POST") return Response.json({ pipelines: [] });
@@ -39266,7 +39266,7 @@ describe("finished work leaves In progress", () => {
         file.attentionDismissal = { at: ended, by: { kind: "system", rule: "container-finished" } } as FileEntry["attentionDismissal"];
       }
     }
-    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: { tmux: { status: "healthy" } } };
+    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: {} };
     const server = await serveEvidenceFixture(out, undefined, { "/api/files": payload, "/api/tasks": { tasks } });
     const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
     let browser: Browser | null = null;

@@ -4512,7 +4512,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: carried,
       projectCatalog: [{ project: PROJECT, conversations: files.length, smt: Math.max(...files.map((file) => file.mtime)) }],
-      flows: [], pipelines: [], tasks: [], workflows: [], systemHealth: { tmux: { status: "healthy" } },
+      flows: [], pipelines: [], tasks: [], workflows: [], systemHealth: {},
       ...(pinned ? { pinOverlayPaths: [pinned.path] } : {}),
     });
   }
@@ -4569,7 +4569,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
