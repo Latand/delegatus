@@ -63,6 +63,8 @@ function readStore(): SqliteStateCollection<CloudEnvironmentBinding> | null {
     decode: value => { const parsed = bindingSchema.safeParse(value); return parsed.success ? parsed.data : null; }, strictDecode: true,
     busyMessage: "Cloud environment bindings are busy" });
 }
+/** Changes with every binding write; null before the collection exists. */
+export function cloudEnvironmentBindingsRevision(): number | null { return readStateCollectionRevision(statePath("state.sqlite"), collection); }
 export async function initializeCloudEnvironmentBindings(): Promise<void> { await initializeStateCollectionsAsync(statePath("state.sqlite"), [seed]); }
 function read(key: string): CloudEnvironmentBinding | null { const store = readStore(); try { return store?.get(key) ?? null; } finally { store?.close(); } }
 async function update(value: CloudEnvironmentBinding, expected: number, assertCurrent: () => void): Promise<CloudEnvironmentBinding> {
@@ -177,7 +179,8 @@ export async function recordCloudEnvironmentPrerequisite(project: string, accoun
   error: unknown, assertCurrent: () => void, accountVersion: string | null = null): Promise<void> {
   const old = read(key(project, accountId, repository, "", "automatic")) ?? initial(project, accountId, repository, "", "automatic", Date.now());
   const code = error instanceof CloudEnvironmentError ? error.code : "catalog_incomplete";
-  await update({ ...old, accountVersion, state: "unavailable", code, retryAt: Date.now() + 15 * 60_000, retries: Math.min(3, old.retries + 1) }, old.revision, assertCurrent);
+  // The recorded choice follows the current one, so a changed choice is retried once.
+  await update({ ...old, accountVersion, selection: JSON.stringify(cloudEnvironmentSelection(project, accountId)), state: "unavailable", code, retryAt: Date.now() + 15 * 60_000, retries: Math.min(3, old.retries + 1) }, old.revision, assertCurrent);
 }
 export async function clearCloudEnvironmentPrerequisite(project: string, accountId: string, repository: string, assertCurrent: () => void): Promise<void> {
   const unresolvedKey = key(project, accountId, repository, "", "automatic"), store = readStore();
