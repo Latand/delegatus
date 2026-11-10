@@ -1594,6 +1594,7 @@ export class SqliteAgentRegistryStore {
       finally { this.snapshotReadDatabase = null; }
     }
     this.fileIdentityRead = null;
+    this.databaseReopens += 1;
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
@@ -2984,6 +2985,10 @@ export class SqliteAgentRegistryStore {
   }
 
   private fileIdentityRead: { identity: string | null } | null = null;
+  /** Counts the times this store's connection moved to another file. A read
+      that starts on one count and ends on another ran its statement against
+      the file that replaced the one its view was built from. */
+  private databaseReopens = 0;
 
   /** The database file's identity, read from the filesystem once for each
       synchronous run. Every access to an archived row checks that its view's
@@ -3031,8 +3036,16 @@ export class SqliteAgentRegistryStore {
         this.coldReaderRows.delete(id); this.coldReaderRows.set(id,cached);
         return cached.row;
       }
+      /* The identity above may be the answer kept for this synchronous run.
+         The connection makes its own check on every statement and moves to a
+         file that took the name since; the row it then returns, or fails to
+         find, belongs to that other database. */
+      const reopens = this.databaseReopens;
       const raw = (this.snapshotReadDatabase ?? this.db)
         .query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
+      if (!this.snapshotReadDatabase && reopens !== this.databaseReopens) {
+        throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+      }
       if (!raw) throw new Error("registry archive version is missing");
       this.onRowPayloadRead?.(collection,1);
       this.onRowPayloadParse?.(collection,1);
@@ -3721,7 +3734,10 @@ export class SqliteAgentRegistryStore {
         `SELECT id,value_json FROM registry_archive WHERE id IN (${Array.from({ length: count },() => "?").join(",")})`);
       for (let offset = 0; offset < missing.length; offset += 500) {
         const batch = missing.slice(offset,offset+500).map(([,id]) => id);
+        const reopens = this.databaseReopens;
         const stored = select(batch.length).all(...batch);
+        // The statement moved this connection to a file that replaced the view's.
+        if (reopens !== this.databaseReopens) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
         this.onRowPayloadRead?.(collection,stored.length);
         this.onRowPayloadParse?.(collection,stored.length);
         for (const { id,value_json: json } of stored) {
