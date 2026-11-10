@@ -1652,3 +1652,33 @@ test("a peer's archive changes refresh the view from the journal", () => {
   expect(held.receipts["cold-3"]!.error).toBe("retained history");
   expect(held.receipts["cold-5"]!.error).toBe("retained history");
 });
+
+test("a traversal of archived rows asks the filesystem for the file identity once", async () => {
+  const { open, filename, kept } = fixture();
+  const writer = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 300; index++) {
+      const id = `identity-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const view = writer.readOnlySnapshot().file;
+  const traverse = () => Object.values(view.receipts).filter(receipt => receipt.error === "retained history").length;
+  expect(traverse()).toBe(300);
+  await Promise.resolve();
+  const stat = spyOn(fs, "statSync");
+  try {
+    expect(traverse()).toBe(300);
+    const asked = stat.mock.calls.filter(call => call[0] === filename).length;
+    // One answer covers the run; a row at a time it was asked 300 times.
+    expect(asked).toBeGreaterThan(0);
+    expect(asked).toBeLessThan(5);
+    // The next run asks again, so a replaced file is still refused.
+    await Promise.resolve();
+    stat.mockClear();
+    expect(traverse()).toBe(300);
+    expect(stat.mock.calls.filter(call => call[0] === filename).length).toBeGreaterThan(0);
+  } finally { stat.mockRestore(); }
+});

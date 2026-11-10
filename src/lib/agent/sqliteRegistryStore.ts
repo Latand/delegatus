@@ -1593,6 +1593,7 @@ export class SqliteAgentRegistryStore {
       try { this.preserveIssuedSnapshots(); }
       finally { this.snapshotReadDatabase = null; }
     }
+    this.fileIdentityRead = null;
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
@@ -2982,6 +2983,20 @@ export class SqliteAgentRegistryStore {
     return reader;
   }
 
+  private fileIdentityRead: { identity: string | null } | null = null;
+
+  /** The database file's identity, read from the filesystem once for each
+      synchronous run. Every access to an archived row checks that its view's
+      file is still the current one; a traversal of a collection with 20,000
+      archived rows made 20,000 stat calls for one answer. The answer is kept
+      until the run yields, and dropped at once when this store reopens. */
+  private fileIdentityThisTurn(): string | null {
+    if (this.fileIdentityRead) return this.fileIdentityRead.identity;
+    const read = this.fileIdentityRead = { identity: databaseFileIdentity(this.filename) };
+    queueMicrotask(() => { if (this.fileIdentityRead === read) this.fileIdentityRead = null; });
+    return read.identity;
+  }
+
   /** Archive accessors survive many refreshes. Capture only the immutable
       version and its grant lists; retaining a whole snapshot here links the
       next view to every older view whose accessors it reuses. Operation owners
@@ -2993,7 +3008,7 @@ export class SqliteAgentRegistryStore {
   ): () => unknown {
     return () => {
       // The immutable version id pins payload truth for an already-held view.
-      if (!this.snapshotReadDatabase && databaseFileIdentity(this.filename) !== identity) {
+      if (!this.snapshotReadDatabase && this.fileIdentityThisTurn() !== identity) {
         throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
       }
       /* An operation owner normalizes against its delivery, which commits
