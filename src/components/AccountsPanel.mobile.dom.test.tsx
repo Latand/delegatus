@@ -138,6 +138,17 @@ test("phone provider credential damage shows repair and never offers sign-in", a
   expect(view.host.querySelector('[data-mobile2-account="cl-provider"]')?.getAttribute("data-mobile2-account-state")).toBe("active");
 });
 
+test("the phone provider editor takes the row's full width and room for its longest placeholder", async () => {
+  const provider = account({ id: "cl-provider", label: "Provider", authPresent: true,
+    provider: { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: null } });
+  const view = await mount([engineState("claude", [provider], provider.id)]);
+  await open(view.host, "cl-provider");
+  await click(view.host.querySelector('[data-mobile2-account="cl-provider"] [data-account-provider-edit]'));
+  const editor = view.host.querySelector('[data-claude-provider-editor="cl-provider"]') as HTMLElement;
+  expect(editor.className).toContain("-ml-8");
+  expect((editor.querySelector("textarea") as HTMLTextAreaElement).getAttribute("rows")).toBe("5");
+});
+
 function engineState(engine: "claude" | "codex", accounts: AccountOption[], active: string, over: Partial<EngineAccountsState> = {}): EngineAccountsState {
   return {
     engine,

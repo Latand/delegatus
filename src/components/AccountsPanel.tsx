@@ -434,10 +434,10 @@ function RowRefusal({ account, state, engine, phone }: { account: AccountOption;
             ? <a key={href} href={href} data-account-refusal-session={work.conversationId ?? work.path ?? ""} title={name} className={`inline-flex min-w-0 items-center font-semibold text-accent underline underline-offset-2 ${s.action}`}><span className="break-words">{name}</span></a>
             : <span key={name} className="break-words text-muted">{name}</span>;
         })}
+        {more > 0 ? <span data-account-refusal-more className="text-muted">{t("accounts.refusal.sessionsMore", { count: more })}</span> : null}
         {action ? <button type="button" disabled={state.mutation !== null} onClick={action.run} className={`${accentAction(s)} -ml-1.5`}>{action.label}</button> : null}
         <button type="button" data-account-refusal-close aria-label={t("accounts.refusal.dismiss")} onClick={state.dismissRemoval} className={`${quietAction(s)} ml-auto ${s.edge}`}>{t("common.close")}</button>
       </div>
-      {more > 0 ? <p className="text-muted">{t("accounts.refusal.sessionsMore", { count: more })}</p> : null}
     </div>
   );
 }
@@ -805,6 +805,7 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
   inRow?: boolean;
 }) {
   const { t } = useLocale();
+  const rowSizes = useSizes();
   const pad = inRow ? "" : "px-3 pb-2 pl-[26px]";
   const login = account.login ?? null;
   const phase = login?.phase;
@@ -845,12 +846,15 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
 
   if (nonterminal && login) {
     const cancelable = phase !== "canceling";
+    /* Inside a row Cancel is the same plain text action the Codex sign-in line draws. */
     const cancelButton = (
       <button
         type="button"
         onClick={() => activate(() => void state.cancelLogin(login.operationId))}
         disabled={busy || !cancelable}
-        className="inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"
+        className={inRow
+          ? `${quietAction(rowSizes)} ${rowSizes.edge}`
+          : "inline-flex min-h-[44px] shrink-0 items-center rounded-[7px] border border-border bg-canvas px-2 py-0.5 text-[11px] font-semibold hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6"}
       >
         {t("accounts.claudeLogin.cancel")}
       </button>
@@ -1138,7 +1142,7 @@ function ClaudeProviderEditor({ state, account, phone = false, inRow = false, op
   // The editor stays mounted while closed: a refused save reopens it with what was typed.
   if (inRow && !open) return null;
   return (
-    <div className={inRow ? "" : phone ? "px-3 pb-2" : "border-t border-border px-3 py-2"} data-claude-provider-editor={account?.id ?? "new"}>
+    <div className={inRow ? (phone ? "-ml-8" : "") : phone ? "px-3 pb-2" : "border-t border-border px-3 py-2"} data-claude-provider-editor={account?.id ?? "new"}>
       {inRow ? null : <button type="button" className="min-h-11 text-[11px] font-semibold text-accent underline underline-offset-2 sm:min-h-6" onClick={() => setOpen(!open)}>
         {account ? t("accounts.provider.edit") : t("accounts.provider.add")}
       </button>}
@@ -1148,7 +1152,7 @@ function ClaudeProviderEditor({ state, account, phone = false, inRow = false, op
         <input aria-label={t("accounts.provider.token")} type={"password"} autoComplete="off" placeholder={account ? t("accounts.provider.keepToken") : t("accounts.provider.token")} value={token} onChange={(event) => setToken(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.model")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.model")} value={model} onChange={(event) => setModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
         <input aria-label={t("accounts.provider.smallModel")} list={`claude-provider-models-${account?.id ?? "new"}`} placeholder={t("accounts.provider.smallModel")} value={smallFastModel} onChange={(event) => setSmallFastModel(event.target.value)} className="min-h-11 w-full rounded border border-border bg-canvas px-2 py-1 text-xs sm:min-h-8" />
-        <textarea aria-label={t("accounts.provider.headers")} placeholder={t("accounts.provider.headersHint")} value={headerLines} onChange={(event) => setHeaderLines(event.target.value)} className="min-h-16 w-full rounded border border-border bg-canvas px-2 py-1 text-xs" />
+        <textarea aria-label={t("accounts.provider.headers")} placeholder={t("accounts.provider.headersHint")} rows={phone ? 5 : 3} value={headerLines} onChange={(event) => setHeaderLines(event.target.value)} className="min-h-16 w-full rounded border border-border bg-canvas px-2 py-1 text-xs" />
         {account?.provider?.customHeaderNames?.length ? <div className="text-[11px] text-muted">{t("accounts.provider.savedHeaders")}: {account.provider.customHeaderNames.join(", ")}</div> : null}
         {account?.provider?.customHeaderNames?.length ? <label className="flex items-center gap-2 text-[11px] text-muted"><input type="checkbox" checked={clearHeaders} onChange={(event) => setClearHeaders(event.target.checked)} />{t("accounts.provider.clearHeaders")}</label> : null}
         {baseUrl.replace(/\/$/, "") === "https://opencode.ai/zen/go" ? <div className="text-[11px] text-muted">{t("accounts.provider.goModels")}</div> : null}

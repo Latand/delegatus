@@ -915,6 +915,32 @@ test("a live-session refusal names each conversation as a link that opens it", a
   expect(view.host.querySelector("[data-account-refusal]")!.textContent).toContain("and 2 more");
 });
 
+test("a live-session refusal keeps its \"and N more\" right after the last link, ahead of Close", async () => {
+  const refusal: AccountRemovalRefusal = {
+    accountId: "acc", label: "Acc", reasons: ["live_sessions"], sessionCount: 4,
+    sessions: [
+      { conversationId: "conversation_one", path: null, title: "Fix the login form" },
+      { conversationId: "conversation_two", path: null, title: "Second" },
+    ],
+  };
+  const view = await mount(state(login({ phase: "authenticated" }), { accounts: [managedAcc], removal: { kind: "refused", refusal } }));
+  mounted.push(view);
+  const links = [...view.host.querySelectorAll("a[data-account-refusal-session]")];
+  const more = view.host.querySelector("[data-account-refusal-more]")!;
+  const close = view.host.querySelector("[data-account-refusal-close]")!;
+  expect(more.textContent).toBe("and 2 more");
+  expect(links.at(-1)!.nextElementSibling).toBe(more);
+  expect(more.nextElementSibling).toBe(close);
+});
+
+test("the Claude sign-in Cancel in a row is a plain text action like the Codex one", async () => {
+  const view = await mount(state(login({ phase: "awaiting_browser" })));
+  mounted.push(view);
+  const cancel = [...view.host.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!;
+  expect(cancel.className.split(/\s+/)).not.toEqual(expect.arrayContaining(["border"]));
+  expect(cancel.className.split(/\s+/)).not.toContain("bg-canvas");
+});
+
 test("Main's summary says its files stay in place and offers Show again", async () => {
   let restored: string | null = null;
   const hidden: AccountRemovalSummary = { ...SUMMARY, accountId: "default", label: "Main", archive: null, files: 0, bytes: 0, conversations: 0, pins: 1, deliveries: 0, migrations: 0, bindings: 2, hiddenHome: ["", "home", "someone", ".claude"].join("/") };
