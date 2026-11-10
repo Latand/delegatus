@@ -357,6 +357,35 @@ function measure(args: { target: string; phone: boolean; viewport: { width: numb
     if (rect.height < floor) failures.push(`target under ${floor}px high: ${control.textContent?.trim().slice(0, 24) || control.getAttribute("aria-label")} (${Math.round(rect.height)})`);
     if (args.phone && rect.width < floor) failures.push(`target under ${floor}px wide: ${control.textContent?.trim().slice(0, 24) || control.getAttribute("aria-label")} (${Math.round(rect.width)})`);
   }
+  // A placeholder of an empty field shows whole: one line fits its field's width, a textarea has the lines it needs.
+  for (const field of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input[placeholder], textarea[placeholder]")) {
+    if (!visible(field) || field.value !== "") continue;
+    const style = getComputedStyle(field);
+    const inner = field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const mirror = document.createElement("div");
+    mirror.textContent = field.placeholder;
+    mirror.style.cssText = `position:absolute;visibility:hidden;font:${style.font};letter-spacing:${style.letterSpacing};white-space:${field.tagName === "TEXTAREA" ? "pre-wrap" : "nowrap"};overflow-wrap:break-word;width:${field.tagName === "TEXTAREA" ? `${inner}px` : "auto"}`;
+    document.body.append(mirror);
+    const need = mirror.getBoundingClientRect();
+    mirror.remove();
+    const label = field.placeholder.slice(0, 30);
+    if (field.tagName === "INPUT" && need.width > inner + 0.5) failures.push(`placeholder cut at the field's edge: «${label}» needs ${Math.round(need.width)} of ${Math.round(inner)}`);
+    if (field.tagName === "TEXTAREA" && need.height > field.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) + 0.5) failures.push(`placeholder cut by the field's bottom: «${label}» needs ${Math.round(need.height)} of ${Math.round(field.clientHeight)}`);
+  }
+  // A refusal's "and N more" follows its last link directly, and Close comes after the list.
+  for (const refusal of document.querySelectorAll("[data-account-refusal]")) {
+    const more = refusal.querySelector("[data-account-refusal-more]");
+    const links = refusal.querySelectorAll("[data-account-refusal-session]");
+    if (more && links.length && links[links.length - 1]!.nextElementSibling !== more) failures.push("a refusal's «and N more» does not follow its last link");
+    const close = refusal.querySelector("[data-account-refusal-close]");
+    if (more && close && !(more.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING)) failures.push("a refusal's Close sits before the end of its list");
+  }
+  // The two sign-in Cancel controls look alike: no border and no fill on either.
+  for (const cancel of document.querySelectorAll<HTMLElement>("[data-account-row] [data-account-signin-cancel], [data-account-row] [role='group'] button")) {
+    if (!visible(cancel) || !/^(cancel|скасувати)$/i.test((cancel.textContent ?? "").trim())) continue;
+    const style = getComputedStyle(cancel);
+    if (parseFloat(style.borderTopWidth) > 0 || style.backgroundColor !== "rgba(0, 0, 0, 0)") failures.push(`a sign-in Cancel is drawn as a button: border ${style.borderTopWidth}, fill ${style.backgroundColor}`);
+  }
   // Contrast of the row's text against what lies behind it.
   const parse = (value: string): [number, number, number, number] | null => {
     const rgb = /^rgba?\(([^)]+)\)$/.exec(value);
