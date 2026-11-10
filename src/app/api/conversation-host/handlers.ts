@@ -165,9 +165,6 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       image?: unknown;
       images?: unknown;
       action?: unknown;
-      key?: unknown;
-      label?: unknown;
-      question?: unknown;
       decision?: unknown;
       requestId?: unknown;
       answer?: unknown;

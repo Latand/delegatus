@@ -1670,7 +1670,7 @@ test("a pinned account without a retry deadline falls back and records the degra
   }
 });
 
-test("a pinned spawn still refuses when no account is admissible", async () => {
+test("a pinned spawn still refuses when no account is admissible", async () => withSandboxRuntimeSocket(async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "account-pin-none-"));
   const store = registry();
   const dependencies = {
@@ -1712,7 +1712,7 @@ test("a pinned spawn still refuses when no account is admissible", async () => {
     accountPin: true,
     state: "failed",
   });
-});
+}));
 
 test("a legacy resolver mismatch also degrades the pin to a durable fallback", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "unusable-account-pin-"));
@@ -4228,14 +4228,10 @@ test("spawn replay keeps its identity after parent alias adoption", () => {
   })).toMatchObject({ kind: "replay", receipt: { launchId: first.receipt.launchId } });
 });
 
-/* A rollback switch is reached for during an incident, so it must leave the
-   deployment able to spawn. `NEXT_PUBLIC_RUNTIME_UI=0` used to leave the
-   implicit choice on `structured` while still failing the capability gap, so
-   every spawn — tmux included — came back 409. The request below carries a
-   directory that does not exist: the cwd check sits *after* the transport
-   decision and the gap, so a 400 naming the directory proves the route got
-   past both, and the 409 gap proves it did not. */
-test("the runtime-UI rollback leaves a default spawn on a transport that can still spawn", async () => {
+/* Every agent runs on a structured host, so a rollback switch has no other
+   transport to move a spawn onto. `NEXT_PUBLIC_RUNTIME_UI=0` refuses the spawn
+   with the gap that names the switch, before the directory is even checked. */
+test("the runtime-UI rollback refuses a spawn and names the switch", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "runtime-ui-rollback-"));
   const missing = path.join(cwd, "no-such-directory");
   const previous = {
@@ -4262,8 +4258,8 @@ test("the runtime-UI rollback leaves a default spawn on a transport that can sti
       body: JSON.stringify({ title: "Test semantic spawn", engine: "codex", cwd: missing, prompt: "smoke" }),
     }));
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: `directory does not exist: ${missing}` });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain("NEXT_PUBLIC_RUNTIME_UI=0");
   } finally {
     if (previous.transport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
     else process.env.LLV_SPAWN_TRANSPORT = previous.transport;

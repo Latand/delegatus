@@ -28,7 +28,7 @@ let killResult: { status: number; body: Record<string, unknown> } = { status: 20
     action — never the real one — served the kill. */
 const MOCK_MARKER = "stub-conversation-action";
 mock.module("@/lib/conversation/actions", () => ({
-  CONVERSATION_ACTIONS: ["interrupt", "kill", "resume", "compact", "dialog-key"] as const,
+  CONVERSATION_ACTIONS: ["interrupt", "kill", "resume", "compact"] as const,
   applyConversationAction: async (request: KillRequest) => {
     killed.push(request);
     settleKill?.();

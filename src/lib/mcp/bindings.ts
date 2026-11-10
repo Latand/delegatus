@@ -7165,9 +7165,6 @@ async function conversationAction(
     conversationId,
     path: transcriptPath,
     action,
-    key: text(args.key),
-    label: args.label,
-    question: args.question,
     ...(action === "speed" ? { serviceTier: args.serviceTier } : {}),
     ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
     ...(action === "answer" ? {

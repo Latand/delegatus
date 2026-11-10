@@ -642,7 +642,7 @@ test.each(["missing", "corrupt"] as const)("a %s queued payload cannot keep an o
   });
 });
 
-test.each(["missing", "corrupt"] as const)("a %s tmux queue payload cannot keep an ownerless receipt alive past the setup bound", async (condition) => {
+test.each(["missing", "corrupt"] as const)("a stored terminal-transport receipt with a %s queue payload fails once the setup bound passes", async (condition) => {
   const store = registry();
   const retryAt = new Date(Date.now() + 60 * 60_000).toISOString();
   const begun = store.beginSpawnRequest({
@@ -704,7 +704,6 @@ test.each(["missing", "corrupt"] as const)("a %s tmux queue payload cannot keep 
     state: "failed",
     admissionOwner: null,
     queuedPinnedSpawn: null,
-    error: `tmux spawn interrupted before durable queue publication or pane binding: ${begun.receipt.launchId}`,
   });
 
   expect(await terminalizeStaleStructuredSpawns(restarted, null, { now: AGED }))

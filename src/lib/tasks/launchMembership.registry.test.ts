@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -313,7 +314,9 @@ function queuedPinnedReceipt(registry: InstanceType<typeof AgentRegistry>, attem
     accountId: "account-a",
     accountPin: true,
     clientAttemptId: attempt,
-    requestDigest: "c".repeat(64),
+    /* One digest per attempt: two launches with the same digest are one
+       request repeated, and recovery retires the older one. */
+    requestDigest: createHash("sha256").update(attempt).digest("hex"),
     origin: { kind: "operator" },
     launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Queued work" }),
     launchDisplay: { prompt: "Continue the queued work", images: 0, echo: "Continue the queued work" },
@@ -331,6 +334,10 @@ function queuedPinnedReceipt(registry: InstanceType<typeof AgentRegistry>, attem
     parentArtifactPath: null,
     pipelineSourceConversationId: null,
   }, `Pinned account quota is exhausted — queued until ${retryAt}`);
+  /* The launching process is gone by the time recovery runs: its claim on the
+     launch is released, as a restart leaves it. */
+  const owner = registry.spawnReceipt(begun.receipt.launchId)?.admissionOwner;
+  if (owner) registry.releaseSpawnActuation(begun.receipt.launchId, owner);
   return begun.receipt;
 }
 

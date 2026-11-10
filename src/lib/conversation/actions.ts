@@ -212,7 +212,7 @@ async function answerNativeQuestion(
       })
     : null;
   if (!structured) {
-    return failure("no structured host holds this conversation; a terminal-hosted question is answered with dialog-key", 409);
+    return failure("no structured host holds this conversation, so nothing can receive the answer", 409);
   }
   return structured;
 }

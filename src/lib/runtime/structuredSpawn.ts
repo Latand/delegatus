@@ -994,6 +994,8 @@ async function curatorReceiptAdmission(receipt: SpawnReceipt, registry: AgentReg
   });
 }
 
+const RETIRED_TERMINAL_TRANSPORT_REASON = "this launch was recorded for the removed terminal transport; launch it again";
+
 async function failQueuedPinnedSpawn(
   registry: AgentRegistry,
   receipt: SpawnReceipt,
@@ -1041,9 +1043,11 @@ async function actuateQueuedPinnedSpawn(
     assertActive();
     return failQueuedPinnedSpawn(registry, receipt, structuredSpawnFailureReason(error));
   }
-  const admissionClaim = receipt.transport === "tmux"
-    ? (await registry.deliveryWriteOrBusy({ label: "registry.claimTmuxSpawnActuation" }, registry.claimTmuxSpawnActuation.bind(registry, receipt.launchId)))
-    : (await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId)));
+  /* A launch queued by a release that hosted agents in terminal panes names a
+     transport no release has. It ends here, unclaimed, with a reason the
+     operator can act on; nothing is started. */
+  if (receipt.transport === "tmux") return failQueuedPinnedSpawn(registry, receipt, RETIRED_TERMINAL_TRANSPORT_REASON);
+  const admissionClaim = await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId));
   if (!admissionClaim.claimed || !admissionClaim.receipt.admissionOwner) return admissionClaim.receipt;
   const releaseIfCancelled = async () => {
     try { assertActive(); }
@@ -1079,7 +1083,7 @@ async function actuateQueuedPinnedSpawn(
     if (account.engine !== receipt.engine || account.accountId !== launchAccountId) {
       throw new Error("queued pinned spawn resolved a different account");
     }
-    admission = claimedQueue.admissionDeadlineAt || (receipt.transport === "tmux" && Boolean(admissionClaim.receipt.pane))
+    admission = claimedQueue.admissionDeadlineAt
       ? { kind: "admissible", basis: "current", stale: false, retryAt: null }
       : await (options.resolvePinnedSpawnAdmission ?? resolvePinnedSpawnAdmission)(receipt.engine, account);
   } catch (error) {
@@ -1114,12 +1118,6 @@ async function actuateQueuedPinnedSpawn(
   }
   if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "owner relay queued launch authorization revoked");
-  /* A launch queued by a release that hosted agents in terminal panes names a
-     transport no release has. It ends here with a reason the operator can act
-     on; nothing is started. */
-  if (receipt.transport === "tmux") {
-    return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "this launch was queued for the removed terminal transport; launch it again");
-  }
   let response: SpawnResponse | null = null;
   try {
     if (!client) {
@@ -1312,21 +1310,15 @@ export async function terminalizeStaleStructuredSpawns(
     const createdMs = structuredSetupStartedAt(receipt);
     if (!stagedLaunchRecovery(receipt) && (!Number.isFinite(createdMs) || now() - createdMs < timeoutMs)) continue;
     if (receipt.transport === "tmux") {
-      const ownerlessPreSettlement = receipt.state === "starting"
-        && !receipt.key
-        && !receipt.pane
-        && !receipt.admissionOwner;
-      if (!ownerlessPreSettlement) continue;
+      /* No release hosts a terminal pane, so a launch an older release left
+         in flight on that transport has no agent to wait for. */
       examined += 1;
       try {
-        await registry.failSpawnOffLoop(
-          receipt.launchId,
-          `tmux spawn interrupted before durable queue publication or pane binding: ${receipt.launchId}`,
-        );
+        await registry.failSpawnOffLoop(receipt.launchId, RETIRED_TERMINAL_TRANSPORT_REASON);
         const failed = registry.spawnReceipt(receipt.launchId);
         if (failed?.state === "failed" || failed?.state === "conflicted") terminalized.push(receipt.launchId);
       } catch (error) {
-        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale tmux spawn reconciliation failed", {
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale terminal-transport spawn reconciliation failed", {
           launchId: receipt.launchId,
           error,
         });
