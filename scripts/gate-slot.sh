@@ -95,6 +95,11 @@ pre_push_parent() {
 # without a user manager does it run in a leaf of the agent's own scope, whose
 # memory cap then applies; that fallback is announced, never silent.
 run() {
+  # A caller that names no deadline sends a heavy command of its own: a build
+  # or a whole suite of any project. The runner's own default of fifteen
+  # minutes stopped healthy ones and their work was run again, so such a
+  # command gets an hour. Hooks and comparators pass their own deadlines.
+  export LLV_OWNED_RUN_TIMEOUT_MS="${LLV_OWNED_RUN_TIMEOUT_MS:-3600000}"
   if [[ -n ${LLV_GATE_WAIT_STARTED:-} ]]; then
     printf 'running\n' > "$LLV_GATE_WAIT_STARTED"
     unset LLV_GATE_WAIT_STARTED
