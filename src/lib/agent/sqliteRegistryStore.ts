@@ -1048,6 +1048,8 @@ export class SqliteAgentRegistryStore {
     collections: Map<RowCollection, {
       hot: Map<string, unknown>; deliveries?: Map<string, unknown>; synthetic: string;
       built: () => Record<string, unknown>; cold?: Map<string, PropertyDescriptor>;
+      /** The stored key order the collection was built with. */
+      order?: readonly string[];
     }>;
   } | null = null;
   /** Counts forgotten cold grant decisions; a change rebuilds the grant-bearing collections. */
@@ -1594,6 +1596,7 @@ export class SqliteAgentRegistryStore {
       finally { this.snapshotReadDatabase = null; }
     }
     this.fileIdentityRead = null;
+    this.databaseReopens += 1;
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
@@ -1856,6 +1859,22 @@ export class SqliteAgentRegistryStore {
                 yield;
               }
               reader.coldRowProjectionIdentity = identity;
+              /* A projector's result for an archived version follows from the
+                 immutable version alone, so it holds for the same file. The
+                 first projection after a preparation otherwise read, parsed
+                 and normalized every archived row of its collection again in
+                 one synchronous call. The view built below drops the results
+                 of versions that have left the archive. */
+              for (const [projector, results] of priorReader.coldRowProjectionResults) {
+                let left = results.size;
+                const kept = new Map<number, unknown>();
+                reader.coldRowProjectionResults.set(projector, kept);
+                for (const [id, result] of results) {
+                  if (left-- <= 0) break;
+                  kept.set(id, result);
+                  yield;
+                }
+              }
             }
             const hot = yield* reader.loadHotSteps();
             const stamp = reader.storeStamp();
@@ -2656,6 +2675,16 @@ export class SqliteAgentRegistryStore {
           yield;
         }
         if (kind === "deliveryOperationOwners") {
+          /* An owner with no stored row is synthesized from its delivery and
+             has no stored order. A whole load lists such owners in the order
+             of their deliveries, so a refresh lists them the same way. */
+          for (const id of yield* this.orderedKeysSteps("heldDeliveries")) {
+            const operationId = Object.hasOwn(file.heldDeliveries,id) ? file.heldDeliveries[id]!.command?.operationId : undefined;
+            if (operationId !== undefined && !Object.hasOwn(ordered,operationId) && Object.hasOwn(file.deliveryOperationOwners,operationId)) {
+              ordered[operationId] = file.deliveryOperationOwners[operationId];
+            }
+            yield;
+          }
           for (const key in file.deliveryOperationOwners) {
             const owner = file.deliveryOperationOwners[key];
             if (!Object.hasOwn(ordered,key)) ordered[key] = owner;
@@ -2984,6 +3013,10 @@ export class SqliteAgentRegistryStore {
   }
 
   private fileIdentityRead: { identity: string | null } | null = null;
+  /** Counts the times this store's connection moved to another file. A read
+      that starts on one count and ends on another ran its statement against
+      the file that replaced the one its view was built from. */
+  private databaseReopens = 0;
 
   /** The database file's identity, read from the filesystem once for each
       synchronous run. Every access to an archived row checks that its view's
@@ -3031,8 +3064,16 @@ export class SqliteAgentRegistryStore {
         this.coldReaderRows.delete(id); this.coldReaderRows.set(id,cached);
         return cached.row;
       }
+      /* The identity above may be the answer kept for this synchronous run.
+         The connection makes its own check on every statement and moves to a
+         file that took the name since; the row it then returns, or fails to
+         find, belongs to that other database. */
+      const reopens = this.databaseReopens;
       const raw = (this.snapshotReadDatabase ?? this.db)
         .query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
+      if (!this.snapshotReadDatabase && reopens !== this.databaseReopens) {
+        throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+      }
       if (!raw) throw new Error("registry archive version is missing");
       this.onRowPayloadRead?.(collection,1);
       this.onRowPayloadParse?.(collection,1);
@@ -3299,9 +3340,23 @@ export class SqliteAgentRegistryStore {
     };
     const sameRows = function* (left: Map<string, unknown> | undefined, right: Map<string, unknown>): Generator<void, boolean> {
       if (!left || left.size !== right.size) return false;
+      /* In the same order too: a row deleted and added again with the same
+         content is the same frozen row at a new place. */
+      const keys = left.keys();
       for (const [key,row] of right) {
-        if (left.get(key) !== row) return false;
+        if (keys.next().value !== key || left.get(key) !== row) return false;
         yield;
+      }
+      return true;
+    };
+    /* The hot rows alone do not place a hot row among the archived ones, so a
+       built collection is reused only under the stored order it was built with. */
+    const sameOrder = function* (left: readonly string[] | undefined, right: readonly string[]): Generator<void, boolean> {
+      if (left === right) return true;
+      if (!left || left.length !== right.length) return false;
+      for (let index = 0; index < right.length; index++) {
+        if (left[index] !== right[index]) return false;
+        if (index % 64 === 63) yield;
       }
       return true;
     };
@@ -3336,7 +3391,8 @@ export class SqliteAgentRegistryStore {
       const reusable = previous && sameHot && previous.synthetic === synthetic && sameDeliveries
         && (collection !== "deliveryOperationOwners"
           || source?.coldSignatures.get("heldDeliveries") === coldSignatures.get("heldDeliveries"))
-        && (!READER_GRANT_COLLECTIONS.has(collection) || source!.forgets === this.coldGrantForgets);
+        && (!READER_GRANT_COLLECTIONS.has(collection) || source!.forgets === this.coldGrantForgets)
+        && (yield* sameOrder(previous.order,yield* this.orderedKeysSteps(collection)));
       if (reusable) {
         Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: previous.built });
         reused.add(collection);
@@ -3370,7 +3426,7 @@ export class SqliteAgentRegistryStore {
       yield* built.primeSteps();
       Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });
       coldReused.add(collection);
-      nextCache.collections.set(collection,{ hot,synthetic,built,cold });
+      nextCache.collections.set(collection,{ hot,synthetic,built,cold,order });
     }
     for (const collection of coldKeys.keys()) {
       if (reused.has(collection) || coldReused.has(collection)) continue;
@@ -3418,6 +3474,7 @@ export class SqliteAgentRegistryStore {
     // twice. Grant decisions above are still pinned inside this transaction.
     for (const [collection,archived] of collections) {
       let order = yield* this.orderedKeysSteps(collection);
+      nextCache.collections.get(collection)!.order = order;
       if (collection === "deliveryOperationOwners") {
         // Normalization also synthesizes owners for hot legacy deliveries;
         // neither these nor cold synthetic owners have a stored order yet.
@@ -3721,7 +3778,10 @@ export class SqliteAgentRegistryStore {
         `SELECT id,value_json FROM registry_archive WHERE id IN (${Array.from({ length: count },() => "?").join(",")})`);
       for (let offset = 0; offset < missing.length; offset += 500) {
         const batch = missing.slice(offset,offset+500).map(([,id]) => id);
+        const reopens = this.databaseReopens;
         const stored = select(batch.length).all(...batch);
+        // The statement moved this connection to a file that replaced the view's.
+        if (reopens !== this.databaseReopens) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
         this.onRowPayloadRead?.(collection,stored.length);
         this.onRowPayloadParse?.(collection,stored.length);
         for (const { id,value_json: json } of stored) {
