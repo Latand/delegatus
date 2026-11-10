@@ -1,3 +1,4 @@
+import { textLengthError } from "@/lib/textLimits";
 import { memoryImportDrainSignal } from "./importStatus";
 import { createHash } from "node:crypto";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -34,7 +35,9 @@ export function problemInput(value: unknown): ProblemInput {
   const input = value as Record<string, unknown>;
   const field = (key: string, limit: number) => {
     const raw = input[key];
-    if (typeof raw !== "string" || !lessonTextLength(raw) || lessonTextLength(raw) > limit) throw new RoleMemoryRefusal("LESSON_INVALID", `problem.${key} must be 1–${limit} characters`);
+    if (typeof raw !== "string") throw new RoleMemoryRefusal("LESSON_INVALID", `problem.${key} must be text`);
+    const actual = lessonTextLength(raw);
+    if (!actual || actual > limit) throw new RoleMemoryRefusal("LESSON_INVALID", textLengthError(`problem.${key}`, actual, limit, "normalized Unicode code points", 1));
     return lessonText(raw);
   };
   return { statement: field("statement", PROBLEM_MAX_CHARS), evidence: field("evidence", PROBLEM_EVIDENCE_MAX_CHARS) };

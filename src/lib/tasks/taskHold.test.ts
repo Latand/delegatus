@@ -92,7 +92,7 @@ test("a hold moves work to Waiting, preserves its age on edits, and clears by th
 });
 
 
-test("legacy status writes remain accepted, create clamps reasons, and unrelated hidden cards stay untouched", () => {
+test("legacy status writes remain accepted, create refuses oversized reasons, and unrelated hidden cards stay untouched", () => {
   const hidden = task({ id: "hidden", status: "blocked", groupHidden: { at: NOW, by: "operator", admitted: [] } });
   const original = task();
   const waiting = ok(patchTask([original, hidden], original.id, { status: "blocked" }, NOW));
@@ -104,9 +104,8 @@ test("legacy status writes remain accepted, create clamps reasons, and unrelated
     expect(moved.task.status).toBe(status);
     expect(moved.task.hold).toBeUndefined();
   }
-  const created = ok(createTask([], { project: "fixture", placement: "unplaced", text: "Wait for a dependency", hold: { kind: "unknown", note: "x".repeat(250), until: "bad date" } }, [], { now: () => NOW }));
-  expect(created.task.status).toBe("blocked");
-  expect(created.task.hold).toEqual({ kind: "unstated", note: "x".repeat(200), since: NOW, by: "operator" });
+  const created = createTask([], { project: "fixture", placement: "unplaced", text: "Wait for a dependency", hold: { kind: "unknown", note: "x".repeat(250), until: "bad date" } }, [], { now: () => NOW });
+  expect(created).toMatchObject({ ok: false, field: "hold.note", error: expect.stringContaining("actual length is 250") });
   const numbered = ok(createTask([], { project: "fixture", placement: "unplaced", text: "Wait for a PR", hold: { kind: "pr", ref: 123, note: "After merge" } }, [], { now: () => NOW, actor: "agent", conversationId: "conversation_fixture" }));
   expect(numbered.task.hold?.ref).toBe("123");
   expect(numbered.task.hold?.conversationId).toBe("conversation_fixture");

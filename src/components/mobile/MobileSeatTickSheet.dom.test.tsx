@@ -4,6 +4,7 @@ import { useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { applySeatTickSettingsChange, defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
@@ -351,7 +352,11 @@ test("a save on the phone adopts the record the route read back", async () => {
 });
 
 const REQUIRED_REFUSAL = "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
-const OVER_LIMIT_REFUSAL = "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again";
+const overLimitResult = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { reason: "x".repeat(501) }, {
+  at: "2026-11-01T10:00:00.000Z", actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+});
+if (overLimitResult.ok) throw new Error("Expected the production instructions limit to refuse 501 units");
+const OVER_LIMIT_REFUSAL = overLimitResult.error;
 
 test.each([
   ["en", REQUIRED_REFUSAL, "«Instructions for every wake» is required when disabling wakes or changing the cadence. Write what the agent should do"],

@@ -15200,8 +15200,8 @@ export function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchRe
   const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId") => Object.hasOwn(req, field) && req[field] !== undefined;
   /* A runtime choice for a running attempt names the attempt and the conversation it was made on. */
   const runningAttemptBound = req.action === "override-stage" && req.applyNow === true;
-  if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review" && req.action !== "accept-head") {
-    return { error: "expectedRevision applies only to resolve-decision, continue-review and accept-head", status: 400, field: "expectedRevision" };
+  if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review" && req.action !== "accept-head" && req.action !== "convert-legacy-review" && req.action !== "revert-legacy-review") {
+    return { error: "expectedRevision applies only to resolve-decision, continue-review, accept-head, convert-legacy-review and revert-legacy-review", status: 400, field: "expectedRevision" };
   }
   if (req.addRounds !== undefined && req.action !== "continue-review") {
     return { error: "addRounds applies only to continue-review", status: 400, field: "addRounds" };
