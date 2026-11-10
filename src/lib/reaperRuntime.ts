@@ -1,5 +1,5 @@
 import { FLOW_ARCHIVE } from "@/lib/flows/retirement";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryLivenessRows, registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { realExec } from "@/lib/workflows/provision";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -846,18 +846,39 @@ function migrationSourceHasLiveOwner(
     && receiptIsLive(snapshot, receipt, probe));
 }
 
-function unsettledDeliveryIdsForIntent(
-  snapshot: RegistryFile,
-  intentId: string,
-): string[] {
-  const conversationIds = new Set(Object.values(snapshot.conversations)
-    .filter((conversation) => conversation.migration?.intentId === intentId)
-    .map((conversation) => conversation.id));
-  return Object.values(snapshot.heldDeliveries)
-    .filter((delivery) =>
-      conversationIds.has(delivery.conversationId)
-      && ["held", "assigned", "delivery-uncertain"].includes(delivery.state))
-    .map((delivery) => delivery.id);
+/* The hygiene pass needs two identity fields of every conversation and held
+   delivery. Read through a projection, an archived row is parsed once for the
+   life of the store; enumerating the rows themselves parsed the whole archive
+   again for every migration intent on every pass. */
+const MIGRATION_OWNERSHIP: RegistryRowProjector<"conversations", { id: RegistryConversation["id"]; intentId: string } | null> = {
+  id: "reaper-migration-ownership-v1", collection: "conversations",
+  project: conversation => conversation.migration ? { id: conversation.id, intentId: conversation.migration.intentId } : null,
+};
+const UNSETTLED_DELIVERIES: RegistryRowProjector<"heldDeliveries", { id: string; conversationId: string } | null> = {
+  id: "reaper-unsettled-deliveries-v1", collection: "heldDeliveries",
+  project: delivery => ["held", "assigned", "delivery-uncertain"].includes(delivery.state)
+    ? { id: delivery.id, conversationId: delivery.conversationId } : null,
+};
+
+/** One reading of who owns what, shared by every intent of a hygiene pass. */
+function migrationHygieneIndex(snapshot: RegistryFile): {
+  ownedBy: (intentId: string) => RegistryConversation[];
+  unsettledDeliveryIds: (conversationIds: ReadonlySet<string>) => string[];
+} {
+  const ownedIds = new Map<string, RegistryConversation["id"][]>();
+  for (const [, owned] of registryRowProjection(snapshot, MIGRATION_OWNERSHIP)) {
+    if (!owned) continue;
+    const ids = ownedIds.get(owned.intentId);
+    if (ids) ids.push(owned.id); else ownedIds.set(owned.intentId, [owned.id]);
+  }
+  const unsettled = registryRowProjection(snapshot, UNSETTLED_DELIVERIES)
+    .flatMap(([, delivery]) => delivery ? [delivery] : []);
+  return {
+    ownedBy: (intentId) => (ownedIds.get(intentId) ?? [])
+      .flatMap((id) => { const conversation = snapshot.conversations[id]; return conversation ? [conversation] : []; }),
+    unsettledDeliveryIds: (conversationIds) => conversationIds.size
+      ? unsettled.filter((delivery) => conversationIds.has(delivery.conversationId)).map((delivery) => delivery.id) : [],
+  };
 }
 
 /**
@@ -892,10 +913,10 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
     ));
     if (settled?.value?.state === "failed") terminalized.add(id);
   }
+  const index = migrationHygieneIndex(snapshot);
   for (const intent of Object.values(snapshot.migrationIntents)) {
-    const owned = Object.values(snapshot.conversations)
-      .filter((conversation) => conversation.migration?.intentId === intent.id);
-    const ids = unsettledDeliveryIdsForIntent(snapshot, intent.id);
+    const owned = index.ownedBy(intent.id);
+    const ids = index.unsettledDeliveryIds(new Set(owned.map((conversation) => conversation.id)));
     /* A rolled-back migration owns only deliveries whose latest admission was
        inside its drain window (#972). A resend can reuse an older reservation,
        so `createdAt` alone does not prove ownership. */
@@ -1021,7 +1042,8 @@ export async function runReaperCycle(options: {
   try {
     const inventorySidecar = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER === "1";
     const hasSpawnWork = !inventorySidecar || registry.openSpawnReceipts().length > 0
-      || Object.values(registry.readOnlySnapshot().entries).some(entry => entry.status === "starting");
+      // A starting entry is never archived, so the liveness rows hold every one.
+      || registryLivenessRows(registry.readOnlySnapshot()).entries.some(entry => entry.status === "starting");
     if (hasSpawnWork) {
       const runtimeClientForSpawns = (options.actuation?.runtimeClient ?? runtimeHostClient)();
       await (options.actuation?.terminalizeStaleSpawns ?? terminalizeStaleStructuredSpawns)(registry, runtimeClientForSpawns, {

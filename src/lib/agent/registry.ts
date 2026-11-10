@@ -110,8 +110,8 @@ import {
   SqliteAgentRegistryStore,
   registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
-  sqliteRegistryStoreImported,
-  type RegistryDeliveryCompactionChanges,
+  sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
+  type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -2937,6 +2937,22 @@ function initialSpawnReceiptOf(file: RegistryFile, delivery: HeldDelivery): Spaw
     || resolveConversationAlias(file, receipt.conversationId) !== resolveConversationAlias(file, delivery.conversationId)) return null;
   return receipt;
 }
+
+/* What the failed-launch convergence can tell from a delivery alone: whose
+   first message it is, and which side of the join it could still owe. A
+   settled first message owes nothing, so its receipt is never read. */
+const INITIAL_SPAWN_DELIVERIES: RegistryRowProjector<"heldDeliveries", { launchId: string; failed: boolean } | null> = {
+  id: "initial-spawn-deliveries-v1", collection: "heldDeliveries",
+  project: (delivery) => {
+    const clientMessageId = delivery.clientMessageId;
+    if (!clientMessageId || !clientMessageId.startsWith("spawn_")) return null;
+    const launchId = clientMessageId.slice("spawn_".length);
+    if (delivery.command.operationId !== `spawn_message_${launchId}`) return null;
+    if (delivery.state === "failed") return { launchId, failed: true };
+    return delivery.attempts === 0 && (delivery.state === "held" || delivery.state === "assigned")
+      ? { launchId, failed: false } : null;
+  },
+};
 
 /** A terminal first-message delivery failure makes its launch receipt terminal
     too. Leaving the receipt path-pending would keep the operator card live
@@ -8263,8 +8279,19 @@ export class AgentRegistry {
   /** The read half of {@link terminalizeFailedSpawnDeliveries}. */
   failedSpawnDeliveryCandidates(): boolean {
     const snapshot = this.readOnlySnapshot();
-    const hasCandidate = Object.values(snapshot.heldDeliveries).some(
-      (delivery) => {
+    /* A failed first message is a candidate only while its launch is open, and
+       an open launch is always among the liveness rows. That keeps the pass
+       from reading the receipt of every launch that ever failed. */
+    let openLaunches: Set<string> | null = null;
+    const hasCandidate = registryRowProjection(snapshot, INITIAL_SPAWN_DELIVERIES).some(
+      ([key, initial]) => {
+        if (!initial) return false;
+        if (initial.failed) {
+          openLaunches ??= new Set(registryLivenessRows(snapshot).receipts.map((receipt) => receipt.launchId));
+          if (!openLaunches.has(initial.launchId)) return false;
+        }
+        const delivery = snapshot.heldDeliveries[key];
+        if (!delivery) return false;
         const receipt = initialSpawnReceiptOf(snapshot, delivery);
         if (!receipt) return false;
         if (delivery.state === "failed") {

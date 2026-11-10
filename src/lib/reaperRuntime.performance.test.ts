@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { performance } from "node:perf_hooks";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "@/lib/agent/registryPerformanceDataset";
 import type { TranscriptHost } from "@/lib/agent/transcriptHost";
 import type { FileEntry } from "@/lib/types";
 
@@ -168,3 +170,53 @@ test("stale migration convergence scales linearly with a production-shaped regis
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 15_000);
+
+test("a hygiene pass with nothing to converge reads no archived history again, whatever the intent count", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-idle-hygiene-"));
+  const deliveries = 640;
+  const intents = 12;
+  const dataset = buildRegistryPerformanceDataset(directory, {
+    ...scaledRegistryPerformanceShape(0.02),
+    heldDeliveries: deliveries, deliveryOperationOwners: deliveries, migrationIntents: intents, hotTerminalRows: 0,
+  });
+  /* The archive a long-lived installation carries is larger than the store's
+     row cache, so a pass that enumerates it reads it from disk every time.
+     Settled deliveries are rewritten with a large body and archived again. */
+  const peer = new Database(dataset.filename);
+  peer.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.text',?)
+    WHERE collection='heldDeliveries' AND json_extract(value_json,'$.state')='delivered'`).run("retained delivery body ".repeat(4_500));
+  peer.close();
+  const reads = new Map<string, number>();
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: dataset.filename,
+    onSqliteRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count),
+  });
+  try {
+    while (registry.archiveInactiveRows(10_000) > 0) { /* until the rewritten rows are cold again */ }
+    const census = new Database(dataset.filename, { readonly: true });
+    const archived = census.query<{ rows: number; bytes: number }, []>(`SELECT COUNT(*) AS rows, SUM(LENGTH(a.value_json)) AS bytes
+      FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id WHERE c.collection='heldDeliveries'`).get()!;
+    census.close();
+    expect(archived.rows).toBeGreaterThan(deliveries - 40);
+    expect(archived.bytes).toBeGreaterThan(56 * 1024 * 1024);
+    await registry.prepareReadOnlySnapshot();
+    const pass = async () => {
+      reads.clear();
+      const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(registry, Date.now(), {}, []);
+      const candidates = registry.failedSpawnDeliveryCandidates();
+      return { terminalized, candidates, deliveries: reads.get("heldDeliveries") ?? 0, conversations: reads.get("conversations") ?? 0 };
+    };
+
+    const first = await pass();
+    const second = await pass();
+
+    console.log(JSON.stringify({ probe: "idle-hygiene-archive-reads", first, second }));
+    expect(first.terminalized).toEqual([]);
+    expect(first.candidates).toBe(false);
+    expect(first.deliveries).toBeLessThan(intents * archived.rows);
+    expect(second).toEqual({ terminalized: [], candidates: false, deliveries: 0, conversations: 0 });
+  } finally {
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 120_000);
