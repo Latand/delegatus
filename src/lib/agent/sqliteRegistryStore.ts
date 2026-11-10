@@ -2,7 +2,7 @@ import { seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
-import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
+import { nextSqliteRows, observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
@@ -231,6 +231,33 @@ function finishSteps<T>(steps: Generator<void, T>): T {
   let next = steps.next();
   while (!next.done) next = steps.next();
   return next.value;
+}
+
+/** One archived row of a view: its key, the immutable version it holds and
+ * that version's place in its collection. */
+type ColdHeader = { collection: RowCollection; row_key: string; archive_id: number; row_order: number };
+
+/** The archived rows a journal replay found changed since the last view: the
+ * keys whose kept version no longer stands and the versions that stand now. */
+type ColdMappingDelta = { removed: Map<RowCollection, Set<string>>; added: ColdHeader[]; ownersChanged: boolean };
+
+/** Rows one measured header read returns. A header measured alone spent more
+ * in its two measurements than in SQLite: the keys of 20,000 rows took 91 ms
+ * a row at a time. */
+const HEADER_BATCH_ROWS = 1024;
+
+/** Every row of one open statement, a measured batch for each step. The
+ * statement is finished when the read ends, is refused or is abandoned. */
+function* headerRowSteps<Row>(rows: IterableIterator<Row>): Generator<void, Row[]> {
+  const read: Row[] = [];
+  try {
+    for (;;) {
+      const batch = performanceSpans.sync("registry.headers", () => nextSqliteRows(rows, HEADER_BATCH_ROWS), HEADER_BATCH_ROWS);
+      for (const row of batch) read.push(row);
+      yield;
+      if (batch.length < HEADER_BATCH_ROWS) return read;
+    }
+  } finally { rows.return?.(); }
 }
 
 /** Native sorts see at most 128 headers. Merge copying also yields every 128
@@ -1003,12 +1030,12 @@ export class SqliteAgentRegistryStore {
       grant decisions are all unchanged (#2761). */
   private coldViewCache: {
     signature: string;
-    headers: readonly { collection: RowCollection; row_key: string; archive_id: number }[];
+    headers: readonly ColdHeader[];
     /** Derived from `headers` once: keys and version ids per collection. */
     coldKeys: Map<RowCollection, Set<string>>;
     coldIds: Map<RowCollection, Map<string, number>>;
     /** The headers of each collection, in archive order. */
-    grouped: Map<RowCollection, { collection: RowCollection; row_key: string; archive_id: number }[]>;
+    grouped: Map<RowCollection, ColdHeader[]>;
     /** Per collection, which archive versions it holds: a mapping change in
         one collection leaves the others' built views reusable. */
     coldSignatures: Map<RowCollection, string>;
@@ -1566,6 +1593,7 @@ export class SqliteAgentRegistryStore {
       try { this.preserveIssuedSnapshots(); }
       finally { this.snapshotReadDatabase = null; }
     }
+    this.fileIdentityRead = null;
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
@@ -2079,10 +2107,8 @@ export class SqliteAgentRegistryStore {
       } finally { changed.return?.(); }
     } else {
       this.coldKeys = new Set();
-      const keys = this.db.query<{ collection: string; row_key: string }, []>("SELECT collection,row_key FROM registry_cold").iterate();
-      try {
-        for (const row of keys) { this.coldKeys.add(grantDecisionKey(row.collection,row.row_key)); yield; }
-      } finally { keys.return?.(); }
+      for (const row of yield* headerRowSteps(this.db.query<{ collection: string; row_key: string }, []>(
+        "SELECT collection,row_key FROM registry_cold").iterate())) this.coldKeys.add(grantDecisionKey(row.collection,row.row_key));
       for (const [collection,rows] of this.rowCache) {
         for (const key of rows.keys()) {
           if (this.coldKeys.has(grantDecisionKey(collection,key))) rows.delete(key);
@@ -2243,26 +2269,25 @@ export class SqliteAgentRegistryStore {
   private *orderedKeysSteps(collection: RowCollection): Generator<void, string[]> {
     let order = this.collectionOrders.get(collection);
     if (!order) {
-      const rows = this.db.query<{ row_key: string; row_order: number }, [string]>(
-        "SELECT row_key,row_order FROM registry_rows WHERE collection=? ORDER BY row_order").iterate(collection);
+      const rows = yield* headerRowSteps(this.db.query<{ row_key: string; row_order: number }, [string]>(
+        "SELECT row_key,row_order FROM registry_rows WHERE collection=? ORDER BY row_order").iterate(collection));
       const keys: string[] = [], orders = new Map<string, number>();
-      try {
-        for (;;) {
-          const next = performanceSpans.sync("registry.headers", () => rows.next());
-          if (next.done) break;
-          keys.push(next.value.row_key);
-          orders.set(next.value.row_key,next.value.row_order);
-          yield;
-        }
-      } finally { rows.return?.(); }
+      for (const row of rows) {
+        keys.push(row.row_key);
+        orders.set(row.row_key,row.row_order);
+      }
+      yield;
       order = { keys, orders };
       this.collectionOrders.set(collection,order);
     }
     return order.keys;
   }
 
-  /** Drop the kept order of every collection in which a journalled row was
-      added, removed or moved. */
+  /** Bring the kept order of every collection up to the journal. A row
+      appended after the last kept one, the place every new row takes, and a
+      removed row are applied to a copy of the order, because views hold the
+      order they were built with. A row that moved, or one added anywhere
+      else, drops the order of its collection, which is then read again. */
   private *refreshCollectionOrdersSteps(changes: readonly { collection: string; row_key: string }[]): Generator<void, void> {
     const named = new Map<RowCollection, string[]>();
     for (const { collection,row_key: key } of changes) {
@@ -2275,13 +2300,44 @@ export class SqliteAgentRegistryStore {
     for (const [collection,keys] of named) {
       const kept = this.collectionOrders.get(collection)!;
       const position = this.db.query<{ row_order: number }, [string, string]>("SELECT row_order FROM registry_rows WHERE collection=? AND row_key=?");
+      const removed = new Set<string>();
+      const appended: Array<{ key: string; order: number }> = [];
+      let moved = false;
       for (const key of keys) {
         yield;
-        if (position.get(collection,key)?.row_order !== kept.orders.get(key)) {
-          this.collectionOrders.delete(collection);
-          break;
-        }
+        const current = position.get(collection,key)?.row_order;
+        const previous = kept.orders.get(key);
+        if (current === previous) continue;
+        if (current === undefined) removed.add(key);
+        else if (previous === undefined) appended.push({ key, order: current });
+        else { moved = true; break; }
       }
+      if (!moved && !removed.size && !appended.length) continue;
+      appended.sort((a, b) => a.order - b.order);
+      /* Rows that share an order are told apart by the stored row itself, so
+         only a strictly later order is known to follow every kept row. */
+      let last = -Infinity;
+      for (let index = kept.keys.length - 1; index >= 0; index--) {
+        const key = kept.keys[index]!;
+        if (!removed.has(key)) { last = kept.orders.get(key)!; break; }
+      }
+      for (const row of appended) {
+        if (row.order <= last) { moved = true; break; }
+        last = row.order;
+      }
+      if (moved) {
+        this.collectionOrders.delete(collection);
+        continue;
+      }
+      const orders = new Map(kept.orders);
+      for (const key of removed) orders.delete(key);
+      const ordered = removed.size ? kept.keys.filter(key => !removed.has(key)) : [...kept.keys];
+      for (const row of appended) {
+        ordered.push(row.key);
+        orders.set(row.key,row.order);
+      }
+      yield;
+      this.collectionOrders.set(collection,{ keys: ordered, orders });
     }
   }
 
@@ -2615,17 +2671,31 @@ export class SqliteAgentRegistryStore {
          holds the archived version it held, or none as before. */
       const kept = this.coldViewCache;
       const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
+      const versionOrder = this.db.query<{ row_order: number }, [number]>("SELECT row_order FROM registry_archive WHERE id=?");
       let archiveUnchanged = kept !== null;
+      /* The journal names every row whose archived version changed, so the
+         kept mapping is brought up to date from those rows alone. */
+      const coldDelta: ColdMappingDelta = { removed: new Map(), added: [], ownersChanged };
       if (kept) for (const change of changes) {
-        if (ROW_COLLECTION_KEYS.has(change.collection)
-          && version.get(change.collection,change.row_key)?.archive_id !== kept.coldIds.get(change.collection as RowCollection)?.get(change.row_key)) {
-          archiveUnchanged = false;
-          break;
-        }
         yield;
+        if (!ROW_COLLECTION_KEYS.has(change.collection)) continue;
+        const collection = change.collection as RowCollection;
+        const current = version.get(collection,change.row_key)?.archive_id;
+        const previous = kept.coldIds.get(collection)?.get(change.row_key);
+        if (current === previous) continue;
+        archiveUnchanged = false;
+        if (previous !== undefined) {
+          const removed = coldDelta.removed.get(collection) ?? new Set<string>();
+          removed.add(change.row_key);
+          coldDelta.removed.set(collection,removed);
+        }
+        if (current !== undefined) {
+          coldDelta.added.push({ collection, row_key: change.row_key, archive_id: current, row_order: versionOrder.get(current)!.row_order });
+        }
       }
       const ownersUnchanged = archiveUnchanged && !ownersChanged;
-      const remembered = yield* this.rememberReadOnlySteps({ file,revision,stamp },false,false,{ archiveUnchanged,ownersUnchanged });
+      const remembered = yield* this.rememberReadOnlySteps({ file,revision,stamp },false,false,
+        { archiveUnchanged,ownersUnchanged,...(kept && !archiveUnchanged ? { coldDelta } : {}) });
       this.snapshotChangeId = this.changeId();
       if (ownsTransaction) this.db.exec("COMMIT");
       return remembered;
@@ -2754,6 +2824,28 @@ export class SqliteAgentRegistryStore {
       if (!this.coldRowProjections.has(id)) missing.push(id);
       yield;
     }
+    yield* this.projectColdClaimsSteps(missing);
+  }
+
+  /** The projection pass for a mapping brought up to date from the journal:
+      versions that left the mapping are forgotten and the ones that entered
+      it are projected, as the complete pass does over every header. */
+  private *rememberColdProjectionDeltaSteps(added: readonly ColdHeader[], retired: readonly number[]): Generator<void, void> {
+    for (const id of retired) {
+      this.coldRowProjections.delete(id);
+      this.forgetColdGrant(id);
+      yield;
+    }
+    const missing: number[] = [];
+    for (const header of added) {
+      if ((READER_GRANT_COLLECTIONS.has(header.collection) || header.collection === "heldDeliveries")
+        && !this.coldRowProjections.has(header.archive_id)) missing.push(header.archive_id);
+      yield;
+    }
+    yield* this.projectColdClaimsSteps(missing);
+  }
+
+  private *projectColdClaimsSteps(missing: readonly number[]): Generator<void, void> {
     for (let offset = 0; offset < missing.length; offset += 64) {
       yield;
       const ids = missing.slice(offset,offset+64);
@@ -2891,6 +2983,20 @@ export class SqliteAgentRegistryStore {
     return reader;
   }
 
+  private fileIdentityRead: { identity: string | null } | null = null;
+
+  /** The database file's identity, read from the filesystem once for each
+      synchronous run. Every access to an archived row checks that its view's
+      file is still the current one; a traversal of a collection with 20,000
+      archived rows made 20,000 stat calls for one answer. The answer is kept
+      until the run yields, and dropped at once when this store reopens. */
+  private fileIdentityThisTurn(): string | null {
+    if (this.fileIdentityRead) return this.fileIdentityRead.identity;
+    const read = this.fileIdentityRead = { identity: databaseFileIdentity(this.filename) };
+    queueMicrotask(() => { if (this.fileIdentityRead === read) this.fileIdentityRead = null; });
+    return read.identity;
+  }
+
   /** Archive accessors survive many refreshes. Capture only the immutable
       version and its grant lists; retaining a whole snapshot here links the
       next view to every older view whose accessors it reuses. Operation owners
@@ -2902,7 +3008,7 @@ export class SqliteAgentRegistryStore {
   ): () => unknown {
     return () => {
       // The immutable version id pins payload truth for an already-held view.
-      if (!this.snapshotReadDatabase && databaseFileIdentity(this.filename) !== identity) {
+      if (!this.snapshotReadDatabase && this.fileIdentityThisTurn() !== identity) {
         throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
       }
       /* An operation owner normalizes against its delivery, which commits
@@ -2990,7 +3096,7 @@ export class SqliteAgentRegistryStore {
     tracked = false,
     /* What a refresh already read from the journal: whether any archived
        version moved, and whether a stored operation owner did. */
-    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean } = { archiveUnchanged: false, ownersUnchanged: false },
+    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean; coldDelta?: ColdMappingDelta } = { archiveUnchanged: false, ownersUnchanged: false },
   ): StampedSnapshot {
     return finishSteps(this.rememberReadOnlySteps(snapshot, complete, tracked, journal));
   }
@@ -3001,7 +3107,7 @@ export class SqliteAgentRegistryStore {
     tracked = false,
     /* What a refresh already read from the journal: whether any archived
        version moved, and whether a stored operation owner did. */
-    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean } = { archiveUnchanged: false, ownersUnchanged: false },
+    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean; coldDelta?: ColdMappingDelta } = { archiveUnchanged: false, ownersUnchanged: false },
   ): Generator<void, StampedSnapshot> {
     /* A whole load that recorded no dependencies leaves none to trust, and no
        journal position the kept orders could be replayed from. */
@@ -3014,29 +3120,89 @@ export class SqliteAgentRegistryStore {
     const signature = prior && journal.archiveUnchanged ? prior.signature
       : this.changesReady ? snapshot.stamp : "";
     const cache = prior?.signature === signature ? prior : null;
-    const readHeaders: Array<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }> = [];
-    let headers = cache?.headers ?? readHeaders;
-    if (!cache && this.changesReady) {
-      const rows = this.db.query<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }, []>(
-        "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate();
-      try {
-        for (;;) {
-          const next = performanceSpans.sync("registry.headers", () => rows.next());
-          if (next.done) break;
-          readHeaders.push(next.value);
+    let headers: readonly ColdHeader[] = cache?.headers ?? [];
+    let grouped = cache?.grouped;
+    let coldKeys = cache?.coldKeys;
+    let coldIds = cache?.coldIds;
+    let coldSignatures = cache?.coldSignatures;
+    let keptOwners = cache && journal.ownersUnchanged ? cache.syntheticOwners : null;
+    /* A replayed journal names the archived rows that changed. The kept
+       mapping of every other collection stands as it is, and a changed
+       collection is rebuilt from its kept headers and the named rows; reading
+       the complete mapping again walked every archived row for one of them. */
+    const delta = !cache && prior && journal.coldDelta && this.coldRowProjectionIdentity === identity ? journal.coldDelta : null;
+    if (delta && prior) {
+      grouped = new Map(prior.grouped);
+      coldKeys = new Map(prior.coldKeys);
+      coldIds = new Map(prior.coldIds);
+      coldSignatures = new Map(prior.coldSignatures);
+      const added = new Map<RowCollection, ColdHeader[]>();
+      for (const header of delta.added) {
+        const rows = added.get(header.collection) ?? [];
+        rows.push(header);
+        added.set(header.collection,rows);
+        this.rowCache.get(header.collection)?.delete(header.row_key);
+        this.localRows.delete(grantDecisionKey(header.collection,header.row_key));
+        yield;
+      }
+      const retired: number[] = [];
+      const touched = new Set<RowCollection>([...delta.removed.keys(),...added.keys()]);
+      for (const collection of touched) {
+        const removed = delta.removed.get(collection);
+        const entered = (added.get(collection) ?? []).sort((a, b) => a.row_order - b.row_order);
+        const previousIds = prior.coldIds.get(collection);
+        for (const key of removed ?? []) retired.push(previousIds!.get(key)!);
+        const group: ColdHeader[] = [];
+        const keys = new Set<string>(), ids = new Map<string, number>();
+        let next = 0, total = 0, largest = 0;
+        const hold = (header: ColdHeader) => {
+          group.push(header);
+          keys.add(header.row_key);
+          ids.set(header.row_key,header.archive_id);
+          total += header.archive_id;
+          largest = Math.max(largest,header.archive_id);
+        };
+        for (const header of prior.grouped.get(collection) ?? []) {
           yield;
+          if (removed?.has(header.row_key)) continue;
+          while (next < entered.length && entered[next]!.row_order < header.row_order) hold(entered[next++]!);
+          hold(header);
         }
-      } finally { rows.return?.(); }
+        while (next < entered.length) hold(entered[next++]!);
+        if (group.length) {
+          grouped.set(collection,group);
+          coldKeys.set(collection,keys);
+          coldIds.set(collection,ids);
+          coldSignatures.set(collection,`${group.length}:${total}:${largest}`);
+        } else {
+          grouped.delete(collection);
+          coldKeys.delete(collection);
+          coldIds.delete(collection);
+          coldSignatures.delete(collection);
+        }
+      }
+      headers = [...grouped.values()].flat();
+      yield;
+      yield* this.rememberColdProjectionDeltaSteps(delta.added,retired);
+      for (const results of this.coldRowProjectionResults.values()) {
+        for (const id of retired) results.delete(id);
+        yield;
+      }
+      /* Synthesized owners follow the archived deliveries and the stored
+         owner keys; with neither named by the journal they stand. */
+      if (!delta.ownersChanged && !touched.has("heldDeliveries")) keptOwners = prior.syntheticOwners;
+    } else if (!cache && this.changesReady) {
+      const readHeaders = yield* headerRowSteps(this.db.query<ColdHeader, []>(
+        "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate());
       headers = yield* orderedHeaderSteps(readHeaders, (a, b) => a.row_order - b.row_order);
     }
     yield;
-    if (!cache) yield* this.rememberColdProjectionSteps(headers);
+    if (!cache && !delta) yield* this.rememberColdProjectionSteps(headers);
     const coldGrantChangeId = yield* this.refreshColdGrantDecisionSteps(snapshot.stamp);
     yield;
     /* The archive's mapping changes rarely and commits often: what is derived
        from the mapping alone is kept with it, so a refresh after another
        writer's commit walks only the collections whose hot rows changed. */
-    let grouped = cache?.grouped;
     if (!grouped) {
       grouped = new Map();
       for (const header of headers) {
@@ -3046,21 +3212,12 @@ export class SqliteAgentRegistryStore {
         else grouped.set(header.collection,[header]);
       }
     }
-    const keptOwners = cache && journal.ownersUnchanged ? cache.syntheticOwners : null;
     const syntheticOwners = keptOwners ?? new Map<string,string>();
     const archivedDeliveries = keptOwners ? undefined : grouped.get("heldDeliveries");
     if (archivedDeliveries) {
       const storedOwners = new Set<string>();
-      const ownerRows = this.db.query<{ row_key: string }, []>(
-        "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners'").iterate();
-      try {
-        for (;;) {
-          const next = ownerRows.next();
-          if (next.done) break;
-          storedOwners.add(next.value.row_key);
-          yield;
-        }
-      } finally { ownerRows.return?.(); }
+      for (const row of yield* headerRowSteps(this.db.query<{ row_key: string }, []>(
+        "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners'").iterate())) storedOwners.add(row.row_key);
       for (const header of archivedDeliveries) {
         const operationId = this.coldRowProjections.get(header.archive_id)?.operationId;
         if (operationId && !storedOwners.has(operationId) && !syntheticOwners.has(operationId)) syntheticOwners.set(operationId,header.row_key);
@@ -3068,9 +3225,6 @@ export class SqliteAgentRegistryStore {
       }
     }
     if (headers.length) this.grantDecisions = null;
-    let coldKeys = cache?.coldKeys;
-    let coldIds = cache?.coldIds;
-    let coldSignatures = cache?.coldSignatures;
     if (!coldKeys || !coldIds || !coldSignatures) {
       coldKeys = new Map<RowCollection, Set<string>>();
       coldIds = new Map<RowCollection, Map<string, number>>();

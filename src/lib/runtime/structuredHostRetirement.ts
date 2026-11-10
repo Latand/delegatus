@@ -1330,7 +1330,7 @@ export async function runStructuredHostRetirementSweep(
     // Admission waits asynchronously under the registry's deadline, with an origin.
     return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, (): GoneHostReconciliation => {
       if (publicationState() !== "ready") return { status: "failed", reason: "retirement publication is no longer ready" };
-      const current = registry.readOnlySnapshot().entries[sessionKeyId(observed.key)];
+      const current = registry.hostEntry(observed.key);
       const process = recordedScopeProcess(current?.structuredHost);
       const currentBoot = readers.bootEpoch();
       if (scope && (!boot.determined || !currentBoot.determined || currentBoot.value !== boot.value)) {
@@ -1361,7 +1361,7 @@ export async function runStructuredHostRetirementSweep(
       if (retired) return { status: "gone" };
       // Another writer can win after our read and before the registry CAS.
       // A lost CAS proves no cleanup failure until its current custody is read.
-      if (custodyChanged(registry.readOnlySnapshot().entries[sessionKeyId(observed.key)])) return changed;
+      if (custodyChanged(registry.hostEntry(observed.key))) return changed;
       return { status: "failed", reason: "registry retirement refused retained custody" };
     });
   });

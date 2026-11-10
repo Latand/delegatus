@@ -199,3 +199,30 @@ test("a hygiene pass with nothing to converge reads no archived history again, w
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 120_000);
+
+test("the failed-launch check reads no receipt for a first message that settled", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-spawn-messages-"));
+  const dataset = buildRegistryPerformanceDataset(directory, {
+    ...scaledRegistryPerformanceShape(0.02), heldDeliveries: 240, deliveryOperationOwners: 240, spawnMessages: 180,
+  });
+  const reads = new Map<string, number>();
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: dataset.filename,
+    onSqliteRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count),
+  });
+  try {
+    await registry.prepareReadOnlySnapshot();
+    const joined = Object.values(registry.snapshot().heldDeliveries)
+      .filter((delivery) => delivery.clientMessageId?.startsWith("spawn_") && delivery.state === "delivered").length;
+    expect(joined).toBeGreaterThan(150);
+    reads.clear();
+
+    expect(registry.failedSpawnDeliveryCandidates()).toBe(false);
+
+    console.log(JSON.stringify({ probe: "failed-launch-check-receipt-reads", joined, receipts: reads.get("receipts") ?? 0 }));
+    expect(reads.get("receipts") ?? 0).toBe(0);
+  } finally {
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 60_000);
