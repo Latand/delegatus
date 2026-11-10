@@ -61,3 +61,16 @@ test("a recovered repository lookup retires its unresolved-ref marker and return
     expect(readCloudEnvironmentBindings("repo-fixture").bindings[0]).toMatchObject({ ref: "main", state: "ready" });
   } finally { clock.mockRestore(); }
 });
+
+test("a pass records its cursor once, and a failed pass still advances past its pair", async () => {
+  const f = fixture(); f.ports.allowed = () => false;
+  const cursorWrites = () => rename.mock.calls.filter(call => path.basename(String(call[1])) === "cloud-environment-cursor.json").length;
+  const rename = spyOn(fs, "renameSync"); cleanups.push(() => rename.mockRestore());
+  const idle = f.controller(); await idle.pass(); idle.stop();
+  expect(cursorWrites()).toBe(1);
+  f.ports.allowed = () => { throw new Error("binding read failed"); };
+  const errors = spyOn(console, "error").mockImplementation(() => undefined); cleanups.push(() => errors.mockRestore());
+  const failing = f.controller(); await failing.pass(); failing.stop();
+  expect(cursorWrites()).toBe(2);
+  expect(JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "cloud-environment-cursor.json"), "utf8")).after).toBe("repo-fixture\0account-b");
+});

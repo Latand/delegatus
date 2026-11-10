@@ -39,6 +39,7 @@ export class CloudEnvironmentController {
     if (this.stopped || this.active) return;
     this.active = true;
     let completedCursor: string | null = null;
+    let savedCursor: string | null = null;
     try {
       const catalog = this.ports.catalog();
       if (!catalog) return;
@@ -90,13 +91,14 @@ export class CloudEnvironmentController {
           }
         }
       }
-      guard(); writeJsonDurably(file, { after: selected.cursor });
+      guard(); writeJsonDurably(file, { after: selected.cursor }); savedCursor = selected.cursor;
     } catch (error) {
       // Provider bodies never cross the client boundary. This log reports only
       // the failed operation; the binding carries its typed prerequisite.
       if (!this.stopped) console.error("[cloud environments] preparation deferred", error instanceof Error ? error.name : "unknown");
     } finally {
-      if (!this.stopped && completedCursor) {
+      // A pass that already saved its cursor has nothing left to record here.
+      if (!this.stopped && completedCursor && completedCursor !== savedCursor) {
         try { assertStateMutationAllowed(stateDir()); writeJsonDurably(statePath("cloud-environment-cursor.json"), { after: completedCursor }); }
         catch { if (!this.stopped) console.error("[cloud environments] preparation cursor could not be saved"); }
       }
