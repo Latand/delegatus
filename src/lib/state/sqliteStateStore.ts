@@ -3364,12 +3364,29 @@ export class SqliteStateCollection<T> {
         authorize();
         this.assertLease(db, ownerToken);
         const meta = this.collectionMeta(db)!;
-        const current = new Map(db.query<CollectionRow, [string]>(`
-          SELECT row_key, value_json, row_order, row_revision, controller_active
-          FROM state_rows WHERE collection = ?
-        `).all(this.options.collection).map((row) => [row.row_key, row] as const));
+        /* A patch compares only the rows it names. Reading the collection
+           here made one changed task read every stored task inside the write
+           transaction, and one rule read every rule (#3809). A replacement
+           still needs the whole collection to find what it omits. */
+        const current = new Map<string, CollectionRow>();
+        if (mergeOmitted) {
+          const touched = [...seen, ...requestedDeletes];
+          for (let start = 0; start < touched.length; start += CHANGE_READ_CHUNK) {
+            const chunk = touched.slice(start, start + CHANGE_READ_CHUNK);
+            for (const row of db.query<CollectionRow, SQLQueryBindings[]>(`
+              SELECT row_key, value_json, row_order, row_revision, controller_active
+              FROM state_rows WHERE collection = ? AND row_key IN (${chunk.map(() => "?").join(", ")})
+            `).all(this.options.collection, ...chunk)) current.set(row.row_key, row);
+          }
+        } else {
+          for (const row of db.query<CollectionRow, [string]>(`
+            SELECT row_key, value_json, row_order, row_revision, controller_active
+            FROM state_rows WHERE collection = ?
+          `).all(this.options.collection)) current.set(row.row_key, row);
+        }
         for (const key of [...seen, ...requestedDeletes]) this.assertRowWritable(db, key);
-        const protectedKeys = new Set([...current].filter(([, row]) => this.protectedRow(row, db)).map(([key]) => key));
+        const protectedKeys = mergeOmitted ? new Set<string>()
+          : new Set([...current].filter(([, row]) => this.protectedRow(row, db)).map(([key]) => key));
         const encoded = records.map((record, index) => ({
           key: this.options.key(record),
           valueJson: JSON.stringify(record),
@@ -3390,7 +3407,8 @@ export class SqliteStateCollection<T> {
         if (changed.length === 0 && deleted.length === 0) return companionChanged ? meta.revision : null;
         const nextRevision = meta.revision + 1;
         const nextOrder = mergeOmitted
-          ? (Math.max(-1, ...[...current.values()].map((row) => row.row_order)) + 1)
+          ? db.query<{ last: number }, [string]>(
+            "SELECT COALESCE(MAX(row_order), -1) AS last FROM state_rows WHERE collection = ?").get(this.options.collection)!.last + 1
           : 0;
         let appended = nextOrder;
         const upsert = db.query(`
