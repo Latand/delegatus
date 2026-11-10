@@ -7,7 +7,6 @@ import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
 import { PIPELINES_CHANGED_EVENT, PIPELINES_PATCHED_EVENT } from "@/components/pipelines/pipelineEvents";
 import { SESSION_TITLES_CHANGED_EVENT } from "@/components/session/sessionTitleApi";
 import { TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
-import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
 import { readTeamAuthority, subscribeTeamAuthority } from "@/components/team/teamClient";
 import { readConfirmedWorkspaces, subscribeConfirmedWorkspaces } from "@/components/team/workspacesClient";
 import { FILES_BUILT_HEADER, filesBuiltBefore, filesBuiltSuperseded, parseFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
@@ -1916,7 +1915,6 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
     const unsubscribeWorkspaces = subscribeConfirmedWorkspaces(onAuthorityChanged);
     window.addEventListener(FLOWS_CHANGED_EVENT, onChanged);
     window.addEventListener(PIPELINES_CHANGED_EVENT, onChanged);
-    window.addEventListener(WORKFLOWS_CHANGED_EVENT, onChanged);
     window.addEventListener(TASKS_CHANGED_EVENT, onChanged);
     window.addEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
     window.addEventListener(FILES_CHANGED_EVENT, onChanged);
@@ -2016,7 +2014,6 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       unsubFiles();
       window.removeEventListener(FLOWS_CHANGED_EVENT, onChanged);
       window.removeEventListener(PIPELINES_CHANGED_EVENT, onChanged);
-      window.removeEventListener(WORKFLOWS_CHANGED_EVENT, onChanged);
       window.removeEventListener(TASKS_CHANGED_EVENT, onChanged);
       window.removeEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
       window.removeEventListener(FILES_CHANGED_EVENT, onChanged);
