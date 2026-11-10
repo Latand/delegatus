@@ -52,11 +52,9 @@ import { GET as memberGET } from "@/app/api/team/workspaces/[id]/members/route";
 import { GET as workspacesGET } from "@/app/api/team/workspaces/route";
 import { POST as spawnPOST } from "@/app/api/spawn/route";
 import { POST as spawnValidatePOST } from "@/app/api/spawn/validate/route";
-import { POST as taskSpawnPOST } from "@/app/api/tasks/[id]/spawn/route";
 import { POST as pipelinesPOST } from "@/app/api/pipelines/route";
 import { POST as preflightPOST } from "@/app/api/pipelines/preflight/route";
 import * as scanCache from "@/lib/scanner/scanCache";
-import * as transcriptHost from "@/lib/agent/transcriptHost";
 import { GET as conversationsGET } from "@/app/api/conversations/route";
 import { GET as filesGET } from "@/app/api/files/route";
 import { createFilesProjectionQueue, type FilesProjectionQueue } from "@/app/api/files/projectionQueue";
@@ -402,7 +400,6 @@ describe("workspace authority", () => {
     const routes = (actor: Member, directory: string) => [
       ["/api/spawn", () => spawnPOST(request("/api/spawn", actor, "POST", { cwd: directory, engine: "codex", prompt: "escape" }))],
       ["/api/spawn/validate", () => spawnValidatePOST(request("/api/spawn/validate", actor, "POST", { cwd: directory, engine: "codex" }))],
-      ["/api/tasks/[id]/spawn", () => taskSpawnPOST(request("/api/tasks/task-own/spawn", actor, "POST", { cwd: directory, engine: "codex" }), { params: Promise.resolve({ id: "task-own" }) })],
       ["/api/pipelines", () => pipelinesPOST(request("/api/pipelines", actor, "POST", { project: alphaKey, repoDir: directory }))],
       ["/api/pipelines/preflight", () => preflightPOST(request("/api/pipelines/preflight", actor, "POST", { repoDir: directory }))],
       ["/api/orchestrator/seat", () => seatGET(request(`/api/orchestrator/seat?project=${encodeURIComponent(alphaKey)}&cwd=${encodeURIComponent(directory)}`, actor))],
@@ -455,16 +452,14 @@ describe("workspace authority", () => {
     ];
     const sends: unknown[] = [];
     const scanned = async () => ({ snapshot: { files } }) as never;
-    const emptyHosts = async () => ({ hosts: [], observation: "available", canonicalFor: () => null }) as never;
     const deliver = async (message: unknown) => { sends.push(message); return { ok: true, target: "probe:0.0", operationId: "op-probe" } as never; };
     setConversationHostDependenciesForTests({
-      completedFileScan: scanned, readTranscriptHosts: emptyHosts,
+      completedFileScan: scanned,
       deliverConversationMessage: deliver as never,
       // Structured admission declines, so a send that passes the gate reaches the legacy pid ladder.
       enqueueStructuredMessage: (async (message: unknown) => { sends.push(message); return null; }) as never,
     });
     const scan = spyOn(scanCache, "completedFileScan").mockImplementation(scanned);
-    const hosts = spyOn(transcriptHost, "readTranscriptHosts").mockImplementation(emptyHosts);
     const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
     const send = (route: string, actor: Member, body: Record<string, unknown>) => request(`/api/${route}`, actor, "POST", { text: "probe", ...body });
     try {
@@ -500,7 +495,6 @@ describe("workspace authority", () => {
       else process.env.LLV_STRUCTURED_HOSTS = previousHosts;
       setConversationHostDependenciesForTests(null);
       scan.mockRestore();
-      hosts.mockRestore();
     }
   });
 
@@ -729,7 +723,7 @@ describe("workspace authority", () => {
 
   test("the board projection removes foreign rows, aliases, names and navigation maps", () => {
     const files = ["alpha", "beta"].map(name => ({ ...catalogEntryToFileEntry({ path: `${root}/${name}.jsonl`, root: "codex-sessions", name, project: `repo-${name}`, title: name, firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: now / 1000, size: 10 }, now), conversationId: `conversation_${name}` as const }));
-    const source: FilesResponse = { files, tasks: [...loadTasksForList()], flows: [], pipelines: [], workflows: [], systemHealth: { tmux: { status: "healthy" } }, projectCatalog: [], projectAliases: { "repo-alpha": "repo-beta" }, projectDisplayNames: { "repo-alpha": "alpha", "repo-beta": "beta" }, conversationAliases: { hidden: "conversation_beta" }, launchRoutes: { hidden: "conversation_beta" }, projectCwds: { "repo-alpha": "alpha", "repo-beta": "beta" }, crownedProjects: ["repo-alpha", "repo-beta"] };
+    const source: FilesResponse = { files, tasks: [...loadTasksForList()], flows: [], pipelines: [], workflows: [], systemHealth: {}, projectCatalog: [], projectAliases: { "repo-alpha": "repo-beta" }, projectDisplayNames: { "repo-alpha": "alpha", "repo-beta": "beta" }, conversationAliases: { hidden: "conversation_beta" }, launchRoutes: { hidden: "conversation_beta" }, projectCwds: { "repo-alpha": "alpha", "repo-beta": "beta" }, crownedProjects: ["repo-alpha", "repo-beta"] };
     const result = workspaceFiles(workspaceScope(store, member.id), source);
     expect(result.files).toHaveLength(1);
     expect(result.tasks).toHaveLength(1);
@@ -936,7 +930,7 @@ test.each(["stored", "refused", "queued"] as const)("retained %s creation disapp
     }
     catalogs++;
     const scope = workspaceScope(store, member.id);
-    return Response.json(workspaceFiles(scope, { files: [], pipelines: [pipeline], tasks: [], flows: [], workflows: [], systemHealth: { tmux: { status: "healthy" } } } as FilesResponse),
+    return Response.json(workspaceFiles(scope, { files: [], pipelines: [pipeline], tasks: [], flows: [], workflows: [], systemHealth: {} } as FilesResponse),
       { headers: { ETag: '"retained-catalog"' } });
   }, { authority: () => ({ owner: member.id, signature: "last-confirmed-alpha-membership" }), creationStore: () => storage });
   try {
