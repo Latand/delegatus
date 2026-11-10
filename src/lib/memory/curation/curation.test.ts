@@ -2213,3 +2213,29 @@ test.each(["a", "ї", "😀"])("rendered %s code points accept the exact scope b
   expect(scopeChars([row(id)])).toBe(ROLE_MEMORY_BOUND + 1);
   expect(() => applyCuration(p, input({ [scope]: [id] }), at(2))).toThrow(/bound/);
 });
+
+test("an apply decodes the scopes it names and no other scope of the pass", () => {
+  const named = roleScope(PROJECT, "builder"), others = [roleScope(PROJECT, "reviewer"), roleScope(PROJECT, "architect"), projectScope(PROJECT)];
+  const one = fixture(named);
+  for (const scope of others) fixture(scope);
+  const p = pass();
+  for (const scope of others) expect(p.scopes.map(canonicalScope)).toContain(scope);
+  // An earlier call of this pass wrote to another scope; the next call still orders itself after it.
+  const moved = fixture(others[0]);
+  applyCuration(p, input({ [others[0]]: [] }, { archive: [
+    { id: (roleMemoryCollection()!.get(`s:${others[0]}`) as { active: string[] }).active[0], reason: "stale", note: "The first command was replaced." },
+    { id: moved, reason: "stale", note: "The second command was replaced." }] }), at(5_000));
+  const decoded: string[] = [];
+  const get = spyOn(SqliteStateCollection.prototype, "get");
+  try {
+    applyCuration(p, input({ [named]: [one] }), at(100));
+  } finally {
+    for (const [key] of get.mock.calls) if (typeof key === "string" && key.startsWith("s:")) decoded.push(key.slice(2));
+    get.mockRestore();
+  }
+  expect(decoded).toContain(named);
+  for (const scope of others) expect(decoded).not.toContain(scope);
+  const entry = (roleMemoryCollection()!.get(`s:${named}`) as { history: { at: string; pass?: string }[] }).history.at(-1)!;
+  expect(entry.pass).toBe(p.id);
+  expect(Date.parse(entry.at)).toBeGreaterThan(Date.parse(at(5_000)));
+});
