@@ -570,6 +570,8 @@ type ScopeReadMetadata = { revision: number; curatedAt: string | null; hasPass: 
 /** What curation asks of a scope's retained history, without the history:
  * which passes wrote to it and when each last did. */
 type ScopeHistoryDigest = { revision: number; curatedAt: string | null; stored: boolean;
+  /** The row's own kind and active membership, as stored. */
+  kind: unknown; active: unknown[];
   /** Latest entry time of every pass, as Math.max over Date.parse leaves it. */
   passAt: Map<string, number>;
   /** Latest curator entry per pass; `unnamed` holds curator entries without one. */
@@ -595,18 +597,22 @@ function scopeHistoryDigest(scope: string): ScopeHistoryDigest {
     return held.digest;
   }
   if (held) { cache.rows.delete(rowKey); cache.bytes -= held.bytes; }
-  const digest: ScopeHistoryDigest = { revision: 0, curatedAt: null, stored: false, passAt: new Map(), curatorAt: new Map(), unnamed: null };
+  const digest: ScopeHistoryDigest = { revision: 0, curatedAt: null, stored: false, kind: null, active: [], passAt: new Map(), curatorAt: new Map(), unnamed: null };
   if (version === undefined) return digest;
-  const entries = db.query<{ revision: number | null; curatedAt: string | null; entry: number | null; pass: unknown; by: unknown; at: unknown }, [string]>(`
+  const entries = db.query<{ revision: number | null; curatedAt: string | null; kind: unknown; active: string | null; entry: number | null; pass: unknown; by: unknown; at: unknown }, [string]>(`
     SELECT json_extract(s.value_json, '$.revision') AS revision,
-      json_extract(s.value_json, '$.curatedAt') AS curatedAt, h.key AS entry,
+      json_extract(s.value_json, '$.curatedAt') AS curatedAt, json_extract(s.value_json, '$.kind') AS kind,
+      CASE WHEN h.key IS NULL OR h.key=0 THEN json_extract(s.value_json, '$.active') END AS active, h.key AS entry,
       json_extract(h.value, '$.pass') AS pass, json_extract(h.value, '$.by') AS by, json_extract(h.value, '$.at') AS at
     FROM state_rows s LEFT JOIN json_each(s.value_json, '$.history') h
     WHERE s.collection='role_memory' AND s.row_key=?
   `).all(rowKey);
   let bytes = rowKey.length * 2 + 128;
   for (const entry of entries) {
-    digest.stored = true; digest.revision = entry.revision ?? 0; digest.curatedAt = entry.curatedAt;
+    digest.stored = true; digest.revision = entry.revision ?? 0; digest.curatedAt = entry.curatedAt; digest.kind = entry.kind;
+    if (typeof entry.active === "string" && entry.active.startsWith("[")) {
+      digest.active = JSON.parse(entry.active) as unknown[]; bytes += entry.active.length * 2;
+    }
     if (entry.entry === null) continue;
     const pass = typeof entry.pass === "string" ? entry.pass : null;
     if (pass !== null) {
@@ -775,16 +781,16 @@ export function activeRoleRuleRows(input: { project?: string; terms?: string[]; 
   // and limiting in SQLite.
   const unicodeTerms = terms.some(term => /[^\x00-\x7f]/u.test(term));
   const conditions = unicodeTerms ? [] : terms.map(() => `(instr(lower(json_extract(r.value_json, '$.rule')), lower(?)) > 0 OR instr(json_extract(r.value_json, '$.id'), ?) > 0)`);
+  // Active membership comes from each scope's per-row digest. Joining the
+  // scope rows here parsed every retained history on each search.
+  const active = scopes.flatMap(scope => { const digest = scopeHistoryDigest(scope); return digest.kind === "scope" ? digest.active : []; });
   const rows = reader().query<Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">, SQLQueryBindings[]>(`
     SELECT DISTINCT json_extract(r.value_json, '$.id') AS id,
       json_extract(r.value_json, '$.scope') AS scope,
       json_extract(r.value_json, '$.rule') AS rule,
       json_extract(r.value_json, '$.changedAt') AS changedAt
-    FROM state_rows s CROSS JOIN json_each(s.value_json, '$.active') a
-    CROSS JOIN state_rows r
+    FROM json_each(?) a CROSS JOIN state_rows r
     WHERE r.collection='role_memory' AND r.row_key='r:' || a.value
-      AND s.collection='role_memory' AND s.row_key IN (SELECT 's:' || value FROM json_each(?))
-      AND json_extract(s.value_json, '$.kind')='scope'
       AND json_extract(r.value_json, '$.kind')='rule'
       AND json_extract(r.value_json, '$.scope') IN (SELECT value FROM json_each(?))
       AND json_extract(r.value_json, '$.state')='active'
@@ -792,7 +798,7 @@ export function activeRoleRuleRows(input: { project?: string; terms?: string[]; 
       ${input.id ? "AND r.row_key=?" : ""}
       ${conditions.length ? `AND ${conditions.join(" AND ")}` : ""}
     ORDER BY changedAt DESC, id ${unicodeTerms ? "" : "LIMIT ?"}
-  `).all(JSON.stringify(scopes), JSON.stringify([...ruleScopes]), ...(input.id ? [`r:${input.id}`] : []), ...(unicodeTerms ? [] : terms.flatMap(term => [term, term])), ...(unicodeTerms ? [] : [input.limit]));
+  `).all(JSON.stringify(active), JSON.stringify([...ruleScopes]), ...(input.id ? [`r:${input.id}`] : []), ...(unicodeTerms ? [] : terms.flatMap(term => [term, term])), ...(unicodeTerms ? [] : [input.limit]));
   if (!unicodeTerms) return rows;
   const normalizedTerms = terms.map(term => term.toLowerCase());
   return rows.filter(row => {
