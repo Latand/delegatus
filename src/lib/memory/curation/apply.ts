@@ -1,4 +1,5 @@
 import { candidateState, candidateById } from "../importCuration";
+import { roleScopePassLastAt } from "../roleViewSource";
 import { importCollection, readImportRecord } from "../importStore";
 import { prepareImportEdits } from "./importApply";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -130,7 +131,15 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
 
     operation?.assertCurrent();
     if (JSON.stringify(readPassAuthority(pass.id)) !== JSON.stringify(fresh)) refuse("CURATE_STALE", "the curator pass changed before commit");
-    const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => { const row = tx.get(`s:${scope}`); return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : []; }));
+    // Only the named scopes are rewritten below. Decoding every other scope of
+    // the pass for one timestamp parsed each retained history on every apply;
+    // their answer comes from the per-row digest instead.
+    const named = new Set(input.scopes.map(item => item.scope));
+    const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => {
+      if (!named.has(scope)) { consume(); const at = roleScopePassLastAt(scope, pass.id); return at === null ? [] : [at]; }
+      const row = tx.get(`s:${scope}`);
+      return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : [];
+    }));
     now = new Date(Math.max(Date.parse(now), previousAt + 1)).toISOString();
     const scopes = new Map<string, RoleMemoryScopeRow>();
     const before = new Map<string, RoleMemoryRule>();
