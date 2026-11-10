@@ -5,7 +5,7 @@ import { projectSnapshotRead } from "@/lib/runtime/snapshotReads";
    production owner reader and judged by `probeQuiet`. Each test names the
    table row it decides. */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -577,6 +577,15 @@ describe("the successor-epoch case", () => {
   });
 });
 
+test("B structured at epoch 1 under its own key: the copy and A's late event release B", async () => {
+  const s = await differentKeySuccessor();
+  const b = spawn();
+  claimHost(s.keyB, s.pathB, b.identity, "idle");
+  await fallback();
+  event(s.id, s.key, "turn-started", "a-late");
+  expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+});
+
 describe("the delayed predecessor write", () => {
   test("a late send outcome over B's own idle publication releases B at once", async () => {
     const s = await sameKeySuccessor();
@@ -842,6 +851,96 @@ describe("R6b and the unknown bounds", () => {
 /* A turn the owner's own sources proved stays held after its evidence becomes
    unreadable: only its own settled tail, its process exiting, or its pid
    naming another process ends it (R8). */
+describe("a proven turn whose evidence is lost", () => {
+  /** A live host with no writer claim over an open turn, held as turn-open. */
+  async function standalone(now: number, observe = true) {
+    const path = transcript("open", new Date(now).toISOString());
+    const c = conversation(path);
+    const b = spawn();
+    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: columns(b.identity, 0) });
+    await fallback();
+    const p = ports();
+    if (observe) expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "turn-open" }] } });
+    return { ...c, b, p };
+  }
+  const at = (ms: number) => new Date(ms).toISOString();
+  const losses: { name: string; lose: (path: string, now: number) => void; settle: (path: string, now: number) => void }[] = [
+    { name: "the transcript is deleted", lose: (path) => rmSync(path),
+      settle: (path, now) => writeFileSync(path, transcriptText("settled", at(now))) },
+    { name: "a partial JSON line is appended", lose: (path, now) => appendFileSync(path, `{"timestamp":"${at(now)}","type":"event_msg","payload":{"type":"agent_mess`),
+      settle: (path, now) => appendFileSync(path, `age"}}\n${JSON.stringify({ timestamp: at(now), type: "event_msg", payload: { type: "task_complete" } })}\n`) },
+    { name: "a large reasoning record pushes the markers out of the tail", lose: (path, now) => appendFileSync(path,
+      `${JSON.stringify({ timestamp: at(now), type: "response_item", payload: { type: "reasoning", summary: [], encrypted_content: "x".repeat(200 * 1024) } })}\n`),
+    settle: (path, now) => appendFileSync(path, `${JSON.stringify({ timestamp: at(now), type: "event_msg", payload: { type: "task_complete" } })}\n`) },
+  ];
+  for (const loss of losses) {
+    for (const first of ["cold", "fresh ports"] as const) {
+      test(`${first}: ${loss.name} before this Viewer's first probe holds the confirmed owner`, async () => {
+        const now = Date.now();
+        const s = await standalone(now, first === "fresh ports");
+        loss.lose(s.path, now + 1);
+        // Reopen the durable registry as a new Viewer would. The cold variant
+        // has never probed the open transcript through the drain.
+        setAgentRegistryForTests(new AgentRegistry(join(f.dir, "registry.json"), undefined, undefined, { sqliteMode: "off" }));
+        const fresh = ports();
+        expect(await probe(fresh, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+        expect(await probe(fresh, now + FIVE_MINUTES + 2)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0 } });
+        expect(await probe(ports(), now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+        loss.settle(s.path, now + TWELVE_HOURS);
+        f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, status: "idle" });
+        expect(await probe(ports(), now + TWELVE_HOURS + 1)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+      });
+    }
+    test(`${loss.name}: the live owner holds past five minutes until its own idle settlement`, async () => {
+      const now = Date.now();
+      const s = await standalone(now);
+      loss.lose(s.path, now + 1);
+      expect(await probe(s.p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0,
+        turnList: [{ conversationId: s.id, reason: "turn-open" }] } });
+      expect(await probe(s.p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0,
+        turnList: [{ conversationId: s.id, reason: "turn-open" }] } });
+      expect(await probe(s.p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      loss.settle(s.path, now + TWELVE_HOURS);
+      f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, status: "idle" });
+      expect(await probe(s.p, now + TWELVE_HOURS + 1)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    });
+    test(`${loss.name}: the owner's exit releases it`, async () => {
+      const now = Date.now();
+      const s = await standalone(now);
+      loss.lose(s.path, now + 1);
+      expect(await probe(s.p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      await exit(s.b);
+      expect(await probe(s.p, now + 1 + FIVE_MINUTES + 2)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    });
+  }
+
+  test("a record that names the pid under another start identity proves nothing about the turn the old process showed", async () => {
+    const now = Date.now();
+    const s = await standalone(now);
+    rmSync(s.path);
+    expect(await probe(s.p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-open" }] } });
+    const reused = { ...s.b.identity, startIdentity: `${s.b.identity.startIdentity}-reused` };
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, structuredHost: columns(reused, 0) });
+    expect(await probe(s.p, now + 2)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test("control: an answering launch with no saved start identity holds after its evidence is lost", async () => {
+    const now = Date.now();
+    const path = transcript("unmarked", at(now));
+    const c = conversation(path);
+    const b = spawn();
+    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "starting", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: columns({ ...b.identity, startIdentity: null }, 0) });
+    await fallback();
+    const p = ports();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0, turnList: [{ reason: "turn-unread" }] } });
+    rmSync(path);
+    expect(await probe(p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0 } });
+    expect(await probe(p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0, unresolvedBlocking: 0 } });
+  });
+});
+
 /* R12: the verdict of an owner is a function of its own records. Each
    perturbation adds a record that names a different process, or a write
    that names no writer, and must leave the owner's verdict as it was. */
@@ -1385,6 +1484,38 @@ describe("each owner's evidence beside another record", () => {
     } finally {
       chmodSync(directory, 0o700);
     }
+  });
+
+  test("an entry that records a stored receipt's launched process keeps that receipt's conversation custody (R1, R10)", async () => {
+    const path = transcript("settled");
+    const host = spawn();
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture" });
+    if (begun.kind !== "created") throw new Error("fixture launch receipt unavailable");
+    const launchId = begun.receipt.launchId;
+    const key = { engine: "codex" as const, sessionId: randomUUID() };
+    const entry = { key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle" as const, host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: columns(host.identity, 0) };
+    expect(f.registry.settleSpawn(launchId, entry).kind).toBe("settled");
+    // The receipt as an older release stored it: it names the process it launched,
+    // and its conversation row and its entry are not written yet.
+    const disk = f.registry.snapshot(), receipt = disk.receipts[launchId]!;
+    Object.assign(receipt, { verifiedHost: { kind: "tmux", endpoint: "fixture", server: host.identity, paneId: "%1",
+      panePid: host.identity, windowName: "fixture", agent: host.identity, argv: ["codex"] } });
+    delete disk.conversations[receipt.conversationId];
+    delete disk.entries[sessionKeyId(key)];
+    writeFileSync(f.registry.filename, JSON.stringify(disk));
+    const pipelines = () => [{ id: "lane_receipt", task: "Finish the work", state: "running", cursor: { stageId: "stage", state: "running" },
+      runs: [{ stageId: "stage", attempts: [{ n: 1, conversationId: receipt.conversationId }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
+    const p = noHandles({ pipelines }), now = Date.now();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    f.registry.upsert(entry);
+    expect(f.registry.readOnlySnapshot()).toMatchObject({ entries: { [sessionKeyId(key)]: { structuredHost: { process: host.identity } } } });
+    expect(f.registry.readOnlySnapshot().conversations[receipt.conversationId]).toBeUndefined();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    await exit(host);
+    // With the process gone the stage's settled transcript holds it for the bound only.
+    expect(await probe(p, now + TWELVE_HOURS + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
   });
 
   test("a round an entry records keeps the round's conversation custody past the unresolved bound (R1, R10)", async () => {

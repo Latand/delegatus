@@ -108,9 +108,16 @@ const defaultDependencies: ProviderDependencies = {
 
 type PaneSuccessorCleanupResult = "cancelled" | "absent" | "unverifiable";
 
-function paneSuccessorProcessAlive(host: TmuxHostEvidence): boolean {
+/** A pid that answers under an unreadable start identity (no platform reader,
+    hidden /proc) proves nothing about death, so it counts as running. */
+export function paneSuccessorProcessAlive(
+  host: Pick<TmuxHostEvidence, "agent">,
+  probe: { processIdentity(pid: number): string | null; pidAlive(pid: number): boolean } = procBackend,
+): boolean {
   const { pid, startIdentity } = host.agent;
-  return startIdentity === null ? procBackend.pidAlive(pid) : procBackend.processIdentity(pid) === startIdentity;
+  if (startIdentity === null) return probe.pidAlive(pid);
+  const identity = probe.processIdentity(pid);
+  return identity === null ? probe.pidAlive(pid) : identity === startIdentity;
 }
 
 function cleanupConfirmed(result: boolean | PaneSuccessorCleanupResult | undefined): boolean {

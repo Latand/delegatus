@@ -6,7 +6,8 @@ import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { conversationIdsResolvingTo, agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, agentRegistry, storedPaneAgentRuns, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { procBackend } from "@/lib/proc";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
@@ -309,6 +310,9 @@ function candidateFor(
      old root is already dead. Only a successful termination retry can verify
      and clear this evidence. */
   if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
+  /* A stored row can name a pane agent that still runs after the upgrade. It
+     may write this transcript, so no second writer is started beside it. */
+  if (storedPaneAgentRuns(entry, procBackend)) return null;
   /* Every registered transcript reaches its host through this recovery path,
      including conversations that predate registry entries. */
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";

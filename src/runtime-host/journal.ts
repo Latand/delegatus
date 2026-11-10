@@ -304,19 +304,22 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   const capabilities = record(payload.capabilities);
   const liveTurn = normalizeRuntimeLiveTurn(payload.liveTurn);
   const protocol = normalizeCodexProtocolReceipt(record(payload.diagnostics).protocol);
+  /* A row journalled for a terminal-pane host names a kind that no longer
+     exists. Nothing hosts that session and nothing can end its turn, so it
+     reads as unhosted (or dead, if that was recorded) with no open turn. */
+  const storedKind = typeof payload.hostKind === "string" ? payload.hostKind : null;
+  const retiredKind = storedKind !== null && storedKind !== "unhosted" && !isStructuredHostKind(storedKind);
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
       engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
-    /* A row journalled for a terminal-pane host names a kind that no longer
-       exists; it reads as unhosted. */
-    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null)
-      ? payload.hostKind as RuntimeSession["hostKind"]
-      : "unhosted",
-    host: payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
-    turn: payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
+    hostKind: isStructuredHostKind(storedKind) ? storedKind as RuntimeSession["hostKind"] : "unhosted",
+    host: retiredKind ? (payload.host === "dead" ? "dead" : "unhosted")
+      : payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
+    turn: retiredKind ? "unknown"
+      : payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
     provenance: payload.provenance === "derived" || payload.provenance === "replayed" ? payload.provenance : "structured",
     revision,
     attentionIds: strings(payload.attentionIds),
@@ -359,7 +362,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
         : record(payload.diagnostics).authRecovery === "completed-unverified" ? "completed-unverified" as const : "unknown" as const,
       ...(protocol ? { protocol } : {}),
     } } : {}),
-    activeTurnId: typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
+    activeTurnId: !retiredKind && typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
     pendingReconfigure: payload.pendingReconfigure && typeof payload.pendingReconfigure === "object"
       ? payload.pendingReconfigure as RuntimeSession["pendingReconfigure"]
       : null,

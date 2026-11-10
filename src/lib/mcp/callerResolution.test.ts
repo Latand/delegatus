@@ -294,9 +294,9 @@ test("a roleless newest generation defaults to worker in root authority selectio
 test("ancestry and root selectors use scoped indexes", () => {
   const f = fixture(100);
   const db = new Database(f.sqliteFilename);
-  for (const field of ["host.agent.pid", "structuredHost.process.pid"]) {
+  for (const field of ["structuredHost.process.pid"]) {
     const plan = db.query(`EXPLAIN QUERY PLAN SELECT json_extract(value_json,'$.artifactPath') AS path FROM registry_rows WHERE collection='entries' AND json_extract(value_json,'$.${field}')=? ORDER BY row_order`).all(42);
-    expect(JSON.stringify(plan)).toContain(field.startsWith("host.") ? "registry_caller_agent_pid" : "registry_caller_structured_pid");
+    expect(JSON.stringify(plan)).toContain("registry_caller_structured_pid");
     expect(JSON.stringify(plan)).not.toContain("SCAN registry_rows");
   }
   expect(JSON.stringify(db.query("EXPLAIN QUERY PLAN SELECT conversation_id FROM registry_caller_roots ORDER BY updated_at DESC,row_order DESC LIMIT 1").all())).toContain("registry_caller_roots_latest");

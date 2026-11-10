@@ -232,6 +232,9 @@ export interface AgentRegistryEntry {
   status: AgentHostStatus;
   /** Always null: the column a pane host used to occupy in stored rows. */
   host: null;
+  /** The agent process of the pane host a stored row named. While it runs it
+      may still write this transcript, so no host is started beside it. */
+  paneAgent?: ProcessIdentity;
   structuredHost?: StructuredHostColumns | null;
   /** Original identity retained after the host columns are retired. */
   hostExitProcess?: ProcessIdentity;
@@ -2372,6 +2375,29 @@ function normalizeStructuredTerminationSurvivors(value: unknown): ProcessIdentit
   });
 }
 
+function storedPaneAgent(value: AgentRegistryEntry): ProcessIdentity | null {
+  const agent = (value.host as { agent?: Partial<ProcessIdentity> } | null)?.agent ?? value.paneAgent;
+  if (!agent || !Number.isSafeInteger(agent.pid) || agent.pid! <= 0) return null;
+  return {
+    pid: agent.pid!,
+    startIdentity: typeof agent.startIdentity === "string" ? agent.startIdentity : null,
+    ...(agent.bootEpoch === undefined ? {} : { bootEpoch: agent.bootEpoch }),
+  };
+}
+
+/** Whether the pane agent a stored row named still runs. A pid that answers
+    under an unreadable start identity counts as running. */
+export function storedPaneAgentRuns(
+  entry: Pick<AgentRegistryEntry, "paneAgent"> | null | undefined,
+  probe: { processIdentity(pid: number): string | null; pidAlive(pid: number): boolean },
+): boolean {
+  const agent = entry?.paneAgent;
+  if (!agent) return false;
+  if (agent.startIdentity === null) return probe.pidAlive(agent.pid);
+  const identity = probe.processIdentity(agent.pid);
+  return identity === null ? probe.pidAlive(agent.pid) : identity === agent.startIdentity;
+}
+
 function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): AgentRegistryEntry {
   const terminationSurvivors = normalizeStructuredTerminationSurvivors(value.structuredTerminationSurvivors);
   return {
@@ -2379,8 +2405,10 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
     /* A row written while agents ran in terminal panes names a pane as its
        host. Nothing can reach that pane any more, so the row loads without a
-       host; with no structured host either, it is unhosted. */
+       host; with no structured host either, it is unhosted. The pane's agent
+       process is kept: recovery waits for it to exit. */
     host: null,
+    ...(storedPaneAgent(value) ? { paneAgent: storedPaneAgent(value)! } : {}),
     status: value.host && !value.structuredHost && value.status !== "dead" ? "unhosted" : value.status,
     structuredHost: normalizeStructuredHost(value.structuredHost),
     ...(value.structuredHost?.exitProcess ? { hostExitProcess: value.structuredHost.exitProcess } : {}),
