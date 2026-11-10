@@ -6,7 +6,10 @@ import { tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import path from "node:path";
 import fs from "node:fs";
-import { repositoryReferencesAttemptTemp, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { repositoryReferencesAttemptTemp, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+
+/** The sweep helper serves every minute tick from one process. */
+const checkoutReads: RetainedCheckoutReads = new Map();
 
 export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<Exclude<AttemptTempAuthority, AttemptTempState>> {
   if (!owner.pipelineId) return { state: "orphan", revision: "", isCurrent: () => true };
@@ -70,7 +73,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   const store = new AttemptTempStore();
   try {
     const report = await sweepAttemptTemps(store, {
-      state: attemptTempState, authority: attemptTempAuthority, mode, scan: ports.scan,
+      state: attemptTempState, authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
       maxRoots: (() => {
         try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
         catch { return undefined; }

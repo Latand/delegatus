@@ -136,6 +136,7 @@ async function file(args: Record<string, unknown>, as: CallerAttribution = MANAG
 }
 
 beforeEach(async () => {
+  counter = 0;
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   resetBridgeCollectionsForTests();
   resetTaskChangeCollectionsForTests();
@@ -194,6 +195,30 @@ test("a voice-correlated report whose items the display copy drops or counts kee
   expect(readBridgeReportLog().reports[1]!.complete).toBeUndefined();
 });
 
+test.each([200, 201])("a decision of %i UTF-16 units reaches Telegram only when it fits the display limit", async length => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  const decision = "я".repeat(length - 2) + "🧭";
+  transport.script("sendMessage", ok({ message_id: 77, chat: TEAM, date: 1 }));
+  const answer = await file({ key: `decision-${length}`, class: "question", summary: "Choose the next step.", sections: { decision: [decision] } });
+  expect(answer).toMatchObject({ ok: true, recorded: true });
+  const row = readBridgeReportLog().reports[0]!;
+  const posts = transport.callsOf("sendMessage");
+  expect(posts).toHaveLength(1);
+  if (length === 200) {
+    expect(row.body).toContain(decision);
+    expect(row.telegram!.html).toContain(decision);
+    expect(JSON.stringify(posts)).toContain(decision);
+    expect(answer.warnings?.some(warning => warning.includes("over 200 characters dropped")) ?? false).toBe(false);
+  } else {
+    expect(row.body).not.toContain(decision);
+    expect(row.telegram!.html).not.toContain(decision);
+    expect(JSON.stringify(posts)).not.toContain(decision);
+    expect(row.complete?.sections).toContainEqual({ heading: "Needs a decision", items: [decision] });
+    expect(answer.warnings!.some(warning => warning.includes("1 item(s) over 200 characters dropped"))).toBe(true);
+  }
+});
+
 test("a report too large to relay whole is refused with a request to split it: nothing is stored, posted or shortened", async () => {
   await connectTeamChat();
   setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
@@ -210,6 +235,24 @@ test("a report too large to relay whole is refused with a request to split it: n
   const { voiceReportText } = await import("@/lib/voiceCompanion/reportSpeech");
   const spoken = readBridgeReportLog().reports.map((row) => voiceReportText(row)).join("\n");
   for (const item of many) expect(spoken).toContain(item);
+});
+
+test("complete report byte boundary preserves multibyte text and refuses one extra byte with its count", async () => {
+  const { completeBytes } = await import("@/lib/bridge/reportComplete");
+  const summary = "Boundary report";
+  const prefix = "я 🧭e\u0301 ".repeat(500);
+  const overhead = completeBytes({ summary, sections: [{ heading: "In progress", items: [prefix] }] });
+  const exact = prefix + "a".repeat(8192 - overhead);
+  const over = await file({ key: "byte-over", summary, sections: { inProgress: [exact + "a"] } });
+  expect(over).toMatchObject({ ok: false, code: "report_too_large", retryable: false });
+  for (const part of ["complete report", "8192 UTF-8 bytes", "actual length is 8193"]) expect(over.error).toContain(part);
+  expect(readBridgeReportLog().reports).toEqual([]);
+  expect(transport.callsOf("sendMessage")).toHaveLength(0);
+  const accepted = await file({ key: "byte-corrected", summary, sections: { inProgress: [exact] } });
+  expect(accepted.recorded).toBe(true);
+  const complete = readBridgeReportLog().reports[0]!.complete!;
+  expect(completeBytes(complete)).toBe(8192);
+  expect(complete.sections[0]!.items).toEqual([exact]);
 });
 
 test("an older caller's long body line keeps its tail fact through the store, the voice admission and its speech", async () => {

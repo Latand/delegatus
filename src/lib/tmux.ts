@@ -513,47 +513,6 @@ export async function knownLivePids(): Promise<Set<number>> {
   return knownLivePidsFrom(await listFiles());
 }
 
-/** Resolves and revalidates a request pid against the scanner's live set. */
-export async function targetForKnownPid(
-  pid: number,
-  entries?: readonly FileEntry[],
-): Promise<TmuxTarget | null | "unknown"> {
-  const live = entries ? knownLivePidsFrom(entries) : await knownLivePids();
-  if (!live.has(pid)) return "unknown";
-  return resolveTarget(pid);
-}
-
-/** Resolves a scanner-approved pid only. Transcript-to-pane policy lives in
-    agent/transcriptHost so resource observation and delivery cannot diverge. */
-export async function resolveRequestedTmuxTarget(
-  pid: number | null,
-  entries?: readonly FileEntry[],
-): Promise<TmuxTarget | null> {
-  if (pid !== null) {
-    const target = await targetForKnownPid(pid, entries);
-    if (target !== "unknown" && target !== null) return target;
-  }
-  return null;
-}
-
-/**
- * Renames the tmux window hosting a conversation's pane to `name` (issue #33 —
- * a custom session title propagates to the window name so `tmux` listings read
- * the human label too). Best-effort: a session with no live pane, a pid the
- * scanner does not vouch for, or a tmux error is a silent no-op — the durable
- * override on disk is the source of truth and the window catches up on the next
- * rename. Returns the target it renamed, or null when nothing was touched.
- */
-export async function renameTmuxWindowForPid(pid: number, name: string): Promise<TmuxTarget | null> {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  const trimmed = name.replace(/\s+/g, " ").trim().slice(0, 80);
-  if (!trimmed) return null;
-  const target = await resolveRequestedTmuxTarget(pid);
-  if (!target) return null;
-  const result = await runTmux(["rename-window", "-t", target, trimmed]).catch(() => null);
-  return result && result.code === 0 ? target : null;
-}
-
 const PASTE_SETTLE_MS = 250;
 const SUBMIT_VERIFY_TRIES = 4;
 const SUBMIT_VERIFY_DELAY_MS = 400;

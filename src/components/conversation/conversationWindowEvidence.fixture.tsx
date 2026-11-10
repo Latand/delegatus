@@ -50,6 +50,7 @@ import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
+import { ArtifactPreviewHost } from "@/components/preview/ArtifactPreviewHost";
 import { ImagePane } from "@/components/preview/ImagePane";
 import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
@@ -119,6 +120,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "document-links"
   | "project-setup"
   | "retired-orchestrator"
   | "file-confirmation"
@@ -1659,6 +1661,7 @@ function ConsumedDeliveryFixture() {
   const [chipSlot, setChipSlot] = useState<HTMLElement | null>(null);
   const [receiptsOpen, setReceiptsOpen] = useState(false);
   const [receiptsDrawn, setReceiptsDrawn] = useState(false);
+  const [receiptsFirstRowSpace, setReceiptsFirstRowSpace] = useState<number | null>(null);
   const staged = useRef(false);
   const addFiles = composer.attachments.addFiles;
   useEffect(() => {
@@ -1687,7 +1690,17 @@ function ConsumedDeliveryFixture() {
       </div>
       {/* The pane's composer box and its bound before the box is measured:
           the transcript keeps 60% of the column, a phone's box at most 38dvh. */}
-      <form className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+      <form
+        /* A Send pressed with the draft's image staged in Context mode: the
+           production composer answers it with this refusal line (the DOM case
+           drives the real path; this stage shows where the line is drawn). */
+        onSubmit={(event) => {
+          event.preventDefault();
+          composer.setStatus({ kind: "err", text: t(isMobile ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedQueue", {
+            toggle: t("composer.context.toggle"), queue: t("queue.queueMessage"), menu: t("composer.sendMenuTitle"),
+          }) });
+        }}
+        className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
         isMobile ? "max-h-[min(38dvh,20rem)] py-1.5" : "max-h-[40%] py-2"}`}>
       <ComposerBar
         composer={composer}
@@ -1711,9 +1724,11 @@ function ConsumedDeliveryFixture() {
         queuePanel={<NativeQueuePanel view={view} unresolved={[]} error={null} thread={{ model: null, effort: null }}
           cardId="conversation_consumed" mintKey={() => "consumed-edit"} submit={async () => ({ ok: true })} onRefresh={() => {}} t={t} />}
         receiptsHidden={!receiptsDrawn}
+        receiptsMinHeight={receiptsOpen ? receiptsFirstRowSpace : null}
         receipts={<RuntimeComposerReceipts receipts={[unknown("unknown-send"), consumed]}
           onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}}
-          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn} />}
+          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn}
+          onFirstRowSpace={setReceiptsFirstRowSpace} />}
       />
       </form>
       <button type="button" data-prove-consumed className="sr-only" onClick={() => setProven(true)}>Prove</button>
@@ -1737,6 +1752,8 @@ const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
   /* A Fable stage whose transcript names the release the alias resolved to. */
   fable: { engine: "claude", fmt: "claude", root: "claude-projects", model: "fable-5-1", launchModel: "fable" },
+  /* A Fable stage launched on the pinned Fable 5.2 row, as the picker offers it. */
+  fable52: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-fable-5-2", launchModel: "claude-fable-5-2" },
   /* Saved on a Codex model fresh menus retired: it stays listed and checked. */
   "legacy-sol": { engine: "codex", model: "gpt-5.6-sol", launchModel: "gpt-5.6-sol" },
   /* The new Terra at its top effort tier. */
@@ -2318,6 +2335,27 @@ else if (root && requested === "project-setup") {
     {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.now() / 1000} onOpenConversation={() => {}} />
       : <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>}
   </main>);
+}
+else if (root && requested === "document-links") {
+  setRuntimeUiEnabledForTests(false);
+  const cwd = params.get("cwd")!;
+  const lines = [JSON.stringify({ type: "response_item", timestamp: "2026-10-20T10:00:00.000Z", payload: {
+    type: "message", role: "assistant", content: [{ type: "output_text", text:
+      `[Source report](docs/report.md:102:7) · [Heading](docs/report.md#source-version) · [Invisible](\u200B${cwd}/docs/report.md:102) · [Missing](docs/missing.md) · [Changed](docs/changed.md) · [Denied](${params.get("denied")}) · [External](https://example.com/guide)` }],
+  } })];
+  setLogFeedDependenciesForTests({ useLogTail: () => ({
+    lines, linesStart: 0, size: lines.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
+  }) });
+  const file = { ...CODEX_FILE, cwd, projectRoot: params.get("parent")!, project: "selected-later-project", conversationId: "conversation_document_source" };
+  function DocumentLinksFixture() {
+    const mobile = useIsMobile();
+    return <main className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+      <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} />
+      <ArtifactPreviewHost mobile={mobile} />
+    </main>;
+  }
+  createRoot(root).render(<DocumentLinksFixture />);
 }
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);

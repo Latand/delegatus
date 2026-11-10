@@ -467,17 +467,17 @@ test("a new default seat is spawned with the current routing policy and its vers
   expect(orchestratorSeatFor("proj-a").active).toMatchObject({ mandate: expect.stringContaining(ORCHESTRATOR_SYSTEM_PROMPT), promptVersion: ORCHESTRATOR_PROMPT_VERSION });
 });
 
-test("a stored v64 default is delivered the v65 policy without rewriting its recorded version", async () => {
-  const v64 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v64.txt"), "utf8");
+for (const version of [64, 65]) test(`a stored v${version} default is delivered the current policy without rewriting its recorded version`, async () => {
+  const v64 = fs.readFileSync(path.join(import.meta.dir, `fixtures/mandate-v${version}.txt`), "utf8");
   const { deps, recorded } = dependencies();
-  const result = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000042"), mandate: v64, promptVersion: 64 }, deps);
+  const result = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000042"), mandate: v64, promptVersion: version }, deps);
 
   expect(result.status).toBe(200);
   const delivered = String(recorded.spawns[0]!.prompt);
   expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
   /* The seat keeps the version it was recorded on, so it still reads as stale
      and its next rotation rebuilds the core from the default. */
-  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(64);
+  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(version);
 });
 
 test("a caller-edited current-version mandate stores the correction duty and receives the status directive once", async () => {

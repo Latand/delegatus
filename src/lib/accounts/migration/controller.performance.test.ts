@@ -179,7 +179,6 @@ test("a complete initial controller cycle yields during every cooperative phase"
           visited.push("runtime");
           await runReaperCycle({
             registry: currentRegistry,
-            hosts: [],
             files: currentFiles,
             actuation: { loadFlows: () => [] },
           });
@@ -267,7 +266,6 @@ test("authorship scanning yields while reading one large transcript", async () =
     try {
       lags = await eventLoopLagsWhile(() => probe.run(() => runReaperCycle({
         registry,
-        hosts: [],
         files: [file],
         actuation: { loadFlows: () => [] },
       })).then(() => undefined));

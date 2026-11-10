@@ -108,10 +108,10 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  hotRegistryRows, registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
-  sqliteRegistryStoreImported,
-  type RegistryDeliveryCompactionChanges,
+  sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
+  type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -2154,6 +2154,29 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/** A plain copy of a row read inside a keyed transaction. It keeps every own
+    property, including one whose value is undefined, so a comparison over the
+    copy answers as it does over the row a complete view holds. */
+function detachedRow<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(detachedRow) as T;
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) copy[key] = detachedRow((value as Record<string, unknown>)[key]);
+  return copy as T;
+}
+
+/** The registry rows one tmux census is reconciled against. */
+export interface TranscriptHostReconciliationRows {
+  /** The named entries that exist, by `engine:sessionId`. */
+  entries: Record<string, AgentRegistryEntry>;
+  /** The named launches that exist, by launch id. */
+  receipts: Record<string, SpawnReceipt>;
+  /** Every hot entry a tmux pane hosts, in collection order. */
+  hostedEntries: Array<[string, AgentRegistryEntry]>;
+  /** Every hot launch still starting, in collection order. */
+  startingReceipts: SpawnReceipt[];
+}
+
 function restoreOwnedChanges(current: unknown, retired: unknown, previous: unknown): unknown {
   if (JSON.stringify(retired) === JSON.stringify(previous)) return current;
   if (JSON.stringify(current) === JSON.stringify(retired)) return previous === undefined ? undefined : clone(previous);
@@ -2937,6 +2960,22 @@ function initialSpawnReceiptOf(file: RegistryFile, delivery: HeldDelivery): Spaw
     || resolveConversationAlias(file, receipt.conversationId) !== resolveConversationAlias(file, delivery.conversationId)) return null;
   return receipt;
 }
+
+/* What the failed-launch convergence can tell from a delivery alone: whose
+   first message it is, and which side of the join it could still owe. A
+   settled first message owes nothing, so its receipt is never read. */
+const INITIAL_SPAWN_DELIVERIES: RegistryRowProjector<"heldDeliveries", { launchId: string; failed: boolean } | null> = {
+  id: "initial-spawn-deliveries-v1", collection: "heldDeliveries",
+  project: (delivery) => {
+    const clientMessageId = delivery.clientMessageId;
+    if (!clientMessageId || !clientMessageId.startsWith("spawn_")) return null;
+    const launchId = clientMessageId.slice("spawn_".length);
+    if (delivery.command.operationId !== `spawn_message_${launchId}`) return null;
+    if (delivery.state === "failed") return { launchId, failed: true };
+    return delivery.attempts === 0 && (delivery.state === "held" || delivery.state === "assigned")
+      ? { launchId, failed: false } : null;
+  },
+};
 
 /** A terminal first-message delivery failure makes its launch receipt terminal
     too. Leaving the receipt path-pending would keep the operator card live
@@ -6237,6 +6276,61 @@ export class AgentRegistry {
     })));
   }
 
+  /** One entry by its session key. A caller inside an admitted writer checks
+      custody of a single host; SQLite reads that row alone, through the
+      writer's own transaction, where the complete view walked every retained
+      row under the write lock. */
+  hostEntry(key: SessionKey): AgentRegistryEntry | null {
+    const id = sessionKeyId(key);
+    if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) return this.readOnlySnapshot().entries[id] ?? null;
+    return this.readKeyed(file => {
+      const entry = file.entries[id];
+      return entry ? detachedRow(entry) : null;
+    });
+  }
+
+  /** The rows a tmux census reads: the entries and launches it names, the hot
+      entries a pane still hosts and the hot launches still starting. An
+      archived entry has no host and a starting launch is never archived, so
+      the two selections cover what a complete view would show the census.
+      SQLite selects them by key and index inside one keyed read, which also
+      borrows an admitted writer's transaction; assembling the complete view
+      there walked every retained row on the serving thread. */
+  transcriptHostReconciliationRows(entryIds: readonly string[], launchIds: readonly string[]): TranscriptHostReconciliationRows {
+    const named = (file: RegistryFile) => {
+      const rows: TranscriptHostReconciliationRows = { entries: {}, receipts: {}, hostedEntries: [], startingReceipts: [] };
+      for (const id of new Set(entryIds)) {
+        const entry = file.entries[id];
+        if (entry) rows.entries[id] = detachedRow(entry);
+      }
+      for (const id of new Set(launchIds)) {
+        const receipt = file.receipts[id];
+        if (receipt) rows.receipts[id] = detachedRow(receipt);
+      }
+      return rows;
+    };
+    if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
+      const file = this.readOnlySnapshot();
+      const rows = named(file);
+      rows.hostedEntries = hotRegistryRows(file, "entries").filter(([, entry]) => entry.host?.kind === "tmux");
+      rows.startingReceipts = hotRegistryRows(file, "receipts").flatMap(([, receipt]) => receipt.state === "starting" ? [receipt] : []);
+      return rows;
+    }
+    return this.readKeyed(file => {
+      const rows = named(file);
+      const keys = this.sqliteStore!.transcriptHostSweepKeys();
+      for (const id of keys.hostedEntries) {
+        const entry = rows.entries[id] ?? file.entries[id];
+        if (entry?.host?.kind === "tmux") rows.hostedEntries.push([id, detachedRow(entry)]);
+      }
+      for (const id of keys.startingReceipts) {
+        const receipt = rows.receipts[id] ?? file.receipts[id];
+        if (receipt?.state === "starting") rows.startingReceipts.push(detachedRow(receipt));
+      }
+      return rows;
+    });
+  }
+
   /** Current credential identity for the seat's stdio MCP heartbeat. */
   seatMcpReceipt(conversationId: string): { spawnCapabilityDigest: string; createdAt: string; viewerMcpTransport: "stdio" | "http" | null } | null {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) {
@@ -8263,8 +8357,19 @@ export class AgentRegistry {
   /** The read half of {@link terminalizeFailedSpawnDeliveries}. */
   failedSpawnDeliveryCandidates(): boolean {
     const snapshot = this.readOnlySnapshot();
-    const hasCandidate = Object.values(snapshot.heldDeliveries).some(
-      (delivery) => {
+    /* A failed first message is a candidate only while its launch is open, and
+       an open launch is always among the liveness rows. That keeps the pass
+       from reading the receipt of every launch that ever failed. */
+    let openLaunches: Set<string> | null = null;
+    const hasCandidate = registryRowProjection(snapshot, INITIAL_SPAWN_DELIVERIES).some(
+      ([key, initial]) => {
+        if (!initial) return false;
+        if (initial.failed) {
+          openLaunches ??= new Set(registryLivenessRows(snapshot).receipts.map((receipt) => receipt.launchId));
+          if (!openLaunches.has(initial.launchId)) return false;
+        }
+        const delivery = snapshot.heldDeliveries[key];
+        if (!delivery) return false;
         const receipt = initialSpawnReceiptOf(snapshot, delivery);
         if (!receipt) return false;
         if (delivery.state === "failed") {
@@ -8735,7 +8840,7 @@ export class AgentRegistry {
    * resumes the reviewer's session like any other finished agent's.
    */
   endHostlessSpawn(launchId: string): boolean {
-    if (!this.hostlessSpawnMarker(this.readOnlySnapshot(), launchId)) return false;
+    if (!this.readKeyed((file) => this.hostlessSpawnMarker(file, launchId) !== null)) return false;
     return this.mutate((file) => {
       const entry = this.hostlessSpawnMarker(file, launchId);
       if (!entry) return false;
@@ -9916,9 +10021,10 @@ export class AgentRegistry {
 
   /** The failed account switch holding this conversation's messages, or null (#1846). */
   switchHold(id: ViewerConversationId): ConversationSwitchHold | null {
-    const snapshot = this.readOnlySnapshot();
-    const hold = snapshot.conversations[resolveConversationAlias(snapshot, id)]?.switchHold;
-    return hold ? clone(hold) : null;
+    return this.readKeyed((file) => {
+      const hold = file.conversations[resolveConversationAlias(file, id)]?.switchHold;
+      return hold ? clone(hold) : null;
+    });
   }
 
   /** The operator sends the held messages on the account the conversation runs on (#1846). */
@@ -9937,11 +10043,12 @@ export class AgentRegistry {
 
   /** Whether a reconfigure operation was cancelled: withdrawn before its claim, or claimed and then cancelled. */
   reconfigureCancelled(id: ViewerConversationId, operationId: string): boolean {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    if (!conversation) return false;
-    if (conversation.reconfigure?.operationId === operationId && conversation.reconfigure.status === "cancelled") return true;
-    return Boolean(conversation.reconfigureWithdrawals?.some((withdrawal) => withdrawal.operationId === operationId));
+    return this.readKeyed((file) => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      if (!conversation) return false;
+      if (conversation.reconfigure?.operationId === operationId && conversation.reconfigure.status === "cancelled") return true;
+      return Boolean(conversation.reconfigureWithdrawals?.some((withdrawal) => withdrawal.operationId === operationId));
+    });
   }
 
   /**

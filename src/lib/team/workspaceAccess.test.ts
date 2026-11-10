@@ -58,8 +58,10 @@ import { POST as pipelinesPOST } from "@/app/api/pipelines/route";
 import { POST as preflightPOST } from "@/app/api/pipelines/preflight/route";
 import * as scanCache from "@/lib/scanner/scanCache";
 import * as transcriptHost from "@/lib/agent/transcriptHost";
-import * as tmux from "@/lib/tmux";
 import { GET as conversationsGET } from "@/app/api/conversations/route";
+import { GET as filesGET } from "@/app/api/files/route";
+import { createFilesProjectionQueue, type FilesProjectionQueue } from "@/app/api/files/projectionQueue";
+import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 const W1 = `w_${"a".repeat(32)}`;
@@ -498,7 +500,7 @@ describe("workspace authority", () => {
     }
   });
 
-  test("a pid beside an authorized conversation, launch or path never looks up or sends to another workspace's process", async () => {
+  test("a pid beside an authorized conversation, launch or path never sends to another workspace's process", async () => {
     const registry = agentRegistry();
     const ownTranscript = path.join(root, "own.jsonl");
     const foreignTranscript = path.join(root, "foreign.jsonl");
@@ -513,35 +515,27 @@ describe("workspace authority", () => {
       { ...catalogEntryToFileEntry(catalogRow(ownTranscript, "repo-alpha"), now), pid: ownPid, proc: "running" as const },
       { ...catalogEntryToFileEntry(catalogRow(foreignTranscript, "repo-beta"), now), pid: foreignPid, proc: "running" as const },
     ];
-    const pidLookups: number[] = [];
     const sends: unknown[] = [];
-    const resolvePid = async (pid: number) => { pidLookups.push(pid); return pid === foreignPid ? "beta-agent:1.0" : pid === ownPid ? "alpha-agent:1.0" : null; };
     const scanned = async () => ({ snapshot: { files } }) as never;
     const emptyHosts = async () => ({ hosts: [], observation: "available", canonicalFor: () => null }) as never;
     const deliver = async (message: unknown) => { sends.push(message); return { ok: true, target: "probe:0.0", operationId: "op-probe" } as never; };
     setConversationHostDependenciesForTests({
-      completedFileScan: scanned, readTranscriptHosts: emptyHosts, resolveRequestedTmuxTarget: resolvePid as never,
+      completedFileScan: scanned, readTranscriptHosts: emptyHosts,
       deliverConversationMessage: deliver as never,
       // Structured admission declines, so a send that passes the gate reaches the legacy pid ladder.
       enqueueStructuredMessage: (async (message: unknown) => { sends.push(message); return null; }) as never,
     });
     const scan = spyOn(scanCache, "completedFileScan").mockImplementation(scanned);
     const hosts = spyOn(transcriptHost, "readTranscriptHosts").mockImplementation(emptyHosts);
-    const tmuxLookup = spyOn(tmux, "resolveRequestedTmuxTarget").mockImplementation(resolvePid as never);
     const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
     const send = (route: string, actor: Member, body: Record<string, unknown>) => request(`/api/${route}`, actor, "POST", { text: "probe", ...body });
     try {
       for (const route of ["conversation-host", "tmux"]) {
-        const { GET, POST: sendPOST } = await import(`../../app/api/${route}/route.ts`);
-        const { POST } = await import(`../../app/api/${route}/targets/route.ts`);
+        const { POST: sendPOST } = await import(`../../app/api/${route}/route.ts`);
         const identities = [receipt.conversationId, `spawn:${receipt.launchId}`, ownTranscript];
         for (const actor of [member, manager]) {
           for (const pid of [foreignPid, unknownPid]) {
             for (const identity of identities) {
-              for (const key of ["path", "conversationId"]) {
-                const lookup = await GET(request(`/api/${route}?${key}=${encodeURIComponent(identity)}&pid=${pid}`, actor));
-                expect(lookup.status, `${route} GET ${key}=${identity} pid=${pid}`).toBe(403);
-              }
               for (const structured of ["1", "0"]) {
                 process.env.LLV_STRUCTURED_HOSTS = structured;
                 for (const body of [{ conversationId: identity, pid }, { path: identity, pid }, { conversationId: identity, pid: String(pid) }]) {
@@ -550,33 +544,17 @@ describe("workspace authority", () => {
                 }
               }
             }
-            const batch = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [
-              { id: "conversation", path: receipt.conversationId, pid },
-              { id: "launch", path: `spawn:${receipt.launchId}`, pid },
-            ] }));
-            expect(batch.status).toBe(403);
-            expect((await GET(request(`/api/${route}?pid=${pid}`, actor))).status).toBe(403);
-            expect((await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [{ id: "pid", pid }] }))).status).toBe(403);
           }
-          expect(pidLookups).toEqual([]);
           expect(sends).toEqual([]);
           // The member's own agent pid, beside its own conversation, still reaches the handlers.
-          expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${ownPid}`, actor))).json()).toEqual({ target: "alpha-agent:1.0" });
-          expect(pidLookups).toEqual([ownPid]);
           process.env.LLV_STRUCTURED_HOSTS = "0";
           expect((await sendPOST(send(route, actor, { conversationId: `spawn:${receipt.launchId}`, pid: ownPid }))).status).toBe(200);
           expect(sends).toEqual([expect.objectContaining({ pid: ownPid, path: "", text: "probe" })]);
-          pidLookups.length = 0;
           sends.length = 0;
         }
-        // The owner's pid lookups and pid-addressed sends are unchanged.
-        expect(await (await GET(request(`/api/${route}?pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
-        expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
-        expect(await (await POST(request(`/api/${route}/targets`, owner, "POST", { reqs: [{ id: "pid", pid: foreignPid }] }))).json()).toEqual({ targets: { pid: "beta-agent:1.0" } });
-        expect(pidLookups).toEqual([foreignPid, foreignPid, foreignPid]);
+        // The owner's pid-addressed sends are unchanged.
         expect((await sendPOST(send(route, owner, { conversationId: `spawn:${receipt.launchId}`, pid: foreignPid }))).status).toBe(200);
         expect(sends).toEqual([expect.objectContaining({ pid: foreignPid, path: "" })]);
-        pidLookups.length = 0;
         sends.length = 0;
       }
     } finally {
@@ -585,7 +563,6 @@ describe("workspace authority", () => {
       setConversationHostDependenciesForTests(null);
       scan.mockRestore();
       hosts.mockRestore();
-      tmuxLookup.mockRestore();
     }
   });
 
@@ -1096,4 +1073,113 @@ test("refusal transition retains the accepted ID for an authorized member", asyn
     await cache.reconcileCreations();
     expect(cache.creationCards().some(row => row.receipt?.id === pipeline.id && row.status === "refused")).toBe(true);
   } finally { observer.mockRestore(); cache.dispose(); }
+});
+
+describe("a cold pinned board scope the projection queue refuses", () => {
+  const queues = globalThis as typeof globalThis & { __llvFilesProjectionQueue?: FilesProjectionQueue };
+  let release: (() => void) | undefined;
+  let held: Promise<unknown> | undefined;
+  let queue: FilesProjectionQueue;
+  /* The queue runs on a clock and a deadline timer the test owns: a request waits
+     until the queue has taken its build (its timer is armed then), and a deadline
+     passes when the test advances the clock, never after a real delay. */
+  const maxWaitMs = 30_000;
+  let clock = 0;
+  let armed: Array<{ callback: () => void; cancelled: boolean }> = [];
+  let armWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const queued = (count: number) => armed.length >= count ? Promise.resolve() : new Promise<void>(resolve => { armWaiters.push({ count, resolve }); });
+  const expireWaiting = () => {
+    clock += maxWaitMs + 1;
+    for (const entry of armed.filter(candidate => !candidate.cancelled)) { entry.cancelled = true; entry.callback(); }
+  };
+  let ownId: string;
+  let foreignId: string;
+  const pinned = (identity: string, actor?: Member) => {
+    const url = `http://localhost/api/files?view=summary&path=${encodeURIComponent(identity)}`;
+    return actor ? request(new URL(url).pathname + new URL(url).search, actor) : new NextRequest(url, { headers: { host: "localhost" } });
+  };
+  const conversationIn = (project: string, suffix: number) => {
+    const registry = agentRegistry();
+    const receipt = registry.beginSpawn("codex", root, { project, title: `${project} conversation` });
+    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(suffix) }, artifactPath: path.join(root, `${project}-${suffix}.jsonl`), cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+    return receipt.conversationId;
+  };
+  beforeEach(() => {
+    ownId = conversationIn("repo-alpha", 11);
+    foreignId = conversationIn("repo-beta", 12);
+    scanCache.resetFilesRouteCacheForTests();
+    scanCache.setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
+    setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") }, timeoutMs: 30_000 });
+    // One build holds the only worker slot, so a later scope waits past its bound.
+    clock = 0;
+    armed = [];
+    armWaiters = [];
+    queue = createFilesProjectionQueue({
+      maxDepth: 4,
+      maxWaitMs,
+      now: () => clock,
+      timer: (callback) => {
+        const entry = { callback, cancelled: false };
+        armed.push(entry);
+        for (const waiter of armWaiters) if (armed.length >= waiter.count) waiter.resolve();
+        return { cancel: () => { entry.cancelled = true; } };
+      },
+    });
+    queues.__llvFilesProjectionQueue = queue;
+    held = queue.run(() => new Promise<{ timing: string }>(resolve => { release = () => resolve({ timing: "" }); }));
+    delete (globalThis as { __llvFilesProjectionCache?: unknown }).__llvFilesProjectionCache;
+  });
+  afterEach(async () => {
+    release?.();
+    await held;
+    queues.__llvFilesProjectionQueue = undefined;
+    scanCache.setFileScanRunnerForTests(null);
+    scanCache.resetFilesRouteCacheForTests();
+    setFilesResponseWorkerRuntimeForTests(null);
+    shutdownFilesResponseWorker("test");
+  });
+
+  test("a member's own conversation gets a 503 with no rows", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      for (const actor of [member, manager]) {
+        const reply = filesGET(pinned(ownId, actor));
+        await queued(armed.length + 1);
+        expireWaiting();
+        const response = await reply;
+        expect(response.status).toBe(503);
+        const text = await response.text();
+        expect(JSON.parse(text)).toEqual({ error: "board unavailable" });
+        expect(text).not.toContain("files");
+        expect(response.headers.get("etag")).toBeNull();
+      }
+    } finally { warn.mockRestore(); }
+  });
+
+  test("a foreign conversation is refused before the queue is touched", async () => {
+    const before = queue.diagnostics();
+    const response = await filesGET(pinned(foreignId, member));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "workspace_forbidden" });
+    expect(queue.diagnostics()).toEqual(before);
+  });
+
+  test("membership removed during the queue wait gives 403", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const pending = filesGET(pinned(ownId, member));
+      await queued(2);
+      expect(queue.diagnostics().waiting).toBe(1);
+      store.removeWorkspaceMember(W1, member.id);
+      expireWaiting();
+      expect((await pending).status).toBe(403);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("no session gets the sign-in refusal before the queue", async () => {
+    const before = queue.diagnostics();
+    const response = await filesGET(pinned(ownId));
+    expect(response.status).toBe(401);
+    expect(queue.diagnostics()).toEqual(before);
+  });
 });

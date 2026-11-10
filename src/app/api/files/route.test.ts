@@ -1,5 +1,5 @@
 import { readAttentionDismissals } from "@/lib/attention/dismissals";
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -40,6 +40,7 @@ import {
 } from "@/lib/scanner/scanCache";
 import { filesResponseWorkerPoolDiagnostics, setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
+import { createFilesProjectionQueue, type FilesProjectionQueue } from "./projectionQueue";
 import { gunzipSync } from "node:zlib";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
@@ -202,7 +203,7 @@ const { fileScanCoordinatorStatus } = await import("@/lib/scanner/scanCoordinato
 const { postSnapshot } = await import("@/app/api/agent/snapshot/handler");
 const { resetPresenceForTest, upsertPresence } = await import("@/lib/view/presenceStore");
 const { controllerFileScan } = await import("@/lib/pipelines/controller");
-const { allowedKillTarget, buildResourceSnapshot, lastResourceTargetRefs, noteSessionTargets, readResourceFileSnapshot } = await import("@/lib/resources");
+const { buildResourceSnapshot, lastResourceTargetRefs, noteSessionTargets, readResourceFileSnapshot } = await import("@/lib/resources");
 // The HTTP adapter supplies Next after(); these direct handler tests own its
 // completion scheduler. Compiled HTTP and browser replays exercise the adapter.
 const { GET, prepareBoardSummary } = await import("./operatorProjection");
@@ -1415,7 +1416,7 @@ test("concurrent fresh callers share one pending generation through failure and 
   expect(scans).toBe(scansAfterRecovery);
 });
 
-test("a fresh resource snapshot fences a pre-kill refresh before host election", async () => {
+test("a fresh resource snapshot fences a pre-kill refresh before reading hosts", async () => {
   const now = Date.now();
   const before = { ...file("/sessions/resource-before.jsonl"), title: "Before kill", activity: "idle" as const };
   const after = { ...file("/sessions/resource-after.jsonl"), title: "After kill", activity: "recent" as const, mtime: 2 };
@@ -1432,51 +1433,26 @@ test("a fresh resource snapshot fences a pre-kill refresh before host election",
   scannedFiles = [after];
 
   let filesFresh: boolean | undefined;
-  let hostEntries: Array<{ path: string }> = [];
   let resourceSettled = false;
-  const resourceRef = {
-    tmuxServerPid: 900,
-    tmuxServerStartIdentity: "900:one",
-    panePid: 100,
-    paneStartIdentity: "100:one",
-    paneId: "%1",
-  };
   const payloadPromise = buildResourceSnapshot(true, {
     readFiles: async (fresh) => {
       filesFresh = fresh;
       return readResourceFileSnapshot(fresh);
     },
-    readHosts: async (_fresh, entries) => {
-      hostEntries = entries;
-      const selected = entries[0]!;
-      const target = selected.path === after.path ? "agents:after" : "agents:before";
-      const host = {
-        tmuxServerPid: 900,
-        paneId: "%1",
-        panePid: 100,
-        agentPid: 200,
-        display: target,
-        engine: "codex" as const,
-        cwd: "/repo",
-        agentArgv: ["codex", "resume", selected.path],
-        agentIdentity: "200:one",
-        launchId: null,
-        claimedPaths: [selected.path],
-        primaryPath: selected.path,
-      };
-      return {
-        hosts: [host],
-        observation: "available" as const,
-        conflicts: [],
-        canonicalFor: (pathname: string) => pathname === selected.path ? host : null,
-      };
-    },
+    readStructuredHosts: async () => [{
+      id: "codex:resource-after", engine: "codex" as const, sessionId: "resource-after", pid: 100, startIdentity: "100:one",
+      bootEpoch: "boot-one", cwd: "/repo", path: after.path, conversationId: null, title: null, role: null, model: null,
+      stage: null, seat: false, turnBusy: false, owned: true,
+    }],
+    processIdentity: (pid) => `${pid}:one`,
+    bootEpoch: () => "boot-one",
+    directoryExists: () => true,
+    listAgentProcesses: () => [],
     proc: {
       systemMemory: () => null,
       ppidMap: () => new Map([[200, 100]]),
       processMemory: () => new Map([[100, { rssBytes: 10, swapBytes: 0 }], [200, { rssBytes: 20, swapBytes: 0 }]]),
     },
-    captureAttachReferences: () => new Map([[resourceRef.paneId, resourceRef]]),
   }).then((payload) => {
     resourceSettled = true;
     return payload;
@@ -1488,134 +1464,15 @@ test("a fresh resource snapshot fences a pre-kill refresh before host election",
   const payload = await payloadPromise;
   expect(resourceSettled).toBeTrue();
   expect(scans).toBe(2);
-  expect(hostEntries.map((entry) => entry.path)).toEqual([after.path]);
   expect(payload.sessions).toEqual([expect.objectContaining({
-    target: "agents:after",
+    target: "structured:codex:resource-after",
     path: after.path,
     title: "After kill",
     activity: "recent",
     lastActiveAt: "1970-01-01T00:00:02.000Z",
   })]);
-  expect(lastResourceTargetRefs()).toEqual([{ target: "agents:after", ref: resourceRef }]);
-  expect(allowedKillTarget("agents:after")).toBeNull();
-  expect(allowedKillTarget("agents:before")).toBeNull();
+  expect(lastResourceTargetRefs()).toMatchObject([{ target: "structured:codex:resource-after", ref: { kind: "structured", pid: 100 } }]);
   releasePreKillRefresh();
-});
-
-test("a fresh resource snapshot replaces stale process and pane observations before host reconciliation", async () => {
-  const sessionId = "199e8e95-0e87-\x34b4f-84bf-f62b3c0993a3";
-  const pathname = `/home/user/.claude/projects/-repo/${sessionId}.jsonl`;
-  const transcript = {
-    ...file(pathname),
-    root: "claude-projects" as const,
-    engine: "claude" as const,
-    fmt: "claude" as const,
-    title: "Plain Claude CLI",
-    activity: "live" as const,
-    mtime: 2,
-  };
-  const oldCli = { agentPid: 200, panePid: 100, paneId: "%1", target: "agents:old" };
-  const newCli = { agentPid: 201, panePid: 101, paneId: "%2", target: "agents:new" };
-  let processMemo = oldCli;
-  let paneMemo = oldCli;
-  const liveProcess = newCli;
-  const livePane = newCli;
-  scannedFiles = [transcript];
-  hydrateScannedFiles = (files, options) => {
-    if ((options as { fresh?: boolean }).fresh === true) {
-      processMemo = liveProcess;
-      paneMemo = livePane;
-    }
-    const owner = processMemo.agentPid === paneMemo.agentPid && processMemo.panePid === paneMemo.panePid
-      ? processMemo
-      : null;
-    return files.map((entry) => ({
-      ...entry,
-      pid: owner?.agentPid ?? null,
-      proc: owner ? "running" as const : null,
-    }));
-  };
-
-  const registry = agentRegistry();
-  const key = { engine: "claude" as const, sessionId };
-  registry.upsert({
-    key,
-    artifactPath: pathname,
-    cwd: "/repo",
-    accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
-    status: "live",
-    host: null,
-    claimEpoch: 0,
-    claimOwner: null,
-    pendingAction: null,
-  });
-
-  const resourceRef = {
-    tmuxServerPid: 900,
-    tmuxServerStartIdentity: "900:one",
-    panePid: newCli.panePid,
-    paneStartIdentity: `${newCli.panePid}:one`,
-    paneId: newCli.paneId,
-  };
-  const payload = await buildResourceSnapshot(true, {
-    readFiles: async (fresh) => (await currentFileScan({ fresh })).snapshot.files,
-    readHosts: async (fresh, entries) => {
-      if (fresh) {
-        processMemo = liveProcess;
-        paneMemo = livePane;
-      }
-      const primaryPath = entries.find((entry) => entry.pid === processMemo.agentPid)?.path ?? null;
-      const host = {
-        tmuxServerPid: 900,
-        paneId: paneMemo.paneId,
-        panePid: paneMemo.panePid,
-        agentPid: processMemo.agentPid,
-        display: paneMemo.target,
-        engine: "claude" as const,
-        cwd: "/repo",
-        agentArgv: ["claude"],
-        agentIdentity: `${processMemo.agentPid}:one`,
-        launchId: null,
-        claimedPaths: primaryPath ? [primaryPath] : [],
-        primaryPath,
-      };
-      if (primaryPath) {
-        const current = registry.snapshot().entries[`claude:${sessionId}`]!;
-        registry.upsert({ ...current, artifactPath: primaryPath, status: "live" });
-      } else {
-        registry.markUnhosted(key);
-      }
-      return {
-        hosts: [host],
-        observation: "available" as const,
-        conflicts: [],
-        canonicalFor: (candidate: string) => candidate === primaryPath ? host : null,
-      };
-    },
-    proc: {
-      systemMemory: () => null,
-      ppidMap: () => new Map([[newCli.agentPid, newCli.panePid]]),
-      processMemory: () => new Map([
-        [newCli.panePid, { rssBytes: 10, swapBytes: 0 }],
-        [newCli.agentPid, { rssBytes: 20, swapBytes: 0 }],
-      ]),
-    },
-    captureAttachReferences: () => new Map([[resourceRef.paneId, resourceRef]]),
-  });
-
-  expect(scans).toBe(1);
-  expect(payload.sessions).toEqual([expect.objectContaining({
-    target: newCli.target,
-    path: pathname,
-    title: "Plain Claude CLI",
-    activity: "live",
-    lastActiveAt: "1970-01-01T00:00:02.000Z",
-  })]);
-  expect(registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
-    artifactPath: pathname,
-    status: "live",
-  });
 });
 
 test("a client automatically converges from a persisted restart snapshot to its completed generation", async () => {
@@ -4793,4 +4650,197 @@ test("a failed bootstrap refinement leaves saved bytes available for a later ret
   await work.shift()!();
   const refined = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
   expect(refined.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
+});
+
+/* A refused cold scope: the projection queue holds one build that has not
+   finished, so the next scope waits past its bound or finds the queue full.
+   The queue runs on a clock and a deadline timer the test owns: a request waits
+   until the queue has taken its build (the timer is armed then), and a deadline
+   passes when the test advances the clock, never after a real delay. */
+describe("a cold scope the projection queue refuses", () => {
+  const HELD_QUEUE_WAIT_MS = 30_000;
+  let held: (() => void) | undefined;
+  let heldRun: Promise<unknown> | undefined;
+  let pending: Promise<unknown>[] = [];
+  let clock = 0;
+  let armed: Array<{ callback: () => void; cancelled: boolean }> = [];
+  let armWaiters: Array<{ count: number; resolve: () => void }> = [];
+  let joined = 0;
+  let joinWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const store = globalThis as typeof globalThis & {
+    __llvFilesProjectionQueue?: FilesProjectionQueue;
+    __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
+  };
+  const pinnedUrl = (target: string) => `http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(target)}`;
+  const realWorker = () => setFilesResponseWorkerRuntimeForTests({
+    launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
+    env: { ...process.env, NODE_ENV: "production", LLV_STATE_DIR: stateDir, LLV_AGENT_REGISTRY_SQLITE: "off", LLV_FILES_RESPONSE_WORKER: "1",
+      HOME: path.join(stateDir, "home"), XDG_CONFIG_HOME: path.join(stateDir, "config"), TMPDIR: stateDir },
+    timeoutMs: 30_000,
+  });
+  const reached = (waiters: Array<{ count: number; resolve: () => void }>, count: number, now: number) =>
+    now >= count ? Promise.resolve() : new Promise<void>((resolve) => { waiters.push({ count, resolve }); });
+  const notify = (waiters: Array<{ count: number; resolve: () => void }>, now: number) => {
+    for (const waiter of waiters) if (now >= waiter.count) waiter.resolve();
+  };
+  /** Resolves once the queue has taken this many builds (the one it holds counts). */
+  const queued = (count: number) => reached(armWaiters, count, armed.length);
+  /** Resolves once this many callers have joined the build already in flight for their scope. */
+  const joinedCallers = (count: number) => reached(joinWaiters, count, joined);
+  /** Runs a request the test finishes, or settles in `afterEach` when it does not. */
+  const request = <T>(work: Promise<T>): Promise<T> => {
+    pending.push(work.catch(() => undefined));
+    return work;
+  };
+  /** The deadline of every build still waiting passes. */
+  const expireWaiting = () => {
+    clock += HELD_QUEUE_WAIT_MS + 1;
+    for (const entry of armed.filter((candidate) => !candidate.cancelled)) {
+      entry.cancelled = true;
+      entry.callback();
+    }
+  };
+  const holdQueue = (options: { maxDepth: number }) => {
+    const queue = createFilesProjectionQueue({
+      maxDepth: options.maxDepth,
+      maxWaitMs: HELD_QUEUE_WAIT_MS,
+      now: () => clock,
+      timer: (callback) => {
+        const entry = { callback, cancelled: false };
+        armed.push(entry);
+        notify(armWaiters, armed.length);
+        return { cancel: () => { entry.cancelled = true; } };
+      },
+    });
+    store.__llvFilesProjectionQueue = queue;
+    const inflight = new Map<string, Promise<unknown>>();
+    const lookup = inflight.get.bind(inflight);
+    inflight.get = (key: string) => {
+      const current = lookup(key);
+      if (current) { joined += 1; notify(joinWaiters, joined); }
+      return current;
+    };
+    store.__llvFilesProjectionInflight = inflight;
+    heldRun = queue.run(() => new Promise<{ timing: string }>((resolve) => { held = () => resolve({ timing: "" }); }));
+    return queue;
+  };
+  const releaseQueue = async () => {
+    held?.();
+    await heldRun;
+    held = undefined;
+    heldRun = undefined;
+  };
+  beforeEach(() => {
+    scannedFiles = [file("/sessions/cold-one.jsonl"), file("/sessions/cold-two.jsonl")];
+    clock = 0;
+    armed = [];
+    armWaiters = [];
+    joined = 0;
+    joinWaiters = [];
+    pending = [];
+    realWorker();
+  });
+  afterEach(async () => {
+    await releaseQueue();
+    await Promise.all(pending);
+    store.__llvFilesProjectionQueue = undefined;
+    store.__llvFilesProjectionInflight = undefined;
+    setFilesResponseWorkerRuntimeForTests(null);
+    await stopTestWorker();
+  });
+
+  test("expires into a controlled 503 with no rows", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    holdQueue({ maxDepth: 4 });
+    try {
+      const reply = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+      await queued(2);
+      expireWaiting();
+      const response = await reply;
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-llv-files-projection-cache")).toBe("unavailable");
+      expect(response.headers.get("etag")).toBeNull();
+      expect(response.headers.get("server-timing")).toContain("files-worker-queue");
+      const body = await response.json() as Record<string, unknown>;
+      expect(body).toEqual({ error: "files projection unavailable", code: "files_projection_unavailable", reason: "expired" });
+      const line = warn.mock.calls.map((call) => String(call[0])).find((text) => text.startsWith("[files projection]"));
+      expect(line).toContain("expired for a scope with nothing to serve");
+      expect(line).toContain("pinned yes, summary yes, agent no");
+      expect(line).not.toContain("cold-one");
+    } finally { warn.mockRestore(); }
+  });
+
+  test("a full queue refuses a second distinct scope at once, whatever the scanner's delay", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const queue = holdQueue({ maxDepth: 1 });
+    /* The first scope's scan is held, so its build cannot reach the queue until the test lets the scan go. */
+    let releaseScan!: () => void;
+    scanGates.push(new Promise<void>((resolve) => { releaseScan = resolve; }));
+    try {
+      const waiting = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+      expect(armed.length).toBe(1);
+      releaseScan();
+      await queued(2);
+      expect(queue.diagnostics().waiting).toBe(1);
+      const refused = await request(GET(new Request(pinnedUrl("/sessions/cold-two.jsonl"))));
+      expect(refused.status).toBe(503);
+      expect((await refused.json() as { reason: string }).reason).toBe("full");
+      expect(queue.diagnostics().refused).toBe(1);
+      await releaseQueue();
+      expect((await waiting).status).toBe(200);
+    } finally { releaseScan(); warn.mockRestore(); }
+  });
+
+  test("callers joined on one scope all get the 503 and one build was queued", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const queue = holdQueue({ maxDepth: 4 });
+    try {
+      const replies = [1, 2].map(() => request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")))));
+      await queued(2);
+      await joinedCallers(1);
+      expireWaiting();
+      expect((await Promise.all(replies)).map((response) => response.status)).toEqual([503, 503]);
+      expect(queue.diagnostics().expired).toBe(1);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("a warm scope keeps serving its last body", async () => {
+    const first = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+    expect(first.status).toBe(200);
+    const warmBody = await first.text();
+    scannedFiles = [file("/sessions/cold-one.jsonl"), file("/sessions/cold-two.jsonl"), file("/sessions/cold-three.jsonl")];
+    await currentFileScan({ fresh: true });
+    holdQueue({ maxDepth: 4 });
+    const reply = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+    await queued(2);
+    expireWaiting();
+    const second = await reply;
+    expect(second.status).toBe(200);
+    expect(await second.text()).toBe(warmBody);
+  });
+
+  test("the same scope answers once the queue frees", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    holdQueue({ maxDepth: 4 });
+    try {
+      const refused = request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+      await queued(2);
+      expireWaiting();
+      expect((await refused).status).toBe(503);
+      await releaseQueue();
+      const recovered = await request(GET(new Request(pinnedUrl("/sessions/cold-one.jsonl"))));
+      expect(recovered.status).toBe(200);
+      const body = await recovered.json() as { files: FileEntry[] };
+      expect(body.files.some((entry) => entry.path === "/sessions/cold-one.jsonl")).toBe(true);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("board preparation still sees the refusal as a throw", async () => {
+    holdQueue({ maxDepth: 4 });
+    const preparing = request(prepareBoardSummary(true));
+    await queued(2);
+    expireWaiting();
+    await expect(preparing).rejects.toMatchObject({ name: "FilesProjectionQueueError", reason: "expired" });
+  });
 });

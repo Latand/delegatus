@@ -6,11 +6,11 @@ import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
-import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
@@ -33,7 +33,9 @@ import {
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
-import { findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { statePath } from "@/lib/configDir";
+import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
+import { loadPipelineOwnershipForStartupAsync, pipelineStartupAttemptMatches, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
 import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -48,6 +50,9 @@ export interface StructuredRecoveryRequest {
   admissionGuard?: DeliveryAdmissionGuard;
   /** Seat authority after reservation, independent of this launch's new identity. */
   authorityGuard?: () => void;
+  /** Hand predecessor evidence to the verified successor before attachment
+      writes its ledger. Called synchronously after this recovery proves custody. */
+  acceptSuccessorClaim?: (key: SessionKey) => void;
   path: string;
   conversationId?: string | null;
   origin?: MessageOrigin;
@@ -426,7 +431,27 @@ async function recoverCandidate(
         const { publishStructuredDeliveryHost, structuredDeliveryHostForConversation } = await import("./structuredDeliveryController");
         if (!structuredDeliveryHostForConversation(current.conversationId)) {
           const account = (dependencies.resolveAccount ?? resolveContinuityAccount)(current.engine, current.accountId, current.project);
+          const recipientSelection = () => {
+            const snapshot = registry.startupHostSnapshot(current!.key);
+            const conversationIds = conversationIdsResolvingTo(snapshot,current!.conversationId);
+            const entry = snapshot.entries[sessionKeyId(current!.key)];
+            const generation = registry.conversation(current!.conversationId)?.generations.at(-1);
+            return { ids: [...new Set(conversationIds.flatMap(id => (snapshot.memberships[id] ?? [])
+              .filter(item => item.kind === "pipeline").map(item => item.containerId)))], conversationIds,
+              agentPaths: [...new Set([entry?.artifactPath, generation?.path].filter((value): value is string => !!value))],
+              sessionIds: [current!.key.sessionId] };
+          };
+          const recipient = recipientSelection();
+          const recipientIdentity = JSON.stringify(recipient);
+          const recipientVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient);
           const authorize = () => {
+            if (!recipientVersion) throw new StructuredRecoveryHeldForUpdateError("recipient pipeline ownership index is unavailable for native reconnect");
+            if (recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient) !== recipientVersion) {
+              throw new StructuredRecoveryHeldForUpdateError("recipient pipeline authority changed during native reconnect");
+            }
+            if (JSON.stringify(recipientSelection()) !== recipientIdentity) throw new StructuredRecoverySupersededError();
+            if (registry.conversation(current!.conversationId)?.generations.at(-1)?.id !== current!.key.sessionId
+              || registry.conversation(current!.conversationId)?.supersededBy) throw new StructuredRecoverySupersededError();
             assertRecoveryAdmission(request, registry);
             request.authorityGuard?.();
             request.admissionGuard?.();
@@ -436,11 +461,20 @@ async function recoverCandidate(
           authorize();
           const claim = await withPipelineStartupAdmission(async available => {
             if (!available) throw new StructuredRecoveryHeldForUpdateError("pipeline authority is unavailable for native reconnect");
+            const owners = await loadPipelineOwnershipForStartupAsync(recipient.ids,new Set(recipient.conversationIds),recipient);
+            if (owners.some(row => row.survivors.some(identity => processIdentityStatus(identity) !== "dead")
+              || row.attempts.some(attempt => pipelineStartupAttemptMatches(attempt,recipient) && attempt.suspended))) {
+              throw new StructuredRecoveryHeldForUpdateError("recipient pipeline custody is unresolved for native reconnect");
+            }
             return registry.deliveryWriteOrBusy({ label: "registry.reconnect-startup-host" }, () => {
               authorize();
+              if (JSON.stringify(recipientSelection()) !== recipientIdentity
+                || registry.conversation(current!.conversationId)?.generations.at(-1)?.id !== current!.key.sessionId) {
+                throw new StructuredRecoverySupersededError();
+              }
               return registry.claimStructuredHost(current!.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
             });
-          }, "reconnecting requested startup host", undefined, true);
+          }, "reconnecting requested startup host", undefined, true, { recipient });
           if (claim?.structuredHost && claim.claimOwner) {
             let host: CodexAppServerHost | undefined;
             const releaseConnection = async () => {
@@ -449,6 +483,11 @@ async function recoverCandidate(
                 () => registry.releaseStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch));
             };
             try {
+              if (!registry.ownsStructuredHostClaim(current.key, claim.claimOwner, claim.claimEpoch)) {
+                throw new StructuredRecoverySupersededError();
+              }
+              request.acceptSuccessorClaim?.(current.key);
+              request.admissionGuard?.(current.key);
               authorize();
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
@@ -457,6 +496,7 @@ async function recoverCandidate(
                 plugins: current.spec.launchProfile?.plugins ?? [],
                 env: { ...withoutUnsupportedApiCredentials(account.env),
                   ...await stageGitEnvironment(registry, current.conversationId, entry.structuredHostOperationId, current.spec.cwd) }, socketOwner,
+                assertCurrent: authorize,
                 initialEventCursor: claim.structuredHost.eventCursor,
                 readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
                 memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
@@ -660,6 +700,8 @@ async function recoverCandidate(
               }
             };
             claimed = true;
+            admissionGuard();
+            request.acceptSuccessorClaim?.(current.key);
             admissionGuard();
           },
         },

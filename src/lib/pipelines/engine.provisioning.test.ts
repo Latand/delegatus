@@ -207,6 +207,7 @@ test("a due busy wait survives a restarted controller race with one fresh host c
     const ports = defaultPipelinePorts();
     ports.now = () => ${JSON.stringify(h.ports.now())};
     // This child models admission and a fake spawn, just like the parent harness.
+    ports.worktreePresent = () => true;
     ports.engineReadiness = () => "connected";
     ports.structuredDeliveryPublication = () => "ready";
     // bun -e is not recognized as a test by the machine scheduler. Keep this

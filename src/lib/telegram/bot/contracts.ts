@@ -161,6 +161,8 @@ export function readTelegramBotRefusals(value: unknown): TelegramBotRefusal[] {
 }
 
 export type TelegramChatBot = Pick<TelegramPostingBot, "name" | "username"> & {
+  /** A paired relay's clone rather than a connected bot: no token of it is stored here. */
+  clone?: { relay: string };
   assigned: boolean;
   member: boolean | null;
   status: TelegramBotMemberStatus | null;

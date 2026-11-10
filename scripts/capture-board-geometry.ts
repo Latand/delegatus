@@ -1194,7 +1194,9 @@ async function captureOnboarding(): Promise<void> {
               must(geometry.overflow <= 1 && geometry.fields.every((field) => field.width >= 44 && (viewport.phone ? field.height >= 44 : field.height >= 24) && field.left >= 0 && field.right <= viewport.width + 1), `${tag}: provider controls overflow or collapse: ${JSON.stringify(geometry)}`);
               await page.locator(`${selector} button`).first().click();
               const edit = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="provider-fixture"]';
-              await page.locator(`${edit} button`).first().click();
+              /* The provider's form opens from the row's own Edit provider, in the opened row. */
+              await page.locator('[data-onboarding-accounts="claude"] [data-account-toggle="provider-fixture"]').click();
+              await page.locator('[data-onboarding-accounts="claude"] [data-account-provider-edit="provider-fixture"]').click();
               await guideForm(edit, "engines-provider-edit");
               const editGeometry = await page.locator(edit).evaluate((node) => ({
                 fields: [...node.querySelectorAll("input,button")].map((field) => {
@@ -1250,7 +1252,8 @@ async function captureOnboarding(): Promise<void> {
               await accountShot("accounts-provider-add", accountNew);
               await page.locator(`${accountRoot} ${accountNew} > button`).click();
               const accountEdit = '[data-claude-provider-editor="provider-fixture"]';
-              await page.locator(`${accountRoot} ${accountEdit} > button`).click();
+              await page.locator(`${accountRoot} [data-account-toggle="provider-fixture"]`).click();
+              await page.locator(`${accountRoot} [data-account-provider-edit="provider-fixture"]`).click();
               await accountShot("accounts-provider-edit", accountEdit);
               report[tag] = frames;
               await context.close();
@@ -1413,12 +1416,14 @@ async function captureOnboarding(): Promise<void> {
               await page.click('[data-mobile2-open="menu"]');
               /* The roles table is on the menu's Settings page. */
               await page.click('[data-mobile2-menu-row="settings"]');
+              await page.click('[data-settings-section-row="roles"]');
               await page.waitForSelector('[data-testid="menu-agent-mapping"]');
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click('[data-testid="menu-agent-mapping"]');
             } else {
               await page.click("[data-rail-menu]");
               await page.click("[data-rail-menu-settings]");
+              await page.click('[data-settings-section-row="roles"]');
               await page.waitForSelector("[data-rail-menu-agent-mapping]");
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click("[data-rail-menu-agent-mapping]");
@@ -3370,7 +3375,13 @@ async function accountRemovalMain(): Promise<void> {
         },
       };
     };
-    const rowIdOf = (page: Page, label: string) => page.evaluate((name: string) => [...document.querySelectorAll("[data-account-row]")].find((row) => row.querySelector("button[aria-current], button")?.textContent?.includes(name))?.getAttribute("data-account-row") ?? null, label);
+    const rowIdOf = (page: Page, label: string) => page.evaluate((name: string) => [...document.querySelectorAll("[data-account-row]")].find((row) => row.querySelector("[data-account-name]")?.textContent?.includes(name))?.getAttribute("data-account-row") ?? null, label);
+    /* Remove sits in the opened row: a press on the row's name opens it (and closes the one that was open). */
+    const openRow = async (page: Page, id: string) => {
+      const toggle = page.locator(`[data-account-toggle="${id}"]`);
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+      await page.waitForSelector(`[data-account-row="${id}"] [data-account-remove], [data-account-row="${id}"] [data-account-remove-armed]`);
+    };
     const openPanel = async (page: Page) => {
       await page.click("[data-bar-more]");
       await page.waitForSelector("[data-bar-more-menu]");
@@ -3420,6 +3431,7 @@ async function accountRemovalMain(): Promise<void> {
       if (!idB || !idC) { await context.close(); continue; }
       const readings: Record<string, RemovalReading> = {};
       const arm = async (id: string) => {
+        await openRow(page, id);
         await page.click(`[data-account-remove="${id}"]`);
         await page.waitForSelector(`[data-account-remove-armed="${id}"]`);
       };
@@ -3466,7 +3478,7 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForTimeout(300);
       readings.liveWork = await page.evaluate(readRemoval, `[data-account-refusal="${idB}"]`);
       check(tag, "live work", readings.liveWork, { text: [lang === "uk" ? "і ще 4" : "and 4 more", liveWork[0]!.title!] });
-      const liveLinks = await page.evaluate((id: string) => [...document.querySelectorAll(`[data-account-refusal="${id}"] [data-account-refusal-sessions] a[href]`)].map((link) => link.getAttribute("href")), idB);
+      const liveLinks = await page.evaluate((id: string) => [...document.querySelectorAll(`[data-account-refusal="${id}"] a[data-account-refusal-session]`)].map((link) => link.getAttribute("href")), idB);
       must(liveLinks.length === 3 && liveLinks[0] === "#c=conversation_capture_onboarding" && liveLinks[2]!.startsWith("#f="), `${tag} live work: the links are ${JSON.stringify(liveLinks)}`);
       await shoot(page, `${tag}-live-work`);
 
@@ -3489,6 +3501,14 @@ async function accountRemovalMain(): Promise<void> {
           await page.mouse.click(r.x, r.y);
         };
         stub.answer(answer);
+        /* Opening the row moves the list: it is opened first and scrolled to the bottom again. */
+        await openRow(page, idC);
+        await page.evaluate((id: string) => {
+          let area = document.querySelector(`[data-account-row="${id}"]`)!.parentElement;
+          while (area && !/(auto|scroll)/.test(getComputedStyle(area).overflowY)) area = area.parentElement;
+          if (area) area.scrollTop = area.scrollHeight;
+        }, idC);
+        await page.waitForTimeout(200);
         await clickPainted(`[data-account-remove="${idC}"]`);
         await page.waitForSelector(`[data-account-remove-armed="${idC}"]`);
         await clickPainted(`[data-account-remove-confirm="${idC}"]`);
@@ -3579,7 +3599,7 @@ async function accountRemovalMain(): Promise<void> {
       await page.waitForSelector('[data-account-row="default"]');
       await page.waitForTimeout(300);
       must(await page.evaluate(() => document.querySelector("[data-account-hidden-offer]") === null), `${tag} Main shown again: the offer stays up`);
-      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"] button');
+      readings.mainRestored = await page.evaluate(readRemoval, '[data-account-row="default"] [data-account-toggle]');
       check(tag, "Main shown again", readings.mainRestored, { text: ["Main"] });
       await shoot(page, `${tag}-main-restored`);
 
@@ -3679,6 +3699,7 @@ async function accountRemovalMain(): Promise<void> {
               ? hiddenMainAnswer
               : { status: 200, body: { removed: { id }, cleanupPending: true, moved: { archive: inventedArchive(id), files: 1284, bytes: 2_100_000_000 }, conversationsRewritten: 37, pinsCleared: 2, deliveriesDropped: 1, migrationsSettled: 1 } });
         const release = stub.holdNext();
+        await openRow(page, id);
         await page.click(`[data-account-remove="${id}"]`);
         await page.click(`[data-account-remove-confirm="${id}"]`);
         await page.setViewportSize({ width: 390, height: 844 });
@@ -3694,7 +3715,7 @@ async function accountRemovalMain(): Promise<void> {
         const reading = await page.evaluate(readRemoval, selector);
         check(tag, kind, reading, { phone: true, ...(kind === "live" ? { text: [liveWork[0]!.title!] } : kind === "hidden" ? { text: ["~/.claude"] } : {}) });
         if (kind === "live") {
-          const links = await page.evaluate((account: string) => document.querySelectorAll(`[data-account-refusal="${account}"] [data-account-refusal-sessions] a[href]`).length, id);
+          const links = await page.evaluate((account: string) => document.querySelectorAll(`[data-account-refusal="${account}"] a[data-account-refusal-session]`).length, id);
           must(links === 3, `${tag}: ${links} live-work links`);
         }
         if (kind === "hidden") must(await page.evaluate(() => document.querySelector('[data-mobile2-accounts-engine="claude"] [data-mobile2-account="default"]') === null), `${tag}: Claude Main is still listed`);
@@ -3936,7 +3957,7 @@ async function claudeLoginMain(): Promise<void> {
         const panel = card?.closest('[role="dialog"]') ?? card?.closest("[data-mobile2-accounts]");
         const footer = document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${card?.getAttribute("data-account-row") ?? card?.getAttribute("data-mobile2-account")}"]`);
         const box = (element: Element | null | undefined) => { const r = element?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; };
-        return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
+        return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", statusLabel: card?.querySelector("[data-account-status]")?.getAttribute("aria-label") ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
           limitRows: card?.querySelectorAll("[data-limit-row]").length ?? 0,
           rowFit: [...(card?.querySelectorAll("[data-limit-row]") ?? [])].map((row) => {
             const label = row.querySelector("dt");
@@ -3956,7 +3977,7 @@ async function claudeLoginMain(): Promise<void> {
       }, { selector: cardSelector, retryText: translate(lang, "accounts.retry") });
       await page.locator(cardSelector).scrollIntoViewIfNeeded();
       const before = await measureCard();
-      must(!before.text.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying still shows the old auth error`);
+      must(!before.text.includes(translate(lang, "accounts.auth.error")) && !before.statusLabel.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying still shows the old auth error`);
       must(!before.text.includes(translate(lang, "limits.noDataYet")), `${tag}: verifying still says no data next to a running verification`);
       must(before.text.includes(translate(lang, "accounts.claudeLogin.verifying")), `${tag}: verifying line absent`);
       await shoot("verifying");
@@ -3969,8 +3990,9 @@ async function claudeLoginMain(): Promise<void> {
       const after = await measureCard();
       must(after.limitRows === 2 && !after.retry, `${tag}: success did not replace Retry with both windows`);
       must(!after.text.includes(translate(lang, "limits.noDataYet")), `${tag}: success still says no data`);
-      must(!after.text.includes(translate(lang, "accounts.auth.error")), `${tag}: success still carries auth error`);
-      must(after.text.includes(translate(lang, phone ? "accounts.active" : "accounts.auth.authenticated")), `${tag}: success badge absent`);
+      must(!after.text.includes(translate(lang, "accounts.auth.error")) && !after.statusLabel.includes(translate(lang, "accounts.auth.error")), `${tag}: success still carries auth error`);
+      /* The state is the status dot's name, and the default account carries its word. */
+      must(after.statusLabel.includes(translate(lang, "accounts.auth.authenticated")), `${tag}: success status absent (${after.statusLabel})`);
       must(polls - readsBeforeSuccess >= 1 && successfulReads >= 1, `${tag}: success arrived without an accounts poll`);
       if (!phone) must(limitsReads > limitsBeforeSuccess, `${tag}: footer did not re-read limits at success`);
       must(!phone || after.weeklyFigures === 1, `${tag}: the weekly figure is stated ${after.weeklyFigures} times on the card`);
@@ -7683,7 +7705,8 @@ async function memorySourceMain(): Promise<void> {
             await page.addStyleTag({ content: "[data-telemetry-notice] { display: none !important; }" });
             await page.locator("[data-rail-menu]").first().click({ timeout: 60_000 });
             await page.locator("[data-rail-menu-settings]").click();
-            const row = page.locator("[data-rail-menu-panel] [data-header-menu-memory-source]");
+            await page.locator("[data-rail-menu-memory]").click();
+            const row = page.locator("[data-settings-window] [data-header-menu-memory-source]");
             await row.waitFor();
             const first = state === "pressed" ? "unchosen" : state === "refused" ? "active" : MEMORY_SOURCE_FRAME_ROW[state];
             await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, first, { timeout: 30_000 });
@@ -7699,7 +7722,7 @@ async function memorySourceMain(): Promise<void> {
             await page.mouse.move(1, 890);
             await page.waitForTimeout(150);
             const geometry = await page.evaluate(() => {
-              const panel = document.querySelector<HTMLElement>("[data-rail-menu-panel]")!;
+              const panel = document.querySelector<HTMLElement>("[data-settings-window]")!;
               const host = panel.querySelector<HTMLElement>("[data-header-menu-memory-source]")!;
               const line = host.querySelector<HTMLElement>("[data-memory-source-line]")!;
               const title = host.querySelector<HTMLElement>("[data-memory-source-title]")!;
@@ -7722,7 +7745,7 @@ async function memorySourceMain(): Promise<void> {
               const overlaps = [...lineRects, ...titleRects].filter((rect) => rect.left < s.right && rect.right > s.left && rect.top < s.bottom && rect.bottom > s.top).length;
               /* A neighbouring row's text under this row's box would be drawn over. */
               const r = host.getBoundingClientRect();
-              const neighbours = [...panel.querySelectorAll<HTMLElement>("[data-header-menu-page='settings'] > *")].filter((node) => node !== host)
+              const neighbours = [...panel.querySelectorAll<HTMLElement>("[data-header-menu-page='memory'] > *")].filter((node) => !node.contains(host))
                 .flatMap((node) => rects(node)).filter((rect) => rect.top < r.bottom - 0.5 && rect.bottom > r.top + 0.5 && rect.left < r.right && rect.right > r.left).length;
               return {
                 rowState: host.getAttribute("data-memory-source-state"), checked: control.getAttribute("aria-checked"),
@@ -7805,14 +7828,17 @@ async function installPingMain(): Promise<void> {
       const noticeBackground = await notice.evaluate(node => getComputedStyle(node).backgroundColor);
       if (noticeBackground === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent notice`);
       await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-notice.png`) });
-      await notice.getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+      await notice.getByRole("button", { name: translate(lang, "settings.section.privacy"), exact: true }).click();
       const dialog = page.locator("[data-telemetry-settings]");
       await dialog.waitFor({ state: "visible" });
-      const toggle = dialog.getByRole("switch");
+      const toggle = dialog.locator("[data-telemetry-ping]");
+      await dialog.locator("[data-settings-details-toggle]").click();
       if (!await toggle.isChecked() || !await toggle.isEnabled()) report.failures.push(`${lang}-${width}: default switch unavailable`);
+      /* The window owns the surface and the scroll; this section's rows run on inside it. */
       const geometry = await dialog.evaluate(node => {
-        const box = node.getBoundingClientRect();
-        return { background: getComputedStyle(node).backgroundColor, overflow: node.scrollWidth - node.clientWidth, left: box.left, right: box.right, bottom: box.bottom, text: node.textContent };
+        const surface = node.closest("[data-settings-window], [data-mobile2-sheet='settings']")!;
+        const box = surface.getBoundingClientRect();
+        return { background: getComputedStyle(surface).backgroundColor, overflow: node.scrollWidth - node.clientWidth, left: box.left, right: box.right, bottom: box.bottom, text: node.textContent };
       });
       report.frames[`${lang}-${width}`] = geometry;
       if (geometry.background === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent settings`);
@@ -7820,14 +7846,15 @@ async function installPingMain(): Promise<void> {
       if (!geometry.text?.includes("DO_NOT_TRACK=1") || !geometry.text?.includes(translate(lang, "telemetry.label"))) report.failures.push(`${lang}-${width}: missing localized disclosure`);
       await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-settings.png`) });
       await toggle.click();
-      await page.waitForFunction(() => !(document.querySelector("[role=switch]") as HTMLInputElement)?.checked);
+      await page.waitForFunction(() => document.querySelector("[data-telemetry-ping]")?.getAttribute("aria-checked") === "false");
       const saved = await (await fetch(`${baseUrl}/api/telemetry`)).json();
       if (saved.enabled !== false) report.failures.push(`${lang}-${width}: switch did not persist`);
       await page.reload();
-      await page.waitForSelector("[data-telemetry-notice]");
+      /* The phone brings its open sheet back, and the notice stands aside while the window is up. */
+      await page.waitForSelector("[data-telemetry-notice], [data-mobile2-sheet='settings']");
       await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
       await page.locator("[data-telemetry-settings]").waitFor();
-      if (await page.locator("[data-telemetry-settings] [role=switch]").isChecked()) report.failures.push(`${lang}-${width}: reload lost opt-out`);
+      if (await page.locator("[data-telemetry-ping]").isChecked()) report.failures.push(`${lang}-${width}: reload lost opt-out`);
       await context.close();
     }
   } finally { await browser?.close(); await stop(server); }

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
+import { headFileCache } from "./local-gate-tests";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -71,6 +72,25 @@ serviceTest("an incomplete head run retains only complete green files across fre
   expect(f.samples()).toEqual({ a: 2, b: 3 });
   const green = f.run(); expect(green.status, green.output).toBe(0);
   expect(f.samples()).toEqual({ a: 2, b: 3 });
+}, 60_000);
+
+serviceTest("green head files outlast the files other lanes of the repository complete before the retry", () => {
+  const f = fixture();
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
+  f.git("add", "b.test.ts"); f.git("commit", "-m", "Complete fixture check");
+  expect(f.run().status).toBe(0);
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+  // Six engine-family pushes of other lanes, each a different tree.
+  const others = headFileCache(f.repo);
+  for (let index = 0; index < 400; index++) {
+    const file = `other-lane-${index}.test.ts`;
+    others.write(`other lane tree ${index}`, { failures: [], passed: [{ file, suite: "", name: "fixture contract", kind: "test", occurrence: 0 }], completed: [file], elapsedMs: 1 });
+  }
+  const retry = f.run();
+  expect(retry.status, retry.output).toBe(0);
+  expect(retry.output).toContain("reused complete green head file a.test.ts");
+  expect(retry.output).toContain("reused complete green head file b.test.ts");
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
 }, 60_000);
 
 serviceTest("head checkpoints invalidate environment and ignored inputs, and refuse corrupt receipts", () => {

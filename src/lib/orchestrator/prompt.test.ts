@@ -45,8 +45,8 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 65, and a v64 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(65);
+test("the default mandate is at version 66, and a v65 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(66);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -130,7 +130,8 @@ test("the default mandate is at version 65, and a v64 seat reads as stale", () =
   expect(orchestratorMandateStale(62)).toBe(true);
   expect(orchestratorMandateStale(63)).toBe(true);
   expect(orchestratorMandateStale(64)).toBe(true);
-  expect(orchestratorMandateStale(65)).toBe(false);
+  expect(orchestratorMandateStale(65)).toBe(true);
+  expect(orchestratorMandateStale(66)).toBe(false);
 });
 
 /**
@@ -223,6 +224,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   64: "3149b6fc1101016b4a00dab1bdb0088a2b6ef56d342b087e1f95cea5096a9735",
   // v65 checks a vague ask's scope first and leaves forms to what stays materially ambiguous.
   65: "1b7344d356b834edcb0271c666b477672024e236169ea2e810dbf08e17f0486d",
+  // v66 promotes contract preparation, effect-aware recovery and role-specific guidance.
+  66: "fc1e372d84b668a3e29d64a8f7383cd0feeb72051fa3d95133d139cb49844606",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -756,7 +759,9 @@ test("the v64 fixture is the text v64 shipped, and v65 changes only three lines"
   const v64 = v64Mandate();
   expect(createHash("sha256").update(v64).digest("hex")).toBe(PROMPT_FINGERPRINTS[64]);
   const before = new Set(v64.split("\n"));
-  const after = new Set(ORCHESTRATOR_SYSTEM_PROMPT.split("\n"));
+  const v65 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v65.txt"), "utf8");
+  expect(createHash("sha256").update(v65).digest("hex")).toBe(PROMPT_FINGERPRINTS[65]);
+  const after = new Set(v65.split("\n"));
   const removed = [...before].filter((line) => !after.has(line));
   const added = [...after].filter((line) => !before.has(line));
   /* v65 rewrites three lines and leaves every other line, so every fence,
@@ -765,15 +770,16 @@ test("the v64 fixture is the text v64 shipped, and v65 changes only three lines"
   expect(added).toHaveLength(3);
 });
 
-test("delivery brings a stored v64 default to the v65 policy once and never twice", () => {
-  const v64 = v64Mandate();
-  const upgraded = orchestratorMandateUpgraded(v64);
-  const delivered = orchestratorMandateForDelivery(v64);
-  expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
-  expect(upgraded).toBe(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT));
-  expect(orchestratorMandateUpgraded(upgraded)).toBe(upgraded);
-  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
-  expect(delivered.split(ORCHESTRATOR_PROTOTYPE_DIRECTIVE)).toHaveLength(2);
+test("delivery brings stored v64 and v65 defaults to the current policy once and never twice", () => {
+  for (const v64 of [v64Mandate(), fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v65.txt"), "utf8")]) {
+    const upgraded = orchestratorMandateUpgraded(v64);
+    const delivered = orchestratorMandateForDelivery(v64);
+    expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+    expect(upgraded).toBe(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT));
+    expect(orchestratorMandateUpgraded(upgraded)).toBe(upgraded);
+    expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+    expect(delivered.split(ORCHESTRATOR_PROTOTYPE_DIRECTIVE)).toHaveLength(2);
+  }
 });
 
 test("a custom mandate keeps its own routing wording and gains only the decision paragraph delivery always adds", () => {

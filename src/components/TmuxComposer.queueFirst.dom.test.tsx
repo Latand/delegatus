@@ -5,7 +5,8 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
+import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 
 import { appendComposerDraft, TmuxComposer } from "./TmuxComposer";
@@ -159,4 +160,95 @@ test("clicking Send is queue-first: the button (form submit) enqueues an optimis
 
 test("pressing Enter is queue-first: identical optimistic bubble and clear as clicking Send", async () => {
   await expectQueueFirst((_host, textarea) => pressEnter(textarea), "sent via enter");
+});
+
+/* 2026-11-09: a plain-text send cleared the composer the moment its row was
+   queued, and the row's write to session storage could fail silently, leaving
+   the message only in this page's memory. One operator message never reached
+   the server and left nothing to recover. A message whose row is not stored
+   now keeps its words until a durable copy exists. */
+function refusingSessionStorage(storage: Storage): Storage {
+  return {
+    get length() { return storage.length; },
+    key: (index: number) => storage.key(index),
+    clear: () => storage.clear(),
+    getItem: (key: string) => storage.getItem(key),
+    removeItem: (key: string) => storage.removeItem(key),
+    setItem: () => { throw new Error("QuotaExceededError: the quota has been exceeded"); },
+  } as Storage;
+}
+
+function recordRequests(requests: string[]) {
+  globalThis.fetch = (async (input: string) => {
+    if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
+    /* Only the two routes a message can leave by; background reads are not sends. */
+    if (String(input) === "/api/tmux" || String(input).startsWith("/api/runtime/send")) requests.push(String(input));
+    return new Promise(() => {}) as unknown as Response;
+  }) as unknown as typeof fetch;
+}
+
+async function turns(count = 8) {
+  await act(async () => { for (let turn = 0; turn < count; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+
+test("a plain send whose row storage refuses keeps its words, says why, and sends nothing", async () => {
+  const requests: string[] = [];
+  recordRequests(requests);
+  const words = "the words that must not vanish";
+  const { host, root } = await renderInto(<TmuxComposer file={file} />);
+  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+  await settle(() => typeInto(words));
+  const storage = dom.sessionStorage as unknown as Storage;
+  Object.assign(globalThis, { sessionStorage: refusingSessionStorage(storage) });
+  try {
+    await settle(() => pressEnter(textarea));
+    await turns();
+  } finally {
+    Object.assign(globalThis, { sessionStorage: storage });
+  }
+  /* This DOM has no IndexedDB either, so no durable copy can be made: the
+     message is not sent, and its words stay where the operator wrote them. */
+  expect(textarea.value).toBe(words);
+  expect(host.textContent).toContain(translate("en", "composer.payloadStorageUnavailable"));
+  expect(readOutbox("conv-queuefirst")).toEqual([]);
+  expect(requests).toEqual([]);
+  /* A reload still finds them. */
+  await act(async () => root.unmount());
+  resetOutboxForTests();
+  const reloaded = await renderInto(<TmuxComposer file={file} />);
+  expect((reloaded.host.querySelector("textarea") as HTMLTextAreaElement).value).toBe(words);
+  await act(async () => reloaded.root.unmount());
+});
+
+test("a plain send whose row storage refuses goes out from its durable copy, which a reload still shows", async () => {
+  const durable = installComposerStorageForTests();
+  try {
+    const requests: string[] = [];
+    recordRequests(requests);
+    const words = "send this once and keep it findable";
+    const { host, root } = await renderInto(<TmuxComposer file={file} />);
+    const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+    await settle(() => typeInto(words));
+    const storage = dom.sessionStorage as unknown as Storage;
+    Object.assign(globalThis, { sessionStorage: refusingSessionStorage(storage) });
+    try {
+      await settle(() => pressEnter(textarea));
+      await turns(16);
+      /* The words were let go only once the complete copy was retained, and
+         the message left once. */
+      expect(textarea.value).toBe("");
+      expect(requests).toEqual(["/api/tmux"]);
+    } finally {
+      Object.assign(globalThis, { sessionStorage: storage });
+    }
+    /* The page reloads: its memory row is gone, the retained copy is not. */
+    await act(async () => root.unmount());
+    resetOutboxForTests();
+    const reloaded = await renderInto(<TmuxComposer file={file} />);
+    await turns(16);
+    expect(reloaded.host.querySelector('[data-testid="composer-payload-recovery"]')?.textContent).toContain(words);
+    await act(async () => reloaded.root.unmount());
+  } finally {
+    durable.uninstall();
+  }
 });

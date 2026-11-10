@@ -10,6 +10,7 @@ import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { demandCloudEnvironment } from "@/lib/projects/cloudEnvironmentDemand";
 import { CLOUD_STAGE_TIMEOUT_MS, validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
 
 // Desktop app protocol, verified against the hosted service; not a public API.
@@ -388,7 +389,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
   return {
     prepareEnvironment: async input => {
       const { prepareCloudEnvironment } = await import("@/lib/projects/codexCloudEnvironments");
-      return prepareCloudEnvironment(input, dependencies);
+      // A stage needs this pair: the controller looks at it again, including
+      // a binding it had stopped retrying.
+      try { return await prepareCloudEnvironment(input, dependencies); }
+      finally { demandCloudEnvironment(input.project, input.account.accountId); }
     },
     hasEnvironment: async input => {
       guard(input);

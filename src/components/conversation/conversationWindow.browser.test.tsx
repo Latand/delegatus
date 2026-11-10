@@ -2942,6 +2942,120 @@ describe("a consumed queued send leaves the composer by its own id", () => {
                 && clips.every((clip) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
                   && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5));
             };
+            /* A control's whole box: inside the window and inside every
+               ancestor that clips, which a label-only reading would not see. */
+            const boxWhole = (element: Element) => {
+              const rect = element.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0) return false;
+              if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) return false;
+              for (let node = element.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const clip = node.getBoundingClientRect();
+                if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5 || rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5) return false;
+              }
+              return true;
+            };
+            /* The open list's first card: its status drawn as visible text, its
+               "why" sentence and every control whole inside the list, the
+               region and the composer's box. */
+            const firstCard = document.querySelector("[data-runtime-receipt-stack][open] [data-delivery-check-card]");
+            const first = firstCard ? (() => {
+              const status = firstCard.querySelector('[role="status"]')!;
+              const why = firstCard.querySelector("[data-receipt-uncertain-why]")!;
+              /* The sentence below the controls may sit past the list's edge
+                 when the box has no more room; it must then be reachable by
+                 the list's own scroll. Scrolled to, read, and put back. */
+              const saved = [...document.querySelectorAll<HTMLElement>("*")].filter((node) => node.scrollHeight > node.clientHeight).map((node) => [node, node.scrollTop] as const);
+              why.scrollIntoView({ block: "nearest" });
+              const whyReachable = whole(why);
+              for (const [node, top] of saved) node.scrollTop = top;
+              /* The list's closing fade never lies over the first card's own
+                 text: no text range of the card's status, message or sentence
+                 meets it. */
+              const fade = document.querySelector("[data-receipt-more-below]")?.getBoundingClientRect() ?? null;
+              const textBoxes = [...firstCard.querySelectorAll('[role="status"], [data-receipt-message], [data-receipt-uncertain-why]')].flatMap((node) => {
+                const range = document.createRange(); range.selectNodeContents(node);
+                return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              });
+              const fadeOverText = fade ? textBoxes.some((rect) => Math.min(rect.right, fade.right) - Math.max(rect.left, fade.left) > 0.5
+                && Math.min(rect.bottom, fade.bottom) - Math.max(rect.top, fade.top) > 0.5) : false;
+              return {
+                whyReachable,
+                fadeOverText,
+                operation: firstCard.getAttribute("data-operation"),
+                status: status.textContent?.trim() ?? "",
+                statusDrawn: !status.classList.contains("sr-only") && whole(status),
+                whyWhole: whole(why),
+                controls: [...firstCard.querySelectorAll("button")].map((button) => ({ label: button.textContent?.trim() ?? "", whole: boxWhole(button) && whole(button) })),
+              };
+            })() : null;
+            /* The region's other surfaces beside the open list: the queue panel
+               keeps its header line and the staged tile its whole box with its
+               remove button, and no surface is painted over a neighbour. */
+            const queuePanel = document.querySelector<HTMLElement>('[data-testid="native-queue-panel"]');
+            const queueHeader = queuePanel?.querySelector<HTMLElement>(":scope > header") ?? null;
+            const tile = document.querySelector<HTMLElement>('[data-testid="attachment-tile"]');
+            const tileRemove = tile?.querySelector<HTMLElement>("button") ?? null;
+            const regionKids = [...(document.querySelector('[data-testid="composer-accessories"]')?.children ?? [])]
+              .filter((kid) => kid.getClientRects().length > 0).map((kid) => kid.getBoundingClientRect());
+            const overlaps = regionKids.some((a, i) => regionKids.slice(i + 1).some((b) =>
+              Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5));
+            /* Whole where it stands, or whole once the region is scrolled to it
+               (the region is the scroller of what exceeds the box); scrolled
+               to, read, and put back. */
+            const reachable = (element: Element | null) => {
+              if (!element) return null;
+              const saved = [...document.querySelectorAll<HTMLElement>("*")].filter((node) => node.scrollHeight > node.clientHeight).map((node) => [node, node.scrollTop] as const);
+              element.scrollIntoView({ block: "nearest" });
+              const result = boxWhole(element) && whole(element);
+              for (const [node, top] of saved) node.scrollTop = top;
+              return result;
+            };
+            const panels = {
+              queueHeight: queuePanel ? Math.round(queuePanel.getBoundingClientRect().height * 10) / 10 : null,
+              queueHeaderPlaced: queueHeader ? boxWhole(queueHeader) && whole(queueHeader) : null,
+              queueHeaderReachable: reachable(queueHeader),
+              tileWhole: tile ? boxWhole(tile) : null,
+              tileReachable: reachable(tile),
+              tileRemoveReachable: reachable(tileRemove),
+              tileHeight: tile ? Math.round(tile.getBoundingClientRect().height * 10) / 10 : null,
+              /* Every control of the queue's rows lies inside the panel's own
+                 clip box, so a squeezed panel never cuts across them. */
+              queueControlsWhole: (() => {
+                const firstRow = queuePanel?.querySelector('[data-testid="native-queue-row"]');
+                if (!queuePanel || !firstRow) return null;
+                const panel = queuePanel.getBoundingClientRect();
+                return [...firstRow.querySelectorAll("button")].every((button) => {
+                  const box = button.getBoundingClientRect();
+                  return box.top >= panel.top - 0.5 && box.bottom <= panel.bottom + 0.5;
+                });
+              })(),
+              overlaps,
+              /* The region's own overflow, and whether the open list's closing
+                 frame (its bottom border) is drawn inside the region and the
+                 window rather than past the region's clip edge. */
+              regionOverflow: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                return region ? region.scrollHeight - region.clientHeight : null;
+              })(),
+              listFrameInRegion: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                const stack = document.querySelector<HTMLElement>("[data-runtime-receipt-stack][open]");
+                if (!region || !stack) return null;
+                const clip = region.getBoundingClientRect(); const frame = stack.getBoundingClientRect();
+                return frame.bottom <= clip.bottom + 0.5 && frame.bottom <= innerHeight + 0.5 && frame.top >= clip.top - 0.5;
+              })(),
+              geometry: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                const rr = region?.getBoundingClientRect();
+                const hr = queueHeader?.getBoundingClientRect();
+                const holder = document.querySelector<HTMLElement>('[data-testid="composer-receipts"]');
+                const kids = [...(region?.children ?? [])].filter((kid) => kid.getClientRects().length > 0)
+                  .map((kid) => `${kid.getAttribute("data-testid") ?? kid.tagName.toLowerCase()} ${kid.getBoundingClientRect().height.toFixed(1)}`).join(", ");
+                return rr ? `region ${rr.top.toFixed(1)}-${rr.bottom.toFixed(1)} scroll ${region!.scrollTop}/${region!.scrollHeight - region!.clientHeight}; header ${hr ? `${hr.top.toFixed(1)}-${hr.bottom.toFixed(1)}` : "-"}; list floor ${holder?.style.minHeight || "-"}; kids ${kids}` : "no region";
+              })(),
+            };
             const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
             const cards = [...document.querySelectorAll("[data-delivery-check-card]")];
             const notice = document.querySelector('[data-testid="native-queue-notice"]');
@@ -2951,6 +3065,15 @@ describe("a consumed queued send leaves the composer by its own id", () => {
               chip: chipShown ? chip!.innerText.trim() : null,
               chipAria: chip?.getAttribute("aria-label") ?? null,
               chipWhole: !chipShown || whole(chip!),
+              /* The open list's own header carries the chip's words where the
+                 chip's line is hidden. */
+              headerCount: (() => {
+                const node = document.querySelector<HTMLElement>("[data-receipts-header-count]");
+                return node && node.getClientRects().length > 0 ? { text: node.textContent?.trim() ?? "", whole: whole(node) } : null;
+              })(),
+              first,
+              panels,
+              active: document.activeElement?.closest("[data-runtime-receipt-stack]") ? "list" : document.activeElement?.hasAttribute("data-receipts-chip") ? "chip" : document.activeElement?.tagName.toLowerCase() ?? null,
               listOpen: (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open ?? false,
               listShown: (document.querySelector('[data-testid="composer-receipts"]')?.getClientRects().length ?? 0) > 0,
               /* The composer's box against the column it shares with the
@@ -2981,6 +3104,12 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           const openList = async () => {
             await page.locator("[data-receipts-chip]").click();
             await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === true);
+            /* A phone hides the chip's line, so focus has to be in the list. */
+            if (viewport.touch) await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-runtime-receipt-stack]")));
+            /* The list reports the height its first card needs after its own
+               layout; the composer applies it a frame later. Read the settled
+               state, as a person sees it. */
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           };
           const closeList = async () => {
             await page.locator("[data-runtime-receipt-stack] > summary").click();
@@ -2988,6 +3117,7 @@ describe("a consumed queued send leaves the composer by its own id", () => {
                line while the list is open. */
             await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === false
               && (document.querySelector("[data-receipts-chip]")?.getClientRects().length ?? 0) > 0);
+            if (viewport.touch) await page.waitForFunction(() => document.activeElement?.hasAttribute("data-receipts-chip") === true);
           };
           const beforeRest = await read();
           await page.screenshot({ path: path.join(out, `before-rest-${key}.png`), fullPage: true });
@@ -3003,16 +3133,43 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           await openList();
           const after = await read();
           await page.screenshot({ path: path.join(out, `after-${key}.png`), fullPage: true });
-          readings[key] = { beforeRest, before, afterRest, after };
+          /* Send pressed with the picture staged: the refusal line is drawn
+             whole below the field, the list's first card stays whole beside it,
+             and the draft and the picture are kept. */
+          await page.locator("button[type=submit]").click();
+          await page.waitForSelector('[data-testid="composer-status"]');
+          const refused = await page.evaluate(() => {
+            const line = document.querySelector<HTMLElement>('[data-testid="composer-status"]')!;
+            const form = document.querySelector("form")!;
+            const range = document.createRange(); range.selectNodeContents(line);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+            const formRect = form.getBoundingClientRect();
+            return {
+              text: line.textContent?.trim() ?? "",
+              /* Every text range inside the window and the form's own box, and
+                 the line unscrolled (it may scroll in its own cap otherwise). */
+              whole: rects.length > 0 && rects.every((rect) => rect.top >= formRect.top - 0.5 && rect.bottom <= formRect.bottom + 0.5
+                && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5 && rect.left >= -0.5 && rect.right <= innerWidth + 0.5),
+              clientHeight: line.clientHeight, scrollHeight: line.scrollHeight,
+              draft: document.querySelector("textarea")?.value ?? null,
+              images: document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `refusal-${key}.png`), fullPage: true });
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          const refusedList = await read();
+          readings[key] = { beforeRest, before, afterRest, after, refused, refusedList };
           expect(pageErrors).toEqual([]);
           /* At rest the list waits behind the chip, which counts the sends
              whose fate is open: two before the proof, one after it. */
           for (const [rest, count] of [[beforeRest, 2], [afterRest, 1]] as const) {
             expect(rest.listOpen).toBe(false);
             expect(rest.listShown).toBe(false);
-            expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipAria", { count }));
+            /* Both counted sends have an unknown fate, so the yellow chip says
+               «Unconfirmed», never «Not delivered». */
+            expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipUnconfirmedAria", { count }));
             expect(rest.chip).not.toBeNull();
-            expect([translate(lang, "runtime.receipt.chip", { count }), String(count)]).toContain(rest.chip ?? "");
+            expect([translate(lang, "runtime.receipt.chipUnconfirmed", { count }), String(count)]).toContain(rest.chip ?? "");
             expect(rest.chipWhole).toBe(true);
             expect(rest.images).toBe(1);
             expect(rest.draft).toBe("an unsent draft");
@@ -3027,6 +3184,92 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           }
           expect(before.listOpen).toBe(true);
           expect(after.listOpen).toBe(true);
+          /* Opening the list guarantees the first card's status and every
+             control, whole inside the bounded list, at every viewport and in
+             both phases; the card leads with them, and its message and "why"
+             sentence below scroll inside the list when the box has no more
+             room (whole in place on the desktop, and reachable by that scroll
+             at every viewport). */
+          for (const state of [before, after]) {
+            expect(state.first?.status).toBe(translate(lang, "composer.deliveryCheckEnded"));
+            expect(state.first?.statusDrawn).toBe(true);
+            /* The closing fade sits on what follows the first card, never on
+               the card's own sentence. */
+            expect({ key, fadeOverText: state.first?.fadeOverText }).toEqual({ key, fadeOverText: false });
+            if (!viewport.touch) expect({ key, whyWhole: state.first?.whyWhole }).toEqual({ key, whyWhole: true });
+            expect({ key, whyReachable: state.first?.whyReachable }).toEqual({ key, whyReachable: true });
+            expect(state.first?.controls.length).toBeGreaterThanOrEqual(2);
+            expect(state.first?.controls.filter((control) => !control.whole)).toEqual([]);
+          }
+          /* A phone hides the chip's line while the list is open: focus is in
+             the list then and back on the chip once it closes, and the list's
+             own header says what the list is and how many sends it holds. */
+          if (viewport.touch) {
+            expect(before.active).toBe("list");
+            expect(afterRest.active).toBe("chip");
+            for (const [state, count] of [[before, 2], [after, 1]] as const) {
+              expect({ key, header: state.headerCount }).toEqual({ key, header: { text: translate(lang, "runtime.receipt.chipUnconfirmed", { count }), whole: true } });
+            }
+          } else {
+            expect(before.headerCount).toBeNull();
+          }
+          /* The refusal: named routes, whole below the field, nothing lost. */
+          expect(refused.text).toBe(translate(lang, viewport.touch ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedQueue", {
+            toggle: translate(lang, "composer.context.toggle"), queue: translate(lang, "queue.queueMessage"), menu: translate(lang, "composer.sendMenuTitle") }));
+          /* A touch screen has no keyboard shortcut to name. */
+          if (viewport.touch) expect(refused.text).not.toContain("Alt+Enter");
+          expect(refused.whole).toBe(true);
+          expect(refused.scrollHeight).toBeLessThanOrEqual(refused.clientHeight + 1);
+          expect(refused.draft).toBe("an unsent draft");
+          expect(refused.images).toBe(1);
+          /* The refusal takes room from the region's other surfaces, never from
+             the open list's first card. */
+          expect(refusedList.first?.statusDrawn).toBe(true);
+          expect(refusedList.first?.controls.filter((control) => !control.whole)).toEqual([]);
+          expect(refusedList.transcriptWhole).toBe(true);
+          /* On the desktop the queue panel yields to the refusal line only in
+             whole units: its header line always, and at 1440 its first row's
+             controls too. */
+          if (!viewport.touch) {
+            expect({ key, queueHeaderPlaced: refusedList.panels.queueHeaderPlaced }).toEqual({ key, queueHeaderPlaced: true });
+            if (viewport.width >= 1440) expect({ key, queueControlsWhole: refusedList.panels.queueControlsWhole }).toEqual({ key, queueControlsWhole: true });
+          }
+          /* The phone's refusal is the two lines its touch wording allows, so
+             the staged picture and its remove button stay whole beside the
+             open list's first card. */
+          if (viewport.touch) {
+            expect({ key, tileWhole: refusedList.panels.tileWhole }).toEqual({ key, tileWhole: true });
+            expect(refused.clientHeight).toBeLessThanOrEqual(31);
+          }
+          /* Beside the open list, in the list-open and refused states alike:
+             the queue panel keeps its header line (a floor, never collapsed
+             to an empty bar), the staged picture's tile and its remove button
+             are whole, and no surface of the region is painted over another. */
+          const panelFaults = ([["before", before], ["after", after], ["refused", refusedList]] as const).flatMap(([phase, state]) =>
+            /* The desktop's remove chip appears on hover only; the phone's is always drawn. */
+            (viewport.touch ? ["queueHeaderReachable", "tileReachable", "tileRemoveReachable"] as const : ["tileReachable"] as const).filter((field) => state.panels[field] !== true)
+              .map((field) => `${key} ${phase}: ${field} ${String(state.panels[field])} (queue ${state.panels.queueHeight} px; ${state.panels.geometry})`)
+              /* Yielding is bounded on the phone, whose box is the 38dvh cap: the
+                 panels keep a box of their own, the header line and the whole
+                 row of tiles, never an empty bar. The desktop pane keeps the
+                 equal shares its card text is gated on. */
+              .concat(viewport.touch && (state.panels.queueHeight ?? 99) < 26 ? [`${key} ${phase}: the queue panel is only ${state.panels.queueHeight} px`] : [])
+              .concat((state.panels.tileHeight ?? 99) < (viewport.touch ? 47.5 : 39.5) ? [`${key} ${phase}: the staged tile is only ${state.panels.tileHeight} px`] : [])
+              .concat(state.panels.overlaps ? [`${key} ${phase}: a surface is painted over a neighbour`] : []));
+          expect(panelFaults).toEqual([]);
+          /* On the phone the open list's three floors fit its region: nothing
+             scrolls in the region, the list's closing frame is drawn inside it
+             (the first card is cut by that frame, never by the region's edge,
+             under its Retry and Discard); its message and sentence stay
+             reachable by the list's own scroll, asserted above. */
+          if (viewport.touch) for (const [phase, state] of [["before", before], ["after", after], ["refused", refusedList]] as const) {
+            expect({ key, phase, regionOverflow: state.panels.regionOverflow }).toEqual({ key, phase, regionOverflow: 0 });
+            expect({ key, phase, listFrameInRegion: state.panels.listFrameInRegion }).toEqual({ key, phase, listFrameInRegion: true });
+            /* The queue panel's header and the staged tile sit whole where they
+               stand, not only after the region is scrolled to them. */
+            expect({ key, phase, queueHeaderPlaced: state.panels.queueHeaderPlaced }).toEqual({ key, phase, queueHeaderPlaced: true });
+            expect({ key, phase, tileWhole: state.panels.tileWhole }).toEqual({ key, phase, tileWhole: true });
+          }
           expect(before.images).toBe(1);
           expect(after.images).toBe(1);
           expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);
@@ -3048,7 +3291,7 @@ describe("a consumed queued send leaves the composer by its own id", () => {
           expect(after.overflowX).toBe(0);
           if (!viewport.touch) {
             expect(afterRest.rowsWhole).toBe(true);
-            expect(after.cardsWhole).toBe(true);
+            expect({ key, cardsWhole: after.cardsWhole }).toEqual({ key, cardsWhole: true });
           }
         } finally { await context.close(); }
       }
@@ -3083,8 +3326,9 @@ describe("the runtime pill names the model the conversation runs on", () => {
     sonnet: { face: "Sonnet 5.5", never: ["Opus"] },
     "claude-unreported": { face: null, never: ["Opus", "Sonnet"] },
     "opus-old": { face: "Opus 4.1", never: ["Opus 5.5"] },
-    /* The transcript's `fable-5-1` is the catalogue's Fable row: named, and its tiers stay open. */
-    fable: { face: "Fable", never: ["Opus", "Sonnet"] },
+    /* The transcript's `fable-5-1` is the catalogue's Fable 5.1 row: named, and its tiers stay open. */
+    fable: { face: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { face: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
   } as const;
 
   browserTest("the face names the observed or requested model, or none, and never the engine default", async () => {
@@ -3213,7 +3457,7 @@ describe("the runtime pill offers only current models and keeps a saved one", ()
   ] as const;
   const reasoningLabel = (lang: "en" | "uk", tier: string) => translate(lang, `reasoningTier.${tier}` as Parameters<typeof translate>[1]);
   const CODEX = ["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"];
-  const CLAUDE = ["Opus 5.5", "Fable", "Sonnet", "Claude Sonnet 5.5", "Haiku 5.5"];
+  const CLAUDE = ["Opus 5.5", "Fable 5.2", "Sonnet", "Claude Sonnet 5.5", "Haiku 5.5"];
   const FILES = {
     "legacy-sol": { models: [...CODEX, "GPT-5.6-Sol"], model: "GPT-5.6-Sol", tiers: 6, tier: "high" },
     "terra-ultra": { models: CODEX, model: "GPT-6.1-Terra", tiers: 6, tier: "ultra" },
@@ -3318,7 +3562,8 @@ describe("the headers name the model the conversation runs on", () => {
     unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
     unlisted: { shown: "gpt-5.5", never: ["Sol"] },
     sonnet: { shown: "Sonnet 5.5", never: ["Opus"] },
-    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { shown: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
   } as const;
   const VIEWPORTS = [{ name: "desktop-1440", width: 1440, height: 900 }, { name: "desktop-900", width: 900, height: 800 }] as const;
   const PHONE = { name: "phone-390", width: 390, height: 844 } as const;
@@ -3793,8 +4038,13 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
           const open = await record("list-open");
           if (!open.list?.aboveField) fail("list-open", "the list is not open above the field");
           if (!open.list?.retryAll?.includes("2")) fail("list-open", `«Retry failed» reads ${JSON.stringify(open.list?.retryAll)}`);
-          /* The chip names the state and the count, so the header does not say it again. */
-          if (open.list && !/^(Повторити невдалі|Retry failed)( \(\d+\))?$/.test(open.list.header)) fail("list-open", `the list's header reads ${JSON.stringify(open.list.header)}`);
+          /* The chip names the state and the count, so the desktop's header does
+             not say it again; the phone hides the chip's line while the list is
+             open, so there the header leads with the chip's own words. */
+          const headerPattern = surface.phone
+            ? /^(Не доставлено|Not delivered): \d+ (Повторити невдалі|Retry failed)( \(\d+\))?$/
+            : /^(Повторити невдалі|Retry failed)( \(\d+\))?$/;
+          if (open.list && !headerPattern.test(open.list.header)) fail("list-open", `the list's header reads ${JSON.stringify(open.list.header)}`);
           if (open.list?.firstFailed && !(open.list.firstFailed.whole && open.list.firstFailed.retryWhole)) fail("list-open", "the first failed row or its Retry is cut off");
           if (open.list && !open.list.firstFailed) fail("list-open", "no failed row with its Retry is in the list");
           if (open.list?.sliced.length) fail("list-open", `cut through mid-control: ${open.list.sliced.join(", ")}`);
@@ -7119,4 +7369,224 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+
+describe("message document links", () => {
+  browserTest("actual message clicks read exact source-worktree bytes through authenticated artifact routes", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/app/api/artifact/route");
+    const { proxy } = await import("@/proxy");
+    const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+    const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
+    const { createHash } = await import("node:crypto");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "document-links");
+    fs.mkdirSync(out, { recursive: true });
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "document-links-"));
+    const previousState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(fixture, "state");
+    const parent = path.join(fixture, "repository");
+    const source = path.join(fixture, "source-worktree");
+    const sibling = path.join(fixture, "later-worktree");
+    const report = path.join(source, "docs/report.md");
+    const denied = path.join(fixture, "private/report.md");
+    const changed = path.join(source, "docs/changed.md");
+    const bytes = Array.from({ length: 110 }, (_, i) => i === 0 ? "# Source version" : i === 101 ? "EXACT UNCOMMITTED SOURCE OUTPUT" : `Source line ${i + 1}`).join("\n");
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      return result.stdout.toString();
+    };
+    const commit = (directory: string, message: string) => git("-C", directory, "-c", "user.name=Fixture", "-c", "user.email=" + ["noreply", "example.invalid"].join("@"), "commit", "-qm", message, "--allow-empty");
+    git("init", "-q", parent);
+    commit(parent, "Initial fixture");
+    git("-C", parent, "worktree", "add", "--detach", source, "HEAD");
+    git("-C", parent, "worktree", "add", "--detach", sibling, "HEAD");
+    for (const [directory, body] of [[parent, "PARENT COMMITTED VERSION"], [sibling, "LATER CURRENT VERSION"], [source, bytes], [path.dirname(denied), "PRIVATE OUTPUT"]]) {
+      const file = directory === path.dirname(denied) ? denied : path.join(directory!, "docs/report.md");
+      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body!);
+    }
+    fs.writeFileSync(changed, "# Changed version\nOriginal bytes\n");
+    git("-C", parent, "add", "docs/report.md");
+    commit(parent, "Parent report version");
+    // The declared report is absent from both commits in a real linked
+    // checkout. A later HEAD cannot stand in for its uncommitted bytes.
+    commit(source, "Later metadata");
+    expect(git("-C", source, "ls-files", "docs/report.md")).toBe("");
+    expect(git("-C", source, "status", "--porcelain", "--untracked-files=all")).toContain("?? docs/report.md");
+    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: {
+      source: { cwd: source, projectRoot: parent }, parent: { cwd: parent }, sibling: { cwd: sibling },
+    } }));
+    resetTeamStoreForTests();
+    const store = teamStore();
+    const now = Date.now();
+    for (const [id, role] of [["fixture_owner", "owner"], ["fixture_outsider", "member"]] as const) store.insertMember({
+      id, role, name: "Fixture", status: "active", color: "teal", telegram: null,
+      createdAt: new Date(now).toISOString(), createdBy: "fixture", revokedAt: null,
+    });
+    const owner = mintSession(store, "fixture_owner", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const outsider = mintSession(store, "fixture_outsider", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const reads: { path: string | null; mode: string; status: number; hash?: string }[] = [];
+    const adapter = async (request: Request) => {
+      const req = new NextRequest(request);
+      const admission = proxy(req);
+      const response = admission.headers.get("x-middleware-next") === "1" ? await GET(req) : admission;
+      const url = new URL(request.url);
+      const read: typeof reads[number] = { path: url.searchParams.get("path"), mode: url.searchParams.get("mode") ?? "body", status: response.status };
+      if (response.ok && read.mode === "body") read.hash = sha256(await response.clone().text());
+      reads.push(read);
+      if (read.path === changed && read.mode === "meta" && response.ok) fs.appendFileSync(changed, "New bytes\n");
+      return response;
+    };
+    const served = await serveEvidenceFixture(path.join(fixture, "bundle"), FIXTURE, { "/api/artifact": adapter });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const evidence: unknown[] = [];
+    try {
+      // The same adapter keeps the production perimeter and workspace checks:
+      // no mock successful fetch can stand in for these negative controls.
+      const resource = `${served.base}api/artifact?path=${encodeURIComponent(report)}`;
+      for (const suffix of ["", "&mode=meta", "&download=1"]) for (const [value, status] of [[null, 401], [outsider.value, 403], [owner.value, 200]] as const) {
+        const response = await fetch(resource + suffix, { headers: value ? { cookie: `${MEMBER_COOKIE}=${value}` } : {} });
+        expect(response.status).toBe(status); await response.arrayBuffer();
+      }
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 605, 820, 1000, 1050, 1280, 1440]) {
+        const phone = width === 390;
+        const query = new URLSearchParams({ case: "document-links", lang, cwd: source, parent, denied });
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: phone ? 844 : width === 1000 ? 700 : 900 }, theme, lang, "no-preference", phone);
+        await context.addCookies([{ name: MEMBER_COOKIE, value: owner.value, url: served.base }]);
+        try {
+          const input = await page.evaluate(() => ({ coarse: matchMedia("(pointer: coarse)").matches, touchPoints: navigator.maxTouchPoints }));
+          expect(input.coarse).toBe(phone);
+          expect(input.touchPoints > 0).toBe(phone);
+          const entry = page.getByRole("link", { name: "Source report", exact: true });
+          await entry.waitFor();
+          const initial = page.url();
+          const start = reads.length;
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-message.png`) });
+          if (phone) await entry.tap();
+          else await entry.click();
+          const pane = page.locator("[data-artifact-preview]");
+          await pane.waitFor();
+          const target = pane.locator("[data-preview-target]");
+          await target.waitFor();
+          expect(await target.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          expect(await pane.locator('[data-preview-mode="source"]').getAttribute("aria-pressed")).toBe("true");
+          expect(reads.slice(start).some(read => read.path === report && read.mode === "meta" && read.status === 200)).toBe(true);
+          expect(reads.slice(start).some(read => read.path === report && read.hash === sha256(bytes))).toBe(true);
+          expect(page.url()).toBe(initial); expect(context.pages()).toHaveLength(1);
+          const geometry = await pane.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            const target = element.querySelector("[data-preview-target]")!;
+            const range = document.createRange(); range.selectNodeContents(target);
+            return { paneFits: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+              textFits: [...range.getClientRects()].every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight) };
+          });
+          expect(geometry).toEqual({ paneFits: true, textFits: true });
+          for (let tab = 0; tab < 12; tab++) {
+            await page.keyboard.press("Tab");
+            expect(await pane.evaluate(element => element.contains(document.activeElement))).toBe(true);
+          }
+          const close = pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true });
+          if (phone) {
+            const box = await close.boundingBox();
+            expect(box!.width).toBeGreaterThanOrEqual(44);
+            expect(box!.height).toBeGreaterThanOrEqual(44);
+          }
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-source.png`) });
+          const rawStart = reads.length;
+          const rawPromise = context.waitForEvent("page");
+          const openExternal = pane.locator("[data-preview-open-external]");
+          if (phone) await openExternal.tap(); else await openExternal.click();
+          const raw = await rawPromise;
+          await raw.waitForLoadState();
+          expect(raw.url()).toBe(resource);
+          expect(await raw.locator("body").innerText()).toBe(bytes);
+          expect(reads.slice(rawStart).some(read => read.path === report && read.status === 200 && read.hash === sha256(bytes))).toBe(true);
+          expect(await raw.evaluate(() => window.opener === null)).toBe(true);
+          await raw.close();
+          if (phone) await close.tap(); else await close.click();
+          await pane.waitFor({ state: "detached" });
+          const heading = page.getByRole("link", { name: "Heading", exact: true });
+          if (phone) await heading.tap(); else await heading.click();
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-heading.png`) });
+          if (phone) await close.tap(); else await close.click();
+          const invisible = page.getByRole("link", { name: "Invisible", exact: true });
+          if (phone) await invisible.tap(); else await invisible.click();
+          await pane.locator("[data-preview-target]").waitFor();
+          expect(await pane.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-invisible.png`) });
+          if (phone) await close.tap(); else await close.click();
+          for (const [label, key] of [["Missing", "preview.missing"], ["Denied", "preview.denied"], ["Changed", "preview.changed"]] as const) {
+            const link = page.getByRole("link", { name: label, exact: true });
+            if (phone) await link.tap(); else await link.click();
+            await pane.getByText(translate(lang, key), { exact: true }).waitFor();
+            const actions = pane.locator('a[download], [data-preview-open-external]');
+            expect(await actions.count()).toBe(label === "Changed" ? 2 : 0);
+            expect(page.url()).toBe(initial);
+            expect(context.pages()).toHaveLength(1);
+            const failureFits = await pane.getByRole("alert").evaluate(element => {
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let parent = walker.currentNode.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+                }
+                if ([...range.getClientRects()].some(rect => rect.left < left || rect.right > right || rect.top < top || rect.bottom > bottom)) return false;
+              }
+              return true;
+            });
+            expect(failureFits).toBe(true);
+            if (phone) {
+              expect(await close.evaluate(element => {
+                const rect = element.getBoundingClientRect();
+                return rect.width >= 44 && rect.height >= 44 && [
+                  [rect.left + 1, rect.top + rect.height / 2], [rect.right - 1, rect.top + rect.height / 2],
+                  [rect.left + rect.width / 2, rect.top + 1], [rect.left + rect.width / 2, rect.bottom - 1],
+                ]
+                  .every(([x, y]) => element.contains(document.elementFromPoint(x!, y!)));
+              })).toBe(true);
+            }
+            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${label.toLowerCase()}.png`) });
+            if (phone) await close.tap(); else await close.click();
+          }
+          const fragment = "#a=" + encodeURIComponent(report);
+          await page.evaluate(hash => { location.hash = hash; }, fragment);
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.goBack(); await pane.waitFor({ state: "detached" });
+          await context.route("https://example.com/**", route => route.fulfill({ body: "External fixture" }));
+          const popupPromise = context.waitForEvent("page");
+          const external = page.getByRole("link", { name: "External", exact: true });
+          if (phone) await external.tap(); else await external.click();
+          const popup = await popupPromise;
+          await popup.waitForLoadState();
+          expect(popup.url()).toBe("https://example.com/guide");
+          expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+          await popup.close();
+          expect(pageErrors).toEqual([]);
+          evidence.push({ lang, theme, width, input, sourceHash: sha256(bytes), geometry, reads: reads.slice(start).map(read => ({ ...read, path: read.path === report ? "source/docs/report.md" : read.path?.startsWith(source) ? "source/docs/" + path.basename(read.path) : "private/report.md" })) });
+        } finally { await context.close(); }
+      }
+      // A vanished source checkout must not select either duplicate.
+      fs.renameSync(source, path.join(fixture, "retained-source-worktree"));
+      const missingSource = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(missingSource.status).toBe(404); await missingSource.arrayBuffer();
+      expect(fs.readFileSync(path.join(parent, "docs/report.md"), "utf8")).toBe("PARENT COMMITTED VERSION");
+      expect(fs.readFileSync(path.join(sibling, "docs/report.md"), "utf8")).toBe("LATER CURRENT VERSION");
+      store.revokeSessionsOf("fixture_owner", new Date(now + 1).toISOString());
+      const revoked = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(revoked.status).toBe(401); await revoked.arrayBuffer();
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(evidence, null, 2));
+    } finally {
+      await browser.close(); served.stop(); resetTeamStoreForTests();
+      if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 240_000);
 });

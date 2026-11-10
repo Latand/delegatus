@@ -7,7 +7,10 @@ import { installActEnv } from "@/test-helpers/actEnv";
 import { previewTarget } from "@/components/preview/ArtifactPreviewHost";
 import { onArtifactPreview } from "@/components/preview/previewBus";
 
-import { md } from "./markdown";
+import { MdDocumentContext, MdMessageSourceContext, md } from "./markdown";
+import { FeedItem } from "./FeedItem";
+import { LiveTurnRows } from "@/components/conversation/LiveTurnRows";
+import { DeputyInkContext } from "@/components/conversation/deputyInk";
 import { UserMessageRow } from "./UserMessageRow";
 
 installActEnv();
@@ -169,4 +172,81 @@ test("a transcript link opens its conversation whichever spelling it has", async
     });
   }
   expect(opened).toEqual([]);
+});
+
+
+test("message source resolves previewable relative files and preserves browser destinations", async () => {
+  const links = ["docs/report.md:102:7", "./docs/report.md#L102", "../notes.md#%D1%80", "docs/a%20b.md#setup"];
+  await act(async () => root!.render(<MdMessageSourceContext.Provider value="/workspace/source">
+    {md(links.map((href, i) => `[file${i}](${href})`).join(" "))}
+  </MdMessageSourceContext.Provider>));
+  const requests: unknown[] = [];
+  const stop = onArtifactPreview(request => requests.push(request.target));
+  try {
+    for (const a of dom.document.querySelectorAll("a")) {
+      expect(a.getAttribute("href")).toStartWith("/api/artifact?");
+      await act(async () => { a.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true })); });
+    }
+    expect(requests).toEqual([
+      { kind: "file", path: "/workspace/source/docs/report.md", line: 102, column: 7, anchor: null },
+      { kind: "file", path: "/workspace/source/docs/report.md", line: 102, column: null, anchor: null },
+      { kind: "file", path: "/workspace/notes.md", line: null, column: null, anchor: "р" },
+      { kind: "file", path: "/workspace/source/docs/a b.md", line: null, column: null, anchor: "setup" },
+    ]);
+  } finally { stop(); }
+  const browser = ["settings", "?q=notes.md", "#heading", "//example.com/notes.md", "mailto:help", "https://example.com/a%20b.md", "session.jsonl", "tool.bin"];
+  await act(async () => root!.render(<MdMessageSourceContext.Provider value="/workspace/source">
+    {md(browser.map((href, i) => `[browser${i}](${href})`).join(" "))}
+  </MdMessageSourceContext.Provider>));
+  // Protocol-relative links retain the existing absolute-path semantics; they
+  // must never be joined under the message's CWD.
+  expect([...dom.document.querySelectorAll("a")].map(a => a.getAttribute("href"))).toEqual(browser.map(href => href.startsWith("//") ? `/api/artifact?path=${encodeURIComponent(href)}` : href));
+});
+
+test("document scope wins and an absent message source never inherits a previous conversation", async () => {
+  const text = "[report](report.md#setup)";
+  await act(async () => root!.render(<MdMessageSourceContext.Provider value="/workspace/source">
+    <MdDocumentContext.Provider value={{ baseDir: "/workspace/document", scrollToAnchor() {} }}>{md(text)}</MdDocumentContext.Provider>
+  </MdMessageSourceContext.Provider>));
+  expect(new URL(anchor().getAttribute("href")!, "http://localhost").searchParams.get("path")).toBe("/workspace/document/report.md");
+  await renderMd(text);
+  expect(anchor().getAttribute("href")).toBe("report.md#setup");
+});
+
+test("the observed leading invisible prefix uses the existing preview on an actual click", async () => {
+  await act(async () => root!.render(<MdMessageSourceContext.Provider value="/workspace/source">{md("[report](\u200B/workspace/source/report.md:102)")}</MdMessageSourceContext.Provider>));
+  await act(async () => { anchor().dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event); });
+  expect(opened).toHaveLength(1);
+  expect(previewTarget(opened[0]!)).toEqual({ kind: "file", path: "/workspace/source/report.md", line: 102, column: null, anchor: null });
+});
+
+test("modified and middle clicks keep the authenticated resource href", async () => {
+  await act(async () => root!.render(<MdMessageSourceContext.Provider value="/workspace/source">{md("[report](docs/report.md)")}</MdMessageSourceContext.Provider>));
+  for (const options of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+    const event = new dom.MouseEvent("click", { ...options, bubbles: true, cancelable: true });
+    await act(async () => { anchor().dispatchEvent(event as unknown as Event); });
+    expect(event.defaultPrevented).toBe(false);
+  }
+  expect(opened).toEqual([]);
+  expect(anchor().getAttribute("href")).toContain("/api/artifact?");
+});
+
+
+test("source CWD belongs only to native prose; deputy, relay and user rows stay unqualified", async () => {
+  const text = "[report](docs/report.md)";
+  const prose = { kind: "prose" as const, text, engine: "codex" as const, ts: "2026-10-20T10:00:00.000Z" };
+  const live = [{ text, itemId: "document", phase: "awaiting-echo" as const, startedAt: null, completedAt: null }];
+  await act(async () => root!.render(<>
+    <section data-source="native"><FeedItem item={prose} sourceCwd="/workspace/source" /></section>
+    <section data-source="deputy"><DeputyInkContext.Provider value><FeedItem item={prose} /><LiveTurnRows items={live} /></DeputyInkContext.Provider></section>
+    <section data-source="relay"><FeedItem sourceCwd="/workspace/receiver" item={{ kind: "tmsg", ts: prose.ts, dir: "in", peer: "agent", summary: "", text, internal: true }} /></section>
+    <section data-source="user"><FeedItem sourceCwd="/workspace/receiver" item={{ kind: "user", text, ts: prose.ts }} /></section>
+  </>));
+  const own = dom.document.querySelector('[data-source="native"] a')!;
+  expect(new URL(own.getAttribute("href")!, "http://localhost").searchParams.get("path")).toBe("/workspace/source/docs/report.md");
+  for (const kind of ["deputy", "relay", "user"]) {
+    const links = [...dom.document.querySelectorAll(`[data-source="${kind}"] a`)];
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) expect(link.getAttribute("href")).toBe("docs/report.md");
+  }
 });

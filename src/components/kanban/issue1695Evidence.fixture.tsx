@@ -1,4 +1,4 @@
-import { AccountsPanel } from "@/components/AccountsPanel";
+import { AccountsPanel, MobileAccountsPanel } from "@/components/AccountsPanel";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
 import { RoundDeck } from "@/components/flows/RoundDeck";
@@ -41,6 +41,7 @@ import { DraftRuntimePill } from "@/components/draft/DraftRuntimePill";
 import { RunsOnRow } from "@/components/orchestrator/RunsOnRow";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { SETTINGS_SCENE, settingsEvidenceRoute } from "@/components/settings/settingsEvidence.fixture";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
@@ -355,6 +356,9 @@ const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
 const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
+/* A pasted `#c=` link to a conversation the plain catalog does not carry. Its own scope is a cold projection the server
+   answers with a controlled 503 until the driver lets it through (`window.__coldLink`). */
+const COLD_LINK = SCENARIO === "cold-link";
 /* #1765: one task carrying five pipelines — two running, three completed — so
    a card's rows can be read for what each pipeline actually does. */
 /* Columns balanced on large screens: every column holds a card whose
@@ -974,6 +978,11 @@ const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fi
 /* K5b: the conversation the release-notes Review gets when it starts during a save. */
 const searchRevFirst = STAGES ? add(conversation("search-rev-1", "Round 2 approved", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
 const exportReview = LOOSE ? add(conversation("export-review", "Reviewer: two presets share a name", { mtime: now - 12 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
+/* Two conversations the plain catalog never carries: only a scope pinned to one of them admits its row. */
+const coldLinkRows: FileEntry[] = COLD_LINK ? [
+  add(conversation("cold-link-first", L("Cold link: the first conversation", "Холодне посилання: перша розмова"), { mtime: now - 40 * MIN })),
+  add(conversation("cold-link-second", L("Cold link: the second conversation", "Холодне посилання: друга розмова"), { mtime: now - 25 * MIN })),
+] : [];
 const linksReview = STAGES ? add(conversation("links-review", "Reviewer: both anchors against the published notes", working({ engine: "codex", model: "gpt-5.6", plan: { current: "Reading the published notes" } }))) : null;
 
 /* #1765: each of the five pipelines on t-many gets its own pair of stages and
@@ -2757,6 +2766,12 @@ function transcriptOf(pathname: string): string {
     line(30, { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "fixture-failed-tool", arguments: JSON.stringify({ fixtureToolArgs: true, cmd: "pwd" }) } }),
   ].join("\n")}\n`;
   if (FEED_RECOVERY && file === searchVer2) return `${[said(120, L("Ready for the next request.", "Готовий до наступного запиту.")), ...(feedRecoveryEcho ? [asked(0, delayedLaunchText)] : [])].join("\n")}\n`;
+  if (coldLinkRows.includes(file)) {
+    const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
+    for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `${file.title}, step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
+    long.push(said(2 * MIN, L("Latest message: the alias swap held under live traffic.", "Останнє повідомлення: перемикання псевдоніма витримало живий трафік.")));
+    return `${long.join("\n")}\n`;
+  }
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
@@ -4181,10 +4196,25 @@ if (WORKSPACES) {
   if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
 }
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
+/* The cold-link scopes: a scope pinned to one of the cold rows holds its first answer until `fail` lets it be the server's
+   503, answers every later request 503 too, and serves its row once `release` opens it. Every `/api/files` URL is kept. */
+const coldLink = {
+  calls: [] as string[],
+  released: new Set<string>(),
+  heldFirst: new Map<string, () => void>(),
+  fail(id: string) { this.heldFirst.get(id)?.(); this.heldFirst.delete(id); },
+  release(id: string) { this.released.add(id); this.fail(id); },
+};
+if (COLD_LINK) (window as unknown as { __coldLink: typeof coldLink }).__coldLink = coldLink;
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (SETTINGS_SCENE) {
+    const asked = new URL(input instanceof Request ? input.url : String(input), location.href);
+    const answer = await settingsEvidenceRoute(asked, input instanceof Request ? input.method : init?.method ?? "GET", init);
+    if (answer) return answer;
+  }
   const url = new URL(String(input), location.origin);
   if (SCENARIO === "accepted-creation" && (url.pathname.startsWith("/api/pipelines") || url.pathname.startsWith("/fixture/")
     || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);
@@ -4193,6 +4223,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
+  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   /* The lane review case answers these from the driver's own server, through
      the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
@@ -4461,6 +4492,29 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       engine: launchRun.engine, model: launchRun.model, effort: launchRun.effort, accountId: "primary", cwd: "/repo/atlas", transcriptPath: launchRun.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
       context: null, transcriptFacts: null, rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    });
+  }
+  if (COLD_LINK && url.pathname === "/api/files" && method === "GET" && url.searchParams.get("view") !== "storage-health") {
+    coldLink.calls.push(url.pathname + url.search);
+    const pin = url.searchParams.get("path");
+    const pinned = coldLinkRows.find((row) => row.conversationId === pin || row.path === pin);
+    if (pinned && !coldLink.released.has(pinned.conversationId!)) {
+      const first = !coldLink.calls.slice(0, -1).some((call) => call.includes(`path=${encodeURIComponent(pinned.conversationId!)}`) || call.includes(`path=${encodeURIComponent(pinned.path)}`));
+      /* A held request ends with its caller, as the browser's own fetch does when the page aborts it. */
+      if (first) {
+        await new Promise<void>((resolve, reject) => {
+          coldLink.heldFirst.set(pinned.conversationId!, resolve);
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+        });
+      }
+      return json({ error: "files projection unavailable", code: "files_projection_unavailable", reason: "expired" }, 503);
+    }
+    const carried = files.filter((file) => !coldLinkRows.includes(file) || file === pinned);
+    return json({
+      files: carried,
+      projectCatalog: [{ project: PROJECT, conversations: files.length, smt: Math.max(...files.map((file) => file.mtime)) }],
+      flows: [], pipelines: [], tasks: [], workflows: [], systemHealth: { tmux: { status: "healthy" } },
+      ...(pinned ? { pinOverlayPaths: [pinned.path] } : {}),
     });
   }
   if (url.pathname === "/api/files") {
@@ -5581,6 +5635,24 @@ function SpendCreditsScene() {
   </main>;
 }
 
+/* The account row on the surface the case names (`surface=dialog|phone`, `engine=claude|codex`): the real panel or the real
+   phone screen over the real store, answered by the case's own routes (`accountRowFrames.ts`). */
+function AccountRowScene() {
+  const params = new URLSearchParams(location.search);
+  const claude = useEngineAccounts("claude");
+  const codex = useEngineAccounts("codex");
+  /* `next=<id>`: the project's next pick, which the row names in its status popover. */
+  const next = params.get("next");
+  if (params.get("surface") === "phone") {
+    return <main data-account-row-scene="phone" className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas text-primary"><MobileAccountsPanel project={next ? "atlas" : null} /></main>;
+  }
+  const state = params.get("engine") === "claude" ? claude : codex;
+  const projectContext = next ? { project: "atlas", nextChosenAccountId: next, restricted: false, allowed: [], carrying: [], outsidePool: [] } : undefined;
+  return <main data-account-row-scene="dialog" className="relative flex min-h-screen items-start justify-center bg-canvas p-2 pt-4 text-primary">
+    <div className="relative w-full max-w-[400px]"><AccountsPanel state={state} onClose={() => {}} placement="header" projectContext={projectContext} /></div>
+  </main>;
+}
+
 if (SCENARIO === "accepted-creation") Object.assign(window, {
   async createAcceptedEvidence() {
     await refreshTeamView();
@@ -5592,7 +5664,7 @@ if (SCENARIO === "accepted-creation") Object.assign(window, {
   refreshAcceptedEvidence: () => acceptedFilesCache.retryPipelineCreationRead?.(),
 });
 
-createRoot(document.getElementById("root")!).render(SCENARIO === "spend-credits" ? <SpendCreditsScene /> : SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
+createRoot(document.getElementById("root")!).render(SCENARIO === "account-row" ? <AccountRowScene /> : SCENARIO === "spend-credits" ? <SpendCreditsScene /> : SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   /* `attach`: the draft is created and attaching its issue fails, so the picker keeps it with the reason. */
   : PIPELINE_LINK ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => (PIPELINE_LINK === "attach" ? { pipeline: linkDraft, warning: "the pipeline store is busy; retry" } : {})} onCreated={() => {}} onClose={() => {}} />

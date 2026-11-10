@@ -26,7 +26,6 @@ import {
   knownLivePidsFrom,
   legacyClaudeTmuxSpawnRefusal,
   spawnAgentWithPrompt,
-  renameTmuxWindowForPid,
   resolveTmuxAttach,
   selectSpawnedAgentProcess,
   SPAWN_READY_TIMEOUT_MS,
@@ -75,17 +74,6 @@ test("invalid publication settings reject before creating a tmux pane or spawn r
     });
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
-
-describe("renameTmuxWindowForPid guards", () => {
-  test("a non-positive pid never touches tmux", async () => {
-    expect(await renameTmuxWindowForPid(0, "Name")).toBeNull();
-    expect(await renameTmuxWindowForPid(-1, "Name")).toBeNull();
-  });
-
-  test("a title that collapses to blank never touches tmux", async () => {
-    expect(await renameTmuxWindowForPid(1234, "   ")).toBeNull();
-  });
 });
 
 describe("cdCommandForCwd", () => {

@@ -267,7 +267,7 @@ export async function reconfigureConversation(
         }
         if (!await (overrides.killHost ?? killTmuxHostIfMatches)(refreshedHost)) return failure("the registered pane changed or its process did not exit", 409);
         await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, () => {
-          const current = registry.readOnlySnapshot().entries[`${refreshed.key.engine}:${refreshed.key.sessionId}`];
+          const current = registry.hostEntry(refreshed.key);
           if (current?.artifactPath === filePath && sameRegisteredHost(current.host, refreshedHost)) registry.markUnhosted(refreshed.key);
         });
         forgetResumePane(filePath);
@@ -830,7 +830,9 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       if (!conversation) {
         const ensured = await registry.deliveryWrite({ label: "conversation.ensure" },
           () => registry.ensureConversation(entry.engine, entry.path, null));
-        if (!ensured.acquired) return failure(REGISTRY_WRITER_BUSY, 503);
+        /* Nothing is reserved yet, and the answer says so: the sender's
+           request closes as not executed instead of unknown for ever (#3782). */
+        if (!ensured.acquired) return { ...failure(REGISTRY_WRITER_BUSY, 503), admission: "refused" };
         conversation = ensured.value;
       }
       pidAddressed = !message.path;
@@ -968,7 +970,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       } catch (error) {
         return failure(error, 409);
       }
-      if (!queued) return failure(REGISTRY_WRITER_BUSY, 503);
+      if (!queued) return { ...failure(REGISTRY_WRITER_BUSY, 503), admission: "refused" };
       const reservation = queued;
       lease.act(reservation.command.operationId);
       /* #1131: an earlier attempt under this same request began typing into the
