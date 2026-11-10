@@ -17,10 +17,15 @@ import path from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { shortId } from "@/lib/shortIds";
 
-// Establish every state root before importing production bindings.
+// The preload may already have loaded stores. Keep its private state root so
+// module-level paths and the bindings use the same sandbox throughout the file.
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-line-edits-"));
-for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
+const stateRoot = process.env.LLV_STATE_DIR ?? path.join(sandbox, "LLV_STATE_DIR");
+process.env.LLV_STATE_DIR = stateRoot;
+fs.mkdirSync(stateRoot, { recursive: true });
+for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
   const dir = path.join(sandbox, key);
   fs.mkdirSync(dir, { recursive: true });
   process.env[key] = dir;
@@ -43,7 +48,7 @@ const { TASK_DETAILS_LIMIT } = await import("@/lib/tasks/types");
 const { NextRequest } = await import("next/server");
 const { PATCH } = await import("@/app/api/tasks/[id]/route");
 const { GET, POST } = await import("@/app/api/tasks/route");
-expect(TASKS_FILE.startsWith(sandbox + path.sep)).toBe(true);
+expect(TASKS_FILE).toBe(path.join(stateRoot, "tasks.json"));
 
 const HUMAN = "Keep the lane ledger\nThe seat's state card for this project.";
 const CARD = [
@@ -55,15 +60,17 @@ const CARD = [
 
 type Answer = Record<string, unknown> & { task?: Record<string, unknown> };
 
+let protocolSequence = 0;
 async function protocol() {
-  const receipts = new SqliteMcpReceiptStore(path.join(sandbox, `receipts-${Math.random().toString(36).slice(2)}.sqlite`));
+  const protocolId = ++protocolSequence;
+  const receipts = new SqliteMcpReceiptStore(path.join(sandbox, `receipts-${protocolId}.sqlite`));
   const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings(), receipts));
   const client = new Client({ name: "task-line-edits-test", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(a), server.connect(b)]);
   let sequence = 0;
   const call = async (name: string, args: Record<string, unknown>) => {
-    const result = await client.callTool({ name, arguments: { clientRequestId: `lines-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } });
+    const result = await client.callTool({ name, arguments: { clientRequestId: `lines-${protocolId}-${++sequence}`, ...args } });
     return { isError: result.isError === true, answer: result.structuredContent as Answer, raw: JSON.stringify(result) };
   };
   return { client, call, close: async () => { await client.close(); await server.close(); receipts.close(); } };
@@ -88,7 +95,7 @@ test("update_task edits one line of details, keeps the rest and the text, and an
     const expected = CARD.replace("Lane b2: review round 2 of 4", "Lane b2: review passed, merging");
     expect(stored(id).details).toBe(expected);
     expect(stored(id).text).toBe(HUMAN);
-    expect(replaced.answer).toMatchObject({ taskId: id, revision: taskRevision(stored(id)), detailsLength: expected.length, changedFields: expect.arrayContaining(["details"]) });
+    expect(replaced.answer).toMatchObject({ taskId: id, revision: shortId(taskRevision(stored(id))), detailsLength: expected.length, changedFields: expect.arrayContaining(["details"]) });
     /* The field does not travel back: not the edited line, not the lines around it. */
     expect(replaced.raw).not.toContain("merging");
     expect(replaced.raw).not.toContain("Lane a1");
@@ -100,7 +107,7 @@ test("update_task edits one line of details, keeps the rest and the text, and an
     expect(appended.isError).toBe(false);
     const final = expected.split("\n").filter((line) => !line.startsWith("Lane c3")).concat("Lane d4: builder queued").join("\n");
     expect(stored(id).details).toBe(final);
-    expect(appended.answer).toMatchObject({ detailsLength: final.length, revision: taskRevision(stored(id)) });
+    expect(appended.answer).toMatchObject({ detailsLength: final.length, revision: shortId(taskRevision(stored(id))) });
 
     /* By index, with a prefix that must agree with the line at that index. */
     const byIndex = await p.call("update_task", { taskId: id, replaceLine: { index: 0, prefix: "Lane a1", text: "Lane a1: PR opened" } });
@@ -158,7 +165,9 @@ test("update_task refuses an ambiguous or missing prefix, a line edit beside det
 
     const tooLong = await p.call("update_task", { taskId: id, appendLine: "x".repeat(TASK_DETAILS_LIMIT) });
     expect(tooLong.isError).toBe(true);
-    expect(tooLong.raw).toContain(`no longer than ${TASK_DETAILS_LIMIT} characters`);
+    for (const part of ["details", String(TASK_DETAILS_LIMIT), "UTF-16 code units", `actual length is ${CARD.length + 1 + TASK_DETAILS_LIMIT}`]) {
+      expect(tooLong.raw).toContain(part);
+    }
 
     /* A later edit in the same call failing refuses the earlier ones too. */
     const half = await p.call("update_task", { taskId: id, replaceLine: { prefix: "Lane a1", text: "Lane a1: done" }, removeLine: { prefix: "Lane" } });
