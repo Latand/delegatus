@@ -118,6 +118,7 @@ export interface KanbanCard {
   /** Agent drafts the card holds, in the band's order: its own «+ Agent», a handoff, a retried launch. */
   drafts: string[];
   pipelines: KanbanPipeline[];
+  creations?: readonly import("@/hooks/useFiles").CreationCard[];
   holdTarget?: { title: string; done: boolean };
   motion: TaskMotion;
   stepSummary: TaskStepsSummary | null;
@@ -972,6 +973,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
          it; a band without one takes it from the container or the first
          conversation it carries, which is where the board got the band. */
       project: task?.project
+        || band.creations?.[0]?.receipt?.project
         || band.pipeline?.project
         || band.flow?.project
         || members[0]?.file.project
@@ -993,6 +995,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
       otherSurfaces,
       drafts,
       pipelines: summaries,
+      ...(band.creations ? { creations: band.creations } : {}),
       stepSummary: stepProjection.summary,
       ...(holdTarget ? { holdTarget: { title: holdTarget.text.split("\n")[0]!, done: holdTarget.status === "done" } } : {}),
       /* A card holding only unsent drafts has started nothing, so nothing stopped: it reads as not started in any column. */

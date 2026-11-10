@@ -784,7 +784,10 @@ test("everything above the input shares ONE region; the input and Send never yie
      how much it has to show. */
   expect(region.className).toContain("[&>*]:min-h-0");
   expect(region.className).toContain("grid");
-  expect(region.className).toContain("auto-rows-[minmax(0,max-content)]");
+  /* A track's floor is what its item's own `min-height` says (0 for every
+     surface here, the open receipts list's first row for that one), so the
+     equal shares stand until the list is open and asks for its row. */
+  expect(region.className).toContain("auto-rows-[minmax(auto,max-content)]");
   const dock = region.querySelector('[data-testid="voice-dock-slot"]');
   const panel = region.querySelector('[data-testid="native-queue-panel"]') as HTMLElement;
   expect(dock).not.toBeNull();

@@ -6,6 +6,9 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { AgentRegistry, defaultPipelinePorts, loadPipelines, reserveActivationOnly,
   savePipelines, setAgentRegistryForTests, tickPipelines } from "./engine.fixture";
+import { ROLE_MEMORY_PREPARATION_MESSAGE } from "@/lib/memory/roleStore";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { RoleMemoryChanged } from "@/lib/memory/privacy";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
@@ -845,5 +848,53 @@ test("role-memory dispatch deadlines round-trip and malformed waits are refused"
     lane.runs[0]!.attempts[0]!.roleMemoryDispatchWait = invalid as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
     expect(f.attempt().roleMemoryDispatchWait).toEqual(wait);
+  }
+});
+
+
+test.each(["absent", "queued", "uncertain", "delivered", "foreign", "read-failed", "live", "generation"] as const)(
+  "preparation deferral retains original custody with %s evidence", async mode => {
+  const f = await fixture(`preparation-${mode}`);
+  const entry = f.stage(mode === "live" ? "live" : "unhosted");
+  f.registry.failSpawn(f.launches[0]!, ROLE_MEMORY_PREPARATION_MESSAGE);
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `preparation-${mode}.sqlite`), { structuredHosts: true });
+  cleanups.push(() => journal.close());
+  if (!["absent", "live", "generation", "read-failed"].includes(mode)) {
+    const launchId = f.launches[0]!, conversationId = mode === "foreign" ? "conversation_foreign" : f.attempt().conversationId!;
+    journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
+      conversationId, engine: "codex", cwd: loadPipelines()[0]!.worktreeDir!, prompt: "Build safely" });
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: entry.key, artifactPath: entry.artifactPath, cwd: loadPipelines()[0]!.worktreeDir!,
+      hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+    } });
+    const id = `spawn_message_${launchId}`;
+    journal.executeOperation({ kind: "send", operationId: id, idempotencyKey: id, conversationId, text: "Build safely" });
+    if (mode === "foreign" || mode === "uncertain" || mode === "delivered") journal.transitionOperation(id, mode === "foreign" ? "failed" : mode, { reason: ROLE_MEMORY_PREPARATION_MESSAGE });
+  }
+  const client = {
+    operationStatus: async (id: string) => {
+      if (mode === "read-failed") throw new Error("fixture journal refused");
+      return journal.operationResult(id);
+    },
+  } as RuntimeHostClient;
+  const production = defaultPipelinePorts({ spawnRecoveryClient: () => client });
+  f.h.ports.failStoppedStageLaunch = production.failStoppedStageLaunch;
+  f.h.ports.spawnAgent = f.normalSpawn;
+  if (mode === "live") f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[`codex:${entry.key.sessionId}`]!,
+    structuredHost: { kind: "codex-app-server", endpoint: "fixture", process: captureProcessIdentity(process.pid),
+      eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  if (mode === "generation") {
+    const original = f.h.ports.spawnReceipt;
+    f.h.ports.spawnReceipt = id => { const receipt = original(id); return receipt ? { ...receipt, generationMatches: false } : receipt; };
+  }
+  for (let turn = 0; turn < 8; turn++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
+  if (mode === "absent") {
+    expect(f.replacements).toHaveLength(1);
+    expect(f.attempt().retiredLaunches?.map(row => row.launchId)).toEqual(f.launches);
+    expect(f.attempt().state).toBe("running");
+  } else {
+    expect(f.replacements).toHaveLength(0);
+    expect(f.attempt().launchId).toBe(f.launches[0]);
+    expect(f.attempt().roleMemoryDispatchWait).toBeDefined();
   }
 });

@@ -133,7 +133,16 @@ export class WorktreeSweepWorker {
     const execution = withViewerOperation(operation, () => this.tail.then(() => {
       if (generation !== this.generation) throw new Error("worktree sweep worker stopped");
       const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error(`${deadlineLabel} exceeded ${timeoutMs} ms`);
+      if (remaining <= 0) {
+        if (request.kind === "attempt-temp") {
+          // The minute tick spent its observation window behind another
+          // sweep. There is no failed root and no helper to kill. Its next
+          // scheduled tick must get a fresh request and admission window.
+          console.error(`[attempt temp] deferred: helper queue exceeded ${timeoutMs} ms; retry next tick`);
+          return null;
+        }
+        throw new Error(`${deadlineLabel} exceeded ${timeoutMs} ms`);
+      }
       return new Promise<SweepResult>((resolve, reject) => {
         if (!this.child) this.start();
         const child = this.child!;

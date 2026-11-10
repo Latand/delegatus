@@ -502,7 +502,7 @@ test("start refuses a draft whose legacy review-loop no run reaches", async () =
   expect(current().state).toBe("draft");
 });
 
-test("MCP pipeline_action previews, converts and replays one conversion", async () => {
+test("MCP pipeline_action previews, converts, reverts and replays both operations", async () => {
   const h = harness();
   const draft = await legacyDraft(h.ports);
   const bindings = viewerMcpBindings(undefined, undefined, {
@@ -519,4 +519,13 @@ test("MCP pipeline_action previews, converts and replays one conversion", async 
   const replay = await service.callTool("pipeline_action", args);
   expect(replay).toMatchObject({ ok: true, legacyReviewConversion: { clientRequestId: "mcp-convert-1" } });
   expect(current().legacyReviewConversions).toHaveLength(1);
+  const revertArgs = { clientRequestId: "mcp-revert-1", pipelineId: draft.id, action: "revert-legacy-review", stageId: "reviewer", expectedRevision: pipelineRevision(current()) };
+  const reverted = await service.callTool("pipeline_action", revertArgs);
+  expect(reverted).toMatchObject({ ok: true, legacyReviewConversion: { reverted: { clientRequestId: "mcp-revert-1" } } });
+  expect(current().stages.map(stage => stage.kind)).toEqual(draft.stages.map(stage => stage.kind));
+  const revertedRow = rawRow(draft.id);
+  expect(await service.callTool("pipeline_action", revertArgs)).toMatchObject({ ok: true, replayed: true, legacyReviewConversion: { reverted: { clientRequestId: "mcp-revert-1" } } });
+  expect(rawRow(draft.id)).toBe(revertedRow);
+  expect(h.flowCalls).toEqual([]);
+  expect(h.spawned).toEqual([]);
 });

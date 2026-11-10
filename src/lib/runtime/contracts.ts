@@ -404,7 +404,9 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   contentDigest?: string;
   /** Privacy revision that must still be current when a pipeline first prompt dispatches. */
   roleMemoryRevision?: string;
-  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  /** context-or-queue chooses native context for a supported active host at dispatch,
+   * otherwise waits for an idle wake. A possibly written insertion is never retried. */
+  policy?: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   /** Automatic continuation requires this same idle revision and writer at admission and execution. */
   onlyIfIdle?: RuntimeIdleKillFence;

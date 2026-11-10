@@ -96,6 +96,36 @@ test.each([false, true])("a silent dead read-write host relaunches with WIP and 
 });
 
 
+/* #3811: a Viewer restart left the agent working. Startup kept holding its row
+   because every record the agent wrote moved the restart cut evidence, so the
+   row read unhosted for as long as the agent worked. */
+test.each(["alive", "gone"] as const)("a row held for its restart cut evidence over a process that is %s", async (process) => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  h.ports.conversationRestartCutHeld = () => true;
+  h.ports.conversationHostProcess = async () => ({ state: process, pid: 4242 });
+  h.ports.conversationHostUnavailableSince = async () => new Date(now - 10 * 60_000).toISOString();
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, launchOnly: false });
+  const stops: unknown[] = [];
+  h.ports.stopStageAgent = async (target) => { stops.push(target.launchId); return { outcome: "not-running" }; };
+  for (let pass = 0; pass < 3; pass++) { await tickPipelines([], h.ports); now += 60_000; }
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  if (process === "alive") {
+    expect(lane.state).toBe("running");
+    expect(attempt.state).toBe("running");
+    expect(attempt.providerWait).toBeUndefined();
+    expect(stops).toEqual([]);
+    expect(h.spawnInputs).toHaveLength(1);
+  } else {
+    expect(attempt.state === "running" && !attempt.providerWait && lane.state === "running").toBe(false);
+  }
+});
+
+
 test("a silent dead pane-hosted stage relaunches with WIP after the bounded wait", async () => {
   const h = harness();
   await runningStructuredStage(h);

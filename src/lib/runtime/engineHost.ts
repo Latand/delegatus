@@ -127,8 +127,8 @@ export type RuntimeEvent =
     evidenceRejectedFor?: string; seq: number }
   | { kind: "turn-started"; turnId: string; seq: number }
   | { kind: "delta"; turnId: string; text: string; seq: number }
-  | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
-    /** Explicit identity from the Codex user-message notification; projection fallbacks supply none. */
+  | { kind: "item"; viewerMcp?: ViewerMcpObservation; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
+    /** Explicit identity from a Codex user-message or Viewer MCP notification; projection fallbacks supply none. */
     codexItemIdentity?: { threadId: string; turnId: string };
     /** Raw live user-echo observation, retained through event replay. */
     deliveryEcho?: { operationId: string; at: string; attachedAt?: string; memberOperationIds?: string[] };
@@ -136,7 +136,7 @@ export type RuntimeEvent =
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
   /** History can infer interruption after a lost process; it carries no operator pause intent. */
-  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; seq: number }
+  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; claudeResultUuid?: string; seq: number }
   | { kind: "attention"; id: string; method: string; attention: unknown; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "limits"; snapshot: unknown; seq: number }
@@ -144,7 +144,35 @@ export type RuntimeEvent =
   | { kind: "realtime-delivery-acknowledged"; deliveryId: string; digest: string; seq: number }
   | { kind: "session-status"; status: "active" | "idle" | "unhosted" | "dead"; activeFlags?: string[]; seq: number };
 
+/** Bounded engine evidence. Absence preserves legacy transport-only health. */
+export interface ViewerMcpObservation {
+  seq: number;
+  observedAt: string;
+  denied: { tool: string; seq: number }[];
+  /** Missing correlation or invalid/overflowed evidence cannot prove recovery. */
+  unverified: boolean;
+}
+
+export function normalizeViewerMcpObservation(value: unknown): ViewerMcpObservation | undefined {
+  if (value === undefined) return undefined;
+  const invalid: ViewerMcpObservation = { seq: 0, observedAt: "1970-01-01T00:00:00.000Z", denied: [], unverified: true };
+  if (!value || typeof value !== "object") return invalid;
+  const row = value as Partial<ViewerMcpObservation>;
+  if (!Number.isSafeInteger(row.seq) || row.seq! < 0 || typeof row.observedAt !== "string"
+    || row.observedAt.length > 32 || !Number.isFinite(Date.parse(row.observedAt))
+    || typeof row.unverified !== "boolean" || !Array.isArray(row.denied) || row.denied.length > 32) return invalid;
+  const denied: ViewerMcpObservation["denied"] = [];
+  for (const item of row.denied) {
+    if (!item || typeof item.tool !== "string" || !/^[a-zA-Z0-9_.-]{1,128}$/.test(item.tool)
+      || !Number.isSafeInteger(item.seq) || item.seq < 0 || item.seq > row.seq!
+      || denied.some(previous => previous.tool === item.tool)) return invalid;
+    denied.push({ tool: item.tool, seq: item.seq });
+  }
+  return { seq: row.seq!, observedAt: row.observedAt, denied, unverified: row.unverified };
+}
+
 export interface HostState {
+  viewerMcp?: ViewerMcpObservation;
   exitProcess?: import("@/lib/processIdentity").ProcessIdentity;
   signalDomain?: AgentSignalDomain;
   /** Present when this launch runs without the signal boundary. */
@@ -218,6 +246,12 @@ export interface EngineHost {
       starts the next turn with it. Only an explicit interrupt stops the turn.
       Absent keeps the replacement: the running turn is interrupted first. */
   readonly sendWaitsForRunningTurn?: boolean;
+  /** The engine reads an input written during a running turn at that turn's
+      next tool boundary, without cutting the tool call; an input the turn
+      never reads starts the next turn. The delivery queue hands such a host
+      an operator's ordinary send while the turn runs, one input at a time.
+      The receipt is `steered` when the running turn took it. */
+  readonly acceptsInputDuringTurn?: boolean;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */
@@ -225,6 +259,8 @@ export interface EngineHost {
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
   health(): Promise<HostState>;
+  /** Current owner memory, synchronously read under its fence at automatic wake dispatch. */
+  readViewerMcpObservation?(): ViewerMcpObservation | undefined;
   release(): Promise<void>;
   /** Engine-backed persistence evidence for a fresh session's first message.
       A logical session may exist before its canonical transcript does. */
@@ -381,7 +417,7 @@ export interface RuntimeInjectOutcome {
 
 /** A host whose engine exposes client-originated history injection (#1560). */
 export interface InjectCapableHost extends EngineHost {
-  inject(request: RuntimeInjectRequest): Promise<RuntimeInjectOutcome>;
+  inject(request: RuntimeInjectRequest, authorizeDispatch?: () => void): Promise<RuntimeInjectOutcome>;
 }
 
 export function hostSupportsInject(host: EngineHost): host is InjectCapableHost {

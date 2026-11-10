@@ -1,15 +1,20 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { composeStageInput } from "./stageInput";
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
+import { composeStageInput, composeStageText } from "./stageInput";
+import { TaskPageWorker } from "@/lib/links/taskPageWorker";
+import { leaveSeatLessons, recordLessonRequest, roleMemoryCollection, storedLessonRevision, withoutStoredLessons } from "@/lib/memory/roleStore";
+import { hardenedRedact, BEARER_TOKEN } from "@/lib/view/compactText";
 import { resolveStageTestGuidance } from "./testGuidance";
 import { commitPipelineStage } from "./git";
 import { buildPipeline } from "./store";
 import type { PipelineStage } from "./types";
 import { realExec } from "@/lib/workflows/provision";
+import * as provision from "@/lib/workflows/provision";
 
 const artifactState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-inputs-"));
 const laneRoot = path.join(artifactState, "worktree");
@@ -226,7 +231,9 @@ test.each(["symlink", "hardlink"] as const)("stage composition leaves a %s in Gi
   const external = path.join(artifactState, `external-${linkKind}.json`);
   const original = '{"enabled":true}\n';
   fs.writeFileSync(external, original);
-  fs.unlinkSync(exclude);
+  // The isolated Git template supplies no info directory or exclude file.
+  fs.mkdirSync(path.dirname(exclude), { recursive: true });
+  fs.rmSync(exclude, { force: true });
   if (linkKind === "symlink") fs.symlinkSync(external, exclude);
   else fs.linkSync(external, exclude);
 
@@ -320,3 +327,154 @@ test("launch filtering executes stored privacy patterns away from the calling th
     expect(prompt).not.toContain(lesson);
   } finally { RegExp.prototype.exec = original; }
 }, 30_000);
+
+
+const privacyLesson = "Inspect current ownership before changing retained worker state.";
+const privacyReason = "An earlier operation used state after its owner had changed.";
+function privacyFixture() {
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(artifactState, "privacy-state-"));
+  return leaveSeatLessons({ source: { origin: "seat", project: "fixture", roleId: "orchestrator", fixRound: false, conversationId: "conversation_fixture" },
+    lessons: [{ scope: "machine", rule: privacyLesson, why: privacyReason }], now: "2026-11-06T00:00:00Z" }).left[0]!.id;
+}
+const referenceFilter = (text: string) => hardenedRedact(withoutStoredLessons(text).replace(BEARER_TOKEN, "[redacted]"));
+
+test.each(["inline", "previous", "specification", "fallback"] as const)("whole emitted fields equal the reference filter with bounded calls: %s", async mode => {
+  privacyFixture();
+  const { pipeline, stage } = handoffFixture(mode === "fallback" ? "x".repeat(32_000) : "Inspect current {{prev.output}}",
+    (mode === "specification" ? "界".repeat(14_000) : "Specification") + " " + privacyLesson);
+  const previous = mode === "inline" ? "ownership before changing retained worker state." : privacyLesson + "🙂".repeat(12_000);
+  const context = { taskDetails: "Task details " + privacyLesson, handoffDigest: "Handoff " + privacyLesson, skillPaths: ["tracked.txt"] };
+  const calls: Array<{ input: string; output: string }> = [];
+  const real = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+    const result = await real.call(this, request);
+    if (request.kind === "filter" && typeof request.value === "string") calls.push({ input: request.value, output: result.value as string });
+    return result;
+  });
+  try {
+    const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, previous, laneRoot, realExec, 256, context);
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(31_744);
+    expect(calls).toHaveLength(mode === "inline" ? 1 : mode === "previous" ? 2 : mode === "specification" ? 3 : 4);
+    expect(prompt).toBe(referenceFilter(calls.at(-1)!.input));
+    expect(prompt).not.toContain(privacyLesson);
+    for (const match of prompt.matchAll(/Full (?:previous output|specification|stage prompt) file: (.+)\n/g)) {
+      const content = fs.readFileSync(match[1]!, "utf8");
+      expect(content).not.toContain(privacyLesson);
+      expect(calls.some(call => referenceFilter(call.input) === content)).toBe(true);
+    }
+    if (mode === "fallback") {
+      const file = prompt.match(/Full stage prompt file: (.+)\n/)![1]!;
+      const full = await composeStageText(pipeline, stage, stage.effectiveRole, previous, context);
+      expect(fs.readFileSync(file, "utf8")).toBe(full);
+    }
+  } finally { worker.mockRestore(); }
+});
+
+test("redaction growth chooses a smaller complete candidate and refuses an oversized wrapper", async () => {
+  const id = privacyFixture();
+  const collection = roleMemoryCollection()!;
+  const row = collection.get(`r:${id}`)!;
+  if (row.kind !== "rule") throw Error("rule missing");
+  collection.boundedPatch(1, tx => tx.put({ ...row, why: "elms" }));
+  const { pipeline, stage } = handoffFixture("elms ".repeat(2_000), "界".repeat(14_000));
+  const inputs: string[] = [];
+  const real = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+    if (request.kind === "filter" && typeof request.value === "string") inputs.push(request.value);
+    return real.call(this, request);
+  });
+  try {
+    const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, "🙂".repeat(12_000), laneRoot, realExec, 8_000);
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(24_000);
+    expect(inputs).toHaveLength(6);
+    expect(inputs.some(input => Buffer.byteLength(input) <= 24_000 && Buffer.byteLength(referenceFilter(input)) > 24_000)).toBe(true);
+    expect(prompt).not.toContain("elms");
+    expect(prompt).toBe(referenceFilter(inputs.at(-1)!));
+    await expect(composeStageInput(pipeline, stage, stage.effectiveRole, "", laneRoot, realExec, 31_990)).rejects.toThrow("Filtered stage input exceeds the message byte limit");
+  } finally { worker.mockRestore(); }
+});
+
+test("whole candidate filtering withholds a lesson spanning the excerpt footer", async () => {
+  privacyFixture();
+  leaveSeatLessons({ source: { origin: "seat", project: "fixture", roleId: "orchestrator", fixRound: false, conversationId: "conversation_fixture" },
+    lessons: [{ scope: "machine", rule: "edge Excerpt ends the file contains the full text", why: privacyReason }], now: "2026-11-06T00:00:00Z" });
+  const { pipeline, stage } = handoffFixture("Build the task");
+  const inputs: string[] = [];
+  const real = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+    if (request.kind === "filter" && typeof request.value === "string") inputs.push(request.value);
+    return real.call(this, request);
+  });
+  try {
+    const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, "p".repeat(507) + " edge " + "p".repeat(40_000));
+    expect(inputs).toHaveLength(2);
+    expect(inputs.at(-1)).toContain("edge\n[Excerpt ends;");
+    expect(prompt).toBe(referenceFilter(inputs.at(-1)!));
+    expect(prompt).not.toContain("edge\n[Excerpt ends;");
+    expect(prompt).toContain("[learned rule]");
+  } finally { worker.mockRestore(); }
+});
+
+for (const point of ["skills", "directory", "previous", "specification", "candidate", "inline-protection"] as const) {
+  test.each(["request", "rule"] as const)(`privacy identity after ${point} await: %s`, async kind => {
+    privacyFixture();
+    const added = "Verify the silver orchard result before committing retained state.";
+    const inline = point === "inline-protection";
+    const { pipeline, stage } = handoffFixture("Build {{prev.output}}", inline ? added : "界".repeat(14_000) + "\n" + added);
+    const previous = inline ? added : privacyLesson + "🙂".repeat(12_000) + added;
+    const before = storedLessonRevision();
+    let changed = false, calls = 0, executions = 0;
+    const mutate = () => {
+      if (changed) return;
+      changed = true;
+      if (kind === "request") recordLessonRequest({ pipelineId: "unrelated", stageId: "build", attempt: 1, project: "fixture", roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
+      else leaveSeatLessons({ source: { origin: "seat", project: "fixture", roleId: "orchestrator", fixRound: false, conversationId: "conversation_fixture" }, lessons: [{ scope: "machine", rule: added, why: privacyReason }], now: "2026-11-06T00:00:00Z" });
+    };
+    const real = TaskPageWorker.prototype.privacy;
+    const invoke = realExec;
+    const validate = point === "skills" ? spyOn(provision, "realExec").mockImplementation(async (...args) => {
+      const result = await invoke(...args);
+      if (args[1].includes("ls-tree")) mutate();
+      return result;
+    }) : undefined;
+    const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+      const result = await real.call(this, request);
+      calls++;
+      if (calls === ({ previous: 1, specification: 2, candidate: 3 } as Partial<Record<typeof point, number>>)[point]) mutate();
+      return result;
+    });
+    const exec: typeof realExec = async (...args) => {
+      const result = await invoke(...args);
+      if (++executions === 1 && (point === "directory" || point === "inline-protection")) mutate();
+      return result;
+    };
+    try {
+      const compose = () => composeStageInput(pipeline, stage, stage.effectiveRole, previous, laneRoot, exec, 0, { skillPaths: ["tracked.txt"] });
+      if (kind === "rule") await expect(compose()).rejects.toBeInstanceOf(RoleMemoryChanged);
+      const prompt = await compose();
+      expect(changed).toBe(true);
+      expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32_000);
+      expect(storedLessonRevision() === before).toBe(kind === "request");
+      if (kind === "request") expect(calls).toBe(inline ? 1 : 3);
+      else {
+        // Early rule changes can populate the new revision's completed cache
+        // before the outer composition defers. The stable pass may reuse it.
+        expect(calls).toBeGreaterThanOrEqual(inline ? 1 : 3);
+        expect(calls).toBeLessThanOrEqual(inline ? 2 : 7);
+        expect(prompt).not.toContain(added);
+        for (const match of prompt.matchAll(/Full (?:previous output|specification) file: (.+)\n/g)) expect(fs.readFileSync(match[1]!, "utf8")).not.toContain(added);
+      }
+    } finally { worker.mockRestore(); validate?.mockRestore(); }
+  });
+}
+
+test.each(["inline", "artifact", "fallback"] as const)("untracked skills refuse before filtering on every composition path: %s", async mode => {
+  privacyFixture();
+  const { pipeline, stage } = handoffFixture(mode === "fallback" ? "x".repeat(40_000) : "Build the task");
+  const worker = spyOn(TaskPageWorker.prototype, "privacy");
+  try {
+    await expect(composeStageInput(pipeline, stage, stage.effectiveRole, mode === "inline" ? "small" : "界".repeat(14_000), laneRoot, realExec, 0,
+      { skillPaths: ["untracked-skill.md"] })).rejects.toThrow("Referenced skill is not tracked");
+    expect(worker).not.toHaveBeenCalled();
+  } finally { worker.mockRestore(); }
+});

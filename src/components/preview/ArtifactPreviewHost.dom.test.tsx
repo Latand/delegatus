@@ -728,3 +728,38 @@ test("the mobile sheet is a labelled full-height dialog", async () => {
   expect(sheet.getAttribute("aria-label")).toContain("build.log");
   expect(sheet.className).toContain("inset-0");
 });
+
+test("an open with a source reads that source and paints above the dialog layer; a later link keeps the layer but reads /api/artifact", async () => {
+  const meta = { name: "notes.log", kind: "text", mime: "text/plain; charset=utf-8", size: 6, mtimeMs: 1, etag: '"gabc"', revision: { head: "c".repeat(40), committedAt: 1, headSource: "branch" } };
+  routes = [
+    (url) => (url.pathname === "/api/tasks/t/files/content" && url.searchParams.get("mode") === "meta" ? { status: 200, body: meta } : null),
+    (url) => (url.pathname === "/api/tasks/t/files/content" ? { status: 206, body: "source" } : null),
+    ...(textRoutes(), routes),
+  ];
+  await render();
+  const source = { metaUrl: "/api/tasks/t/files/content?lane=l&mode=meta", contentUrl: "/api/tasks/t/files/content?lane=l" };
+  await act(async () => openArtifactPreview("notes.log", { kind: "file", path: "notes.log", line: null, column: null, anchor: null }, { source, layer: "overlay" }));
+  await flush();
+  await flush();
+  expect(fetchLog[0]!.url).toBe(source.metaUrl);
+  expect(fetchLog.some((call) => call.url.startsWith("/api/artifact"))).toBe(false);
+  expect(surface()!.style.zIndex).toBe("76");
+  expect(surface()!.textContent).toContain("at ccccccc");
+  expect(surface()!.querySelector("a[download]")!.getAttribute("href")).toBe(`${source.contentUrl}&download=1`);
+  fetchLog = [];
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(fetchLog.every((call) => call.url.startsWith("/api/artifact"))).toBe(true);
+  expect(surface()!.style.zIndex).toBe("76");
+});
+
+test("an open without a source or a layer reads /api/artifact at the reader layer, as before", async () => {
+  textRoutes();
+  await render();
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()!.style.zIndex).toBe("65");
+  expect(surface()!.textContent).not.toContain("at ");
+});

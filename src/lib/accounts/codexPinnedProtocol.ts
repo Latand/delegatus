@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromJSONSchema, type ZodType } from "zod";
-import currentManifest from "./protocol/0.166.0/manifest.json";
+import currentManifest from "./protocol/0.167.0/manifest.json";
+import latestPriorManifest from "./protocol/0.166.0/manifest.json";
 import newestPriorManifest from "./protocol/0.165.0/manifest.json";
 import lastManifest from "./protocol/0.164.0/manifest.json";
 import recentManifest from "./protocol/0.163.0/manifest.json";
@@ -20,7 +21,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
 const pins = [
-  currentManifest, newestPriorManifest, lastManifest, recentManifest,
+  currentManifest, latestPriorManifest, newestPriorManifest, lastManifest, recentManifest,
   priorManifest, previousManifest, oldestManifest,
 ].map(manifest => {
   // Keep the generated object graphs out of webpack's server modules. Each

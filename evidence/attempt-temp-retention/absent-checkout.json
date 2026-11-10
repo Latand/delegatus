@@ -1,0 +1,366 @@
+{
+  "capturedAt": "2026-11-05T04:40:20.591251+00:00",
+  "mergedParent": "cb8c3412f2cc37fe6618de6b467db2f9a3da278e",
+  "main": "53d55130064a4d8bceacb36bbfa30120eb810c64",
+  "preFixMergedHead": "9bbb61cc7579f8201481e2436916da1235ff7794",
+  "sourceSha256": {
+    "src/lib/runtime/attemptTempFilesystem.ts": "0b32c03bbd6fd12736eddc0e6031d43e6f3ee8534a660da944bec69aa61aa2d5",
+    "src/lib/runtime/attemptTempProduction.ts": "ed47c48fb7eb05c96b37be98c0a194a42f695d0832fdbb052e277e5ba71be11a",
+    "src/lib/runtime/attemptTempFilesystem.test.ts": "0356225234fbbd961dffcc4771bc74b87fa36d45a45072f43d83490798372c1e",
+    "src/lib/runtime/attemptTempProduction.test.ts": "9f2d0820ea1fdd3ed0c045ce2984aa8fa7e9edf76f6afebd1f2906078751327e",
+    "src/lib/runtime/attemptTempRetention.ts": "2ee975d2b867a307450f8607f5ea42fdd78b59eb6ef85e9302554ba879096dd9",
+    "src/lib/runtime/attemptTempRetention.test.ts": "7fba5670124395151aa78aca8d420ef78b56363804f5590a570422fe9a5274bb",
+    "src/lib/runtime/attemptTempRetention.fixture.ts": "49989d14c0484d1018c787bd764c8c39dd0e32b5c64aabda8331068a26d3f858",
+    "src/lib/pipelines/worktreeSweepWorker.ts": "ca9fb5b535bb04318abf7cfe17fa8c98f53642df459d3e8067859ed024488849",
+    "src/lib/pipelines/worktreeSweepWorker.test.ts": "588a16290406a1baff748b4836d67b82b3c218540e7fb7ba1c2cf69730616b86",
+    "src/lib/tempSweep.ts": "5f5d517e7dece059f0e009826ecbd6e566468f361142541ace9f4fb70d8eb486",
+    "src/lib/tempSweep.test.ts": "cad12883aebb05fc3fba72ddc6db3327556dace096acbdb6535dfd0c13572e7c"
+  },
+  "registryObservation": {
+    "capturedAt": "2026-11-05T04:28:52.954979+00:00",
+    "counts": {
+      "registry": 534,
+      "rootPresent": 508,
+      "absentCheckout.closedOrCompleted": 100,
+      "liveCwdsInAbsentCheckouts": 0,
+      "rootsHeldSolelyByAbsentCheckoutRule": 0
+    },
+    "registeredBytesForAbsentCheckout": {
+      "closedOrCompleted": 72709894144.0
+    },
+    "openLaneRows": [],
+    "terminalReapFields": {
+      "rounds": 100,
+      "stopped": 100,
+      "lastAt": 100,
+      "settledAttempts": 100,
+      "settledAt": 100
+    },
+    "method": "SQLite read-only backup of attempt-temp and state; read-only filesystem existence checks; no sweeps or removals. Read only /proc/<pid>/cwd for surviving consumers of the absent checkout paths.",
+    "observationFinishedAt": "2026-11-05T04:31:34.564662+00:00",
+    "snapshotSha256": {
+      "attempt-temp.sqlite": "7c286f7b62a7ee661c5848b4a094c4d0cbee9f3fa326b77043e4f2cde9661dca",
+      "state.sqlite": "ad068e839fd936331278d8a5826316130018dbc84d2cd270e3f3271a49189541"
+    }
+  },
+  "followupReadOnlyObservation": {
+    "capturedAt": "2026-11-05T08:41:45.573580658+02:00",
+    "sourceHead": "74b6df5228911b531e8d986c3f771e9461019f00",
+    "method": "Read-only SQLite backups of the attempt registry and pipeline state; read-only filesystem existence and process cwd checks; no sweep or removal",
+    "counts": {
+      "registry": 643,
+      "rootAbsent": 26,
+      "rootPresent": 617,
+      "absentCheckout.terminal": 101,
+      "noPipeline": 259
+    },
+    "registeredBytes": {
+      "terminal": 73613594624
+    },
+    "rootsHeldSolelyByAbsentCheckoutRule": 0,
+    "snapshotSha256": {
+      "attempt-temp.sqlite": "1ccecd580eda6bb44abad047dd2bf3626e31c4cd1fe7efcdd84de0ad7ea99659",
+      "state.sqlite": "bfa23fc1872edf3044b8ef264f26d898443af55e6815cad387f55effed914152"
+    }
+  },
+  "checks": [
+    {
+      "log": "final-filesystem.log",
+      "at": "2026-11-05T04:36:46.813152+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts"
+      ],
+      "exit": 0,
+      "logSha256": "c2d7f352ca0bb5e04f6721da7ead91c6fa992743867a46e17d7784efa3f0e85a",
+      "pass": 26,
+      "skip": 14,
+      "fail": 0,
+      "ranTests": 40
+    },
+    {
+      "log": "final-production.log",
+      "at": "2026-11-05T04:37:37.257872+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts"
+      ],
+      "exit": 0,
+      "logSha256": "b61e3bcc4c3d7f81ef0df7ca9f86621f5bb04c6e53449103f3a6a0b5b1c90e83",
+      "pass": 27,
+      "skip": 1,
+      "fail": 0,
+      "ranTests": 28
+    },
+    {
+      "log": "final-retention.log",
+      "at": "2026-11-05T04:38:00.424505+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempRetention.test.ts"
+      ],
+      "exit": 0,
+      "logSha256": "d29cc0f35475855ef776f92329fc615d0bc5b56def594663a023427d93cc3eea",
+      "pass": 60,
+      "skip": 0,
+      "fail": 0,
+      "ranTests": 60
+    },
+    {
+      "log": "final-worker.log",
+      "at": "2026-11-05T04:38:28.644325+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/pipelines/worktreeSweepWorker.test.ts"
+      ],
+      "exit": 0,
+      "logSha256": "998c0f6aee5871b0baf8987048102ac79ad8b8ebc4dc12069d39a95446f05343",
+      "pass": 34,
+      "skip": 0,
+      "fail": 0,
+      "ranTests": 34
+    },
+    {
+      "log": "final-temp-sweep.log",
+      "at": "2026-11-05T04:39:15.726548+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/tempSweep.test.ts"
+      ],
+      "exit": 0,
+      "logSha256": "75cafe8d904f5b2dc76b13fd492f0b1ce6391a2c3dfa2094fcf19d5678f627a9",
+      "pass": 79,
+      "skip": 0,
+      "fail": 0,
+      "ranTests": 79
+    },
+    {
+      "log": "final-retained-probe.log",
+      "at": "2026-11-05T04:39:41.246979+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/restored-consumer-checkout.test.ts"
+      ],
+      "exit": 0,
+      "logSha256": "be64719fd505ae6c67b25c29ce44ea21d167c1d74babbea475f196f8a7cdb76d",
+      "pass": 1,
+      "skip": 0,
+      "fail": 0,
+      "ranTests": 1
+    }
+  ],
+  "baseControls": [
+    {
+      "log": "retained-base.log",
+      "at": "2026-11-05T04:27:58.314712+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/restored-consumer-checkout.test.ts"
+      ],
+      "exit": 1,
+      "logSha256": "9227857b481974053feaaa2be79288cce82975196578549ace6962dd9c3a4555",
+      "pass": 0,
+      "skip": 0,
+      "fail": 1,
+      "ranTests": 1
+    },
+    {
+      "log": "final-regression-filesystem-base.log",
+      "at": "2026-11-05T04:39:45.970748+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts",
+        "-t",
+        "absent|real consumer exits"
+      ],
+      "exit": 1,
+      "logSha256": "95262d596d24904252d114a54b70f1779ff938fdcc74504ae6255e86c5687cc6",
+      "pass": 1,
+      "skip": 0,
+      "fail": 6,
+      "ranTests": 7
+    },
+    {
+      "log": "final-regression-production-base.log",
+      "at": "2026-11-05T04:39:51.189873+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts",
+        "-t",
+        "absent open-lane"
+      ],
+      "exit": 1,
+      "logSha256": "597ceab2aa1ff78253dcdf8c76bfa77f06fe56f3923ed050878ebc0c6a6adf9a",
+      "pass": 0,
+      "skip": 0,
+      "fail": 2,
+      "ranTests": 2
+    }
+  ],
+  "mutationControls": [
+    {
+      "log": "mutation-initial-empty.log",
+      "at": "2026-11-05T04:36:18.554974+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts",
+        "-t",
+        "absent"
+      ],
+      "exit": 1,
+      "logSha256": "9e30d6c8eb07b09de18400e3871b962cb81951e71d9c2f10a3e426d3e7910c03",
+      "pass": 1,
+      "skip": 0,
+      "fail": 5,
+      "ranTests": 6,
+      "mutation": "initial-empty",
+      "failedTests": [
+        "an absent checkout refuses inventory and retries after restoration (before walk)",
+        "an absent checkout is never a successful empty inventory",
+        "an absent consumer checkout keeps scratch at removal observation 1 and permits later reclaim",
+        "an absent consumer checkout keeps scratch at removal observation 2 and permits later reclaim",
+        "an absent consumer checkout keeps scratch at removal observation 3 and permits later reclaim"
+      ]
+    },
+    {
+      "log": "mutation-walk-empty.log",
+      "at": "2026-11-05T04:36:19.677626+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts",
+        "-t",
+        "refuses inventory"
+      ],
+      "exit": 1,
+      "logSha256": "e2c9aea442dd214b116589264206e60f5951dc8468ec29cb70be9f6c5e7df25e",
+      "pass": 1,
+      "skip": 0,
+      "fail": 1,
+      "ranTests": 2,
+      "mutation": "walk-empty",
+      "failedTests": [
+        "an absent checkout refuses inventory and retries after restoration (during walk)"
+      ]
+    },
+    {
+      "log": "mutation-failed-cache.log",
+      "at": "2026-11-05T04:36:20.519192+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts",
+        "-t",
+        "refuses inventory"
+      ],
+      "exit": 1,
+      "logSha256": "f3ac21dd6779da0f24d055338f28d02d9fef2955ca641f5fef40d99edf0d48a6",
+      "pass": 0,
+      "skip": 0,
+      "fail": 2,
+      "ranTests": 2,
+      "mutation": "failed-cache",
+      "failedTests": [
+        "an absent checkout refuses inventory and retries after restoration (before walk)",
+        "an absent checkout refuses inventory and retries after restoration (during walk)"
+      ]
+    },
+    {
+      "log": "mutation-open-absence.log",
+      "at": "2026-11-05T04:36:21.329678+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts",
+        "-t",
+        "absent open-lane"
+      ],
+      "exit": 1,
+      "logSha256": "1255765c57ad0a7bdd3a66749cb7164c51525fb10987e05122acaad6dc9329bb",
+      "pass": 0,
+      "skip": 0,
+      "fail": 2,
+      "ranTests": 2,
+      "mutation": "open-absence",
+      "failedTests": [
+        "an absent open-lane checkout holds scratch until the lane is closed and its consumer exits",
+        "an absent open-lane checkout holds scratch until the lane is completed and its consumer exits"
+      ]
+    },
+    {
+      "log": "mutation-consumer-links.log",
+      "at": "2026-11-05T04:36:23.072800+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts",
+        "-t",
+        "real consumer exits"
+      ],
+      "exit": 1,
+      "logSha256": "e4855478e4c5d9ef3d870985c79f047b9108696f1a92ae55432f7b660f9febe7",
+      "pass": 0,
+      "skip": 0,
+      "fail": 1,
+      "ranTests": 1,
+      "mutation": "consumer-links",
+      "failedTests": [
+        "a closed lane's checkout link stops holding scratch when its real consumer exits"
+      ]
+    },
+    {
+      "log": "mutation-terminal-release.log",
+      "at": "2026-11-05T04:36:24.263851+00:00",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts",
+        "-t",
+        "absent open-lane"
+      ],
+      "exit": 1,
+      "logSha256": "1e4e047421b5cf03347feffb1c4392c0c47f7c9f07991992eac320e02520145a",
+      "pass": 0,
+      "skip": 0,
+      "fail": 2,
+      "ranTests": 2,
+      "mutation": "terminal-release",
+      "failedTests": [
+        "an absent open-lane checkout holds scratch until the lane is closed and its consumer exits",
+        "an absent open-lane checkout holds scratch until the lane is completed and its consumer exits"
+      ]
+    }
+  ],
+  "finalFileCommandCount": 6,
+  "finalPassCount": 227,
+  "finalSkipCount": 15,
+  "environment": "Bun 1.4.0; each direct command has fresh HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, LLV_STATE_DIR and TMPDIR; closed Viewer control URL; repository test preload and owned runner; serial explicit test-file commands.",
+  "liveSweepRan": false,
+  "throughputClaim": "No additional throughput claim.",
+  "release": "Closed/completed producer skips its own checkout; live consumer links still hold; each later sweep has fresh process observations and inventory. An unreadable open-lane checkout requires restoration or lane closure."
+}

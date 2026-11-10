@@ -2,10 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
+import { statePath } from "@/lib/configDir";
 import { execFile } from "node:child_process";
-import { afterEach, expect, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -65,7 +67,254 @@ test("a settled root retires beside more than 32 unrelated checkouts; a linking 
   expect(await attemptReferencesClear(directory, directory, scan(), async () => true)).toBeFalse();
 });
 
-test("one tick reads each checkout once across roots and rereads it once stale", async () => {
+test("a missing process cwd cannot become a cached no-checkout result", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-unproven-cwd"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 41, namespace: null, stamped: false, paths: [cwd] }] };
+  fs.rmSync(cwd, { recursive: true });
+  await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toThrow();
+  expect(inventory.walks).toHaveLength(0);
+});
+
+test("an unreadable process cwd cannot become a cached no-checkout result", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-unreadable-cwd"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }] };
+  fs.chmodSync(repository, 0);
+  try {
+    await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toMatchObject({ code: "EACCES" });
+    expect(inventory.walks).toHaveLength(0);
+  } finally { fs.chmodSync(repository, 0o700); }
+});
+
+test.each(["absent", "unreadable", "restored"] as const)("the final removal check observes a checkout changed during container observation (%s)", async change => {
+  const parent = root(), directory = path.join(parent, "llv-stage-final-boundary");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  const inventory = new RepositoryLinkInventory();
+  let changed = false;
+  let containerObservations = 0;
+  const oldRepository = `${repository}-old`;
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  const denied = change === "unreadable" ? spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    if (changed && path.resolve(String(target)) === repository) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return readdir(target, options);
+  }) : undefined;
+  const mutate = () => {
+    changed = true;
+    if (change === "absent") fs.renameSync(repository, oldRepository);
+    if (change === "unreadable") fs.chmodSync(repository, 0);
+    if (change === "restored") {
+      fs.renameSync(repository, oldRepository);
+      fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+      fs.mkdirSync(path.join(repository, "work"));
+      fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+    }
+  };
+  const references = (original: string, current: string, scan: Parameters<typeof attemptReferencesClear>[2]) =>
+    attemptReferencesClear(original, current, scan, async () => {
+      containerObservations++;
+      if (containerObservations === 3) mutate();
+      return true;
+    }, inventory);
+  let now = 2;
+  const sweep = (processes: Array<{ pid: number; namespace: null; stamped: boolean; paths: string[] }>) => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+    state: async () => {
+      try {
+        const before = fs.lstatSync(repository);
+        if (!before.isDirectory() || before.isSymbolicLink()) return "unknown";
+        await repositoryReferencesAttemptTemp(repository, directory, directory, inventory);
+        const after = fs.lstatSync(repository);
+        return after.isDirectory() && !after.isSymbolicLink() && `${before.dev}:${before.ino}` === `${after.dev}:${after.ino}`
+          ? "closed" : "unknown";
+      } catch { return "unknown"; }
+    }, references, scan: () => ({ ownNamespace: null, processes }) });
+  const processes = [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }];
+  try {
+    const result = await sweep(processes);
+    expect(changed).toBeTrue();
+    expect(containerObservations).toBeGreaterThanOrEqual(3);
+    expect(result.removed).toBe(0);
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    if (change === "absent") fs.renameSync(oldRepository, repository);
+    if (change === "unreadable") { fs.chmodSync(repository, 0o700); changed = false; }
+    if (change === "restored") fs.unlinkSync(path.join(repository, "dependency"));
+    now += 60_001;
+    expect((await sweep([])).removed).toBe(1);
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { denied?.mockRestore(); fs.chmodSync(change === "unreadable" ? repository : parent, 0o700); store.close(); }
+});
+
+test.each([
+  ["namespace-only", "control"], ["namespace-only", "activate"], ["namespace-only", "checkout-disappears"], ["namespace-only", "reopen-absent"],
+  ["permission-fallback", "control"], ["permission-fallback", "activate"], ["permission-fallback", "checkout-disappears"], ["permission-fallback", "reopen-absent"],
+] as const)("namespace dispatch validates its final snapshot (%s, %s)", async (removalPath, change) => {
+  const parent = root(), directory = path.join(parent, "llv-stage-namespace-dispatch"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  const payload = path.join(directory, "payload"), dispatched = path.join(parent, "dispatched");
+  fs.writeFileSync(payload, "keep");
+  const docker = path.join(bin, "docker");
+  fs.writeFileSync(docker, `#!/bin/sh
+case "$1" in
+  ps) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    printf started > "$DOCKER_DISPATCH_MARKER"
+    find "$source" -depth -mindepth 1 -delete
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(docker, 0o700);
+  const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  const previousMarker = process.env.DOCKER_DISPATCH_MARKER;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.DOCKER_DISPATCH_MARKER = dispatched;
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+    if (removalPath === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return undefined;
+  });
+  let producerState = "closed", checkoutReadable = true;
+  const guard = async () => {
+    await Promise.resolve();
+    if (change === "activate") producerState = "live";
+    if (change === "checkout-disappears") checkoutReadable = false;
+    if (change === "reopen-absent") producerState = "unknown";
+    return true;
+  };
+  const dispatchGuard = () => producerState === "closed" && checkoutReadable;
+  try {
+    let error: unknown;
+    try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard); }
+    catch (caught) { error = caught; }
+    if (change === "control") {
+      expect(error).toBeUndefined();
+      expect(fs.existsSync(dispatched)).toBeTrue();
+      expect(fs.existsSync(directory)).toBeFalse();
+    } else {
+      expect(String(error)).toContain("authority changed before namespace removal");
+      expect(fs.existsSync(dispatched)).toBeFalse();
+      expect(fs.readFileSync(payload, "utf8")).toBe("keep");
+    }
+  } finally {
+    rm.mockRestore();
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+    else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+    if (previousMarker === undefined) delete process.env.DOCKER_DISPATCH_MARKER;
+    else process.env.DOCKER_DISPATCH_MARKER = previousMarker;
+  }
+});
+
+test.each([
+  ["namespace-only", "control"], ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
+  ["permission-fallback", "control"], ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
+] as const)("final namespace rmdir revalidates authority and root identity (%s, %s)", async (pathKind, change) => {
+  const parent = root(), directory = path.join(parent, "llv-stage-final-rmdir"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const originalIdentity = fs.lstatSync(directory), identity = `${originalIdentity.dev}:${originalIdentity.ino}`;
+  const docker = path.join(bin, "docker"), completion = path.join(parent, "docker-complete");
+  fs.writeFileSync(docker, `#!/bin/sh
+case "$1" in
+  ps) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    find "$source" -depth -mindepth 1 -delete || exit
+    if test "$FINAL_RMDIR_CHANGE" = root-replaced; then mv "$source" "$source-original"; mkdir "$source"; printf replacement > "$source/payload"; fi
+    printf done > "$FINAL_RMDIR_COMPLETE"
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(docker, 0o700);
+  const previous = { PATH: process.env.PATH, image: process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE,
+    change: process.env.FINAL_RMDIR_CHANGE, complete: process.env.FINAL_RMDIR_COMPLETE };
+  process.env.PATH = `${bin}${path.delimiter}${previous.PATH ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.FINAL_RMDIR_CHANGE = change;
+  process.env.FINAL_RMDIR_COMPLETE = completion;
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+    if (pathKind === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return undefined;
+  });
+  const dispatchGuard = () => !fs.existsSync(completion) || change !== "producer-changed" && change !== "checkout-unreadable";
+  try {
+    let error: unknown;
+    try { await removeAttemptTree(directory, directory, async () => true, pathKind === "namespace-only", dispatchGuard); }
+    catch (caught) { error = caught; }
+    if (change === "control") {
+      expect(error).toBeUndefined();
+      expect(fs.existsSync(directory)).toBeFalse();
+    } else {
+      expect(fs.existsSync(completion)).toBeTrue();
+      expect(String(error)).toMatch(change === "root-replaced" ? /identity changed before namespace rmdir/ : /authority changed before namespace rmdir/);
+      if (change === "root-replaced") {
+        const replacement = fs.lstatSync(directory);
+        expect(`${replacement.dev}:${replacement.ino}`).not.toBe(identity);
+        expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("replacement");
+      } else {
+        expect(`${fs.lstatSync(directory).dev}:${fs.lstatSync(directory).ino}`).toBe(identity);
+        expect(fs.readdirSync(directory)).toEqual([]);
+      }
+    }
+  } finally {
+    rm.mockRestore();
+    if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
+    if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;
+    if (previous.change === undefined) delete process.env.FINAL_RMDIR_CHANGE; else process.env.FINAL_RMDIR_CHANGE = previous.change;
+    if (previous.complete === undefined) delete process.env.FINAL_RMDIR_COMPLETE; else process.env.FINAL_RMDIR_COMPLETE = previous.complete;
+  }
+});
+
+test("a capture created during the final container observation is preserved before reclaim", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-late-capture");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  const identity = fs.lstatSync(directory), identityKey = `${identity.dev}:${identity.ino}`;
+  const evidenceKey = createHash("sha256").update(directory).update("\0").update(identityKey).digest("hex");
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "late-capture", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  let stateReads = 0;
+  let now = 2;
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+    state: async () => {
+      stateReads++;
+      if (stateReads === 3) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
+      return "closed";
+    }, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+  try {
+    const first = await sweep();
+    expect(stateReads).toBeGreaterThanOrEqual(3);
+    expect(first.removed).toBe(0);
+    expect(fs.readFileSync(path.join(directory, "frame.png"), "utf8")).toBe("late frame");
+    now += 60_001;
+    expect((await sweep()).removed).toBe(1);
+    const saved = path.join(statePath("evidence", "attempt-temp", evidenceKey), "files/frame.png");
+    expect(fs.readFileSync(saved, "utf8")).toBe("late frame");
+  } finally { store.close(); }
+});
+
+test("one tick shares checkout walks and invalidates a negative result after a late link", async () => {
   const parent = root(), first = path.join(parent, "llv-stage-first"), second = path.join(parent, "llv-stage-second");
   fs.mkdirSync(first); fs.mkdirSync(second);
   const processes = repositoryProcesses(parent, 34);
@@ -76,15 +325,228 @@ test("one tick reads each checkout once across roots and rereads it once stale",
   expect(inventory.walks.length).toBe(34);
   // Checkouts are read in name order; repository-9 is the last one.
   fs.symlinkSync(second, path.join(parent, "repository-9/work/late-link"), "dir");
-  // Within the freshness window the read is shared, so the late link is not
-  // yet seen; past it every checkout is read again before the decision.
-  expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeTrue();
-  expect(inventory.walks.length).toBe(34);
+  // Unchanged checkouts reuse their inventory. A nested directory change
+  // invalidates just that checkout's negative result immediately.
+  expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeFalse();
+  expect(inventory.walks.length).toBe(35);
   now += 10_001;
   expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeFalse();
-  expect(inventory.walks.length).toBe(68);
+  expect(inventory.walks.length).toBe(69);
   now += 20_000;
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
+});
+
+test("a link created between directory enumeration and metadata capture cannot become a cached negative", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-link-race"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "repository"), cwd = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const link = path.join(cwd, "node_modules");
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  let injected = false;
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    const entries = await readdir(target, options);
+    if (!injected && target === cwd) { injected = true; fs.symlinkSync(directory, link, "dir"); }
+    return entries;
+  });
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 7, namespace: null, stamped: false, paths: [cwd] }] };
+  try {
+    await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toThrow("changed during link inventory");
+    expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeFalse();
+    expect(fs.existsSync(directory)).toBeTrue();
+  } finally { observed.mockRestore(); }
+});
+
+test("a nested link added during a later directory read defers the real sweep", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-race-target"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"), earlier = path.join(repository, "a"), later = path.join(repository, "b");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(earlier); fs.mkdirSync(later);
+  const link = path.join(earlier, "dependency");
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  let injected = false;
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    const entries = await readdir(target, options);
+    if (!injected && target === later) { injected = true; fs.symlinkSync(directory, link, "dir"); }
+    return entries;
+  });
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  store.measure(directory, 4096); store.release(directory);
+  const scan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [repository] }] };
+  const inventory = new RepositoryLinkInventory();
+  let now = 2;
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
+    state: async () => "closed",
+    references: (original, current, currentScan) => attemptReferencesClear(original, current, currentScan, async () => true, inventory),
+    scan: () => scan });
+  try {
+    const raced = await sweep();
+    expect(injected).toBeTrue();
+    expect(raced).toMatchObject({ removed: 0, deferred: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    observed.mockRestore();
+    now += 60_001;
+    const retry = await sweep();
+    expect(retry).toMatchObject({ removed: 0, held: 1, errors: 0 });
+    expect(fs.readlinkSync(link)).toBe(directory);
+
+    fs.unlinkSync(link); store.defer(directory, 0);
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { observed.mockRestore(); store.close(); }
+});
+
+test("a real sweep rechecks an external symlink alias before removing its target root", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-linked-root"); fs.mkdirSync(directory);
+  const data = path.join(directory, "data"); fs.writeFileSync(data, "owned scratch");
+  const safe = path.join(parent, "safe"); fs.mkdirSync(safe); fs.writeFileSync(path.join(safe, "data"), "safe target");
+  const alias = path.join(parent, "external-alias"); fs.symlinkSync(safe, alias, "dir");
+  const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.symlinkSync(path.join(alias, "data"), path.join(repository, "dependency"));
+  const processScan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [repository] }] };
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "fixture", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  const inventory = new RepositoryLinkInventory();
+  let firstRead = true;
+  try {
+    const report = await sweepAttemptTemps(store, {
+      now: () => Date.parse("2030-01-01T00:00:00Z"), capBytes: 0, state: async () => "closed",
+      scan: () => processScan,
+      references: async (original, current, scan) => {
+        const clear = await attemptReferencesClear(original, current, scan, async () => true, inventory);
+        if (firstRead) {
+          firstRead = false;
+          fs.unlinkSync(alias);
+          fs.symlinkSync(directory, alias, "dir");
+        }
+        return clear;
+      },
+    });
+    expect(report).toMatchObject({ removed: 0, held: 1, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(data, "utf8")).toBe("owned scratch");
+    expect(fs.lstatSync(path.join(repository, "dependency")).isSymbolicLink()).toBeTrue();
+  } finally { store.close(); }
+});
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed checkout inventory names its real error and retries the recovered checkout in the same run", async () => {
+  const parent = root();
+  const repository = path.join(parent, "repository"), blocked = path.join(repository, "blocked");
+  fs.mkdirSync(blocked, { recursive: true }); fs.chmodSync(blocked, 0);
+  const inventory = new RepositoryLinkInventory();
+  try {
+    await expect(inventory.targets(repository)).rejects.toThrow("permission denied");
+    fs.chmodSync(blocked, 0o700);
+    expect(await inventory.targets(repository)).toEqual([]);
+    expect(inventory.walks).toHaveLength(2);
+  } finally { fs.chmodSync(blocked, 0o700); }
+});
+
+test.each(["before walk", "during walk"])("an absent checkout refuses inventory and retries after restoration (%s)", async disappearance => {
+  const parent = root(), repository = path.join(parent, "checkout"), directory = path.join(parent, "llv-stage-linked");
+  fs.mkdirSync(directory);
+  if (disappearance === "during walk") fs.mkdirSync(repository);
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    const entries = await readdir(target, options);
+    if (target === repository && disappearance === "during walk") fs.renameSync(repository, repository + "-previous");
+    return entries;
+  });
+  const inventory = new RepositoryLinkInventory({ now: () => 1_000 });
+  try { await expect(inventory.targets(repository)).rejects.toThrow(); }
+  finally { observed.mockRestore(); }
+  fs.mkdirSync(repository);
+  fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+  expect(await inventory.targets(repository)).toContain(directory);
+  expect(inventory.walks).toHaveLength(2);
+});
+
+test.skipIf(process.platform === "win32")("a large unrelated checkout allows reclaim and its nested link still holds scratch", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-large-checkout-"));
+  const repository = path.join(parent, "checkout"), directory = path.join(parent, "llv-stage-settled");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), "retained payload");
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  try {
+    for (let group = 0; group < 21; group++) {
+      await exec("sh", ["-c", 'mkdir "$1" && cd "$1" && seq 0 9999 | xargs touch', "sh", path.join(repository, String(group).padStart(2, "0"))], { timeout: 60_000 });
+    }
+    store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+    store.measure(directory, 4096); store.release(directory);
+    const link = path.join(repository, "20", "dependency"); fs.symlinkSync(directory, link, "dir");
+    const sweep = () => sweepAttemptTemps(store, { now: () => 2, maxRoots: 1, capBytes: 0, state: async () => "closed",
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, inventory),
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 999, namespace: null, stamped: false, paths: [repository] }] }) });
+    // Reuse the full inventory through the real sweep's deletion boundaries.
+    const inventory = new RepositoryLinkInventory();
+    expect(await sweep()).toMatchObject({ removed: 0, held: 1, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
+    expect(inventory.walks).toHaveLength(1);
+    fs.unlinkSync(link); store.defer(directory, 0);
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(inventory.walks).toHaveLength(2);
+  } finally { store.close(); await exec("rm", ["-rf", "--", parent], { timeout: 60_000 }); }
+}, 150_000);
+
+test("an absent checkout is never a successful empty inventory", async () => {
+  const inventory = new RepositoryLinkInventory();
+  const repository = path.join(root(), "gone");
+  await expect(inventory.targets(repository)).rejects.toThrow();
+  await expect(inventory.targets(repository)).rejects.toThrow();
+  expect(inventory.walks).toHaveLength(2);
+});
+
+test.each([1, 2, 3])("an absent consumer checkout keeps scratch at removal observation %i and permits later reclaim", async boundary => {
+  const parent = root(), directory = path.join(parent, "llv-stage-restored-consumer");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(repository, ".git"));
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-producer", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  let now = 1000, reads = 0, containers = 0;
+  let inventory = new RepositoryLinkInventory({ now: () => now });
+  const processes = [{ pid: 42, namespace: null, stamped: false, paths: [cwd] }];
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, capBytes: 0, state: async () => "closed",
+    scan: () => ({ ownNamespace: null, processes }),
+    references: async (original, current, scan) => {
+      if (++reads === boundary) { now += 10001; fs.renameSync(repository, repository + "-previous"); }
+      return attemptReferencesClear(original, current, scan, async () => {
+        containers++;
+        // This is the retained probe's former deletion window. An absent
+        // checkout must stop the observation before this await is reached.
+        if (reads === boundary) {
+          await Promise.resolve();
+          fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(repository, ".git"));
+          fs.symlinkSync(original, path.join(repository, "dependency"), "dir");
+        }
+        return true;
+      }, inventory);
+    } });
+  // Discover the consumer before its cwd disappears, as in the retained probe.
+  expect(inventory.repositoryOf(cwd)).toBe(repository);
+  try {
+    expect(await sweep()).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
+    expect(reads).toBe(boundary); expect(containers).toBe(boundary - 1);
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(path.join(repository, ".git"));
+    const link = path.join(repository, "dependency"); fs.symlinkSync(directory, link, "dir");
+    now += 60001; inventory = new RepositoryLinkInventory({ now: () => now });
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    fs.unlinkSync(link); now += 60001; inventory = new RepositoryLinkInventory({ now: () => now });
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { store.close(); }
 });
 
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture", "bmp-capture", "bmp-dispatch-capture", "bmp-fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async variant => {
@@ -237,3 +699,42 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
   expect(() => fs.readdirSync(privateRoot)).toThrow();
   expect(await inspectAttemptTree(directory)).toBe(kind === "uv" || kind === "internal");
 }, 60_000);
+
+
+test.skipIf(process.platform !== "linux")("a closed lane's checkout link stops holding scratch when its real consumer exits", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-dead-consumer");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "closed-lane", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--hold"], {
+    cwd: repository, env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  let now = 1000;
+  // Read only this fixture's PID. The shared machine's process inventory is
+  // outside this test's observations and cannot affect its removal result.
+  const scan = () => {
+    let cwd: string | undefined;
+    try { cwd = fs.readlinkSync(`/proc/${child.pid}/cwd`); } catch { /* Exited consumer. */ }
+    return { ownNamespace: null, processes: cwd ? [{ pid: child.pid, namespace: null, stamped: false, paths: [cwd] }] : [] };
+  };
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, state: async () => "closed", scan,
+    references: (original, current, observed) => attemptReferencesClear(original, current, observed, async () => true) });
+  try {
+    const reader = child.stdout.getReader();
+    const ready = await reader.read(); reader.releaseLock();
+    expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+    expect(await sweep()).toMatchObject({ removed: 0, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
+    child.stdin.end(); expect(await child.exited).toBe(0);
+    now += 60001;
+    expect(await sweep()).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.lstatSync(path.join(repository, "dependency")).isSymbolicLink()).toBeTrue();
+  } finally {
+    child.stdin.end();
+    if (child.exitCode === null) child.kill();
+    await child.exited; store.close();
+  }
+});

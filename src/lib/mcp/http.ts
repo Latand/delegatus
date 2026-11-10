@@ -6,7 +6,7 @@ import type { NextRequest } from "next/server";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } from "./taskExecutor";
-import { mcpHttpRefusal as refusal } from "./httpResponse";
+import { mcpHttpRefusal as refusal, MCP_REFUSAL_HEADER, MCP_CHECK_HEADER, MCP_CHECK_PATTERN } from "./httpResponse";
 import { MCP_MAX_REQUEST_BODY_BYTES } from "./inputLimits";
 import { logCallerIdentificationError } from "./callerIdentification";
 
@@ -18,6 +18,8 @@ import {
   MCP_HTTP_CLIENT_ID,
   MCP_TOOL_NAMES,
   taskExecutorFailure,
+  taskExecutorReplyLost,
+  isMutatingMcpTool,
   type McpToolName,
   type McpToolService,
 } from "./server";
@@ -145,6 +147,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
      Neither access credential replaces the launch identity checked below. */
   const crossOrigin = rejectCrossOrigin(request);
   if (crossOrigin) return crossOrigin;
+  const suppliedCheck = request.headers.get(MCP_CHECK_HEADER);
+  const check = suppliedCheck?.length === 36 && MCP_CHECK_PATTERN.test(suppliedCheck) ? suppliedCheck : undefined;
 
   let body: unknown;
   let nativePeer: import("@/lib/processIdentity").ProcessIdentity | undefined;
@@ -197,18 +201,19 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
       ? testDependencies.conversationForCapability(capability)
       : await productionConversationForCapability(capability);
   } catch (error) {
-    logCallerIdentificationError(error, capability);
-    return refusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.", { "retry-after": "1" });
+    logCallerIdentificationError(error, capability, "failed", { check });
+    return refusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.", { "retry-after": "1", [MCP_REFUSAL_HEADER]: "caller-identification" });
   }
   if (!executorAuthenticates && !conversationId) {
-    return refusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch.");
+    return refusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch.", { [MCP_REFUSAL_HEADER]: "capability-unknown" });
   }
 
   let service: McpToolService;
   try {
     service = await (testDependencies ? testDependencies.service() : productionService());
-  } catch {
-    return refusal(503, -32002, "The Viewer MCP tool service is not available yet; retry the call.");
+  } catch (error) {
+    logCallerIdentificationError(error, capability, "failed", { check, phase: "tool-service" });
+    return refusal(503, -32002, "The Viewer MCP tool service is not available yet; retry the call.", { [MCP_REFUSAL_HEADER]: "tool-service" });
   }
 
   try {
@@ -266,10 +271,17 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
       try {
         // Keep ingress parsing and executor admission on separate loop turns.
         await new Promise<void>(resolve => setImmediate(resolve));
-        return await viewerTaskExecutor().callHttpTool(requested, body, request,
-          nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability }, {
-            signal: registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal,
-          });
+        const signal = registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal;
+        const taskCaller = nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability };
+        const callOnce = () => viewerTaskExecutor().callHttpTool(requested, body, request, taskCaller, { signal });
+        try { return await callOnce(); }
+        catch (error) {
+          /* The executor stopped before its reply. The receipt under the
+             caller's own key answers the same call once more (#3757). */
+          const keyed = typeof (messages[0]?.params as { arguments?: { clientRequestId?: unknown } } | undefined)?.arguments?.clientRequestId === "string";
+          if (!taskExecutorReplyLost(error) || !isMutatingMcpTool(requested as McpToolName) || !keyed || signal.aborted) throw error;
+          return await callOnce();
+        }
       } catch (error) {
         const args = (messages[0]?.params as { arguments?: unknown } | undefined)?.arguments;
         const result = taskExecutorFailure(requested, args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {}, error);

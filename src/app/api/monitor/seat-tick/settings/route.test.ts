@@ -373,7 +373,7 @@ test("the module's rules hold verbatim, and a refusal stores nothing", async () 
     [{ project: PROJECT, enabled: false }, "instructions (reason) are required when the tick is disabled or its wake interval changes"],
     [{ project: PROJECT, wakeIntervalMinutes: -5, reason: "why" }, "wakeIntervalMinutes must be a positive number of minutes, or null for the default"],
     [{ project: PROJECT, wakeIntervalMinutes: SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES + 1, reason: "far too long" }, `must be at most ${SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES}`],
-    [{ project: PROJECT, monitorPrompt: "x".repeat(SEAT_TICK_PROMPT_LIMIT + 1) }, `the limit is ${SEAT_TICK_PROMPT_LIMIT}`],
+    [{ project: PROJECT, monitorPrompt: "x".repeat(SEAT_TICK_PROMPT_LIMIT + 1) }, `monitorPrompt must be at most ${SEAT_TICK_PROMPT_LIMIT} UTF-16 code units; actual length is ${SEAT_TICK_PROMPT_LIMIT + 1}`],
     [{ project: PROJECT, enabled: false, reason: "quiet", untilMinutes: 0 }, "untilMinutes must be a positive number of minutes"],
     [{ enabled: false, reason: "no project named" }, "project is required"],
   ] as const;

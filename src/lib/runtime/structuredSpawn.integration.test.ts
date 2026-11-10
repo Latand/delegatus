@@ -3796,6 +3796,7 @@ async function resumeOverOrphanWriterTree(
   label: string,
   tree: Awaited<ReturnType<typeof orphanWriterTree>>,
   orphanStop?: { graceMs: number; deadlineMs: number },
+  prepare?: (registry: AgentRegistry, conversationId: `conversation_${string}`, cwd: string) => void,
 ) {
   const sessionId = crypto.randomUUID();
   const cwd = path.join(sandbox, `${label}-${sessionId}`);
@@ -3806,6 +3807,7 @@ async function resumeOverOrphanWriterTree(
   const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
   const launchProfile = emptyLaunchProfile({ cwd, model: "gpt-5.6-luna" });
   const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  prepare?.(registry, conversation.id, cwd);
   const key = { engine: "codex" as const, sessionId };
   registry.upsert({
     key, artifactPath, cwd, accountId: "codex-subscription", launchProfile, status: "dead", host: null,
@@ -3872,6 +3874,51 @@ test("a resume starts no host while a terminal-row orphan's writer outlives its 
     await tree.stop();
   }
 }, 15_000);
+
+/* #3811: the conversation is a stage attempt the lane has parked. Its resume is
+   refused its stage binding, so the process the row still records, which may be
+   an agent at work, must not be stopped for a resume that cannot happen. */
+for (const parked of [true, false]) {
+  test(`a resume over a ${parked ? "parked" : "running"} stage attempt ${parked ? "is refused before the recorded process is stopped" : "still ends the recorded process"}`, async () => {
+    const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
+    const { savePipelines, pipelineIdentity } = await import("@/lib/pipelines/store");
+    const tree = await orphanWriterTree();
+    try {
+      // The lane's worktree path is derived from its repository and id.
+      const resumed = await resumeOverOrphanWriterTree("repo-pipeline", tree, undefined, (registry, conversationId, cwd) => {
+        Bun.spawnSync(["git", "init", "-q", cwd]);
+        fs.writeFileSync(path.join(cwd, ".git", "delegatus-stage-owner"), "fixture");
+        const [, lane] = pipelineCorpus(2, 2);
+        for (const stage of lane!.stages) if (stage.kind !== "run") Object.assign(stage, { kind: "run" });
+        lane!.id = path.basename(cwd).slice("repo-pipeline-".length);
+        lane!.repoDir = path.join(path.dirname(cwd), "repo");
+        Object.assign(lane!, pipelineIdentity(lane!.id, lane!.task!, lane!.repoDir));
+        expect(lane!.worktreeDir).toBe(cwd);
+        lane!.state = parked ? "needs_decision" : "running";
+        lane!.stateDetail = parked ? "provider recovery parked" : null;
+        lane!.cursor = { ...lane!.cursor!, stageId: "build", state: "running" };
+        Object.assign(lane!.runs.find(run => run.stageId === "build")!.attempts.at(-1)!, {
+          state: parked ? "needs_decision" : "running", verdict: null, completedAt: null, launchId: "launch-parked-stage", conversationId,
+          error: parked ? "provider recovery parked" : null });
+        savePipelines([lane!]);
+        registry.rememberMembership(conversationId, { kind: "pipeline", containerId: lane!.id, role: "builder", slot: "build:2",
+          stageId: "build", stageOrder: 0, round: 2, parentConversationId: null });
+      });
+      if (parked) {
+        expect(resumed.outcome).toBe("stage Git rehost cannot prove its original attempt");
+        expect(resumed.atStart).toEqual([]);
+        expect(tree.engineAlive()).toBe(true);
+        expect(tree.toolAlive()).toBe(true);
+        expect(resumed.row?.structuredHost?.process).toEqual(tree.engine);
+      } else {
+        expect(tree.engineAlive()).toBe(false);
+        expect(tree.toolAlive()).toBe(false);
+      }
+    } finally {
+      await tree.stop();
+    }
+  }, 15_000);
+}
 
 test("a resume claim loser leaves the winning writer projection and ownership intact", async () => {
   const sessionId = crypto.randomUUID();

@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { create, harness, tickPipelines, loadPipelines, savePipelines, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, accountManager } from "./engine.fixture";
 import { RoleMemoryChanged } from "@/lib/memory/privacy";
-import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
+import { ROLE_MEMORY_PREPARATION_MESSAGE, ROLE_MEMORY_CHANGED_MESSAGE, recordLessonRequest, roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { sharedLinkState } from "@/lib/links/runtimeState";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -34,7 +34,7 @@ function write(rule: string) {
 }
 afterEach(shutdownTaskPageWorker);
 
-test.each(["before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
+test.each(["preparation-codex", "preparation-claude", "preparation-lost-transition-codex", "preparation-lost-dead-codex", "preparation-lost-receipt-codex", "preparation-lost-admission-codex", "preparation-staged-codex", "before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
   "replay-codex", "replay-claude", "replay-native-codex", "replay-native-claude",
   "before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling",
   ...["exact", "suffix", "exact-native", "suffix-native"].flatMap(mode =>
@@ -44,6 +44,8 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   ...["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "unregister", "release", "native", "late-native", "unreadable", "reaper", "retry-twice", "retry-uncertain", "retry-twice-native", "retry-uncertain-native", "retry-twice-late-native"].flatMap(mode =>
     ["codex", "claude"].map(engine => `unsettled-${mode}-${engine}`))] as const)(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
+  const preparation = scenario.startsWith("preparation-");
+  const stagedPreparation = scenario === "preparation-staged-codex";
   const laterFailure = scenario.startsWith("later-failure-");
   const laterNative = laterFailure && scenario.includes("-native-");
   const timing = laterFailure ? scenario.includes("-exact-") ? "before-dispatch" : "before-authorization" : scenario.startsWith("before-handoff") || scenario.startsWith("replay") ? "before-handoff" : scenario;
@@ -104,8 +106,28 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   let lateNative = false;
   let refusedWrites = 0;
   let journalReadFailed = false;
+  const preparationClocks: Array<{ mockRestore: () => void }> = [];
   const journalMode = manual || ["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified"].includes(mode!);
   const failSpawn = registry.failStructuredSpawnOffLoop.bind(registry);
+  const deliveryWrite = registry.deliveryWrite.bind(registry);
+  const admissionRelease = spyOn(registry, "deliveryWrite").mockImplementation(async (options, operation) => {
+    const result = await deliveryWrite(options, operation);
+    if (scenario === "preparation-lost-admission-codex" && options.label === "spawn.admission.release" && launches.length === 1) {
+      throw new Error("fixture admission release acknowledgement lost");
+    }
+    return result;
+  });
+  const originalRecoveryWrite = registry.deliveryWriteOrBusy.bind(registry);
+  let recoveryAckLost = false;
+  const recoveryWrite = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (options, operation) => {
+    const result = await originalRecoveryWrite(options, operation);
+    if (stagedPreparation && !recoveryAckLost && options.label === "registry.staged-recovery"
+      && registry.spawnReceipt(launches[0]!)?.error?.includes("role memory could not be read or filtered")) {
+      recoveryAckLost = true;
+      throw new Error("fixture recovery diagnostic acknowledgement lost");
+    }
+    return result;
+  });
   const failure = spyOn(registry, "failStructuredSpawnOffLoop").mockImplementation(async (...args) => {
     if (mode === "late-native" && observing && !lateNative) {
       lateNative = true;
@@ -115,7 +137,11 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
         : { type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
     }
     if (!unsettled || refusedWrites || args[1] !== ROLE_MEMORY_CHANGED_MESSAGE
-      || !(uncertain || ["refused-writer", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "reaper", "native", "late-native", "unreadable"].includes(mode!))) return failSpawn(...args);
+      || !(uncertain || ["refused-writer", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "reaper", "native", "late-native", "unreadable"].includes(mode!))) {
+      const result = await failSpawn(...args);
+      if (scenario === "preparation-lost-receipt-codex" && result.claimed && launches.length === 1) throw new Error("fixture receipt acknowledgement lost");
+      return result;
+    }
     const holder = new Database(path.join(root, "registry.sqlite"));
     holder.exec("PRAGMA busy_timeout = 0"); holder.exec("BEGIN IMMEDIATE");
     try {
@@ -168,7 +194,11 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       return journal.operationResult(id);
     },
     events: async after => journal.replay(after),
-    transitionOperation: async (id, status, details, options) => journal.transitionOperation(id, status, details, options),
+    transitionOperation: async (id, status, details, options) => {
+      const result = journal.transitionOperation(id, status, details, options);
+      if (scenario === "preparation-lost-transition-codex" && status === "failed" && launches.length === 1) throw new Error("fixture acknowledgement lost");
+      return result;
+    },
     effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
     command: async command => {
       const result = journal.executeOperation(command);
@@ -299,7 +329,17 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       },
     };
     hosts.set(input.receipt.conversationId, host);
-    try { return await realSpawn({ ...input, ...(unsettled && !journalMode && launches.length === 1 ? {
+    let preparationTime = 0;
+    const preparationClock = preparation && launches.length === 1
+      ? spyOn(performance, "now").mockImplementation(() => preparationTime) : undefined;
+    if (preparationClock && stagedPreparation) preparationClocks.push(preparationClock);
+    try { return await realSpawn({ ...input, ...(preparation && launches.length === 1 ? {
+      preparePrompt: async () => {
+        changed = true;
+        preparationTime += 180_000;
+        return input.preparePrompt!();
+      },
+    } : {}), ...(unsettled && !journalMode && launches.length === 1 ? {
       preparePrompt: async () => {
         const prompt = await input.preparePrompt!();
         write(`${newRule} revision ${++churn}`); changed = true;
@@ -358,14 +398,25 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
         } });
         return () => {
           const current = target.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]?.structuredHost;
-          if (dead && current) target.setStructuredHostClaimed(key, { ...current, process: null }, "dead", owner, epoch, true);
+          if (dead && current) {
+            target.setStructuredHostClaimed(key, { ...current, process: null }, "dead", owner, epoch, true);
+            if (scenario === "preparation-lost-dead-codex" && launches.length === 1) throw new Error("fixture dead projection acknowledgement lost");
+          }
         };
       },
-      publishHost: async () => async () => {
+      publishHost: async () => {
+        if (stagedPreparation && launches.length === 1 && !changed) {
+          changed = true;
+          write(newRule);
+          throw Object.assign(new Error("fixture runtime publication returned HOST_BUSY"), { code: "HOST_BUSY" });
+        }
+        return async () => {
         if (["unregister", "refused-unregister"].includes(mode!) && launches.length === 1) throw new Error("fixture unregister refused");
+        };
       },
       processIdentity: () => ({ pid: process.pid, startIdentity: "privacy-fixture" }),
     }); } finally {
+      if (!stagedPreparation) preparationClock?.mockRestore();
       if (unknown && launches.length === 1) {
         const first = registry.spawnReceipt(input.receipt.launchId)!;
         if (unknownMode === "native") fs.writeFileSync(first.artifactPath!, JSON.stringify(engine === "codex"
@@ -393,7 +444,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       finally { reader.releaseLock(); }
     }
     const h = harness();
-    if (scenario.startsWith("staged") || unsettled) h.advanceWallClock(Date.now() - Date.parse(h.ports.now()));
+    if (scenario.startsWith("staged") || stagedPreparation || unsettled) h.advanceWallClock(Date.now() - Date.parse(h.ports.now()));
     const defaults = defaultPipelinePorts();
     h.ports.spawnAgent = (input, reserved, prepare) => defaults.spawnAgent(input, async receipt => {
       await reserved(receipt);
@@ -442,6 +493,21 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
     expect(launches, loadPipelines()[0]!.stateDetail ?? "").toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
+    if (preparation && !stagedPreparation) {
+      const first = registry.spawnReceipt(launches[0]!)!;
+      if (scenario !== "preparation-lost-dead-codex") expect(first.error).toBe(ROLE_MEMORY_PREPARATION_MESSAGE);
+      expect(journal.operationResult(originalId)).toBeNull();
+      journal.close(); journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+      savePipelines(loadPipelines());
+      for (let tick = 0; tick < 8; tick++) { h.advanceWallClock(31_000); await tickPipelines([], h.ports); }
+      expect(launches).toHaveLength(2);
+      expect(sent.map(entry => entry.id)).toEqual([`spawn_message_${launches[1]}`]);
+      expect(registry.spawnReceipt(launches[0]!)!.error).toBe(ROLE_MEMORY_PREPARATION_MESSAGE);
+      expect(journal.operationResult(originalId)).toBeNull();
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      return;
+    }
     if (laterFailure || manual) {
       let claimedRetries = 0;
       const { patchPipeline } = await import("./engine");
@@ -593,13 +659,21 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       expect(loadPipelines()[0]!.state).toBe("running");
       return;
     }
-    if (scenario.startsWith("staged")) {
+    if (scenario.startsWith("staged") || stagedPreparation) {
       expect(registry.spawnReceipt(launches[0]!)!.state).toBe("path-pending");
       expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.roleMemoryDispatchWait).toBeUndefined();
       for (let tick = 0; tick < 6; tick++) {
         h.advanceWallClock(1_000); setSystemTime(new Date(h.ports.now())); await tickPipelines([], h.ports);
       }
-      expect(registry.spawnReceipt(launches[0]!)!.error).toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+      if (stagedPreparation) {
+        expect(recoveryAckLost).toBe(true);
+        expect(registry.spawnReceipt(launches[0]!)!.state).toBe("failed");
+        expect(launches).toHaveLength(2);
+        expect(sent.map(entry => entry.id)).toEqual([`spawn_message_${launches[1]}`]);
+        expect(loadPipelines()[0]!.state).toBe("running");
+        expect(journal.operationResult(originalId)).toBeNull();
+      }
+      expect(registry.spawnReceipt(launches[0]!)!.error).toBe(stagedPreparation ? ROLE_MEMORY_PREPARATION_MESSAGE : ROLE_MEMORY_CHANGED_MESSAGE);
       expect(launches).toHaveLength(scenario.includes("native") ? 1 : 2);
       expect(sent).toHaveLength(scenario.includes("native") ? 0 : 1);
       expect(loadPipelines()[0]!.state).toBe("running");
@@ -703,7 +777,8 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     expect(roleMemoryRevisionToken()).not.toBe(JSON.parse(originalEffect!).payload.roleMemoryRevision);
   } finally {
     if (termination) { if (termination.exitCode === null) termination.stdin.end(); await termination.exited; }
-    failure.mockRestore(); deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
+    for (const clock of preparationClocks) clock.mockRestore();
+    recoveryWrite.mockRestore(); admissionRelease.mockRestore(); failure.mockRestore(); deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
     ids.mockRestore();
     setSystemTime();
     setAgentRegistryForTests(null);
@@ -743,8 +818,15 @@ test.each([
   const prepared = loadPipelines()[0]!;
   fs.mkdirSync(prepared.worktreeDir!, { recursive: true });
   await tickPipelines([], h.ports);
-  const pipeline = loadPipelines()[0]!;
   expect(changed).toBe(true);
+  if (h.spawnInputs.length === 0) {
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.roleMemoryWait).toBeDefined();
+    for (let tick = 0; tick < 8 && h.spawnInputs.length === 0; tick++) {
+      h.advanceWallClock(31_000); await tickPipelines([], h.ports);
+    }
+  }
+  const pipeline = loadPipelines()[0]!;
   expect(pipeline.stateDetail).toBeNull();
   expect(pipeline.state).toBe("running");
   expect(h.spawnInputs).toHaveLength(1);
@@ -758,7 +840,7 @@ test.each([
 }, 30_000);
 
 
-test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as const)("admission rechecks privacy and activation before dispatch: %s", async mode => {
+test.each(["reclassify", "file-reclassify", "request", "churn", "corrupt", "pause"] as const)("admission rechecks privacy and activation before dispatch: %s", async mode => {
   savePipelines([]);
   write(oldRule);
   const h = harness();
@@ -807,18 +889,23 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
       ++reservations;
       if (reservations < 2) return;
       if (mode === "pause") throw new Error("activation superseded in fixture");
+      if (mode === "request") recordLessonRequest({ project: "fixture", pipelineId: "unrelated-reservation", stageId: "build", attempt: reservations,
+        roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
       if (mode === "churn") write(`${newRule} revision ${reservations}`);
       if ((mode === "reclassify" || mode === "file-reclassify") && reservations === 2) write(newRule);
       if (mode === "corrupt") {
         roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: 7, rule: newRule } as never));
       }
     }, preparePrompt);
-    if (mode === "reclassify" || mode === "file-reclassify") {
+    if (mode === "reclassify" || mode === "file-reclassify" || mode === "request") {
       await launch;
-      expect(reservations).toBe(3);
+      expect(reservations).toBe(mode === "request" ? 2 : 3);
       expect(sent).toHaveLength(1);
-      expect(sent[0]).not.toContain(newRule);
-      expect(sent[0]).toContain("[learned rule]");
+      if (mode === "request") expect(sent[0]).toContain(newRule);
+      else {
+        expect(sent[0]).not.toContain(newRule);
+        expect(sent[0]).toContain("[learned rule]");
+      }
       if (mode === "file-reclassify") {
         const file = sent[0]!.match(/Full (?:stage prompt|specification) file: (.+)\n/)?.[1];
         expect(file).toBeDefined();
@@ -864,7 +951,7 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
   }
 }, 30_000);
 
-test.each([false, true] as const)("the real structured spawn refreshes role memory after runtime admission (file-backed=%s)", async fileBacked => {
+test.each([false, true].flatMap(fileBacked => ["rule", "request", "none"].map(kind => ({ fileBacked, kind }))))("the real structured spawn refreshes role memory after runtime admission (file-backed=$fileBacked, change=$kind)", async ({ fileBacked, kind }) => {
   savePipelines([]);
   write(oldRule);
   const h = harness();
@@ -885,6 +972,13 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
   fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
   await tickPipelines([], h.ports);
   const input = h.spawnInputs[0]!;
+  const preparedRevision = roleMemoryRevisionToken();
+  let requestAttempt = 0;
+  const change = (text: string) => {
+    if (kind === "rule") write(text);
+    if (kind === "request") recordLessonRequest({ project: "fixture", pipelineId: "unrelated", stageId: "build", attempt: ++requestAttempt,
+      roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
+  };
   input.cwd = path.join(process.env.LLV_STATE_DIR!, `late-dispatch-cwd-${fileBacked}`);
   fs.mkdirSync(input.cwd, { recursive: true });
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `late-dispatch-registry-${fileBacked}.json`));
@@ -899,12 +993,16 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
     transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
   }});
   const runtime = spyOn(clientModule, "runtimeHostClient").mockReturnValue({
-    command: async () => { write(newRule); return undefined; },
+    command: async () => { change(newRule); return undefined; },
     transitionOperation: async () => undefined,
   } as never);
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
   const sent: string[] = [];
   let handedToHost = false;
+  const filter = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(function(this: TaskPageWorker, request) {
+    return filter.call(this, request);
+  });
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async launch => await realSpawn(launch, {
     startHost: async () => ({ identity: { threadId: fixtureThreadId, path: path.join(input.cwd, "session.jsonl") },
       health: async () => ({ status: "idle", sessionKey: fixtureThreadId, endpoint: "fixture", pid: process.pid,
@@ -915,12 +1013,13 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
     publishHost: async () => async () => {},
     deliverFirst: async delivered => {
       sent.push(delivered.prompt);
-      expect(delivered.prompt).not.toContain(newRule);
-      write(`${newRule} changed while first delivery was held`);
+      if (kind === "rule") expect(delivered.prompt).not.toContain(newRule);
+      else expect(delivered.prompt).toContain(newRule);
+      change(`${newRule} changed while first delivery was held`);
       let refused = false;
       try { await delivered.authorize?.(); }
       catch (error) { refused = error instanceof Error && error.message.includes("Role-memory privacy changed"); }
-      expect(refused).toBe(true);
+      expect(refused).toBe(kind === "rule");
       if (!refused) handedToHost = true;
       return "held";
     },
@@ -930,17 +1029,23 @@ test.each([false, true] as const)("the real structured spawn refreshes role memo
   try {
     await defaultPipelinePorts().spawnAgent(input, () => {}, preparePrompt);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).not.toContain(newRule);
-    expect(sent[0]).toContain("[learned rule]");
+    if (kind === "rule") {
+      expect(sent[0]).not.toContain(newRule);
+      expect(sent[0]).toContain("[learned rule]");
+    } else expect(roleMemoryRevisionToken()).toBe(preparedRevision);
     const file = sent[0]!.match(/Full (?:stage prompt|specification) file: (.+)\n/)?.[1];
     expect(Boolean(file)).toBe(fileBacked);
     if (file) {
       const fullPrompt = fs.readFileSync(file, "utf8");
-      expect(fullPrompt).not.toContain(newRule);
-      expect(fullPrompt).toContain("[learned rule]");
+      if (kind === "rule") {
+        expect(fullPrompt).not.toContain(newRule);
+        expect(fullPrompt).toContain("[learned rule]");
+      } else expect(fullPrompt).toContain(newRule);
     }
-    expect(handedToHost).toBe(false);
+    expect(handedToHost).toBe(kind !== "rule");
+    if (kind !== "rule") expect(worker).toHaveBeenCalledTimes(0);
   } finally {
+    worker.mockRestore();
     resolve.mockRestore(); runtime.mockRestore(); guard.mockRestore(); spawn.mockRestore(); setAgentRegistryForTests(null);
   }
 }, 30_000);
@@ -963,7 +1068,7 @@ test("continuous memory writes defer the launch and the next stable tick sends o
     return await exec(...args);
   };
   await tickPipelines([], h.ports);
-  expect(writes).toBe(3);
+  expect(writes).toBe(1);
   expect(loadPipelines()[0]!.state).toBe("running");
   expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
   expect(h.spawnInputs).toHaveLength(0);

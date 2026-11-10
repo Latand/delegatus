@@ -1,13 +1,18 @@
 import type { TaskRefusal } from "./commands";
 import type { BoardTask } from "./types";
+import { textLengthError } from "@/lib/textLimits";
 
 export const FINDING_KEY_LIMIT = 200;
 
 /** Opaque: retain whitespace and case, and count Unicode characters. */
 export function readFindingKey(value: unknown): { ok: true; key?: string } | TaskRefusal {
   if (value === undefined || value === null) return { ok: true };
-  if (typeof value !== "string" || value.length > FINDING_KEY_LIMIT * 2 || [...value].length > FINDING_KEY_LIMIT) {
-    return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "findingKey", error: `findingKey must be a string of at most ${FINDING_KEY_LIMIT} characters` };
+  if (typeof value !== "string") {
+    return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "findingKey", error: "findingKey must be a string" };
+  }
+  const length = [...value].length;
+  if (length > FINDING_KEY_LIMIT) {
+    return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "findingKey", error: textLengthError("findingKey", length, FINDING_KEY_LIMIT, "Unicode code points") };
   }
   return { ok: true, key: value };
 }

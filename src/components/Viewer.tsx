@@ -56,6 +56,7 @@ import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { useDrainDecisionsLeaving } from "./selfUpdate/AutoDrainDecision";
+import { SettingsWindowHost } from "./settings/SettingsWindow";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LearnedRulesWindowHost } from "./roleMemory/LearnedRules";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
@@ -64,8 +65,6 @@ import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
 import { VoiceCompanionHost } from "./voiceCompanion/VoiceCompanionHost";
-import { VoiceCompanionSettingsHost } from "./voiceCompanion/VoiceCompanionSetting";
-import { onOpenKeys } from "./keys/openKeys";
 import { focusHandoffBus } from "./attention/focusHandoffBus";
 import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
 import { textField } from "./kanban/taskText";
@@ -150,21 +149,31 @@ export function recognizedFragment(hash: string, { phone = false }: { phone?: bo
 /** `requested`: the catalog request names this path. False while the plain
     catalog holds the conversation; it turns true when a confirmed payload no
     longer carries it, and the pinned payload that follows decides its fate. */
-export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null; requested: boolean } | null;
+export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null; requested: boolean; pin: string | null } | null;
+/** `pin`: the request pin the row was resolved under, kept as the scope that
+    already answered. Absent for a row the catalog list or search opened, whose
+    own path is its pin. */
 export type CatalogPinEvent =
-  | { kind: "open"; path: string; conversationId?: string; unpinned?: boolean }
-  | { kind: "resolve"; path: string; conversationId?: string; unpinned?: boolean }
+  | { kind: "open"; path: string; conversationId?: string; unpinned?: boolean; pin?: string | null }
+  | { kind: "resolve"; path: string; conversationId?: string; unpinned?: boolean; pin?: string | null }
   | { kind: "release"; path?: string }
   | { kind: "files"; paths: ReadonlySet<string>; pending: boolean; currentPath?: string };
 
 export function reduceCatalogPin(state: CatalogPinState, event: CatalogPinEvent): CatalogPinState {
-  if (event.kind === "open") return { path: event.path, hydrated: false, conversationId: event.conversationId ?? null, requested: !event.unpinned };
-  if (event.kind === "resolve") return { path: event.path, hydrated: true, conversationId: event.conversationId ?? null, requested: !event.unpinned };
+  if (event.kind === "open") return { path: event.path, hydrated: false, conversationId: event.conversationId ?? null, requested: !event.unpinned, pin: event.pin ?? null };
+  if (event.kind === "resolve") return { path: event.path, hydrated: true, conversationId: event.conversationId ?? null, requested: !event.unpinned, pin: event.pin ?? null };
   if (event.kind === "release") return !event.path || state?.path === event.path ? null : state;
   if (!state) return state;
   const current = event.currentPath && event.currentPath !== state.path ? { ...state, path: event.currentPath } : state;
   if (current.hydrated && !event.pending && !event.paths.has(current.path)) return current.requested ? null : { ...current, requested: true };
   return current;
+}
+
+/** The request pin an open catalog conversation holds on its own: the scope its
+    link resolved under, else its transcript path; none while the plain catalog
+    holds it. */
+export function retainedCatalogPin(state: CatalogPinState): string | null {
+  return state?.requested ? (state.pin ?? state.path) : null;
 }
 
 /** The URL a project selection lands on: the project hash, or the bare route
@@ -180,6 +189,11 @@ function projectUrl(project: string): string {
     then the intent clears so the failure is visible and later history actions
     stay usable. */
 const STALE_FOCUS_REPLAY_MS = 8_000;
+
+/** How long a pasted link stays unresolved before the shell says it is
+    opening it: a link the plain catalog answers opens well inside this, so a
+    fast open never flashes the notice. */
+const LINK_PENDING_NOTICE_MS = 1_000;
 
 /** How long the unknown-fragment notice stays up before it dismisses itself.
     The stale-conversation notice never self-dismisses: an unresolved deep link
@@ -270,7 +284,10 @@ function ViewerApp() {
      new object and starts without a pin. */
   const [hashPinFor, setHashPinFor] = useState<ConversationHash | null>(null);
   const wantsHashPin = pendingHash !== null && hashPinFor === pendingHash;
-  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, archivedProjects: serverArchivedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
+  /* The link that has waited long enough to be announced, held by identity: a
+     new link starts its own wait. */
+  const [pendingNoticeFor, setPendingNoticeFor] = useState<ConversationHash | null>(null);
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, archivedProjects: serverArchivedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, retainedCatalogPin(catalogPin), wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -828,14 +845,6 @@ function ViewerApp() {
       return next;
     });
   }, []);
-  /* «Open Keys» from a place that asked for a key (docs/design/keys-settings.md
-     §4): the phone opens its menu sheet, and a desktop with the rail put away
-     brings the rail back, whose ⋯ menu then opens on «Keys». */
-  useEffect(() => onOpenKeys(() => {
-    if (isMobile) { if (mobileNav.getState().sheet !== "menu") mobileNav.openSheet("menu"); }
-    else setRailHidden(false);
-  }), [isMobile, mobileNav]);
-
   /* The overview board has no project view state to report: presence publishes
      the overview context/slice here, and ProjectDashboard takes over the moment
      a project opens. */
@@ -898,13 +907,13 @@ function ViewerApp() {
      the node after the transient hash intent resolves. A conversation the
      plain catalog already carries is not pinned: the pin is a request scope of
      its own and brings the whole catalog down again. */
-  const openPinnedFile = useCallback((file: FileEntry, hydrated = false) => {
+  const openPinnedFile = useCallback((file: FileEntry, hydrated = false, pin: string | null = null) => {
     /* On the phone's Overview every landing (a replay, a search result, a
        pasted link, a catalog row) opens the conversation as a screen over it
        and keeps the Overview, so ‹ comes back to it (#2098). */
     if (overviewPhoneRef.current) {
       setStaleFocusNotice(false);
-      dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current) });
+      dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current), pin });
       openOverOverview(file, { catalog: true });
       return;
     }
@@ -913,7 +922,7 @@ function ViewerApp() {
        viewer is now showing a conversation, so the failure claim is over. */
     setStaleFocusNotice(false);
     queueColumnOpen(key, file.path, isChildConversation(file));
-    dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current) });
+    dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current), pin });
     setProject(key);
     localStorage.setItem(PROJECT_KEY, key);
     setOpenNonce((value) => value + 1);
@@ -975,10 +984,13 @@ function ViewerApp() {
        `#f=` link to a demoted archived predecessor resolves once that poll
        lands instead of being cleared after the first cap-limited payload. */
     if (hit) {
-      openPinnedFile(hit, true);
+      /* The scope that answered keeps serving the row: moving the pin to the
+         transcript path would be a second cold scope, with nothing cached
+         behind it, that drops the row until it answers. */
+      openPinnedFile(hit, true, wantsHashPin ? filesRequestPin(pendingHash, null, true) : null);
       setPendingHash(null);
     }
-  }, [pendingHash, allFiles, conversationAliases, launchRoutes, openPinnedFile]);
+  }, [pendingHash, wantsHashPin, allFiles, conversationAliases, launchRoutes, openPinnedFile]);
   /* The plain catalog answered and does not carry the target (a conversation
      beyond its cap, an archived predecessor, an id it has never seen): only
      now does the link ask for the exact transcript. */
@@ -1011,6 +1023,14 @@ function ViewerApp() {
     }, STALE_FOCUS_REPLAY_MS);
     return () => window.clearTimeout(timer);
   }, [pendingHash, wantsHashPin, loaded, scopeCertified]);
+
+  /* A link that is still looking for its conversation says so, so the board
+     underneath is never read as the answer. */
+  useEffect(() => {
+    if (!pendingHash) return;
+    const timer = window.setTimeout(() => setPendingNoticeFor(pendingHash), LINK_PENDING_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [pendingHash]);
 
   const releaseCatalogFile = useCallback((path: string) => {
     dispatchCatalogPin({ kind: "release", path });
@@ -2026,6 +2046,20 @@ function ViewerApp() {
         </BarNeedsFilterProvider>
         </BoardPaneProvider>
         <StateWritesAlert storage={systemHealth.storage} />
+        {/* A pasted link still looking for its conversation says so. It is a strip in
+            the column's flow under the board, as the storage alert is, so the board
+            gives it a line of its own and no text of the board is drawn under it.
+            The not-found notice replaces it. */}
+        {pendingHash && pendingNoticeFor === pendingHash && !staleFocusNotice && !unknownFragmentNotice ? (
+          <div
+            role="status"
+            data-link-pending-notice={catalogFailures > 0 ? "retrying" : "opening"}
+            className={`shrink-0 border-t px-3 py-1.5 text-center text-[12px] font-semibold ${catalogFailures > 0 ? "border-warning/45 bg-warning-soft text-warning" : "border-border bg-card text-primary"}`}
+            style={{ paddingBottom: "max(0.375rem, env(safe-area-inset-bottom))" }}
+          >
+            {t(catalogFailures > 0 ? "viewer.linkRetrying" : "viewer.linkOpening")}
+          </div>
+        ) : null}
       </main>
       {panelDocked ? panel("docked") : null}
       {/* Runtime connection pill — mounts the tab-wide bus and shows live /
@@ -2072,10 +2106,10 @@ function ViewerApp() {
       <SelfUpdateHost />
       <LinkedSettingsHost />
       <TelemetrySettingsHost />
+      {/* The one Settings window: the header menu's Settings, «Open Keys» and the install notice open it. */}
+      <SettingsWindowHost project={project === OVERVIEW ? null : project} />
       {/* Role memory's rules window, opened from the board's ⋯ and from a stage report's rule line. */}
       <LearnedRulesWindowHost />
-      {/* #2519: the voice companion's settings, from the desktop menu's Settings page and the companion's own notice. */}
-      <VoiceCompanionSettingsHost />
       <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card

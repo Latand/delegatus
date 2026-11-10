@@ -90,6 +90,16 @@ export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/** The parsed-entity cache has to hold one whole snapshot population in both
+    session representations. A cap below that population makes every rebuild
+    evict the rows it is about to read, in the same order, so each rebuild
+    parses every stored row again. One entity above the admission size is
+    never retained. */
+export const RUNTIME_ENTITY_READ_CACHE_ENTRIES = 65_536;
+export const RUNTIME_ENTITY_READ_CACHE_BYTES = 64 * 1024 * 1024;
+export const RUNTIME_ENTITY_READ_ADMISSION_BYTES = 16 * 1024 * 1024;
+// The eviction loop ends only when one admitted entity fits an empty cache.
+if (RUNTIME_ENTITY_READ_ADMISSION_BYTES > RUNTIME_ENTITY_READ_CACHE_BYTES) throw new Error("runtime entity read admission limit exceeds the cache size");
 /** A spawn or kill may wait through a short host succession. After one
     continuous hour with no runtime host and no current live registry
     conversation, the maintenance sweep terminalizes the orphaned work so
@@ -447,6 +457,9 @@ export class RuntimeJournal {
   private entityReadMaintenanceChanges = 0;
   private readingSnapshot = false;
   snapshotProjectionReads = 0;
+  /** Entities the cache dropped to make room. A count that grows on every
+      rebuild means one snapshot population no longer fits the cache. */
+  snapshotEntityEvictions = 0;
   /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
   snapshotCacheHits = 0;
   snapshotRebuilds = 0;
@@ -1239,10 +1252,10 @@ export class RuntimeJournal {
       if (stopCompleted && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
-      // Steer-first fallback follows the next live turn. Keep the observed turn
-      // on its receipt, without pinning the durable effect to the ended turn.
+      // Policies that select a running turn at dispatch retain its identity on
+      // the receipt. A proven pre-write refusal can then retry when idle.
       if (beginning && (command.kind === "send" || command.kind === "steer")
-        && command.policy !== "steer-or-queue" && details.turnId !== undefined) {
+        && command.policy !== "steer-or-queue" && command.policy !== "context-or-queue" && details.turnId !== undefined) {
         const effect = this.db.query<{ payload_json: string }, [string]>("SELECT payload_json FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`);
         if (!effect) throw new Error("runtime operation effect is missing");
@@ -3550,10 +3563,11 @@ export class RuntimeJournal {
     const value = sessionPresentation && (parsed as RuntimeSession).turn !== "running"
       ? { ...(parsed as RuntimeSession), liveTurn: null } as T : parsed;
     const bytes = sessionPresentation ? Buffer.byteLength(JSON.stringify(value)) : Buffer.byteLength(row.state_json);
-    if (bytes <= 16 * 1024 * 1024) {
-      while (this.entityReads.size >= 8192 || this.entityReadBytes + bytes > 16 * 1024 * 1024) {
+    if (bytes <= RUNTIME_ENTITY_READ_ADMISSION_BYTES) {
+      while (this.entityReads.size >= RUNTIME_ENTITY_READ_CACHE_ENTRIES || this.entityReadBytes + bytes > RUNTIME_ENTITY_READ_CACHE_BYTES) {
         const oldest = this.entityReads.keys().next().value!;
         this.evictEntityRead(oldest);
+        this.snapshotEntityEvictions++;
       }
       this.entityReads.set(key, { value, bytes }); this.entityReadBytes += bytes;
       this.entityReadMaintenanceChanges += this.db.query("INSERT OR REPLACE INTO snapshot_entity_keys(key,kind,id) VALUES (?,?,?)").run(key,kind,id).changes;

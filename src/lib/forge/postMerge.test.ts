@@ -296,8 +296,8 @@ test("a committed fix creation with a lost response replays the same durable key
   const f = fixture();
   const create = f.ports.create;
   let lost = true;
-  f.ports.create = async (request, receipt, lineage) => {
-    const result = await create(request, receipt, lineage);
+  f.ports.create = async (request, receipt, lineage, source) => {
+    const result = await create(request, receipt, lineage, source);
     if (lost) { lost = false; throw new Error("response lost"); }
     return result;
   };
