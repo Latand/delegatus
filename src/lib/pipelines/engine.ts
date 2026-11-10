@@ -128,9 +128,7 @@ import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasks, loadTasksByIds } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
-import { isShellCommand } from "@/lib/status";
 import { cleanTitle } from "@/lib/title";
-import { killTmuxHostIfMatches, paneInfo, panePidMap } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
@@ -1305,63 +1303,6 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
   };
 }
 
-export type StagePaneProbes = {
-  killHostIfMatches?: (host: TmuxHostEvidence) => Promise<boolean>;
-  /** What the pane shows right now. Null when tmux has no such pane. */
-  paneSnapshot?: (paneId: string) => Promise<{ windowName: string; command: string } | null>;
-};
-
-/**
- * Last resort for a pane-hosted stage agent, gated on identity rather than
- * liveness. A tmux pane id is unique only within one server lifetime and
- * restarts at %0, while the attempt's stored id outlives that — and this path
- * runs exactly when the registry has no resident host, which is when a stale id
- * is most likely. "This pane runs something that is not a shell" would therefore
- * happily kill an unrelated agent, so the kill goes through
- * killTmuxHostIfMatches, which verifies the tmux server, the pane pid, the
- * window name and the agent's process start identity before signalling. Without
- * durable evidence to match, nothing is killed: the host is reported unknown so
- * the operator decides. A refused close is a nuisance; killing someone else's
- * agent is not recoverable.
- */
-export async function stopPipelineStagePane(
-  target: PipelineStageHostRef,
-  probes: StagePaneProbes = {},
-): Promise<{ outcome: "stopped" | "not-running" } | { outcome: "unknown"; detail: string } | { outcome: "failed"; error: string }> {
-  const paneId = target.paneId;
-  if (!paneId) return { outcome: "not-running" };
-  const snapshot = probes.paneSnapshot ?? paneInfo;
-  /* Name what the pane actually shows. An operator handed "pane %3 now runs
-     codex in window review" can find it in tmux and decide; "it could not be
-     identified" alone leaves them nothing to act on. */
-  const describe = (info: { windowName: string; command: string } | null): string =>
-    info ? `pane ${paneId} now runs ${info.command} in window ${info.windowName}` : `pane ${paneId}`;
-  try {
-    const probe = await stageHostProbe(target);
-    const host = probe?.host() ?? null;
-    if (!host || host.paneId !== paneId) {
-      /* No durable evidence ties this id to this agent. Report what is there,
-         but never signal it. */
-      const info = await snapshot(paneId);
-      if (!info || isShellCommand(info.command)) return { outcome: "not-running" };
-      return {
-        outcome: "unknown",
-        detail: `${describe(info)} and cannot be identified as this stage's agent; stop it yourself if it is the orphan, or close again with acknowledgeHosts to dismiss it`,
-      };
-    }
-    const killed = await (probes.killHostIfMatches ?? killTmuxHostIfMatches)(host);
-    if (killed) return { outcome: "stopped" };
-    const info = await snapshot(paneId);
-    if (!info || isShellCommand(info.command)) return { outcome: "not-running" };
-    return {
-      outcome: "unknown",
-      detail: `${describe(info)}; it changed or its agent did not exit, so it was left running`,
-    };
-  } catch (error) {
-    return { outcome: "failed", error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
 export async function stopPipelineStageAgent(
   target: PipelineStageHostRef,
   probes: StageStopProbes = {},
@@ -1820,7 +1761,6 @@ function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] 
 
 export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
-    panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
     spawnRecoveryClient?: () => RuntimeHostClient | null;
     runtimeObservation?: Parameters<typeof pipelineRuntimeReads>[0]; providerRecoveryRandom?: () => number } = {},
 ): PipelinePorts {
@@ -2262,16 +2202,10 @@ export function defaultPipelinePorts(
       invalidateRegistryProjection();
       return result;
     },
-    paneAgentAlive: async (paneId) => {
-      const info = await (dependencies.panes?.snapshot ?? paneInfo)(paneId);
-      if (info) return !isShellCommand(info.command);
-      // display-message also returns null on a failed probe. Require positive
-      // absence evidence before letting automatic recovery replace the pane.
-      const observation = await (dependencies.panes?.observation ?? panePidMap)(true);
-      if (observation.kind === "no-server") return false;
-      if (observation.kind === "failure") return true;
-      return [...observation.panes.values()].some(pane => pane.paneId === paneId);
-    },
+    /* A stage attempt stored by a release that ran agents in terminal panes
+       still carries a pane id. No release hosts a pane, so such an agent is
+       reported as not running and there is nothing to stop. */
+    paneAgentAlive: async () => false,
     stopStageAgent: async (target, options) => options?.recordedIdentity
       ? withViewerOperation("pipelines.evidence", async () => {
         const receipt = target.launchId ? registry.spawnReceipt(target.launchId) : null;
@@ -2401,7 +2335,7 @@ export function defaultPipelinePorts(
       }
       return changed && stopped.outcome === "failed" ? null : stopped;
     },
-    stopStagePane: (target) => stopPipelineStagePane(target),
+    stopStagePane: async () => ({ outcome: "not-running" }),
     stopSettledStageWriter: (target, operationId) => withViewerOperation("pipelines.prior-writer-stop", () =>
       performanceSpans.wait("pipeline.prior-writer-stop", () =>
         stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination }))),

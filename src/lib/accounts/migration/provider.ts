@@ -34,7 +34,6 @@ import { bindClaudeHostPersistence, bindCodexHostPersistence, structuredHostsEna
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, materializeOwnedStructuredHostAccess, tempOwnerForConversation, structuredHostAccessPolicy, structuredHostCell } from "@/lib/runtime/structuredSpawn";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
-import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
 import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
 import { forkClaudeHistoryAsync, hashValidatedHistoryAsync, HistorySecurityError, MissingSourceAncestorError, MigrationTargetUnavailableError, safeCopyHistoryAsync, validateHistorySource } from "./safeHistoryCopy";
@@ -55,10 +54,11 @@ export interface ProviderDependencies {
   accounts: Pick<AccountManager, "resolveSpawn" | "resolveTranscriptOwner">;
   startCodex(home: string, assertCurrent?: () => void): Promise<CodexAppServerClient>;
   claudeStatus(home: string): Promise<{ loggedIn: boolean; indeterminate?: boolean }>;
-  /** Liveness and cancellation of a legacy tmux-launched successor. A receipt
-      persisted before viewer-written forks still names such a pane. */
+  /** Liveness and retirement of a successor an older release launched in a
+      terminal pane. A receipt persisted before viewer-written forks still
+      names such a pane; its recorded agent process answers for it. */
   verifyClaudeHost?(host: TmuxHostEvidence): Promise<boolean>;
-  cancelClaude?(host: TmuxHostEvidence): Promise<boolean | TmuxHostCleanupResult>;
+  cancelClaude?(host: TmuxHostEvidence): Promise<boolean | PaneSuccessorCleanupResult>;
   registry?: AgentRegistry;
   claudeJournalRoot?: string;
   /** Test seam: runs after the fork is durable and before its receipt returns. */
@@ -98,12 +98,22 @@ const defaultDependencies: ProviderDependencies = {
   accounts: accountManager,
   startCodex: (home, assertCurrent) => CodexAppServerClient.start({ home, protocolProfile: "thread-control", assertCurrent }),
   claudeStatus: (home) => realClaudeLoginPorts.status(home),
-  verifyClaudeHost: (host) => verifyTmuxHostEvidence(host),
-  cancelClaude: (host) => cleanupTmuxHostIfMatches(host),
+  verifyClaudeHost: async (host) => paneSuccessorProcessAlive(host),
+  /* No release can close a terminal pane. A successor whose process is gone
+     is absent; one still running keeps the transition pending until the
+     operator closes it. */
+  cancelClaude: async (host) => paneSuccessorProcessAlive(host) ? "unverifiable" : "absent",
   now: () => new Date().toISOString(),
 };
 
-function cleanupConfirmed(result: boolean | TmuxHostCleanupResult | undefined): boolean {
+type PaneSuccessorCleanupResult = "cancelled" | "absent" | "unverifiable";
+
+function paneSuccessorProcessAlive(host: TmuxHostEvidence): boolean {
+  const { pid, startIdentity } = host.agent;
+  return startIdentity === null ? procBackend.pidAlive(pid) : procBackend.processIdentity(pid) === startIdentity;
+}
+
+function cleanupConfirmed(result: boolean | PaneSuccessorCleanupResult | undefined): boolean {
   return result === true || result === "cancelled" || result === "absent";
 }
 
@@ -655,7 +665,6 @@ async function publishClaudeSuccessorHost(
       const tmuxHost = claudeTmuxHostFromReceipt(input.receipt);
       const cancelled = await input.cancelClaude(tmuxHost);
       if (!cleanupConfirmed(cancelled)) throw new Error("successor Claude host transition is still pending");
-      await forgetResumePaneIfMatches(input.receipt.path, tmuxHost);
     }
     // Retirement awaits external cleanup. The operation and its account grant
     // must still own this successor before any native process can start.
@@ -1773,7 +1782,6 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     const host = claudeTmuxHostFromReceipt(receipt);
     const cancelled = await this.dependencies.cancelClaude?.(host);
     if (!cleanupConfirmed(cancelled)) throw new Error("successor Claude host cleanup is still pending");
-    await forgetResumePaneIfMatches(receipt.path, host);
   }
 
   private async createClaude(

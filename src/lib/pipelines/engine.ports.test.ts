@@ -80,23 +80,10 @@ for (const sqliteMode of ["off", "sqlite"] as const) test(`late predecessor exit
   } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(binding, { recursive: true, force: true }); }
 });
 
-test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
-  const observations: Awaited<ReturnType<typeof import("@/lib/tmux").panePidMap>>[] = [
-    { kind: "failure", error: "tmux snapshot unavailable" },
-    { kind: "available", panes: new Map([[42, { target: "stage:0.0", paneId: "%42", windowName: "stage" }]]) },
-    { kind: "available", panes: new Map() },
-    { kind: "no-server" },
-  ];
-  const freshReads: boolean[] = [];
-  const ports = defaultPipelinePorts({ panes: {
-    snapshot: async () => null,
-    observation: async fresh => { freshReads.push(fresh!); return observations.shift()!; },
-  } });
-  expect(await ports.paneAgentAlive("%42")).toBe(true);
-  expect(await ports.paneAgentAlive("%42")).toBe(true);
+test("a stored pane id answers as not running and has nothing to stop", async () => {
+  const ports = defaultPipelinePorts();
   expect(await ports.paneAgentAlive("%42")).toBe(false);
-  expect(await ports.paneAgentAlive("%42")).toBe(false);
-  expect(freshReads).toEqual([true, true, true, true]);
+  expect(await ports.stopStagePane({ paneId: "%42" } as never)).toEqual({ outcome: "not-running" });
 });
 
 
