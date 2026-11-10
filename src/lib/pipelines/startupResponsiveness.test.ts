@@ -276,7 +276,7 @@ test("asynchronous evidence copies preserve nested isolation and batch project a
 test("compact ownership preserves unknown owners, duplicate detection and independent copies", async () => {
   const { root, row } = fixture();
   const first = await loadPipelineOwnershipForStartupAsync();
-  first[0]!.attempts.push({ conversationId: "conversation_synthetic", state: "passed" });
+  first[0]!.attempts.push({ conversationId: "conversation_synthetic", agentPath: null, sessionId: null, state: "passed" });
   expect((await loadPipelineOwnershipForStartupAsync())[0]!.attempts).toEqual([]);
   const db = new Database(path.join(root, "state.sqlite"));
   try {

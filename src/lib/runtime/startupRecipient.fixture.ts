@@ -458,7 +458,7 @@ export async function addressedRecipientSocket(kind: "unhosted" | "live" | "stam
       if (!custody || custody.timing !== "initial") await observe(raceReached.promise, "retarget seam");
       else {
         await observe(preparationSettled.promise, "suspended recipient preparation");
-        expect(prepareError).toBe("recipient pipeline authority is unavailable or held");
+        expect<string | null>(prepareError).toBe("recipient pipeline authority is unavailable or held");
       }
       await kick();
       expect(finished).toBe(false);
