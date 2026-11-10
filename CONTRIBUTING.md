@@ -473,7 +473,7 @@ reuse and after completion. Dirty trees never read or create pass receipts.
 Privacy, frozen install and the advisory audit always run fresh. The runtime
 build and its consumers reuse together; a partial runtime chain rebuilds.
 Head commit and branch also bind history-sensitive tests. Pass receipts expire
-after seven days. Each receipt family retains at most 256 records and 32 MiB; unavailable or malformed entries run the check again.
+after seven days. Each receipt family retains at most 256 records and 32 MiB; green head files, one record per test file for every lane, retain 8192 records and 256 MiB. Unavailable or malformed entries run the check again.
 Each reuse prints the step, recorded time, tree and base with its reason.
 Types, lint and tests run in one private, canonical environment
 (`checkEnvironment` in `scripts/gate-cache.ts`). An agent's session, forge
