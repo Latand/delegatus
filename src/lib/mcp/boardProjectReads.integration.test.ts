@@ -14,6 +14,7 @@ import { projectAliasStore } from "@/lib/projects/persistence";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
+import type { FileEntry } from "@/lib/types";
 import { teamStore, resetTeamStoreForTests, type TeamStore } from "@/lib/team/store";
 import { createWorkspace, placeProject } from "@/lib/team/workspaces";
 import type { Member } from "@/lib/team/contract";
@@ -29,6 +30,12 @@ const CALLER = "conversation_board_reader";
 const W1 = `w_${"a".repeat(32)}`, W2 = `w_${"b".repeat(32)}`;
 const TOOLS = ["list_tasks", "list_pipelines"] as const;
 type Tool = typeof TOOLS[number];
+function retainedFile(project: string, projectName: string): FileEntry {
+  return { project, projectName, path: path.join(root, `${project}.jsonl`), root: "codex-sessions",
+    name: `${project}.jsonl`, title: "Retained conversation", engine: "codex", kind: "session", fmt: "codex",
+    parent: null, mtime: Date.parse(AT) / 1000, size: 0, activity: "idle", proc: null, pid: null,
+    model: null, pendingQuestion: null, waitingInput: null };
+}
 let root: string;
 let previousState: string | undefined;
 const cursorStoreKey = Symbol.for("delegatus.mcp.pageCursors");
@@ -409,8 +416,8 @@ for (const tool of TOOLS) for (const workspace of [false, true]) for (const form
     const h = await harness(workspace);
     setBoardAliases({ "retained-file-alias": "middle-alias", "middle-alias": OWN });
     h.domain.lastCompletedCatalog = () => ({ projectCatalog: [], files: [
-      { project: "retained-file-alias", projectName: "Retained Widgets" },
-      { project: FOREIGN, projectName: "Foreign Canary Board" },
+      retainedFile("retained-file-alias", "Retained Widgets"),
+      retainedFile(FOREIGN, "Foreign Canary Board"),
     ] });
     const args = { project: "Retained Widgets", limit: 1, ...(form === "fresh" ? {} : { clientRequestId: `retained-file-${form}` }) };
     if (form === "replay") expect(await h.call(tool, args)).toMatchObject({ ok: true, total: 1 });
@@ -433,8 +440,8 @@ for (const workspace of [false, true]) for (const changed of [false, true]) {
     const h = await harness(workspace); h.many();
     setBoardAliases({ "retained-file-alias": "middle-alias", "middle-alias": OWN });
     h.domain.lastCompletedCatalog = () => ({ projectCatalog: [], files: [
-      { project: "retained-file-alias", projectName: "Retained Widgets" },
-      { project: FOREIGN, projectName: "Foreign Canary Board" },
+      retainedFile("retained-file-alias", "Retained Widgets"),
+      retainedFile(FOREIGN, "Foreign Canary Board"),
     ] });
     expect(await h.call("list_pipelines", { project: "Retained Widgets", limit: 1 })).toMatchObject({ ok: true, total: 251, hasMore: true });
     h.onRows(() => queueMicrotask(() => { if (changed) setBoardAliases({ "middle-alias": FOREIGN }); }));

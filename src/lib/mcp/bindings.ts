@@ -6464,7 +6464,7 @@ export function captureBoardAliasProof(
         .some(value => typeof value === "string" && normalize(value) === spelling);
     }).map(row => row.project),
     ...(catalog?.files ?? []).filter(row => canonicalProject(row.project) === project
-      && [row.project, row.displayName ?? row.projectName]
+      && [row.project, row.projectName]
         .some(value => typeof value === "string" && normalize(value) === spelling))
       .map(row => row.project),
   ];
