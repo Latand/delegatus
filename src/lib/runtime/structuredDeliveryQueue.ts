@@ -1204,13 +1204,15 @@ export class StructuredDeliveryQueue {
           // control has: past it, it settles with its reason during startup.
           let settledControls = 0;
           for (const control of heldControls) {
-            if (await this.settleExpiredDeferredControl(control)) settledControls += 1;
+            if (await this.settleExpiredDeferredControl(control, lane)) settledControls += 1;
           }
+          const owned = () => !lane.released && !this.retirementExecutor.retired && !this.port.handoffHeld?.();
           const settleKilledReconfigures = async () => {
-            if (this.port.handoffHeld?.()) return;
             for (const effect of deferred) {
+              if (!owned()) return;
               if (isReconfigureEffect(effect) && this.killedReconfigures.has(effect.operationId)) {
-                await this.transitionReconfigure(effect, "failed", { reason: "conversation-killed" });
+                await this.transitionReconfigure(effect, "failed", { reason: "conversation-killed" }, effect, owned);
+                if (!owned()) return;
               }
             }
           };
@@ -2985,13 +2987,18 @@ export class StructuredDeliveryQueue {
     status: StructuredDeliveryTransition,
     details?: RuntimeTransitionDetails,
     options?: RuntimeTransitionOptions,
+    canContinue: () => boolean = () => true,
   ): Promise<boolean> {
+    if (!canContinue()) return false;
     try {
       await this.port.transition(operationId, status, details, options);
+      if (!canContinue()) return false;
       this.settleProgress(operationId, status, details?.reason);
       return true;
     } catch (error) {
+      if (!canContinue()) return false;
       const durable = await this.readStatus(operationId);
+      if (!canContinue()) return false;
       if (durable.readable && durable.value && TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) {
         this.settleProgress(operationId, durable.value.status, durable.value.reason);
         /* The journal ended this operation and only the answer was lost, so the
@@ -3124,9 +3131,18 @@ export class StructuredDeliveryQueue {
 
   /** A control held by startup deferral keeps its settlement ceiling. Answers
       whether the control is settled; one that is still open waits for startup
-      with a bounded wake toward its deadline. */
-  private async settleExpiredDeferredControl(effect: ControlEffect): Promise<boolean> {
+      with a bounded wake toward its deadline.
+
+      This shortcut runs outside `drainTarget`, so it carries that drain's
+      ownership fences itself: a released lane, a retired executor or an
+      update handoff writes nothing for the control, neither before the status
+      read nor after it, because the read can outlast this executor's
+      authority while a successor or the release takes the conversation. */
+  private async settleExpiredDeferredControl(effect: ControlEffect, lane: DeliveryLane): Promise<boolean> {
+    const owned = () => !lane.released && !this.retirementExecutor.retired && !this.port.handoffHeld?.();
+    if (!owned()) return false;
     const durable = await this.readStatus(effect.operationId);
+    if (!owned()) return false;
     if (!durable.readable) {
       this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "delivery journal status is unavailable" });
       this.retrySoon();
@@ -3138,8 +3154,7 @@ export class StructuredDeliveryQueue {
     }
     const expired = expiredControlSettlement(effect, durable.value);
     if (expired) {
-      await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason });
-      return true;
+      return await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason }, undefined, owned);
     }
     this.scheduleControlSettlementCheck(durable.value);
     this.noteWait(effect, "startup", { wake: "event" });
@@ -3401,10 +3416,12 @@ export class StructuredDeliveryQueue {
     status: StructuredDeliveryTransition,
     details?: { turnId?: string | null; reason?: string | null },
     retryOwner = effect,
+    canContinue: () => boolean = () => true,
   ): Promise<boolean> {
     try {
-      return await this.transitionUnlessSettled(effect.operationId, status, details);
+      return await this.transitionUnlessSettled(effect.operationId, status, details, undefined, canContinue);
     } catch (error) {
+      if (!canContinue()) return false;
       const retry = this.reconfigureRetries.get(retryOwner.operationId) ?? new RetryBackoff();
       retry.fail();
       this.reconfigureRetries.set(retryOwner.operationId, retry);
