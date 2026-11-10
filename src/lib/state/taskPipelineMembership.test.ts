@@ -89,3 +89,52 @@ test("losing the evidence index returns to the complete read", () => {
     expect(ids(readPipelineRowsForTask(filename, "task-1"))).toEqual(["pipelines-1", "pipelines-2", "pipelines_archive-1"]);
   } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+/** Whether `work` answered by scanning stored lanes for one task, which is how
+ * an installation above the cache bound is served. */
+function scansLanes<T>(work: () => T): { value: T; scanned: boolean } {
+  let scanned = false;
+  const real = Database.prototype.query;
+  const spy = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+    if (sql.includes("json_each(") && sql.includes("WHERE type = 'text' AND value = ?")) scanned = true;
+    return real.call(this, sql);
+  } as never);
+  try { const value = work(); return { value, scanned }; }
+  finally { spy.mockRestore(); }
+}
+
+test("lanes added past the cache bound are served the way a complete read serves them", () => {
+  const { root, filename, db } = fixture("task-membership-bound");
+  try {
+    expect(scansLanes(() => ids(readPipelineRowsForTask(filename, "task-4")))).toEqual({ value: ["pipelines-4", "pipelines_archive-4"], scanned: false });
+    const insert = db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,?,1,0)");
+    db.transaction(() => {
+      for (let index = 0; index < 19_800; index++) insert.run(`bulk-${index}`, JSON.stringify({ id: `bulk-${index}`, taskIds: [] }), 1_000 + index);
+    })();
+    // 20 040 lanes are stored now; the complete read keeps none above 20 000.
+    expect(scansLanes(() => ids(readPipelineRowsForTask(filename, "task-4")))).toEqual({ value: ["pipelines-4", "pipelines_archive-4"], scanned: true });
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='pipelines-6'")
+      .run(JSON.stringify({ id: "pipelines-6", taskIds: ["task-4"] }));
+    expect(scansLanes(() => ids(readPipelineRowsForTask(filename, "task-4")))).toEqual({ value: ["pipelines-4", "pipelines-6", "pipelines_archive-4"], scanned: true });
+    // Back under the bound the kept membership answers again.
+    db.query("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key LIKE 'bulk-1%'").run();
+    expect(scansLanes(() => ids(readPipelineRowsForTask(filename, "task-4")))).toEqual({ value: ["pipelines-4", "pipelines-6", "pipelines_archive-4"], scanned: false });
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a collection revision that moved backwards discards the kept membership", () => {
+  const { root, filename, db } = fixture("task-membership-rewound");
+  try {
+    db.query("UPDATE state_collections SET revision=5 WHERE collection IN ('pipelines','pipelines_archive')").run();
+    expect(ids(readPipelineRowsForTask(filename, "task-8"))).toEqual(["pipelines-8", "pipelines_archive-8"]);
+    // Other content under the same file identity: a lane differs, the evidence
+    // rows do not name it, the clock is ahead and a collection revision is behind.
+    db.transaction(() => {
+      db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='pipelines-2'")
+        .run(JSON.stringify({ id: "pipelines-2", taskIds: ["task-8"] }));
+      db.query("DELETE FROM pipeline_evidence_rows WHERE collection='pipelines' AND row_key='pipelines-2'").run();
+      db.query("UPDATE state_collections SET revision=4 WHERE collection='pipelines'").run();
+    })();
+    expect(ids(readPipelineRowsForTask(filename, "task-8"))).toEqual(["pipelines-2", "pipelines-8", "pipelines_archive-8"]);
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

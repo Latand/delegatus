@@ -414,7 +414,9 @@ function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
  * and a busy machine completes several hundred files an hour, so the default
  * 256 records were gone within the hour while a record stays valid for a day:
  * the retry of an unchanged tree then ran every file again. Hold about a day of
- * records for all lanes together. */
+ * records for all lanes together. Each writer trims the shared directory to
+ * its own limit, so the larger store takes effect once every active lane's
+ * checkout carries this change. */
 const HEAD_FILE_LIMITS = { entries: 8192, bytes: 256 * 1024 * 1024 };
 export const headFileCache = (root: string) => new GateCache<TestRun>(cacheDirectory(root, "head-files"), isGreenHeadFile, 24 * 60 * 60_000, HEAD_FILE_LIMITS);
 

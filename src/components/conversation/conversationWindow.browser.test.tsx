@@ -7370,3 +7370,223 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+
+describe("message document links", () => {
+  browserTest("actual message clicks read exact source-worktree bytes through authenticated artifact routes", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/app/api/artifact/route");
+    const { proxy } = await import("@/proxy");
+    const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+    const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
+    const { createHash } = await import("node:crypto");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "document-links");
+    fs.mkdirSync(out, { recursive: true });
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "document-links-"));
+    const previousState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(fixture, "state");
+    const parent = path.join(fixture, "repository");
+    const source = path.join(fixture, "source-worktree");
+    const sibling = path.join(fixture, "later-worktree");
+    const report = path.join(source, "docs/report.md");
+    const denied = path.join(fixture, "private/report.md");
+    const changed = path.join(source, "docs/changed.md");
+    const bytes = Array.from({ length: 110 }, (_, i) => i === 0 ? "# Source version" : i === 101 ? "EXACT UNCOMMITTED SOURCE OUTPUT" : `Source line ${i + 1}`).join("\n");
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      return result.stdout.toString();
+    };
+    const commit = (directory: string, message: string) => git("-C", directory, "-c", "user.name=Fixture", "-c", "user.email=" + ["noreply", "example.invalid"].join("@"), "commit", "-qm", message, "--allow-empty");
+    git("init", "-q", parent);
+    commit(parent, "Initial fixture");
+    git("-C", parent, "worktree", "add", "--detach", source, "HEAD");
+    git("-C", parent, "worktree", "add", "--detach", sibling, "HEAD");
+    for (const [directory, body] of [[parent, "PARENT COMMITTED VERSION"], [sibling, "LATER CURRENT VERSION"], [source, bytes], [path.dirname(denied), "PRIVATE OUTPUT"]]) {
+      const file = directory === path.dirname(denied) ? denied : path.join(directory!, "docs/report.md");
+      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body!);
+    }
+    fs.writeFileSync(changed, "# Changed version\nOriginal bytes\n");
+    git("-C", parent, "add", "docs/report.md");
+    commit(parent, "Parent report version");
+    // The declared report is absent from both commits in a real linked
+    // checkout. A later HEAD cannot stand in for its uncommitted bytes.
+    commit(source, "Later metadata");
+    expect(git("-C", source, "ls-files", "docs/report.md")).toBe("");
+    expect(git("-C", source, "status", "--porcelain", "--untracked-files=all")).toContain("?? docs/report.md");
+    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: {
+      source: { cwd: source, projectRoot: parent }, parent: { cwd: parent }, sibling: { cwd: sibling },
+    } }));
+    resetTeamStoreForTests();
+    const store = teamStore();
+    const now = Date.now();
+    for (const [id, role] of [["fixture_owner", "owner"], ["fixture_outsider", "member"]] as const) store.insertMember({
+      id, role, name: "Fixture", status: "active", color: "teal", telegram: null,
+      createdAt: new Date(now).toISOString(), createdBy: "fixture", revokedAt: null,
+    });
+    const owner = mintSession(store, "fixture_owner", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const outsider = mintSession(store, "fixture_outsider", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const reads: { path: string | null; mode: string; status: number; hash?: string }[] = [];
+    const adapter = async (request: Request) => {
+      const req = new NextRequest(request);
+      const admission = proxy(req);
+      const response = admission.headers.get("x-middleware-next") === "1" ? await GET(req) : admission;
+      const url = new URL(request.url);
+      const read: typeof reads[number] = { path: url.searchParams.get("path"), mode: url.searchParams.get("mode") ?? "body", status: response.status };
+      if (response.ok && read.mode === "body") read.hash = sha256(await response.clone().text());
+      reads.push(read);
+      if (read.path === changed && read.mode === "meta" && response.ok) fs.appendFileSync(changed, "New bytes\n");
+      return response;
+    };
+    const served = await serveEvidenceFixture(path.join(fixture, "bundle"), FIXTURE, { "/api/artifact": adapter });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const evidence: unknown[] = [];
+    try {
+      // The same adapter keeps the production perimeter and workspace checks:
+      // no mock successful fetch can stand in for these negative controls.
+      const resource = `${served.base}api/artifact?path=${encodeURIComponent(report)}`;
+      for (const suffix of ["", "&mode=meta", "&download=1"]) for (const [value, status] of [[null, 401], [outsider.value, 403], [owner.value, 200]] as const) {
+        const response = await fetch(resource + suffix, { headers: value ? { cookie: `${MEMBER_COOKIE}=${value}` } : {} });
+        expect(response.status).toBe(status); await response.arrayBuffer();
+      }
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 605, 820, 1000, 1050, 1280, 1440]) {
+        const phone = width === 390;
+        const query = new URLSearchParams({ case: "document-links", lang, cwd: source, parent, denied });
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: phone ? 844 : width === 1000 ? 700 : 900 }, theme, lang, "no-preference", phone);
+        await context.addCookies([{ name: MEMBER_COOKIE, value: owner.value, url: served.base }]);
+        try {
+          const input = await page.evaluate(() => ({ coarse: matchMedia("(pointer: coarse)").matches, touchPoints: navigator.maxTouchPoints }));
+          expect(input.coarse).toBe(phone);
+          expect(input.touchPoints > 0).toBe(phone);
+          const entry = page.getByRole("link", { name: "Source report", exact: true });
+          await entry.waitFor();
+          const initial = page.url();
+          const start = reads.length;
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-message.png`) });
+          if (phone) await entry.tap();
+          else await entry.click();
+          const pane = page.locator("[data-artifact-preview]");
+          await pane.waitFor();
+          const target = pane.locator("[data-preview-target]");
+          await target.waitFor();
+          expect(await target.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          expect(await pane.locator('[data-preview-mode="source"]').getAttribute("aria-pressed")).toBe("true");
+          expect(reads.slice(start).some(read => read.path === report && read.mode === "meta" && read.status === 200)).toBe(true);
+          expect(reads.slice(start).some(read => read.path === report && read.hash === sha256(bytes))).toBe(true);
+          expect(page.url()).toBe(initial); expect(context.pages()).toHaveLength(1);
+          const geometry = await pane.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            const target = element.querySelector("[data-preview-target]")!;
+            const range = document.createRange(); range.selectNodeContents(target);
+            return { paneFits: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+              textFits: [...range.getClientRects()].every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight) };
+          });
+          expect(geometry).toEqual({ paneFits: true, textFits: true });
+          for (let tab = 0; tab < 12; tab++) {
+            await page.keyboard.press("Tab");
+            expect(await pane.evaluate(element => element.contains(document.activeElement))).toBe(true);
+          }
+          const close = pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true });
+          if (phone) {
+            const box = await close.boundingBox();
+            expect(box!.width).toBeGreaterThanOrEqual(44);
+            expect(box!.height).toBeGreaterThanOrEqual(44);
+          }
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-source.png`) });
+          const rawStart = reads.length;
+          const rawPromise = context.waitForEvent("page");
+          const openExternal = pane.locator("[data-preview-open-external]");
+          if (phone) await openExternal.tap(); else await openExternal.click();
+          const raw = await rawPromise;
+          await raw.waitForLoadState();
+          expect(raw.url()).toBe(resource);
+          expect(await raw.locator("body").innerText()).toBe(bytes);
+          expect(reads.slice(rawStart).some(read => read.path === report && read.status === 200 && read.hash === sha256(bytes))).toBe(true);
+          expect(await raw.evaluate(() => window.opener === null)).toBe(true);
+          await raw.close();
+          if (phone) await close.tap(); else await close.click();
+          await pane.waitFor({ state: "detached" });
+          const heading = page.getByRole("link", { name: "Heading", exact: true });
+          if (phone) await heading.tap(); else await heading.click();
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-heading.png`) });
+          if (phone) await close.tap(); else await close.click();
+          const invisible = page.getByRole("link", { name: "Invisible", exact: true });
+          if (phone) await invisible.tap(); else await invisible.click();
+          await pane.locator("[data-preview-target]").waitFor();
+          expect(await pane.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-invisible.png`) });
+          if (phone) await close.tap(); else await close.click();
+          for (const [label, key] of [["Missing", "preview.missing"], ["Denied", "preview.denied"], ["Changed", "preview.changed"]] as const) {
+            const link = page.getByRole("link", { name: label, exact: true });
+            if (phone) await link.tap(); else await link.click();
+            await pane.getByText(translate(lang, key), { exact: true }).waitFor();
+            const actions = pane.locator('a[download], [data-preview-open-external]');
+            expect(await actions.count()).toBe(label === "Changed" ? 2 : 0);
+            expect(page.url()).toBe(initial);
+            expect(context.pages()).toHaveLength(1);
+            const failureFits = await pane.getByRole("alert").evaluate(element => {
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let parent = walker.currentNode.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+                }
+                if ([...range.getClientRects()].some(rect => rect.left < left || rect.right > right || rect.top < top || rect.bottom > bottom)) return false;
+              }
+              return true;
+            });
+            expect(failureFits).toBe(true);
+            if (phone) {
+              expect(await close.evaluate(element => {
+                const rect = element.getBoundingClientRect();
+                return rect.width >= 44 && rect.height >= 44 && [
+                  [rect.left + 1, rect.top + rect.height / 2], [rect.right - 1, rect.top + rect.height / 2],
+                  [rect.left + rect.width / 2, rect.top + 1], [rect.left + rect.width / 2, rect.bottom - 1],
+                ]
+                  .every(([x, y]) => element.contains(document.elementFromPoint(x!, y!)));
+              })).toBe(true);
+            }
+            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${label.toLowerCase()}.png`) });
+            if (phone) await close.tap(); else await close.click();
+          }
+          const fragment = "#a=" + encodeURIComponent(report);
+          await page.evaluate(hash => { location.hash = hash; }, fragment);
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.goBack(); await pane.waitFor({ state: "detached" });
+          await context.route("https://example.com/**", route => route.fulfill({ body: "External fixture" }));
+          const popupPromise = context.waitForEvent("page");
+          const external = page.getByRole("link", { name: "External", exact: true });
+          if (phone) await external.tap(); else await external.click();
+          const popup = await popupPromise;
+          await popup.waitForLoadState();
+          expect(popup.url()).toBe("https://example.com/guide");
+          expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+          await popup.close();
+          expect(pageErrors).toEqual([]);
+          evidence.push({ lang, theme, width, input, sourceHash: sha256(bytes), geometry, reads: reads.slice(start).map(read => ({ ...read, path: read.path === report ? "source/docs/report.md" : read.path?.startsWith(source) ? "source/docs/" + path.basename(read.path) : "private/report.md" })) });
+        } finally { await context.close(); }
+      }
+      // A vanished source checkout must not select either duplicate.
+      fs.renameSync(source, path.join(fixture, "retained-source-worktree"));
+      const missingSource = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(missingSource.status).toBe(404); await missingSource.arrayBuffer();
+      expect(fs.readFileSync(path.join(parent, "docs/report.md"), "utf8")).toBe("PARENT COMMITTED VERSION");
+      expect(fs.readFileSync(path.join(sibling, "docs/report.md"), "utf8")).toBe("LATER CURRENT VERSION");
+      store.revokeSessionsOf("fixture_owner", new Date(now + 1).toISOString());
+      const revoked = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(revoked.status).toBe(401); await revoked.arrayBuffer();
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(evidence, null, 2));
+    } finally {
+      await browser.close(); served.stop(); resetTeamStoreForTests();
+      if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 240_000);
+});

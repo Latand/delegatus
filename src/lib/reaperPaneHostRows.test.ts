@@ -54,3 +54,24 @@ test("a pane-hosted row whose agent process is gone becomes unhosted; a live one
   expect(entries[`codex:${sessionId(2)}`]).toMatchObject({ status: "live", host: { kind: "tmux", paneId: "%2002" } });
   expect(await retireDeadPaneHostRows(registry, identity, () => false)).toBe(0);
 });
+
+test("a live agent process whose identity cannot be read keeps its row hosted", async () => {
+  const registry = new AgentRegistry(path.join(DIR, "unreadable-identity.json"));
+  registry.upsert({
+    key: { engine: "codex", sessionId: sessionId(3) },
+    artifactPath: `/transcripts/rollout-${sessionId(3)}.jsonl`,
+    cwd: "/repo",
+    accountId: null,
+    status: "live",
+    host: paneHost(2003),
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+
+  expect(await retireDeadPaneHostRows(registry, () => null, () => true)).toBe(0);
+  expect(registry.snapshot().entries[`codex:${sessionId(3)}`]).toMatchObject({ status: "live", host: { kind: "tmux" } });
+
+  expect(await retireDeadPaneHostRows(registry, () => null, () => false)).toBe(1);
+  expect(registry.snapshot().entries[`codex:${sessionId(3)}`]).toMatchObject({ host: null, status: "unhosted" });
+});

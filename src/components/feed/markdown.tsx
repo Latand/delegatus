@@ -5,6 +5,8 @@ import { isFileConfirmationUrl } from "@/lib/telegram/bot/fileConfirmationContra
 import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { classifyArtifact } from "@/lib/artifact/classify";
+
 import { artifactContentUrl } from "@/components/preview/artifactResource";
 import { openArtifactPreview } from "@/components/preview/previewBus";
 import { resolveLink, resolveRelative, type FileLinkTarget } from "@/lib/artifact/linkTarget";
@@ -130,6 +132,10 @@ export interface MdDocumentScope {
 
 export const MdDocumentContext = createContext<MdDocumentScope | null>(null);
 
+/** Exact native conversation CWD. Identifies the source; grants no file access.
+    Scope only native assistant prose so foreign cards cannot inherit it. */
+export const MdMessageSourceContext = createContext<string | null>(null);
+
 function viewerHosts(): string[] {
   return typeof window === "undefined" ? [] : [window.location.host];
 }
@@ -159,6 +165,7 @@ function FileAnchor({ spelled, target, title, label }: { spelled: string; target
 
 function Anchor({ href: raw, label }: { href: string; label: string }) {
   const scope = useContext(MdDocumentContext);
+  const sourceCwd = useContext(MdMessageSourceContext);
   const href = raw.replace(/\\([()])/g, "$1");
   if (isFileConfirmationUrl(href)) return <a href={href} title={href} className={ANCHOR_CLASS}>{label}</a>;
   if (scope && href.startsWith("#") && !/^#[acfp]=/.test(href)) {
@@ -175,11 +182,17 @@ function Anchor({ href: raw, label }: { href: string; label: string }) {
       </a>
     );
   }
-  const relative = scope ? resolveRelative(scope.baseDir, href) : null;
+  const direct = resolveLink(href, { viewerHosts: viewerHosts() });
+  let relative = scope && !direct ? resolveRelative(scope.baseDir, href) : null;
+  if (!scope && !direct && sourceCwd && /^(?:\/|~\/)/.test(sourceCwd) && !href.includes("?")) {
+    const candidate = resolveRelative(sourceCwd, href);
+    const resolved = candidate ? resolveLink(candidate) : null;
+    if (resolved?.kind === "file" && classifyArtifact(resolved.path)) relative = candidate;
+  }
   /* One resolver for every link shape agents write (see linkTarget.ts): a
      viewer URL or bare hash, `#f=` naming a transcript or any other file, an
      encoded or literal anchor, `:line` suffixes, file:// and plain paths. */
-  const target = resolveLink(relative ?? href, { viewerHosts: viewerHosts() });
+  const target = direct ?? (relative ? resolveLink(relative) : null);
   if (target?.kind === "file") {
     return <FileAnchor spelled={relative ?? href} target={target} title={href} label={label} />;
   }

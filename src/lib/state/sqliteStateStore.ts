@@ -1270,9 +1270,13 @@ export function pipelineEvidenceRevision(filename: string): string | null {
 type TaskPipelineKey = { collection: string; row_key: string };
 type TaskPipelineMembership = TaskPipelineKey & { row_order: number; taskIds: string[] };
 /** `clock` names the evidence index the membership rows were read under: its
-    file and schema, and the clock revision they are complete through. */
+    file and schema, the clock revision they are complete through, and the two
+    collection revisions seen with it. The index carries no generation of its
+    own, so a collection revision that moved backwards is the one sign already
+    in hand that the same inode now holds other content. */
 let taskPipelineSelection: { filename: string; version: string; links: Map<string, TaskPipelineKey[]> | null;
-  rows: Map<string, TaskPipelineMembership> | null; clock: { scope: string; revision: number } | null } | undefined;
+  rows: Map<string, TaskPipelineMembership> | null;
+  clock: { scope: string; revision: number; active: number; archive: number } | null } | undefined;
 const MAX_TASK_PIPELINE_LINKS = 20_000;
 
 function taskPipelineMembership(db: BunDatabase, row: TaskPipelineKey & { row_order: number; task_ids: string | null }): TaskPipelineMembership {
@@ -1299,10 +1303,12 @@ export function readPipelineRowsForTask(filename: string, taskId: string): unkno
   const db = sharedStateReadonlyDatabase(filename);
   if (taskPipelineSelection?.filename !== filename || taskPipelineSelection.version !== version) {
     const split = indexed === null ? -1 : indexed.lastIndexOf(":");
-    const clock = split < 0 ? null : { scope: indexed!.slice(0, split), revision: Number(indexed!.slice(split + 1)) };
+    const clock = split < 0 ? null : { scope: indexed!.slice(0, split), revision: Number(indexed!.slice(split + 1)),
+      active: revisions.get("pipelines")!, archive: revisions.get("pipelines_archive")! };
     const prior = taskPipelineSelection?.filename === filename ? taskPipelineSelection : undefined;
     let rows: Map<string, TaskPipelineMembership> | null = null;
-    if (clock && prior?.rows && prior.clock?.scope === clock.scope && prior.clock.revision <= clock.revision) {
+    if (clock && prior?.rows && prior.clock?.scope === clock.scope && prior.clock.revision <= clock.revision
+      && prior.clock.active <= clock.active && prior.clock.archive <= clock.archive) {
       // A deleted lane keeps its evidence row, so it is named here as absent.
       const changed = db.query<TaskPipelineKey & { row_order: number | null; task_ids: string | null }, [number]>(`
         SELECT e.collection, e.row_key, r.row_order,
@@ -1317,6 +1323,9 @@ export function readPipelineRowsForTask(filename: string, taskId: string): unkno
         if (row.row_order === null) rows.delete(key);
         else rows.set(key, taskPipelineMembership(db, { ...row, row_order: row.row_order }));
       }
+      // The complete pass keeps no rows above this bound; a refresh that grew
+      // past it hands the answer to the targeted query the same way.
+      if (rows.size > MAX_TASK_PIPELINE_LINKS) rows = null;
     } else {
       const scanned = db.query<TaskPipelineKey & { row_order: number; task_ids: string | null }, [number]>(`
         SELECT collection, row_key, row_order,

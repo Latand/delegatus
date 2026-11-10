@@ -28,7 +28,7 @@ import { SeatTickWork, seatTickWorkSignal } from "@/lib/monitor/seatTickWork";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
-import type { RoleMemoryRow } from "../roleTypes";
+import type { RoleMemoryRow, RoleMemoryScopeRow } from "../roleTypes";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { seatTickWakeCommit, seatTickWakeCommitPlan } from "@/lib/monitor/seatTick";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
@@ -38,7 +38,7 @@ import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { groupHideState } from "@/lib/tasks/groupHide";
 import { commitTaskMembership } from "@/lib/tasks/membership";
 import { recordMemoryDelivery } from "../deliveryLedger";
-import { projectedScopeRows } from "../roleViewSource";
+import { projectedScopeRows, projectViewRowsCooperatively } from "../roleViewSource";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -2235,6 +2235,25 @@ test("an apply decodes the scopes it names and no other scope of the pass", () =
   }
   expect(decoded).toContain(named);
   for (const scope of others) expect(decoded).not.toContain(scope);
+  const entry = (roleMemoryCollection()!.get(`s:${named}`) as { history: { at: string; pass?: string }[] }).history.at(-1)!;
+  expect(entry.pass).toBe(p.id);
+  expect(Date.parse(entry.at)).toBeGreaterThan(Date.parse(at(5_000)));
+});
+
+test("an apply orders itself after an earlier call committed while a cooperative view read is suspended", async () => {
+  const named = roleScope(PROJECT, "builder"), other = roleScope(PROJECT, "reviewer"), long = roleScope(PROJECT, "architect");
+  const one = fixture(named), stale = fixture(other);
+  fixture(long);
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const row = tx.get(`s:${long}`) as RoleMemoryScopeRow;
+    tx.put({ ...row, history: Array.from({ length: 60 }, (_, index) => ({ revision: index + 1, at: at(index), by: "agent" as const, added: [], merged: [], archived: [] })) });
+  });
+  const p = pass();
+  // The view read yields with its history cursor open on the shared view connection.
+  const view = projectViewRowsCooperatively(PROJECT);
+  applyCuration(p, input({ [other]: [] }, { archive: [{ id: stale, reason: "stale", note: "The command was replaced." }] }), at(5_000));
+  applyCuration(p, input({ [named]: [one] }), at(100));
+  await view;
   const entry = (roleMemoryCollection()!.get(`s:${named}`) as { history: { at: string; pass?: string }[] }).history.at(-1)!;
   expect(entry.pass).toBe(p.id);
   expect(Date.parse(entry.at)).toBeGreaterThan(Date.parse(at(5_000)));
