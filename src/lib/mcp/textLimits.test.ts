@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,10 +19,10 @@ const task: BoardTask = { id: "limit-task", project: "fixture", text: "Keep comp
 const scalarText = (length: number) => "я".repeat(16) + "🧭".repeat(length - 16);
 const unitText = (length: number) => "🧭".repeat(Math.floor(length / 2)) + (length % 2 ? "я" : "");
 
-async function protocol(run: (client: Client, dispatched: Array<{ name: string; args: Record<string, unknown> }>) => Promise<void>, overrides: Partial<McpToolBindings> = {}) {
+async function protocol(run: (client: Client, dispatched: Array<{ name: string; args: Record<string, unknown> }>) => Promise<void>, overrides: Partial<McpToolBindings> = {}, receipts = new MemoryMcpReceiptStore()) {
   const dispatched: Array<{ name: string; args: Record<string, unknown> }> = [];
   const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async (args: Record<string, unknown>) => { dispatched.push({ name, args }); return {}; }])) as McpToolBindings;
-  const server = createViewerMcpServer(createMcpToolService({ ...bindings, ...overrides }, new MemoryMcpReceiptStore()));
+  const server = createViewerMcpServer(createMcpToolService({ ...bindings, ...overrides }, receipts));
   const client = new Client({ name: "text-limit-contract", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -357,6 +357,27 @@ test.each([
     path: field,
     message: `must be ${min ? `${min}–${max}` : `at most ${max}`} ${unit}; actual length is ${max + 1}. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance.`,
   }]);
+});
+
+test("dueReason overage keeps its due-date refusal code without dispatch or receipt admission", async () => {
+  const receipts = new MemoryMcpReceiptStore();
+  const claim = spyOn(receipts, "claim");
+  try {
+    await protocol(async (client, dispatched) => {
+      const args = { taskId: task.id, dueAt: "2026-12-01T10:00:00.000Z" };
+      const refused = await client.callTool({ name: "update_task", arguments: { clientRequestId: "reason-over", ...args, dueReason: ` ${unitText(201)} ` } });
+      expect(refused.isError).toBe(true);
+      expect(refused.structuredContent).toMatchObject({ ok: false, code: "TASK_DUE_REASON_REQUIRED", retryable: false, details: { field: "dueReason" } });
+      for (const part of ["dueReason", "200", "UTF-16 code units", "actual length is 201"]) expect(JSON.stringify(refused.content)).toContain(part);
+      expect(dispatched).toEqual([]);
+      expect(claim).not.toHaveBeenCalled();
+      const corrected = await client.callTool({ name: "update_task", arguments: { clientRequestId: "reason-exact", ...args, dueReason: ` ${unitText(200)} ` } });
+      expect(corrected.isError).not.toBe(true);
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]!.args.dueReason).toBe(unitText(200));
+      expect(claim).toHaveBeenCalledTimes(1);
+    }, {}, receipts);
+  } finally { claim.mockRestore(); }
 });
 
 test.each(["agent", "operator"] as const)("dueReason domain uses trimmed UTF-16 units for %s", actor => {

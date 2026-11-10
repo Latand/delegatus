@@ -77,8 +77,13 @@ operation's recovery read. `message_receipt` takes the accepted send's
 families. An unknown receipt is a non-retryable lookup error and supplies no
 proof that an original effect did not happen.
 
-For bridge reports, 120 summary units and 200 item units are display targets.
-The full report remains recoverable within the 8192-byte bound. An over-limit
+For bridge reports, the summary display limit is 120 UTF-16 code units;
+longer summaries are shortened in the stored display body and Telegram.
+The item display limit is 200 UTF-16 code units. A longer section item is
+omitted whole from the stored display body and Telegram, retained only in
+the complete voice copy, with a warning. Supply at most three decisions,
+each at most 200 units; further decisions appear only as a count in display
+and Telegram. The full report remains recoverable within the 8192-byte bound. An over-limit
 whole report is refused with its actual byte count before recording or
 delivery. Summarize whole items or split complete reports under distinct keys,
 preserving every owed decision.

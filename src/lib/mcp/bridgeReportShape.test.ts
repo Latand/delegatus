@@ -136,6 +136,7 @@ async function file(args: Record<string, unknown>, as: CallerAttribution = MANAG
 }
 
 beforeEach(async () => {
+  counter = 0;
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   resetBridgeCollectionsForTests();
   resetTaskChangeCollectionsForTests();
@@ -192,6 +193,30 @@ test("a voice-correlated report whose items the display copy drops or counts kee
   expect(row.complete).toEqual({ summary: "Answer to the voice.", sections: [{ heading: "Merged, goes out with the next deploy", items: [long, "short item"] }, { heading: "Next", items: queued }] });
   await file({ key: "clean", summary: "Nothing cut.", sections: { queued: ["one"] } });
   expect(readBridgeReportLog().reports[1]!.complete).toBeUndefined();
+});
+
+test.each([200, 201])("a decision of %i UTF-16 units reaches Telegram only when it fits the display limit", async length => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  const decision = "я".repeat(length - 2) + "🧭";
+  transport.script("sendMessage", ok({ message_id: 77, chat: TEAM, date: 1 }));
+  const answer = await file({ key: `decision-${length}`, class: "question", summary: "Choose the next step.", sections: { decision: [decision] } });
+  expect(answer).toMatchObject({ ok: true, recorded: true });
+  const row = readBridgeReportLog().reports[0]!;
+  const posts = transport.callsOf("sendMessage");
+  expect(posts).toHaveLength(1);
+  if (length === 200) {
+    expect(row.body).toContain(decision);
+    expect(row.telegram!.html).toContain(decision);
+    expect(JSON.stringify(posts)).toContain(decision);
+    expect(answer.warnings?.some(warning => warning.includes("over 200 characters dropped")) ?? false).toBe(false);
+  } else {
+    expect(row.body).not.toContain(decision);
+    expect(row.telegram!.html).not.toContain(decision);
+    expect(JSON.stringify(posts)).not.toContain(decision);
+    expect(row.complete?.sections).toContainEqual({ heading: "Needs a decision", items: [decision] });
+    expect(answer.warnings!.some(warning => warning.includes("1 item(s) over 200 characters dropped"))).toBe(true);
+  }
 });
 
 test("a report too large to relay whole is refused with a request to split it: nothing is stored, posted or shortened", async () => {
