@@ -602,13 +602,48 @@ export function HEAD(request: Request): Response {
 export type AfterFilesResponse = (work: () => Promise<void>) => void;
 const nextTurn: AfterFilesResponse = (work) => { setTimeout(() => { void work(); }, 0); };
 
+/** A queue refusal for a scope with nothing to serve, as the HTTP answer. It
+    carries no rows, ETag or build stamp, so the caller learns nothing about any
+    scope; the client's own backoff asks again. Only this boundary converts it:
+    `getFiles` keeps throwing for the board's internal preparation, which treats
+    a throw as "not prepared yet". */
+function projectionUnavailableResponse(request: Request, error: FilesProjectionQueueError): Response {
+  const url = new URL(request.url);
+  const diagnostics = filesProjectionQueueDiagnostics();
+  const yesNo = (flag: boolean) => (flag ? "yes" : "no");
+  console.warn(
+    `[files projection] ${error.reason} for a scope with nothing to serve: waited ${Math.round(error.waitedMs)}ms; `
+    + `waiting ${diagnostics.waiting}, expired ${diagnostics.expired}, refused ${diagnostics.refused}; `
+    + `pinned ${yesNo(!!url.searchParams.get("path")?.trim())}, summary ${yesNo(url.searchParams.get("view") === "summary")}, `
+    + `agent ${yesNo(request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))}`,
+  );
+  return Response.json(
+    { error: "files projection unavailable", code: "files_projection_unavailable", reason: error.reason },
+    {
+      status: 503,
+      headers: {
+        "cache-control": "no-store",
+        "x-llv-files-projection-cache": "unavailable",
+        "server-timing": `files-worker-queue;dur=${error.waitedMs.toFixed(1)};desc="${error.reason}"`,
+      },
+    },
+  );
+}
+
 export async function GET(request: Request, afterResponse: AfterFilesResponse = nextTurn): Promise<Response> {
   const id = randomUUID();
   performanceSpans.request(id, new URL(request.url).searchParams.get("view") === "storage-health" ? "health" : "files");
   performanceSpans.event("http.dispatch", id);
   let failed = true;
   try {
-    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", () => getFiles(request, false, afterResponse)));
+    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", async () => {
+      try {
+        return await getFiles(request, false, afterResponse);
+      } catch (error) {
+        if (error instanceof FilesProjectionQueueError) return projectionUnavailableResponse(request, error);
+        throw error;
+      }
+    }));
     failed = false;
     return response;
   } finally {

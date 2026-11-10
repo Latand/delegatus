@@ -172,8 +172,8 @@ import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntim
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
 import { withPrivacyWorkerOwner } from "@/lib/memory/privacyDiagnostics";
-import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
-import { RoleMemoryChanged, withCurrentRoleMemory, withRoleMemoryRetry, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { ROLE_MEMORY_PREPARATION_MESSAGE, isRoleMemoryDeferralReason, ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
+import { RoleMemoryPreparationDeferred, roleMemoryDeferralReason, RoleMemoryChanged, withCurrentRoleMemory, withRoleMemoryRetry, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -1020,9 +1020,13 @@ async function spawnPipelineAgent(
   } catch (error) {
     // The exact reservation is durable custody for this cleanup. It must be
     // settled even when the controller lease that authorized setup expired.
-    await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId,
-      error instanceof RoleMemoryChanged ? ROLE_MEMORY_CHANGED_MESSAGE
-        : "stage Git guard preparation or activation recheck failed before dispatch"));
+    try {
+      await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId,
+        roleMemoryDeferralReason(error)
+          ?? "stage Git guard preparation or activation recheck failed before dispatch"));
+    } catch (cleanupFailure) {
+      if (!roleMemoryDeferralReason(error)) throw cleanupFailure;
+    }
     throw error;
   }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
@@ -1052,6 +1056,7 @@ async function spawnPipelineAgent(
     deadline = Infinity;
   } catch (error) {
     if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
+    if (error instanceof Error && error.message === ROLE_MEMORY_PREPARATION_MESSAGE) throw new RoleMemoryPreparationDeferred();
     if (isRuntimeHostTransportFailure(error)) throw new Error(unavailable, { cause: error });
     throw error;
   }
@@ -2028,11 +2033,11 @@ export function defaultPipelinePorts(
         error: receipt.error,
         staged: receipt.key !== null,
         neverBegan: receipt.state === "failed" && !receipt.rejection
-          && (receipt.membershipAdmitted === false || admittedButFailedBeforeDispatch || receipt.error === ROLE_MEMORY_CHANGED_MESSAGE)
+          && (receipt.membershipAdmitted === false || admittedButFailedBeforeDispatch || isRoleMemoryDeferralReason(receipt.error))
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
           && !evidence.generation,
         roleMemoryRetrySafe: receipt.state === "failed" && !receipt.rejection
-          && receipt.error === ROLE_MEMORY_CHANGED_MESSAGE && receipt.key !== null && receipt.artifactPath !== null
+          && isRoleMemoryDeferralReason(receipt.error) && receipt.key !== null && receipt.artifactPath !== null
           && evidence.generation?.path === receipt.artifactPath && evidence.entry?.artifactPath === receipt.artifactPath
           && (!evidence.entry.structuredHostOperationId || evidence.entry.structuredHostOperationId === receipt.launchId)
           && !hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)
@@ -2109,7 +2114,7 @@ export function defaultPipelinePorts(
     failStoppedStageLaunch: (launchId, conversationId, reason, eligible, options) => withViewerOperation("pipelines.evidence", async () => {
       const before = registry.spawnReceipt(launchId);
       if (!before || before.conversationId !== conversationId || (before.engine !== "codex" && before.engine !== "claude")) return false;
-      const roleMemory = reason === ROLE_MEMORY_CHANGED_MESSAGE;
+      const roleMemory = isRoleMemoryDeferralReason(reason);
       const stamp = stageArtifactStamp(before.artifactPath);
       if (stamp === undefined) return false;
       if (roleMemory && before.artifactPath && !transcriptAllowed(before.artifactPath)
@@ -2135,7 +2140,7 @@ export function defaultPipelinePorts(
             || !(options?.manualRetry && (message.receipt.status === "uncertain"
                 || message.receipt.status === "failed" && message.receipt.deliveryUnverified === true)
               || message.receipt.deliveryUnverified !== true && (message.receipt.status === "rejected"
-                || message.receipt.status === "failed" && message.receipt.reason === ROLE_MEMORY_CHANGED_MESSAGE)))) return false;
+                || message.receipt.status === "failed" && message.receipt.reason === reason)))) return false;
         } catch { return false; }
       }
       const safe = (file: RegistryFile, receipt: RegistryFile["receipts"][string]) => {
@@ -2147,7 +2152,7 @@ export function defaultPipelinePorts(
         const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
         const generation = conversation?.generations.at(-1);
         const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
-        if (roleMemory && receipt.state === "failed" && receipt.error !== ROLE_MEMORY_CHANGED_MESSAGE) {
+        if (roleMemory && receipt.state === "failed" && !isRoleMemoryDeferralReason(receipt.error)) {
           // Automatic retirement accepts only the unchanged first delivery.
           // Explicit retry also permits failed later claims, with journal,
           // native-turn and process proof checked on both sides of its claim.
@@ -8026,7 +8031,7 @@ function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts)
 }
 
 function roleMemoryDispatchFailed(receipt: Pick<PipelineSpawnReceipt, "state" | "error"> | null): boolean {
-  return receipt?.state === "failed" && (receipt.error === ROLE_MEMORY_CHANGED_MESSAGE
+  return receipt?.state === "failed" && (isRoleMemoryDeferralReason(receipt.error)
     || receipt.error?.startsWith(`${ROLE_MEMORY_CHANGED_MESSAGE};`) === true);
 }
 
@@ -8080,7 +8085,9 @@ async function reconcileRoleMemoryDispatch(
   const needsStoppedProof = (candidate: PipelineSpawnReceipt | null) => matches(candidate)
     && (["starting", "path-pending"].includes(candidate.state)
       || roleMemoryDispatchFailed(candidate) && candidate.error !== ROLE_MEMORY_CHANGED_MESSAGE);
-  const proveStopped = async () => await ports.failStoppedStageLaunch?.(launchId!, conversationId!, ROLE_MEMORY_CHANGED_MESSAGE, () => {
+  const stoppedReason = openReceipt?.error === ROLE_MEMORY_PREPARATION_MESSAGE || wait.reason === ROLE_MEMORY_PREPARATION_MESSAGE
+    ? ROLE_MEMORY_PREPARATION_MESSAGE : ROLE_MEMORY_CHANGED_MESSAGE;
+  const proveStopped = async () => await ports.failStoppedStageLaunch?.(launchId!, conversationId!, stoppedReason, () => {
     assertCurrent();
     return wait.launchId === launchId;
   }, { manualRetry }) === true;
@@ -8168,12 +8175,14 @@ async function reconcileRoleMemoryDispatch(
       delete attempt.roleMemoryDispatchWait;
       delete attempt.controllerWait;
       delete attempt.spawnAdmissionBudget;
-      attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
+      attempt.roleMemoryWait = { ...nextRoleMemoryWait(attempt, ports), detail: wait.detail };
       attempt.state = "pending";
       attempt.error = null;
       pipeline.state = "running";
       setCursorState(pipeline, stage.id, "pending");
-      pipeline.stateDetail = "stage spawn deferred: role memory changed; original launch retired; retrying automatically";
+      pipeline.stateDetail = stoppedReason === ROLE_MEMORY_PREPARATION_MESSAGE
+        ? `stage spawn deferred: ${wait.detail ?? stoppedReason}; original launch retired; retrying automatically`
+        : "stage spawn deferred: role memory changed; original launch retired; retrying automatically";
       ports.scheduleTick?.(250);
       return null;
     }
@@ -8329,14 +8338,14 @@ async function spawnCorrelatedRunStage(
           const resetObservation = typeof wait.revision !== "string" || revision !== wait.revision
             || !Number.isSafeInteger(wait.observations) || wait.observations < 0 || wait.observations >= 2;
           if (resetObservation) {
-            attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now() };
+            attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now(), detail: wait.detail };
           }
           const currentWait = attempt.roleMemoryWait;
           const delay = validSchedule ? Math.max(0, retryAt - unixMs(ports.now())) : 0;
           if (delay > 0) {
             attempt.state = "pending";
             setCursorState(pipeline, stage.id, "pending");
-            pipeline.stateDetail = "stage spawn deferred: waiting before the next role-memory privacy attempt";
+            pipeline.stateDetail = `stage spawn deferred: ${currentWait.detail ?? "waiting before the next role-memory privacy attempt"}`;
             await persist();
             ports.scheduleTick?.(delay);
             return false;
@@ -8574,7 +8583,10 @@ async function spawnCorrelatedRunStage(
     if (!spawned) throw new Error("stage spawn failed without a result");
     const replayReceipt = ports.spawnReceipt(spawned.launchId);
     if (recoveringReservation && roleMemoryDispatchFailed(replayReceipt)
-      && replayReceipt?.conversationId === attempt.conversationId) throw new RoleMemoryChanged();
+      && replayReceipt?.conversationId === attempt.conversationId) {
+      if (replayReceipt.error === ROLE_MEMORY_PREPARATION_MESSAGE) throw new RoleMemoryPreparationDeferred();
+      throw new RoleMemoryChanged();
+    }
     if (recoveringReservation && replayReceipt?.state === "failed" && (replayReceipt.neverBegan || replayReceipt.roleMemoryRetrySafe)
       && replayReceipt.conversationId === attempt.conversationId) {
       const now = ports.now();
@@ -8640,10 +8652,11 @@ async function spawnCorrelatedRunStage(
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
   } catch (error) {
     if (error instanceof ActivationSuperseded) throw error;
-    if (error instanceof RoleMemoryChanged) {
+    if (roleMemoryDeferralReason(error)) {
       if (attempt.launchId) {
         attempt.roleMemoryDispatchWait ??= { launchId: attempt.launchId,
-          deadline: new Date(unixMs(ports.now()) + STAGED_RECOVERY_BUDGET_MS).toISOString() };
+          deadline: new Date(unixMs(ports.now()) + STAGED_RECOVERY_BUDGET_MS).toISOString(),
+          ...(error instanceof RoleMemoryPreparationDeferred ? { reason: ROLE_MEMORY_PREPARATION_MESSAGE, detail: error.message } : {}) };
         await reconcileRoleMemoryDispatch(pipeline, stage, attempt, ports);
         delete attempt.activation;
         await persist();
@@ -8654,7 +8667,10 @@ async function spawnCorrelatedRunStage(
       attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
       delete attempt.activation;
       setCursorState(pipeline, stage.id, "pending");
-      pipeline.stateDetail = "stage spawn deferred: role memory is changing; retrying automatically";
+      if (error instanceof RoleMemoryPreparationDeferred) attempt.roleMemoryWait.detail = error.message;
+      pipeline.stateDetail = error instanceof RoleMemoryPreparationDeferred
+        ? `stage spawn deferred: ${error.message}; retrying automatically`
+        : "stage spawn deferred: role memory is changing; retrying automatically";
       await persist();
       ports.scheduleTick?.(250);
       return;
@@ -17146,8 +17162,42 @@ export async function patchPipeline(
     }
   }
 
+  if (req.action === "set-src") {
+    const unknown = Object.keys(req).find(key => !["action", "srcPath", "overwrite"].includes(key));
+    if (unknown) return { error: `unsupported set-src field: ${unknown}`, status: 400 };
+    if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") return { error: "overwrite must be a boolean", status: 400 };
+    // Source roots may initialize account storage. Do that before taking the
+    // pipeline writer, then resolve again under admission against the current row.
+    const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
+    if (!creator.lineage) return { error: creator.error, status: creator.status };
+  }
   let linkRepositories: string[] = [];
-  const patched = await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
+  const patched = req.action === "set-src" ? await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
+      assertAuthority?.();
+      const pipeline = tx.get(id);
+      if (!pipeline) return { error: "pipeline not found", status: 404 };
+      if (legacyAction(pipeline)) return STAGE_RETIREMENT;
+      const guardShape = stageGuardShapeError(req);
+      if (guardShape) return guardShape;
+      if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
+        return { error: "overwrite must be a boolean", status: 400 };
+      }
+      const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
+      if (!creator.lineage) return { error: creator.error, status: creator.status };
+      const hasLineage = pipeline.srcPath !== null || pipeline.srcConversationId !== null;
+      const sameLineage = pipeline.srcPath === creator.lineage.srcPath
+        && pipeline.srcConversationId === creator.lineage.srcConversationId;
+      if (hasLineage && !sameLineage && req.overwrite !== true) {
+        return { error: "pipeline creator lineage already exists; pass overwrite: true to replace it", status: 409 };
+      }
+      assertAuthority?.();
+      pipeline.srcPath = creator.lineage.srcPath;
+      pipeline.srcConversationId = creator.lineage.srcConversationId;
+      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
+      else delete pipeline.srcDeputyConversationId;
+      tx.put(pipeline);
+      return { pipeline };
+    }, 2) : await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) {
       if ((req.action === "convert-legacy-review" || req.action === "revert-legacy-review") && findPipelineRecord(id)) {
@@ -17205,23 +17255,7 @@ export async function patchPipeline(
     let graphEdit: PipelineGraphEdit | null = null;
     let legacyAnswer: Pick<PipelineMutationResult, "convertedStages" | "legacyReview"> = {};
 
-    if (req.action === "set-src") {
-      if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
-        return { error: "overwrite must be a boolean", status: 400 };
-      }
-      const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
-      if (!creator.lineage) return { error: creator.error, status: creator.status };
-      const hasLineage = pipeline.srcPath !== null || pipeline.srcConversationId !== null;
-      const sameLineage = pipeline.srcPath === creator.lineage.srcPath
-        && pipeline.srcConversationId === creator.lineage.srcConversationId;
-      if (hasLineage && !sameLineage && req.overwrite !== true) {
-        return { error: "pipeline creator lineage already exists; pass overwrite: true to replace it", status: 409 };
-      }
-      pipeline.srcPath = creator.lineage.srcPath;
-      pipeline.srcConversationId = creator.lineage.srcConversationId;
-      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
-      else delete pipeline.srcDeputyConversationId;
-    } else if (req.action === "link-task") {
+    if (req.action === "link-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
       const tasks = loadTasks();

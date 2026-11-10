@@ -720,6 +720,12 @@ test("Claude resume normalizes transcript families and omits unknown model overr
 
   expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-20260701" })?.command)
     .toContain("'--model' 'fable'");
+  /* A pinned release resumes as itself: the `fable` alias runs Fable 5.1 on the
+     2.1.318 CLI runs Fable 5.1, so folding a Fable 5.2 conversation to it would switch it back. */
+  expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-5-2" })?.command)
+    .toContain("'--model' 'claude-fable-5-2'");
+  expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-5-1-20260901" })?.command)
+    .toContain("'--model' 'claude-fable-5-1'");
   expect(resumeSpecFor("claude-projects", transcript, { model: "mythos-1" })?.command)
     .not.toContain("'--model'");
 });

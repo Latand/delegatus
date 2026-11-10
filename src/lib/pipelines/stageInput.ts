@@ -5,7 +5,7 @@ import path from "node:path";
 import { BEARER_TOKEN, hardenedRedact } from "@/lib/view/compactText";
 import { storedLessonRevision, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { PrivacyWorkError } from "@/lib/memory/privacyFailure";
-import { withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -78,7 +78,7 @@ export async function composeStageInput(
   context?: StagePromptContext,
 ): Promise<string> {
   const resolved = stagePromptContext(pipeline, context);
-  return withCurrentRoleMemory(() => composeCurrentStageInput(pipeline, stage, role, previousOutput, worktreeDir, exec, reserveBytes, resolved));
+  return withCurrentRoleMemory(() => composeCurrentStageInput(pipeline, stage, role, previousOutput, worktreeDir, exec, reserveBytes, resolved), { revisionAttempts: 1 });
 }
 
 async function composeCurrentStageInput(
@@ -87,7 +87,7 @@ async function composeCurrentStageInput(
 ): Promise<string> {
   const revision = storedLessonRevision();
   const assertPrivacy = () => {
-    if (storedLessonRevision() !== revision) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "Role-memory privacy changed; nothing was sent");
+    if (storedLessonRevision() !== revision) throw new RoleMemoryChanged();
   };
   const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
   const workerLimit = effectiveWorkerLimit(pipeline.project).value;

@@ -45,9 +45,9 @@ const attempt = () => lane().runs[0]!.attempts.at(-1)!;
 const privacyRule = "Preserve amber orchard receipts until the owning operation completes";
 const privacyRows = () => taskPageWorkerDiagnostics().privacy?.rows ?? [];
 const privacyDigest = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
-function putPrivacyRule(rule = privacyRule) {
+function putPrivacyRule(rule = privacyRule, why = "") {
   roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: "r_cloud_owner", scope: "machine",
-    rule, why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "review",
+    rule, why, state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "review",
       attempt: 1, roleId: "reviewer", fixRound: false, conversationId: "conversation_fixture" },
     createdAt: "2026-11-05T00:00:00Z", changedAt: "2026-11-05T00:00:00Z" }));
 }
@@ -85,8 +85,15 @@ test.each(["codex-cloud", "claude-cloud"] as const)("Cloud privacy ownership sur
       expect(prompt).not.toContain(privacyRule);
       const lastJob = new Set(privacyRows().map(row => row.jobId));
       await withPrivacyWorkerOwner("foreign pipeline", "foreign stage", 9, async () => {
-        expect(await input.preparePrompt!("thread_repeat")).not.toContain(privacyRule);
-        expect(await input.preparePrompt!("thread_repeat")).not.toContain(privacyRule);
+        // Unchanged callbacks reuse completed filtering without inventing jobs.
+        expect(await input.preparePrompt!("thread_repeat")).toBe(prompt);
+        expect(await input.preparePrompt!("thread_repeat")).toBe(prompt);
+        expect(privacyRows().filter(row => !lastJob.has(row.jobId))).toHaveLength(0);
+        // A semantic revision forces real work so ownership cannot pass vacuously.
+        for (const why of ["first repeated callback", "second repeated callback"]) {
+          putPrivacyRule(privacyRule, why);
+          expect(await input.preparePrompt!("thread_repeat")).not.toContain(privacyRule);
+        }
       });
       const repeated = privacyRows().filter(row => !lastJob.has(row.jobId));
       const settled = repeated.filter(row => row.phase === "settled");
@@ -95,10 +102,14 @@ test.each(["codex-cloud", "claude-cloud"] as const)("Cloud privacy ownership sur
       expect(repeated.every(row => JSON.stringify(row.owner) === JSON.stringify(privacyOwner()))).toBe(true);
 
       await withPrivacyWorkerOwner(lane().id, "review", attempt().n, async () => {
+        putPrivacyRule(privacyRule, "nested callback");
         await runPrivacyWork({ kind: "filter", value: privacyRule });
         const parentRequest = privacyRows().at(-1)!.requestId;
-        await input.preparePrompt!("thread_nested");
-        expect(privacyRows().at(-1)!.requestId).toBe(parentRequest);
+        const beforeNested = new Set(privacyRows().map(row => row.jobId));
+        expect(await input.preparePrompt!("thread_nested")).not.toContain(privacyRule);
+        const nested = privacyRows().filter(row => !beforeNested.has(row.jobId));
+        expect(nested.filter(row => row.phase === "settled")).toHaveLength(1);
+        expect(nested.every(row => row.requestId === parentRequest)).toBe(true);
       });
       return submit({ ...input, prompt });
     };
@@ -108,7 +119,7 @@ test.each(["codex-cloud", "claude-cloud"] as const)("Cloud privacy ownership sur
     const expected = privacyOwner();
     const owned = privacyRows().filter(row => !before.has(row.jobId));
     expect(owned.some(row => row.phase === "started")).toBe(true);
-    expect(owned.filter(row => row.phase === "settled")).toHaveLength(6);
+    expect(owned.filter(row => row.phase === "settled")).toHaveLength(5);
     expect(owned.every(row => JSON.stringify(row.owner) === JSON.stringify(expected))).toBe(true);
     // A completed submission's callback still carries its owner, while the
     // existing dispatch fence refuses its superseded intent.

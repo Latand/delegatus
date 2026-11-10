@@ -162,6 +162,9 @@ export class RoleMemoryRefusal extends Error {
 }
 
 export const ROLE_MEMORY_CHANGED_MESSAGE = "Role-memory privacy changed; retrying before dispatch";
+export const ROLE_MEMORY_PREPARATION_MESSAGE = "Role-memory privacy preparation exhausted; retrying before dispatch";
+export const isRoleMemoryDeferralReason = (reason: string | null | undefined): boolean =>
+  reason === ROLE_MEMORY_CHANGED_MESSAGE || reason === ROLE_MEMORY_PREPARATION_MESSAGE;
 
 /** Opaque token carried with a staged first message to its final dispatcher. */
 export function roleMemoryRevisionToken(): string {
