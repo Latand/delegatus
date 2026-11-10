@@ -1,8 +1,20 @@
 import { expect, test } from "bun:test";
-import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+
+test.each(["remote: fatal error in commit_refs_rules", "! [remote rejected] HEAD -> lane (pre-receive hook declined)"])(
+  "a remote ref refusal retains its diagnostic: %s", async line => {
+    const outputTail = `pre-push: privacy\nPRIVACY GATE: PASS\npre-push: verified completed checks for this publication; transport admitted\n${line}\nerror: failed to push some refs`;
+    const { publicationFailureCause } = await import("./git");
+    expect(publicationTransportLine(outputTail)).toBe(line);
+    expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1, outputTail }))
+      .toBe(`git push was refused (exit 1): ${line}`);
+    expect(publicationApp403(outputTail)).toBe(false);
+    expect(publicationDeadlineOnly(outputTail)).toBe(false);
+    expect(publicationFrozenInstallFailure(outputTail)).toBe(false);
+  });
 
 async function admissionFailureOutput(): Promise<string> {
   let now = 0;

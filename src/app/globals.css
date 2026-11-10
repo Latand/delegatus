@@ -28,6 +28,10 @@
 /* Dark-theme conversation controls: accent fills, outlines and raised hovers. */
 @import "../styles/darkControls.css";
 
+/* The Settings window's phone sheet, which opens on a short screen too: its
+   touch sizes follow the sheet, never the viewport's width alone. */
+@custom-variant settings-sheet (&:where([data-settings-density="sheet"] *));
+
 body {
   background: var(--color-canvas);
   color: var(--color-primary);

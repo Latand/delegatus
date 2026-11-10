@@ -1,4 +1,4 @@
-export const MODEL_REGISTRY_VERSION = "2026-10-11";
+export const MODEL_REGISTRY_VERSION = "2026-11-09";
 
 interface RegistryEntry {
   standard: number;
@@ -11,6 +11,7 @@ const TWO_HUNDRED_THOUSAND = 200_000;
 /** Official-doc snapshot. Exact keys keep future model revisions unknown until
     the registry is deliberately updated and its version is bumped. */
 const MODEL_REGISTRY: Readonly<Record<string, RegistryEntry>> = {
+  "fable-5-2": { standard: ONE_MILLION },
   "fable-5-1": { standard: ONE_MILLION },
   "fable-5": { standard: ONE_MILLION },
   "mythos-5": { standard: ONE_MILLION },
@@ -32,7 +33,11 @@ const MODEL_REGISTRY: Readonly<Record<string, RegistryEntry>> = {
 };
 
 const MODEL_REGISTRY_ALIASES: Readonly<Record<string, string>> = {
-  fable: "fable-5-1",
+  /* The installed Claude Code (2.1.321) resolves `fable` to claude-fable-5-2;
+     2.1.318 and earlier run claude-fable-5-1 for it. A session reports the
+     exact id it ran, so only an unresolved launch alias reads through this
+     row, and both releases have the same window. */
+  fable: "fable-5-2",
   opus: "opus-5-5",
   sonnet: "sonnet-5-5",
   haiku: "haiku-5-5",

@@ -1,3 +1,4 @@
+import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
@@ -42,7 +43,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./fencedFirstMessage";
 import { stageRepairDelivery } from "./repairDelivery";
-import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
 import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
@@ -171,8 +172,9 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
-import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
-import { RoleMemoryChanged, withCurrentRoleMemory, withRoleMemoryRetry, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { withPrivacyWorkerOwner } from "@/lib/memory/privacyDiagnostics";
+import { ROLE_MEMORY_PREPARATION_MESSAGE, isRoleMemoryDeferralReason, ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
+import { RoleMemoryPreparationDeferred, roleMemoryDeferralReason, RoleMemoryChanged, withCurrentRoleMemory, withRoleMemoryRetry, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -183,7 +185,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
+import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost } from "./hostRetirement";
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
@@ -1019,9 +1021,13 @@ async function spawnPipelineAgent(
   } catch (error) {
     // The exact reservation is durable custody for this cleanup. It must be
     // settled even when the controller lease that authorized setup expired.
-    await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId,
-      error instanceof RoleMemoryChanged ? ROLE_MEMORY_CHANGED_MESSAGE
-        : "stage Git guard preparation or activation recheck failed before dispatch"));
+    try {
+      await withoutOperationLease(() => registry.failStructuredSpawnOffLoop(begun.receipt.launchId,
+        roleMemoryDeferralReason(error)
+          ?? "stage Git guard preparation or activation recheck failed before dispatch"));
+    } catch (cleanupFailure) {
+      if (!roleMemoryDeferralReason(error)) throw cleanupFailure;
+    }
     throw error;
   }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
@@ -1051,6 +1057,7 @@ async function spawnPipelineAgent(
     deadline = Infinity;
   } catch (error) {
     if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
+    if (error instanceof Error && error.message === ROLE_MEMORY_PREPARATION_MESSAGE) throw new RoleMemoryPreparationDeferred();
     if (isRuntimeHostTransportFailure(error)) throw new Error(unavailable, { cause: error });
     throw error;
   }
@@ -2027,11 +2034,11 @@ export function defaultPipelinePorts(
         error: receipt.error,
         staged: receipt.key !== null,
         neverBegan: receipt.state === "failed" && !receipt.rejection
-          && (receipt.membershipAdmitted === false || admittedButFailedBeforeDispatch || receipt.error === ROLE_MEMORY_CHANGED_MESSAGE)
+          && (receipt.membershipAdmitted === false || admittedButFailedBeforeDispatch || isRoleMemoryDeferralReason(receipt.error))
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
           && !evidence.generation,
         roleMemoryRetrySafe: receipt.state === "failed" && !receipt.rejection
-          && receipt.error === ROLE_MEMORY_CHANGED_MESSAGE && receipt.key !== null && receipt.artifactPath !== null
+          && isRoleMemoryDeferralReason(receipt.error) && receipt.key !== null && receipt.artifactPath !== null
           && evidence.generation?.path === receipt.artifactPath && evidence.entry?.artifactPath === receipt.artifactPath
           && (!evidence.entry.structuredHostOperationId || evidence.entry.structuredHostOperationId === receipt.launchId)
           && !hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)
@@ -2108,7 +2115,7 @@ export function defaultPipelinePorts(
     failStoppedStageLaunch: (launchId, conversationId, reason, eligible, options) => withViewerOperation("pipelines.evidence", async () => {
       const before = registry.spawnReceipt(launchId);
       if (!before || before.conversationId !== conversationId || (before.engine !== "codex" && before.engine !== "claude")) return false;
-      const roleMemory = reason === ROLE_MEMORY_CHANGED_MESSAGE;
+      const roleMemory = isRoleMemoryDeferralReason(reason);
       const stamp = stageArtifactStamp(before.artifactPath);
       if (stamp === undefined) return false;
       if (roleMemory && before.artifactPath && !transcriptAllowed(before.artifactPath)
@@ -2134,7 +2141,7 @@ export function defaultPipelinePorts(
             || !(options?.manualRetry && (message.receipt.status === "uncertain"
                 || message.receipt.status === "failed" && message.receipt.deliveryUnverified === true)
               || message.receipt.deliveryUnverified !== true && (message.receipt.status === "rejected"
-                || message.receipt.status === "failed" && message.receipt.reason === ROLE_MEMORY_CHANGED_MESSAGE)))) return false;
+                || message.receipt.status === "failed" && message.receipt.reason === reason)))) return false;
         } catch { return false; }
       }
       const safe = (file: RegistryFile, receipt: RegistryFile["receipts"][string]) => {
@@ -2146,7 +2153,7 @@ export function defaultPipelinePorts(
         const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
         const generation = conversation?.generations.at(-1);
         const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
-        if (roleMemory && receipt.state === "failed" && receipt.error !== ROLE_MEMORY_CHANGED_MESSAGE) {
+        if (roleMemory && receipt.state === "failed" && !isRoleMemoryDeferralReason(receipt.error)) {
           // Automatic retirement accepts only the unchanged first delivery.
           // Explicit retry also permits failed later claims, with journal,
           // native-turn and process proof checked on both sides of its claim.
@@ -2454,9 +2461,18 @@ export function defaultPipelinePorts(
         if (!sessions.length || sessions.some(session => session.host === "conflict" || session.attentionIds.length > 0)
           || exitStatusPending(conversationId)) return null;
         const gone = sessions.every(session => ["dead", "unhosted"].includes(session.host));
-        if (gone) runtimeReads.reset();
+        // This read is ordered after transcript and durable evidence reads.
+        // Reset the shared activity cache on either outcome so a fresh host
+        // adoption invalidates an earlier cached dead session before the
+        // retry decision consumes conversationAgentActive.
         return gone;
       } catch { return null; }
+      finally {
+        // Invalidate any earlier death cached by conversationAgentActive on
+        // every outcome, including attention, conflict and unknown evidence.
+        // Those paths must not let stale death authorize a replacement.
+        runtimeReads.reset();
+      }
     },
     restartRecoveryBootId: () => PIPELINE_RECOVERY_BOOT_ID,
     restartRecoveryBootStartedAt: () => PIPELINE_RECOVERY_BOOT_STARTED_AT,
@@ -2917,7 +2933,7 @@ function stageReservationReceipt(pipeline: Pipeline, stageId: string, attempt: P
       || registry.conversationMemberships(receipt.conversationId).some(member =>
       member.kind === "pipeline" && member.containerId === pipeline.id && member.stageId === stageId
       && member.slot === `${stageId}:${attempt.n}` && member.round === attempt.n
-      && member.role === (input?.membership.role ?? attempt.effectiveRole.roleId)))) {
+      && member.role === (input?.membership.role ?? attempt.effectiveRole.roleId ?? "agent")))) {
     throw new Error("stage receipt membership, runtime or worktree identity conflicts with the original attempt");
   }
   return receipt;
@@ -2926,6 +2942,14 @@ function stageReservationReceipt(pipeline: Pipeline, stageId: string, attempt: P
 function bindStageReservation(attempt: PipelineStageAttempt, receipt: NonNullable<ReturnType<typeof stageReservationReceipt>>) {
   Object.assign(attempt, { launchId: receipt.launchId, conversationId: receipt.conversationId,
     accountId: receipt.accountId ?? attempt.accountId ?? null });
+}
+
+function isVerifiedNoHostStageReceipt(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt,
+  receipt: NonNullable<ReturnType<typeof stageReservationReceipt>>): boolean {
+  if (receipt.state !== "failed" || receipt.membershipAdmitted !== false || receipt.key || receipt.pane
+    || receipt.verifiedHost || receipt.artifactPath || !receipt.clientAttemptId) return false;
+  try { return stageReservationReceipt(pipeline, stageId, attempt, receipt.clientAttemptId)?.launchId === receipt.launchId; }
+  catch { return false; }
 }
 
 async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
@@ -5099,6 +5123,9 @@ function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: R
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
   }
   if (!failure) return `publishing the passed stage: ${published.error}`;
+  if (publicationRemoteRefusal(failure)) {
+    return `publishing the passed stage: ${publicationFailureCause(failure)}. The remote cause is unknown; the accepted head is preserved. Inspect the remote refusal before using publish to try again.\n${published.error}`;
+  }
   const action = commitsRefusedByPrivacy(failure)
     ? "The commits this push carries were refused: correct their author, message or content on this branch, then retry-stage."
     : failure.changedFiles === 0
@@ -5122,8 +5149,9 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
  * Execution deadlines without a decisive refusal retry on the same bounded
  * backoff as other interruptions. Each failed operation is counted once on
  * the attempt; the limit is durable across ticks and restarts.
- * A refused stage that changed files, or whose commits privacy refused,
- * proceeds to its bounded producer repair.
+ * A remote refusal after completed checks parks with the accepted head intact.
+ * Other refused stages that changed files, or whose commits privacy refused,
+ * proceed to their bounded producer repair.
  */
 async function retryRefusedPublication(
   pipeline: Pipeline,
@@ -5139,7 +5167,7 @@ async function retryRefusedPublication(
   if (!operation || operation.state !== "settled") return false;
   const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
+    cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
     detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error).slice(0, 400),
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
@@ -5183,7 +5211,7 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
   const notLanded = publicationNotLanded(result);
   const deadlineOnly = failure?.retryableDeadline === true;
   recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
+    cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
     detail: (deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
     recoverable: result.remote === "unreachable" || recoverablePublication(result) },
@@ -5728,15 +5756,23 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const conversationId = worker.conversationId;
   const proveGone = confirmHostGone ? ports.publicationRepairProducerGone : undefined;
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
-  const interrupted = proveGone ? null
-    : await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
+  const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
-  const hostGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
-  // The targeted native read supplies activity evidence for this producer.
-  // Legacy ports retain their existing interruption and activity witnesses.
-  const active = proveGone ? hostGone === true ? false : null
-    : await ports.conversationAgentActive(conversationId).catch(() => null);
-  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle", dead: interrupted === "dead", hostGone };
+  const observedGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
+  const observedActive = await ports.conversationAgentActive(conversationId).catch(() => null);
+  // Activity is read last and can observe adoption after the absence proof.
+  // Invalidate that older death evidence everywhere the retry consumes it.
+  const hostGone = observedActive === true ? false : observedGone;
+  // An earlier cached dead/conflict result cannot override a fresh absence
+  // probe reporting attention or an unknown host.
+  const active = proveGone && hostGone !== true && observedActive !== true ? null
+    : proveGone && hostGone === true ? false : observedActive;
+  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle",
+    // The interruption read can precede a host adoption while durable evidence
+    // is awaited. A fresh host observation that says it is present supersedes
+    // that earlier death result.
+    dead: proveGone ? hostGone === true
+      : active !== true && (hostGone === true || (hostGone !== false && interrupted === "dead")), hostGone };
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
@@ -5776,8 +5812,25 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   if (!worker.conversationId) return abandon("the producer has no conversation.");
   const { active, durable } = evidence;
   const bounded = !passedStageCustodyPark(pipeline, attempt);
+  const outstanding = ports.conversationDeliveryOutstanding?.(worker.conversationId) === true;
+  const repairDeliverySettled = delivery?.state === "failed" && delivery.safeToReplace
+    || delivery?.state === "unreserved" && delivery.safeToReplace && !repair?.requestedAt;
+  const priorDeliveryId = repair?.delivery?.operationId;
+  const sameRepairOperation = !!delivery?.operationId && (!priorDeliveryId || delivery.operationId === priorDeliveryId);
+  const terminalRepairDelivery = sameRepairOperation && (delivery?.state === "delivered" || delivery?.state === "failed");
+  // Legacy history cannot prove reservation identity. Its failed key-specific
+  // read still bounds this repair after confirmed death and the original cutoff.
+  const failedOperationlessRepair = delivery?.state === "failed" && !delivery.operationId && !priorDeliveryId;
+  const canProceedWithUnrelatedHeldDelivery = outstanding && evidence.hostGone === true && expired
+    && (repairDeliverySettled || terminalRepairDelivery || failedOperationlessRepair);
+  // An unrelated message can remain held behind account migration after the
+  // repair itself has failed. Once the old producer is freshly confirmed gone
+  // and this repair's original window has elapsed, that older reservation
+  // cannot keep the accepted head parked forever. Keep it in the registry so
+  // its own lifecycle can settle it later.
+  if (outstanding && !canProceedWithUnrelatedHeldDelivery) return refusal;
   if (active === true) return refusal;
-  if (active === false && (repair || bounded)) return abandon("the producer is gone or idle.");
+  if (active === false && evidence.hostGone !== false && (repair || bounded)) return abandon("the producer is gone or idle.");
   const background = liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(now));
   const progressAt = durable?.lastRecordAt ?? durable?.message?.ts;
   if ((durable?.turn === "busy" && typeof progressAt === "number"
@@ -5790,7 +5843,7 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
     && (durable.message?.ts ?? 0) > (repair?.messageTs ?? 0)
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repairStartedAt);
   const failed = delivery?.state === "failed";
-  if (durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
+  if (durable?.turn === "busy" || outstanding && !canProceedWithUnrelatedHeldDelivery
     || background.length > 0 || active !== false && !finished && !failed) return refusal;
   if (repair) {
     if (delivery) repair.delivery = delivery;
@@ -5839,9 +5892,10 @@ async function requestStagePublicationRepair(
   const operation = pipeline.delivery?.operation;
   // The producer judges the refusal. Custom hooks and bounded log tails can
   // omit the phase marker, so it cannot gate this repair. A head that changes
-  // no files cannot have caused a refusal other than privacy's: that one has
-  // had its retries and parks with its cause, with no producer turn.
+  // no files cannot have caused a refusal other than privacy's. An explicit
+  // remote refusal also parks with its cause, with no producer turn.
   if (attempt.publicationRepair || !failure || failure.retryableApp403 === true || failure.retryableDeadline === true || !operation || publicationNotLanded(published)
+    || publicationRemoteRefusal(failure)
     || failure.step !== "publishing the pipeline branch"
     || (failure.changedFiles === 0 && !commitsRefusedByPrivacy(failure))) return false;
   const ownOutputs = stage.kind === "run" && (attempt.effectiveRole.access === "read-write" || !!attemptStage(stage, attempt).outputs?.length);
@@ -7718,6 +7772,15 @@ function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefine
     && !attempt.completedAt && !attempt.report && !attempt.verdict;
 }
 
+function undispatchedRunAttempt(pipeline: Pipeline, stage: PipelineStage | null, attempt: PipelineStageAttempt | null): boolean {
+  if (stage?.kind !== "run" || !attempt || attempt.launchId || attempt.conversationId || attempt.sessionId
+    || attempt.agentPath || attempt.paneId || attempt.flowId || attempt.report || attempt.verdict || attempt.activation
+    || attempt.cloud || attempt.runtimeSwitches?.length || attempt.controllerWait || attempt.retiredLaunches?.length
+    || attempt.spawnCalls !== undefined && attempt.spawnCalls !== 0) return false;
+  try { return agentRegistry().pipelineSpawnHistory(clientAttemptId(pipeline, stage, attempt)).length === 0; }
+  catch { return false; }
+}
+
 function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts, activationPending = !!attempt.activation): string {
   const publication = ports.structuredDeliveryPublication?.() ?? "ready";
   if (publication !== "ready") return `stage spawn deferred: waiting for the delivery controller (${publication})`;
@@ -7969,7 +8032,7 @@ function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts)
 }
 
 function roleMemoryDispatchFailed(receipt: Pick<PipelineSpawnReceipt, "state" | "error"> | null): boolean {
-  return receipt?.state === "failed" && (receipt.error === ROLE_MEMORY_CHANGED_MESSAGE
+  return receipt?.state === "failed" && (isRoleMemoryDeferralReason(receipt.error)
     || receipt.error?.startsWith(`${ROLE_MEMORY_CHANGED_MESSAGE};`) === true);
 }
 
@@ -8023,7 +8086,9 @@ async function reconcileRoleMemoryDispatch(
   const needsStoppedProof = (candidate: PipelineSpawnReceipt | null) => matches(candidate)
     && (["starting", "path-pending"].includes(candidate.state)
       || roleMemoryDispatchFailed(candidate) && candidate.error !== ROLE_MEMORY_CHANGED_MESSAGE);
-  const proveStopped = async () => await ports.failStoppedStageLaunch?.(launchId!, conversationId!, ROLE_MEMORY_CHANGED_MESSAGE, () => {
+  const stoppedReason = openReceipt?.error === ROLE_MEMORY_PREPARATION_MESSAGE || wait.reason === ROLE_MEMORY_PREPARATION_MESSAGE
+    ? ROLE_MEMORY_PREPARATION_MESSAGE : ROLE_MEMORY_CHANGED_MESSAGE;
+  const proveStopped = async () => await ports.failStoppedStageLaunch?.(launchId!, conversationId!, stoppedReason, () => {
     assertCurrent();
     return wait.launchId === launchId;
   }, { manualRetry }) === true;
@@ -8111,12 +8176,14 @@ async function reconcileRoleMemoryDispatch(
       delete attempt.roleMemoryDispatchWait;
       delete attempt.controllerWait;
       delete attempt.spawnAdmissionBudget;
-      attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
+      attempt.roleMemoryWait = { ...nextRoleMemoryWait(attempt, ports), detail: wait.detail };
       attempt.state = "pending";
       attempt.error = null;
       pipeline.state = "running";
       setCursorState(pipeline, stage.id, "pending");
-      pipeline.stateDetail = "stage spawn deferred: role memory changed; original launch retired; retrying automatically";
+      pipeline.stateDetail = stoppedReason === ROLE_MEMORY_PREPARATION_MESSAGE
+        ? `stage spawn deferred: ${wait.detail ?? stoppedReason}; original launch retired; retrying automatically`
+        : "stage spawn deferred: role memory changed; original launch retired; retrying automatically";
       ports.scheduleTick?.(250);
       return null;
     }
@@ -8181,6 +8248,15 @@ async function spawnRunStage(
   spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0],
   ports: PipelinePorts, persist: () => void | Promise<void>,
   prepareInput = false,
+): Promise<void> {
+  return withPrivacyWorkerOwner(pipeline.id, stage.id, attempt.n,
+    () => spawnCorrelatedRunStage(pipeline, stage, attempt, spawnInput, ports, persist, prepareInput));
+}
+
+async function spawnCorrelatedRunStage(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0],
+  ports: PipelinePorts, persist: () => void | Promise<void>, prepareInput: boolean,
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
   let roleMemoryWaitReady = false;
@@ -8269,14 +8345,14 @@ async function spawnRunStage(
           const resetObservation = typeof wait.revision !== "string" || revision !== wait.revision
             || !Number.isSafeInteger(wait.observations) || wait.observations < 0 || wait.observations >= 2;
           if (resetObservation) {
-            attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now() };
+            attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now(), detail: wait.detail };
           }
           const currentWait = attempt.roleMemoryWait;
           const delay = validSchedule ? Math.max(0, retryAt - unixMs(ports.now())) : 0;
           if (delay > 0) {
             attempt.state = "pending";
             setCursorState(pipeline, stage.id, "pending");
-            pipeline.stateDetail = "stage spawn deferred: waiting before the next role-memory privacy attempt";
+            pipeline.stateDetail = `stage spawn deferred: ${currentWait.detail ?? "waiting before the next role-memory privacy attempt"}`;
             await persist();
             ports.scheduleTick?.(delay);
             return false;
@@ -8514,7 +8590,10 @@ async function spawnRunStage(
     if (!spawned) throw new Error("stage spawn failed without a result");
     const replayReceipt = ports.spawnReceipt(spawned.launchId);
     if (recoveringReservation && roleMemoryDispatchFailed(replayReceipt)
-      && replayReceipt?.conversationId === attempt.conversationId) throw new RoleMemoryChanged();
+      && replayReceipt?.conversationId === attempt.conversationId) {
+      if (replayReceipt.error === ROLE_MEMORY_PREPARATION_MESSAGE) throw new RoleMemoryPreparationDeferred();
+      throw new RoleMemoryChanged();
+    }
     if (recoveringReservation && replayReceipt?.state === "failed" && (replayReceipt.neverBegan || replayReceipt.roleMemoryRetrySafe)
       && replayReceipt.conversationId === attempt.conversationId) {
       const now = ports.now();
@@ -8580,10 +8659,11 @@ async function spawnRunStage(
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
   } catch (error) {
     if (error instanceof ActivationSuperseded) throw error;
-    if (error instanceof RoleMemoryChanged) {
+    if (roleMemoryDeferralReason(error)) {
       if (attempt.launchId) {
         attempt.roleMemoryDispatchWait ??= { launchId: attempt.launchId,
-          deadline: new Date(unixMs(ports.now()) + STAGED_RECOVERY_BUDGET_MS).toISOString() };
+          deadline: new Date(unixMs(ports.now()) + STAGED_RECOVERY_BUDGET_MS).toISOString(),
+          ...(error instanceof RoleMemoryPreparationDeferred ? { reason: ROLE_MEMORY_PREPARATION_MESSAGE, detail: error.message } : {}) };
         await reconcileRoleMemoryDispatch(pipeline, stage, attempt, ports);
         delete attempt.activation;
         await persist();
@@ -8594,7 +8674,10 @@ async function spawnRunStage(
       attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
       delete attempt.activation;
       setCursorState(pipeline, stage.id, "pending");
-      pipeline.stateDetail = "stage spawn deferred: role memory is changing; retrying automatically";
+      if (error instanceof RoleMemoryPreparationDeferred) attempt.roleMemoryWait.detail = error.message;
+      pipeline.stateDetail = error instanceof RoleMemoryPreparationDeferred
+        ? `stage spawn deferred: ${error.message}; retrying automatically`
+        : "stage spawn deferred: role memory is changing; retrying automatically";
       await persist();
       ports.scheduleTick?.(250);
       return;
@@ -8812,7 +8895,8 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       }
       if (!record.retry && !attempt.report) {
         const limited = attempt.providerWait?.condition.kind === "usage_limit";
-        const sourceStoppedForHandoff = !parked && record.mode === "handoff" && ["switching", "continuing"].includes(record.phase);
+        const sourceStoppedForHandoff = !parked && record.mode === "handoff"
+          && (["switching", "continuing"].includes(record.phase) || record.phase === "cutting" && !!record.stopDispatchedAt);
         const dead = !limited && !sourceStoppedForHandoff && (ports.runtimeSwitchSourceUnavailable?.(record.from.conversationId)
           || await ports.conversationTurnInterrupted?.(record.from.conversationId) === "dead");
         if (limited || dead) {
@@ -9018,7 +9102,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           await checkpoint(); continue;
         }
       }
-      await driveRuntimeSwitch(pipeline, stage, attempt, outside, checkpoint, async role => {
+      await withPrivacyWorkerOwner(pipeline.id, stage.id, attempt.n, () => driveRuntimeSwitch(pipeline, stage, attempt, outside, checkpoint, async role => {
         const bound = attemptStage(stage, attempt);
         const memory = stageMemoryForLaunch(pipeline, stage, role.roleId ?? null);
         const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec);
@@ -9029,7 +9113,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace, supersedes: record.from.conversationId,
           membership: { kind: "pipeline", containerId: pipeline.id, role: role.roleId ?? "agent", slot: `${stage.id}:${attempt.n}`,
             stageId: stage.id, stageOrder: pipeline.stages.indexOf(stage), round: attempt.n, parentConversationId: null } };
-      });
+      }));
       if (parked && ["committed", "rolled-back", "superseded"].includes(record.phase)) {
         pipeline.state = "running";
         pipeline.stateDetail = null;
@@ -9640,7 +9724,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         }
         if (abort.signal.aborted) throw new Error(`${label} operation timed out`);
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) return;
-        const prepareCloudPrompt = async (threadId?: string) => {
+        const prepareCloudPrompt = (threadId?: string) => withPrivacyWorkerOwner(pipeline.id, stage.id, n, async () => {
           const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
           const prompt = (await composeCloudStageInput(pipeline, bound, attempt.effectiveRole,
             previousOutput, undefined, threadId ? {
@@ -9658,7 +9742,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
             'End with one fenced JSON verdict: {"status":"pass|fail|needs_decision","findings":["P1 — file:line and defect"]}. Use the same findings and verdict contract as a local stage. A pass has no findings.',
           ].join("\n\n"));
           return [prompt, runtime].join("\n\n");
-        };
+        });
         const prompt = await prepareCloudPrompt();
         const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
           environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
@@ -10323,9 +10407,19 @@ async function tickRunStage(
   }
 
   updateAttemptIdentity(pipeline, attempt, entries, ports);
-  const structuredActive = !attempt.paneId && attempt.conversationId
+  const reportedStructuredActive = !attempt.paneId && attempt.conversationId
     ? await ports.conversationAgentActive(attempt.conversationId)
     : null;
+  /* Startup holds a row whose restart cut evidence is undecided or keeps
+     moving, and an agent that kept working through the restart moves it with
+     every record it writes (#3811). The held row reads unhosted for as long
+     as that lasts, while its engine process is alive. That is no host death:
+     nothing below may read it as one, fail the attempt over it or stop the
+     process. A held row whose process is gone keeps the ordinary reading. */
+  const restartCutLiveHost = !attempt.paneId && !!attempt.conversationId
+    && ports.conversationRestartCutHeld?.(attempt.conversationId) === true
+    && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive";
+  const structuredActive = restartCutLiveHost && reportedStructuredActive === false ? null : reportedStructuredActive;
   const paneActive = attempt.paneId ? await ports.paneAgentAlive(attempt.paneId) : null;
   const spawnReceipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const terminalSpawnFailure = spawnReceipt
@@ -10411,7 +10505,7 @@ async function tickRunStage(
     ? Math.max(reportedUnavailableAt, unixMs(deployCut.resolvedAt))
     : reportedUnavailableAt;
   const hostUnavailablePastGrace = !heldForDeployCut
-    && (Boolean(oomDeath) || (unavailableAt > 0
+    && (Boolean(oomDeath) || (!restartCutLiveHost && unavailableAt > 0
     && unixMs(ports.now()) - unavailableAt >= DEAD_RUNNING_ATTEMPT_GRACE_MS));
   if (heldForDeployCut && pipeline.stateDetail !== DEPLOY_CUT_HOLD_DETAIL) {
     pipeline.stateDetail = DEPLOY_CUT_HOLD_DETAIL;
@@ -10433,7 +10527,7 @@ async function tickRunStage(
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attemptEvidenceFloor(attempt), undefined,
     attempt.providerWait?.turnTs ?? attempt.controllerWait?.providerCutAt);
-  const unregisteredHostDeath = structuredActive === true
+  const unregisteredHostDeath = structuredActive === true || restartCutLiveHost
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
       stageId: stage.id,
@@ -15120,12 +15214,12 @@ function replaceStartedStages(
  * or stated on an action it does not guard, is refused with 400, so a caller
  * never believes a write was guarded when it was not.
  */
-function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
+export function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
   const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId") => Object.hasOwn(req, field) && req[field] !== undefined;
   /* A runtime choice for a running attempt names the attempt and the conversation it was made on. */
   const runningAttemptBound = req.action === "override-stage" && req.applyNow === true;
-  if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review" && req.action !== "accept-head") {
-    return { error: "expectedRevision applies only to resolve-decision, continue-review and accept-head", status: 400, field: "expectedRevision" };
+  if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review" && req.action !== "accept-head" && req.action !== "convert-legacy-review" && req.action !== "revert-legacy-review") {
+    return { error: "expectedRevision applies only to resolve-decision, continue-review, accept-head, convert-legacy-review and revert-legacy-review", status: 400, field: "expectedRevision" };
   }
   if (req.addRounds !== undefined && req.action !== "continue-review") {
     return { error: "addRounds applies only to continue-review", status: 400, field: "addRounds" };
@@ -15971,26 +16065,53 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
       if (!claimed) continue;
       const plan = claimed.closeTeardown!;
       const report = claimed.closeReport!;
-      const checkpoint = async (candidate?: StageHostCandidate) => withPipelineMutation(async (pipelines, persist) => {
+      const checkpoint = async (candidate?: StageHostCandidate, reconciledTarget?: PipelineStageHostRef) => withPipelineMutation(async (pipelines, persist) => {
         const live = pipelines.find((item) => item.id === claimed.id);
         if (live?.closeTeardown?.id !== plan.id || live.closeTeardown.phase !== "running"
           || JSON.stringify(live.closeTeardown.owner) !== JSON.stringify(owner)) throw new Error("close teardown ownership changed");
+        if (reconciledTarget && live.closeReport) {
+          live.closeReport.pending = live.closeReport.pending.filter(target => closeHostIdentity(target) !== closeHostIdentity(reconciledTarget));
+        }
         if (candidate) {
           const current = runFor(live, candidate.target.stageId)?.attempts.find((item) => item.n === candidate.target.attempt);
           const host = plan.hosts?.find((item) => closeHostIdentity(item.target) === closeHostIdentity(candidate.target));
           if (host) host.evidence = closeHostEvidence(candidate.attempt);
+          if (current && current.state === "pending" && candidate.target.launchId
+            && (!current.launchId || current.launchId === candidate.target.launchId)
+            && (!current.conversationId || current.conversationId === candidate.target.conversationId)
+            && (!current.agentPath || current.agentPath === candidate.target.agentPath)
+            && (!current.paneId || current.paneId === candidate.target.paneId)) {
+            current.launchId = candidate.target.launchId;
+            current.conversationId = candidate.target.conversationId;
+            current.agentPath = candidate.target.agentPath;
+            current.paneId = candidate.target.paneId;
+          }
           // The outcome belongs to the frozen host. A scanner may already have
           // bound this attempt to the next reviewer while the stop was in flight.
           if (current && closeHostIdentity(current) === closeHostIdentity(candidate.target)) {
             current.unresolvedTermination = structuredClone(candidate.attempt.unresolvedTermination);
-            if (!current.verdict && !current.completedAt) {
+            if (!current.verdict && !current.completedAt
+              && !report.pending.some(target => target.stageId === candidate.target.stageId && target.attempt === candidate.target.attempt)) {
               current.state = candidate.attempt.state;
               current.error = candidate.attempt.error;
               current.completedAt = candidate.attempt.completedAt;
             }
           }
         }
+        // A final no-host receipt can release the last pending obligation
+        // after another original host's terminal evidence was checkpointed.
+        for (const host of plan.hosts ?? []) {
+          const current = runFor(live, host.target.stageId)?.attempts.find(item => item.n === host.target.attempt);
+          if (current?.state === "pending" && !current.verdict && !current.completedAt && host.evidence.completedAt
+            && closeHostIdentity(current) === closeHostIdentity(host.target)
+            && !report.pending.some(target => target.stageId === host.target.stageId && target.attempt === host.target.attempt)) {
+            current.state = host.evidence.state;
+            current.error = host.evidence.error;
+            current.completedAt = host.evidence.completedAt;
+          }
+        }
         retainCloseHosts(live, report, plan);
+        settleClosedPipelineAttempts(live);
         if (report.pending.length || report.pendingContinuations?.length) {
           report.status = "pending";
           if (plan.phase === "settled") plan.phase = "pending";
@@ -16029,6 +16150,74 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         if (budget) budget.used++;
         const attempt = runFor(claimed, target.stageId)?.attempts.find((item) => item.n === target.attempt);
         if (!attempt) throw new Error("close target attempt disappeared");
+        const launchObligation = report.notes.some(note => closeHostIdentity(note) === closeHostIdentity(target)
+          && note.detail.startsWith("original stage launch"));
+        const hasAttemptHostAddress = Boolean(attempt.conversationId || attempt.agentPath || attempt.paneId);
+        if (launchObligation || attempt.state === "pending" && !hasAttemptHostAddress) {
+          const stage = claimed.stages.find(item => item.id === target.stageId);
+          try {
+            if (!stage) throw new Error("original stage is unavailable");
+            const receipt = target.launchId ? agentRegistry().spawnReceipt(target.launchId) : null;
+            if (!target.launchId) {
+              const base = clientAttemptId(claimed, stage, attempt);
+              const history = agentRegistry().pipelineSpawnHistory(base);
+              const noHost = (item: (typeof history)[number]) => isVerifiedNoHostStageReceipt(claimed, target.stageId, attempt, item);
+              if (history.length && history.every(noHost)) {
+                report.pending = report.pending.filter(item => item !== target);
+                attempt.spawnCalls = 0;
+                attempt.state = "skipped";
+                attempt.completedAt = claimed.closedAt;
+                attempt.error = "pipeline closed before this attempt started";
+                report.notes = report.notes.filter(note => !(note.stageId === target.stageId && note.attempt === target.attempt));
+                await checkpoint(undefined, target);
+                continue;
+              }
+              const found = history.filter(item => !noHost(item));
+              if (!found.length) throw new Error("original stage launch history is still unavailable");
+              const targets = found.map(item => ({ stageId: target.stageId, attempt: target.attempt,
+                conversationId: item.conversationId, agentPath: null, paneId: item.pane?.paneId ?? null, launchId: item.launchId }));
+              report.pending = [...report.pending.filter(item => item !== target), ...targets];
+              for (const item of found) report.notes.push({ stageId: target.stageId, attempt: target.attempt,
+                conversationId: item.conversationId, agentPath: null, paneId: item.pane?.paneId ?? null,
+                launchId: item.launchId, detail: "original stage launch is awaiting receipt validation" });
+              await checkpoint(undefined, target);
+              continue;
+            }
+            if (!receipt?.clientAttemptId) throw new Error("original launch receipt is unavailable");
+            const verified = stageReservationReceipt(claimed, target.stageId, attempt, receipt.clientAttemptId);
+            const base = clientAttemptId(claimed, stage, attempt);
+            if (!verified || verified.launchId !== receipt.launchId || verified.conversationId !== target.conversationId
+              || !agentRegistry().pipelineSpawnHistory(base).some(item => item.launchId === receipt.launchId)) {
+              throw new Error("original launch receipt conflicts with stage membership, request history or worktree");
+            }
+            if (receipt.state === "starting") {
+              upsertCloseLaunchNote(report, target, "original stage launch is still starting; close retains its dispatch custody");
+              continue;
+            }
+            const noHost = receipt.state === "failed" && receipt.membershipAdmitted === false
+              && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath;
+            report.notes = report.notes.filter(note => closeHostIdentity(note) !== closeHostIdentity(target));
+            if (noHost) {
+              report.pending = report.pending.filter(item => item !== target);
+              const other = report.pending.some(item => item.stageId === target.stageId && item.attempt === target.attempt);
+              if (!other) {
+                attempt.spawnCalls = 0;
+                attempt.state = "skipped";
+                attempt.completedAt = claimed.closedAt;
+                attempt.error = "pipeline closed before this attempt started";
+              }
+              await checkpoint(undefined, target);
+              continue;
+            }
+            bindStageReservation(attempt, verified);
+            attempt.paneId = verified.pane?.paneId ?? attempt.paneId;
+            target.paneId = verified.pane?.paneId ?? target.paneId;
+          } catch (error) {
+            upsertCloseLaunchNote(report, target,
+              `original stage launch could not be verified; close retains the obligation: ${String(error)}`);
+            continue;
+          }
+        }
         const host = plan.hosts!.find((item) => closeHostIdentity(item.target) === closeHostIdentity(target));
         // Older obligations have no snapshot. Keep their recorded address and
         // only borrow survivor evidence when the current identity still matches.
@@ -16039,7 +16228,12 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         const candidate = { target, attempt: frozen, turnSettled: Boolean(frozen.verdict || frozen.completedAt) };
         try { await stopCloseHost(candidate, report, ports); }
         catch (error) { report.unconfirmed.push({ ...target, operationId: null, detail: `close stop could not be confirmed: ${String(error)}` }); }
-        if (closeHostIdentity(attempt) === closeHostIdentity(target)) Object.assign(attempt, closeHostEvidence(frozen));
+        // A stop settles this host only. Another original request may still
+        // dispatch for the same attempt, including after a controller restart.
+        if (closeHostIdentity(attempt) === closeHostIdentity(target)
+          && !report.pending.some(item => item !== target && item.stageId === target.stageId && item.attempt === target.attempt)) {
+          Object.assign(attempt, closeHostEvidence(frozen));
+        }
         report.pending = report.pending.filter(item => item !== target);
         await checkpoint(candidate);
       }
@@ -16981,12 +17175,47 @@ export async function patchPipeline(
         const refusal = decisionAnswerActorRefusal(snapshot, actor, req.clientRequestId);
         if (refusal) return refusal;
       }
-      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports);
+      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports,
+        req.action === "retry-stage");
     }
   }
 
+  if (req.action === "set-src") {
+    const unknown = Object.keys(req).find(key => !["action", "srcPath", "overwrite"].includes(key));
+    if (unknown) return { error: `unsupported set-src field: ${unknown}`, status: 400 };
+    if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") return { error: "overwrite must be a boolean", status: 400 };
+    // Source roots may initialize account storage. Do that before taking the
+    // pipeline writer, then resolve again under admission against the current row.
+    const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
+    if (!creator.lineage) return { error: creator.error, status: creator.status };
+  }
   let linkRepositories: string[] = [];
-  const patched = await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
+  const patched = req.action === "set-src" ? await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
+      assertAuthority?.();
+      const pipeline = tx.get(id);
+      if (!pipeline) return { error: "pipeline not found", status: 404 };
+      if (legacyAction(pipeline)) return STAGE_RETIREMENT;
+      const guardShape = stageGuardShapeError(req);
+      if (guardShape) return guardShape;
+      if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
+        return { error: "overwrite must be a boolean", status: 400 };
+      }
+      const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
+      if (!creator.lineage) return { error: creator.error, status: creator.status };
+      const hasLineage = pipeline.srcPath !== null || pipeline.srcConversationId !== null;
+      const sameLineage = pipeline.srcPath === creator.lineage.srcPath
+        && pipeline.srcConversationId === creator.lineage.srcConversationId;
+      if (hasLineage && !sameLineage && req.overwrite !== true) {
+        return { error: "pipeline creator lineage already exists; pass overwrite: true to replace it", status: 409 };
+      }
+      assertAuthority?.();
+      pipeline.srcPath = creator.lineage.srcPath;
+      pipeline.srcConversationId = creator.lineage.srcConversationId;
+      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
+      else delete pipeline.srcDeputyConversationId;
+      tx.put(pipeline);
+      return { pipeline };
+    }, 2) : await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) {
       if ((req.action === "convert-legacy-review" || req.action === "revert-legacy-review") && findPipelineRecord(id)) {
@@ -17044,23 +17273,7 @@ export async function patchPipeline(
     let graphEdit: PipelineGraphEdit | null = null;
     let legacyAnswer: Pick<PipelineMutationResult, "convertedStages" | "legacyReview"> = {};
 
-    if (req.action === "set-src") {
-      if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
-        return { error: "overwrite must be a boolean", status: 400 };
-      }
-      const creator = resolvePipelineCreatorLineage(req.srcPath, ports);
-      if (!creator.lineage) return { error: creator.error, status: creator.status };
-      const hasLineage = pipeline.srcPath !== null || pipeline.srcConversationId !== null;
-      const sameLineage = pipeline.srcPath === creator.lineage.srcPath
-        && pipeline.srcConversationId === creator.lineage.srcConversationId;
-      if (hasLineage && !sameLineage && req.overwrite !== true) {
-        return { error: "pipeline creator lineage already exists; pass overwrite: true to replace it", status: 409 };
-      }
-      pipeline.srcPath = creator.lineage.srcPath;
-      pipeline.srcConversationId = creator.lineage.srcConversationId;
-      if (creator.lineage.srcDeputyConversationId) pipeline.srcDeputyConversationId = creator.lineage.srcDeputyConversationId;
-      else delete pipeline.srcDeputyConversationId;
-    } else if (req.action === "link-task") {
+    if (req.action === "link-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
       const tasks = loadTasks();
@@ -17669,12 +17882,43 @@ export async function patchPipeline(
       const receiptRetry = (explicitReceiptRetry || attempt?.paneId === null)
         && retryStageId !== null
         && retryLaunchId !== null;
-      // The accepted work is already committed. Retry its publication from
-      // this cursor without claiming a new launch or closing its stage flow.
+      // The accepted work stays committed while recovery chooses between a
+      // publication retry and a fresh attempt for an unreachable producer.
       if (stage && attempt && (passedStagePublicationPark(pipeline, attempt) || resumablePassedPublication(pipeline))) {
         if (attempt.publicationRepair || passedStagePublicationPark(pipeline, attempt)) {
           const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, decisionProducerEvidence, ports);
           if (repairRefusal) return { error: repairRefusal, status: 409 };
+        }
+        const repair = attempt.publicationRepair;
+        const delivery = decisionProducerEvidence?.delivery ?? repair?.delivery;
+        // A finished producer can retry the push in place. An undeliverable
+        // repair needs a new identity, with the accepted commits and current
+        // stage definition retained. Never reset the checkout to the base.
+        const unreachable = repair && repair.outcome?.status === "rejected"
+          && (decisionProducerEvidence?.dead === true || decisionProducerEvidence?.hostGone === true
+            || delivery?.state === "failed" && delivery.safeToReplace
+            || delivery?.state === "unreserved" && delivery.safeToReplace && !repair.requestedAt
+              && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS);
+        if (stage.kind === "run" && unreachable) {
+          if (pipeline.delivery?.operation?.state === "running" || pipeline.delivery?.operation?.state === "pending") {
+            return { error: "the publication is still settling", status: 409 };
+          }
+          recordSettledPublicationFailure(pipeline, attempt, ports);
+          if (pipeline.delivery) delete pipeline.delivery.operation;
+          pipeline.publishedCommit = null;
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.cursor!.input = [attempt.input,
+            "The previous attempt passed and its committed work is preserved at the accepted head. Its producer could not complete publication repair.",
+            "Repair the following publication refusal using this stage's current instructions, then report the result:",
+            repair.detail].filter(Boolean).join("\n\n");
+          recordHandLaunch(pipeline, actor, ports.now());
+          await newAttempt(pipeline, stage);
+          pipeline.state = "running";
+          pipeline.pausedState = null;
+          pipeline.stateDetail = null;
+          await persist();
+          requestPipelineTick();
+          return { pipeline };
         }
         if (pipeline.delivery && settledPublicationRefusal(pipeline)) {
           recordSettledPublicationFailure(pipeline, attempt, ports);
@@ -17692,6 +17936,10 @@ export async function patchPipeline(
         await persist();
         return { pipeline };
       }
+      const parkedRunningReceipt = (state: string, receipt: { error?: string | null } | null | undefined, settlementWasPending = false): boolean =>
+        state === "path-pending" && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
+        && attempt.launchId === retryLaunchId && !!attempt.agentPath && !!attempt.conversationId && !!attempt.completedAt
+        && attempt.state === "needs_decision" && !attempt.report && !isStructuredSpawnPark(pipeline, attempt) && !stagedLaunchRecovery(receipt);
       const validateRetryReceipt = (settlementWasPending = false): { conflict: { error: string; status: number } | null; claimRequired: boolean } => {
         if (!receiptRetry) return { conflict: null, claimRequired: false };
         const receipt = ports.spawnReceipt(retryLaunchId);
@@ -17715,6 +17963,17 @@ export async function patchPipeline(
         ) {
           return { conflict: null, claimRequired: false };
         }
+        /* A stage that ran and was then parked can still hold a launch
+           receipt that never closed, when its transcript bound the attempt
+           before the receipt completed (#3760). The stage is the one to
+           retry; its host is stopped below before the reset. A launch that
+           never produced a turn keeps the spawn recovery rules above. */
+        if (
+          state === "path-pending"
+          && parkedRunningReceipt(state, receipt, settlementWasPending)
+        ) {
+          return { conflict: null, claimRequired: false };
+        }
         if (
           explicitReceiptRetry
           || settlementWasPending
@@ -17722,7 +17981,9 @@ export async function patchPipeline(
           || state !== "completed"
         ) {
           return {
-            conflict: { error: `the clicked launch settled as ${state}; retry was cancelled`, status: 409 },
+            conflict: { error: state === "path-pending" || state === "starting"
+              ? `the clicked launch is still ${state}; retry was cancelled. Stop the stage's agent, then retry the stage`
+              : `the clicked launch settled as ${state}; retry was cancelled`, status: 409 },
             claimRequired: false,
           };
         }
@@ -17771,12 +18032,37 @@ export async function patchPipeline(
           };
         }
       }
-      /* An internal review retries on the clean local head it holds; only a
-         `remote-branch` pipeline takes a remote repair or republishes. */
-      if (pipeline.delivery?.operation?.state === "settled") {
+      // An undispatched retry can reuse the current owner's successful receipt.
+      // Recheck all evidence synchronously after the worktree read yields.
+      const head = !pipelinePublicationHoldsHost(pipeline)
+        && pipeline.lastPassedCommit && settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
+        && pipeline.publishedCommit === pipeline.lastPassedCommit
+        ? await currentPipelineBranchHead(pipeline, ports.exec).catch(() => null) : null;
+      const keepPublication = head?.ok && head.sha === pipeline.lastPassedCommit
+        && !pipelinePublicationHoldsHost(pipeline)
+        && settledPublicationForHead(pipeline, head.sha) !== null
+        && pipeline.publishedCommit === head.sha
+        && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }) ?? pipeline) === null
+        && undispatchedRunAttempt(pipeline, stage, attempt);
+      if (pipeline.delivery?.operation?.state === "settled" && !keepPublication) {
         recordSettledPublicationFailure(pipeline, attempt, ports);
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
+      }
+      if (receiptRetry && stage && attempt && parkedRunningReceipt(
+        (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId) : ports.spawnReceipt(retryLaunchId)?.state) ?? "", ports.spawnReceipt(retryLaunchId))) {
+        if (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
+          return { error: "the parked attempt has a pending delivery; retry once that delivery settles", status: 409 };
+        }
+        const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+          await persist();
+          return { error: "the host of the parked attempt has not confirmed termination; retry once it has stopped", status: 409 };
+        }
+        if (attempt.report) {
+          await persist();
+          return { error: "the parked attempt recorded a stage report while its host was stopping", status: 409 };
+        }
       }
       if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       if (unreservedSpawnRetry) {
@@ -18176,13 +18462,15 @@ export async function patchPipeline(
         const pendingSwitch = openRuntimeSwitch(item);
         if (pendingSwitch) { pendingSwitch.phase = "superseded"; pendingSwitch.settledAt = ports.now(); pendingSwitch.outcome = "pipeline closed"; }
       }
+      const launchCustody = reconcileClosedAttemptLaunches(pipeline);
       const activations = pipeline.runs.flatMap((run) => run.attempts).filter((item) => item.activation);
       for (const item of activations) item.activation!.closeRequested = true;
       // Freeze recorded identities before releasing the collection. A permitted
       // activation appends its original launch only after reconciliation.
-      const pending = launchedStageHosts(pipeline).map(({ target }) => target);
+      const pending = [...launchedStageHosts(pipeline).map(({ target }) => target), ...launchCustody.pending]
+        .filter((target, index, all) => all.findIndex(item => closeHostIdentity(item) === closeHostIdentity(target)) === index);
       pipeline.closeReport = { status: "pending", pending, ...(pendingContinuations.length ? { pendingContinuations } : {}), stopped: [], alreadyStopped: [],
-        unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
+        unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: launchCustody.notes, worktree: null };
       pipeline.closeTeardown = {
         id: crypto.randomUUID(), phase: "pending", waitingForActivation: activations.length > 0,
         acknowledgeHosts: req.acknowledgeHosts === true,
@@ -18190,12 +18478,12 @@ export async function patchPipeline(
       };
       if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by close");
       retainCloseHosts(pipeline);
-      if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) await newAttempt(pipeline, stage);
       delete pipeline.activationCloseRequested;
       pipeline.state = "closed";
       pipeline.cursor = null;
       pipeline.pausedState = null;
       pipeline.closedAt ??= ports.now();
+      settleClosedPipelineAttempts(pipeline);
       pipeline.hiddenAt = null;
       pipeline.stateDetail = "closed; teardown pending";
       await persist();
@@ -18214,6 +18502,63 @@ export async function patchPipeline(
   /* The lock is gone: ask the sweep to read what the new links name. */
   for (const repository of linkRepositories) nudgeForgeSweep(repository);
   return patched;
+}
+
+/** Reconcile every original request key before close decides a pending
+ * row never launched. Registry read failures retain the attempt. */
+function reconcileClosedAttemptLaunches(pipeline: Pipeline): {
+  pending: PipelineStageHostRef[];
+  notes: NonNullable<Pipeline["closeReport"]>["notes"];
+} {
+  const pending: PipelineStageHostRef[] = [];
+  const notes: NonNullable<Pipeline["closeReport"]>["notes"] = [];
+  const registry = agentRegistry();
+  for (const run of pipeline.runs) for (const attempt of run.attempts) {
+    if (attempt.state !== "pending" || attempt.activation || attempt.flowId) continue;
+    if (attempt.spawnCalls === 0 && !attempt.launchId) continue;
+    try {
+      const stage = pipeline.stages.find(candidate => candidate.id === run.stageId);
+      if (!stage) throw new Error("original stage is unavailable");
+      const base = clientAttemptId(pipeline, stage, attempt);
+      const history = registry.pipelineSpawnHistory(base);
+      if (attempt.launchId && !history.some(receipt => receipt.launchId === attempt.launchId)) {
+        throw new Error("bound original stage launch receipt is unavailable in its request history");
+      }
+      const noHostFailure = (receipt: (typeof history)[number]) => isVerifiedNoHostStageReceipt(pipeline, run.stageId, attempt, receipt);
+      if (!history.length || history.every(noHostFailure)) {
+        attempt.spawnCalls = 0;
+        continue;
+      }
+      for (const receipt of history) {
+        if (noHostFailure(receipt)) continue;
+        const target: PipelineStageHostRef = { stageId: run.stageId, attempt: attempt.n,
+          conversationId: receipt.conversationId, agentPath: null, paneId: receipt.pane?.paneId ?? null,
+          launchId: receipt.launchId };
+        pending.push(target);
+        try {
+          if (!receipt.clientAttemptId || stageReservationReceipt(pipeline, run.stageId, attempt, receipt.clientAttemptId)?.launchId !== receipt.launchId) {
+            throw new Error("original spawn request identity is unavailable");
+          }
+          notes.push({ ...target, detail: receipt.state === "starting"
+            ? "original stage launch is still starting; close is retaining its dispatch custody"
+            : "original stage launch receipt is retained for close reconciliation" });
+        } catch (error) {
+          notes.push({ ...target, detail: `original stage launch could not be verified; close is retaining it: ${String(error)}` });
+        }
+      }
+    } catch (error) {
+      // A missing or conflicting registry read never proves non-execution.
+      const target: PipelineStageHostRef = { stageId: run.stageId, attempt: attempt.n,
+        conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId, launchId: attempt.launchId };
+      pending.push(target);
+      notes.push({ ...target, detail: `original stage launch history could not be read; close retains the obligation: ${String(error)}` });
+    }
+  }
+  return { pending, notes };
+}
+
+function upsertCloseLaunchNote(report: PipelineCloseReport, target: PipelineStageHostRef, detail: string): void {
+  report.notes = [...report.notes.filter(note => closeHostIdentity(note) !== closeHostIdentity(target)), { ...target, detail }];
 }
 
 /**

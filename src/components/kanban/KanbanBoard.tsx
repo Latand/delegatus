@@ -1,4 +1,5 @@
 "use client";
+import { useMaterializedCreationIds } from "@/hooks/useFiles";
 
 import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin, Workflow } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
@@ -2090,6 +2091,34 @@ export function KanbanBoard(props: KanbanBoardProps) {
     pendingReveal.current = { cardId, focusSelector };
     setRevealTick((tick) => tick + 1);
   }, [query, setWindow]);
+  const revealedCreations = useRef(new Set<string>());
+  const revealedMaterialized = useRef(new Set<string>());
+  const materializedCreationIds = useMaterializedCreationIds();
+  useEffect(() => {
+    const cards = [...model.unlinkedShown, ...Object.values(model.columns).flatMap(column => column.shown)];
+    for (const id of materializedCreationIds) {
+      const card = cards.find(card => card.pipelines.some(summary => summary.pipeline.id === id));
+      if (card && !revealedMaterialized.current.has(id)) {
+        revealedMaterialized.current.add(id);
+        setTab(card.status); revealCard(card.id);
+      }
+    }
+    for (const id of revealedMaterialized.current) if (!materializedCreationIds.includes(id)) revealedMaterialized.current.delete(id);
+    const current = new Set(cards.flatMap(card => card.creations?.map(creation => creation.id) ?? []));
+    for (const id of revealedCreations.current) if (!current.has(id)) {
+      revealedCreations.current.delete(id);
+      const materialized = cards.find(card => card.pipelines.some(summary => summary.pipeline.id === id));
+      if (materialized) { setTab(materialized.status); revealCard(materialized.id); }
+    }
+    for (const card of cards) for (const creation of card.creations ?? []) {
+      if (revealedCreations.current.has(creation.id)) continue;
+      revealedCreations.current.add(creation.id);
+      // Restoration can precede the first width measurement. Remember the
+      // receipt's column even while the initial layout still reports wide.
+      setTab(card.status);
+      revealCard(card.id);
+    }
+  }, [model, revealCard, materializedCreationIds]);
   /* The agent each attention request's handoff opened, so that request's
      Return closes exactly that one. An agent that was already open is not the
      handoff's to touch. Any gesture of the operator's on that agent makes it

@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { compactSeatTickTiming, sanitizeSeatTickTiming } from "./seatTickTiming";
 
 import {
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -245,9 +246,11 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
   const delivery = (raw.delivery ?? null) as Record<string, unknown> | null;
   const clientMessageId = delivery ? text(delivery.clientMessageId, 200) : null;
   const outcome = delivery ? text(delivery.outcome, 60) : null;
+  const timing = sanitizeSeatTickTiming(raw.timing);
 
   return {
     schemaVersion: 1,
+    ...(timing ? { timing } : {}),
     at: text(raw.at, 40) ?? "",
     project,
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
@@ -264,6 +267,7 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
 
 export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatTickJournalPath()): void {
   const projectFile = seatTickProjectJournalPath(record.project, filePath);
+  const line = `${JSON.stringify(record.timing ? { ...record, timing: compactSeatTickTiming(record.timing) } : record)}\n`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   // The global ring remains small. Each project's own ring is independent,
   // so unrelated checks cannot consume its diagnostic window.
@@ -275,10 +279,46 @@ export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatT
       if (legacy.length) fs.writeFileSync(projectFile, `${legacy.map(row => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
     }
     for (const target of [projectFile, filePath]) {
-      fs.appendFileSync(target, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+      fs.appendFileSync(target, line, { encoding: "utf8", mode: 0o600 });
       trim(target, SEAT_TICK_RUN_HISTORY);
     }
   }));
+}
+
+/** The check awaits durability, while file I/O stays off the Viewer thread.
+ * Retention scans bytes backwards, avoiding decoding and copying every saved
+ * phase in both rings on every append. Shares the legacy writer's lock. */
+export async function appendSeatTickRecordAsync(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
+  const projectFile = seatTickProjectJournalPath(record.project, filePath);
+  const line = `${JSON.stringify(record.timing ? { ...record, timing: compactSeatTickTiming(record.timing) } : record)}\n`;
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await withFileTransactionAsync(filePath, "the seat tick journal is busy", async () => {
+    await fs.promises.mkdir(path.dirname(projectFile), { recursive: true, mode: 0o700 });
+    try { await fs.promises.access(projectFile); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      let legacy = "";
+      try { legacy = await fs.promises.readFile(filePath, "utf8"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      const rows = legacy.split("\n").flatMap(line => {
+        try { const row = sanitizeSeatTickRecord(JSON.parse(line)); return row ? [row] : []; }
+        catch { return []; }
+      }).slice(-SEAT_TICK_RUN_HISTORY).filter(row => row.project === record.project);
+      if (rows.length) await fs.promises.writeFile(projectFile, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`, { mode: 0o600 });
+    }
+    for (const target of [projectFile, filePath]) {
+      await fs.promises.appendFile(target, line, { mode: 0o600 });
+      const bytes = await fs.promises.readFile(target);
+      let cursor = bytes.length - 1;
+      for (let kept = 0; kept < SEAT_TICK_RUN_HISTORY && cursor >= 0; kept++) cursor = bytes.lastIndexOf(10, cursor - 1);
+      if (cursor < 0) continue;
+      const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+      try {
+        await fs.promises.writeFile(temp, bytes.subarray(cursor + 1), { mode: 0o600 });
+        await fs.promises.rename(temp, target);
+      } finally { await fs.promises.rm(temp, { force: true }); }
+    }
+  }, { waitMs: 1_000 });
 }
 
 function seatTickProjectJournalPath(project: string, filePath: string): string {
@@ -295,4 +335,97 @@ export function readSeatTickRecords(limit: number, filePath = seatTickJournalPat
       .filter(row => row.project === project).slice(-Math.max(0, limit));
   }
   return readJournalRecords(limit, { filePath, sanitize: sanitizeSeatTickRecord });
+}
+
+/** Read the compact fields needed to reconcile a check-error alarm. Skip each
+ * record's potentially large timing value before JSON.parse so this post-check
+ * bookkeeping never rebuilds the phase history on the Viewer thread. */
+export function readSeatTickAlarmRecords(limit: number, filePath = seatTickJournalPath(), project?: string): SeatTickRunRecord[] {
+  const scoped = project === undefined ? filePath : seatTickProjectJournalPath(project, filePath);
+  let source = scoped;
+  if (project !== undefined && !fs.existsSync(scoped)) source = filePath;
+  let raw: string;
+  try { raw = fs.readFileSync(source, "utf8"); }
+  catch { return []; }
+  const rows: SeatTickRunRecord[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const compact = omitTopLevelJsonProperty(line, "timing");
+      const row = sanitizeSeatTickRecord(JSON.parse(compact));
+      if (row && (project === undefined || row.project === project)) rows.push(row);
+    } catch { /* A malformed line does not hide records around it. */ }
+  }
+  return rows.slice(-Math.max(0, limit));
+}
+
+/** Remove one top-level JSON property without parsing its value. */
+function omitTopLevelJsonProperty(json: string, property: string): string {
+  let cursor = 1;
+  while (cursor < json.length) {
+    while (/[\s,]/.test(json[cursor] ?? "")) cursor++;
+    if (json[cursor] === "}") return json;
+    if (json[cursor] !== '"') return json;
+    const keyStart = cursor;
+    cursor++;
+    let escaped = false;
+    while (cursor < json.length) {
+      const char = json[cursor++]!;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') break;
+    }
+    const keyEnd = cursor;
+    while (/\s/.test(json[cursor] ?? "")) cursor++;
+    if (json[cursor++] !== ":") return json;
+    while (/\s/.test(json[cursor] ?? "")) cursor++;
+    const valueStart = cursor;
+    if (json.slice(keyStart + 1, keyEnd - 1) === property) {
+      cursor = skipJsonValue(json, cursor);
+      let end = cursor;
+      while (/\s/.test(json[end] ?? "")) end++;
+      if (json[end] === ",") return json.slice(0, keyStart) + json.slice(end + 1);
+      let start = keyStart;
+      while (start > 0 && /\s/.test(json[start - 1]!)) start--;
+      if (json[start - 1] === ",") start--;
+      return json.slice(0, start) + json.slice(end);
+    }
+    cursor = skipJsonValue(json, valueStart);
+    while (/\s/.test(json[cursor] ?? "")) cursor++;
+    if (json[cursor] === "}") return json;
+  }
+  return json;
+}
+
+function skipJsonValue(json: string, start: number): number {
+  if (json[start] === '"') {
+    let escaped = false;
+    for (let cursor = start + 1; cursor < json.length; cursor++) {
+      const char = json[cursor]!;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') return cursor + 1;
+    }
+    return json.length;
+  }
+  if (json[start] !== "{" && json[start] !== "[") {
+    let end = start;
+    while (end < json.length && json[end] !== "," && json[end] !== "}") end++;
+    return end;
+  }
+  const stack = [json[start] === "{" ? "}" : "]"];
+  let quoted = false, escaped = false;
+  for (let cursor = start + 1; cursor < json.length; cursor++) {
+    const char = json[cursor]!;
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "{" || char === "[") stack.push(char === "{" ? "}" : "]");
+    else if (char === "}" || char === "]") {
+      if (stack.pop() === char && stack.length === 0) return cursor + 1;
+    }
+  }
+  return json.length;
 }

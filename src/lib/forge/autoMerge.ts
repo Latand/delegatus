@@ -1,5 +1,5 @@
 import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
-import { assertProactivePipelineExecution, proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
+import { assertProactivePipelineExecution, proactivePipelineExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { openRevertPr, readPostMergeChecks, sweepPostMerge } from "./postMerge";
@@ -1853,9 +1853,34 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
   const recovery = sweepPostMerge({
     ...ports,
     read: async (lane, ref) => readPostMergeChecks(lane, ref, await requiredContexts(lane.merge!.repository, "main", ports), ports.run),
-    create: async (request, creationRequest, lineage) => {
-      const project = ports.loadPipelines().find(lane => lane.repoDir === request.repoDir)?.project;
-      const creatorLineage = (project ? await ports.activeSeat?.(project) : null) ?? lineage;
+    create: async (request, creationRequest, lineage, source) => {
+      // An original receipt owns its membership, including later manual corrections.
+      const replay = () => {
+        const existing = pipelineDeliveryLookup({ requestKey: creationRequest.key });
+        if (existing && existing.creationRequest?.digest !== creationRequest.digest) {
+          throw new Error("idempotency_conflict: recovery creation arguments changed");
+        }
+        return existing;
+      };
+      const existing = replay();
+      if (existing) return { id: existing.id };
+      const creatorLineage = (await ports.activeSeat?.(source.project)) ?? lineage;
+      const afterSeat = replay();
+      if (afterSeat) return { id: afterSeat.id };
+      // Read again after seat lookup; only fresh repairs acquire source membership.
+      const current = ports.loadPipelines().find(lane => lane.id === source.id);
+      if (!current || current.project !== source.project || current.repoDir !== source.repoDir) {
+        throw new Error("Recovery source outcome is unavailable; restore its task membership and retry");
+      }
+      const taskIds = [...new Set(current.taskIds)];
+      if (!taskIds.length) {
+        throw new Error("Recovery source outcome has no tasks; link its outcome tasks and retry");
+      }
+      const retained = proactiveConversationTaskIds([creatorLineage.srcConversationId]);
+      if (retained.some(id => !taskIds.includes(id))) {
+        throw new Error("Recovery creator authority requires tasks outside the source outcome; reconcile authority and retry");
+      }
+      request = { ...request, taskIds };
       const result = await (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, { creationRequest, creatorLineage });
       if (!result.pipeline) throw new Error(result.error ?? "Recovery pipeline creation failed");
       return { id: result.pipeline.id };

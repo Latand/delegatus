@@ -4499,3 +4499,14 @@ test("Codex socket reattachment takes only the exact live process after its prev
   expect(claimed).toMatchObject({ claimEpoch: 5, structuredHost: { endpoint, process: engine, pendingAttention: ["callback"], eventCursor: 12 } });
   expect(store.claimStructuredHost(entry.key, writer, { reconnectCodex })).toBeNull();
 });
+
+
+test("malformed MCP observations remain unavailable through registry normalization", async () => {
+  const { normalizeRegistry } = await import("./registry");
+  const row = spawnEntry("/sessions/mcp-malformed.jsonl");
+  for (const viewerMcp of [null, { denied: [] }, { seq: 2, observedAt: "2026-11-01T00:00:00.000Z", unverified: false, denied: [{ tool: "x".repeat(129), seq: 1 }] }]) {
+    const value = normalizeRegistry({ version: 2, entries: { [`codex:${row.key.sessionId}`]: { ...row,
+      structuredHost: { kind: "codex-app-server", writerClaimEpoch: 0, viewerMcp } } }, receipts: {} });
+    expect(value.entries[`codex:${row.key.sessionId}`]?.structuredHost?.viewerMcp).toMatchObject({ denied: [], unverified: true });
+  }
+});

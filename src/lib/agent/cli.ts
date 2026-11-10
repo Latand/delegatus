@@ -25,7 +25,7 @@ import { claudeTranscriptPath, headCwd } from "./transcript";
 import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
-import { normalizeClaudeLaunchModel } from "./models";
+import { claudePinnedModelId, normalizeClaudeLaunchModel } from "./models";
 import {
   applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, viewerMcpHttpCodexEntry,
   viewerMcpServerEntry, viewerMcpTransportForLaunch, viewerMcpHttpUrl, VIEWER_SPAWN_CAPABILITY_ENV,
@@ -689,7 +689,7 @@ export function resumeSpecForSession(
     }
     if (options.operatorDecisionForms && !engineReadOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);
-    const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
+    const launchModel = providerLaunchModel(home, claudePinnedModelId(options.model) ?? normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
     if (options.effort) args.push("--effort", options.effort);
     args.push("--resume", sessionId);

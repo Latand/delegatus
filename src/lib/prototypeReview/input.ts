@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { codePointText } from "@/lib/textLimitSchema";
 import { homeRoot, evidenceRoots, fencedStores, inFencedStore, resolveLocal, underRoot, realAllowedRoots } from "@/lib/artifact/localFile";
 import type { PublishPrototypeInput } from "./types";
 
@@ -11,11 +12,11 @@ export const PROTOTYPE_LIMITS = {
   /* One task's history in the task store: rounds, and bytes of their metadata at publication. */
   taskRounds: 30, taskMetadataBytes: 1024 * 1024,
 } as const;
-const localPath = z.string().min(1).max(4096).refine(value => !/[\0\r\n]/.test(value));
+const localPath = codePointText(4096, 1, false, null).refine(value => !/[\0\r\n]/.test(value));
 export const prototypeQuestionsSchema = z.array(z.object({
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/),
-  text: z.string().trim().min(1).max(300),
-  options: z.array(z.object({ label: z.string().trim().min(1).max(120), recommended: z.boolean().optional() }).strict()).min(2).max(6),
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).describe("Unique question id: 1–40 ASCII letters/digits/hyphens, beginning with a letter or digit. Preserve it exactly."),
+  text: codePointText(300, 1, true).describe("Question: 1–300 Unicode code points after trimming; recommended target 240. Preserve the complete approval scope. On refusal, shorten explicitly and retry after proving no effect."),
+  options: z.array(z.object({ label: codePointText(120, 1, true).describe("Option label: 1–120 Unicode code points after trimming; recommended target 90. Preserve option identity; exactly one recommended option per question."), recommended: z.boolean().optional() }).strict()).min(2).max(6),
   multiple: z.boolean().optional(), other: z.boolean().optional(),
 }).strict()).min(1).max(7).superRefine((questions, ctx) => {
   if (new Set(questions.map(q => q.id)).size !== questions.length) ctx.addIssue({ code: "custom", message: "question ids must be unique" });
@@ -25,15 +26,15 @@ export const prototypeQuestionsSchema = z.array(z.object({
   });
 });
 export const prototypePublishSchema = z.object({
-  clientRequestId: z.string().min(1).max(160), taskId: z.string().min(1).optional(),
-  title: z.string().trim().min(1).max(120).optional(), issueReport: z.string().regex(/^[a-f0-9]{7,64}$/i).optional(), dir: localPath.optional(),
+  clientRequestId: codePointText(160, 1, false, null), taskId: z.string().min(1).optional(),
+  title: codePointText(120, 1, true).optional(), issueReport: z.string().regex(/^[a-f0-9]{7,64}$/i).optional(), dir: localPath.optional(),
   variants: z.array(z.object({
-    number: z.number().int().min(1).max(9), name: z.string().trim().min(1).max(60),
-    description: z.string().trim().min(1).max(300),
-    frames: z.array(z.object({ path: localPath, originalPath: localPath.optional(), caption: z.string().max(200),
+    number: z.number().int().min(1).max(9), name: codePointText(60, 1, true),
+    description: codePointText(300, 1, true),
+    frames: z.array(z.object({ path: localPath, originalPath: localPath.optional(), caption: codePointText(200),
       width: z.number().int().min(240).max(3840).optional(), lang: z.enum(["en", "uk"]).optional(),
     })).max(240).optional(),
-    videos: z.array(z.object({ path: localPath, caption: z.string().max(200) })).max(240).optional(),
+    videos: z.array(z.object({ path: localPath, caption: codePointText(200) })).max(240).optional(),
   })).max(9).optional(),
   questions: prototypeQuestionsSchema.optional(),
 }).strict();

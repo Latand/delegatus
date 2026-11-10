@@ -102,8 +102,8 @@ deployment, with a runtime host that owns releases and the listening port.
 
 Each project gets one orchestrator: the agent you talk to about that project.
 You ask it for something in its chat. It opens a task on the project's board
-and starts a pipeline for it: one agent builds the change, another reviews it,
-and the builder fixes what the review found. The pipeline ends with its pull
+and, for work that needs agents, starts a pipeline for it: one agent builds the
+change, another reviews it, and the builder fixes what the review found. The pipeline ends with its pull
 request open for you to merge, or merged for you once you turn on **Merge when
 the review passes**. The orchestrator files a short report each time a piece
 lands, and the task's card says so when it needs a decision from you. Pipeline
@@ -115,9 +115,11 @@ orchestrator can also start single agents, Copilot included.
 
 Write to it the way you would message a colleague: "take issues 12 and 14",
 "fix the flaky test in the scanner", "review PR 30". For each piece of work it
-opens a task, starts a pipeline in a worktree of its own and keeps the task's
-card up to date. A decision it cannot make alone reaches you as a form with a
-recommended answer for each question, in the **Decisions** tab beside its chat
+opens a task, starts a pipeline in a worktree of its own for work that needs
+agents and keeps the task's card up to date. You can state only an outcome: it
+checks the scope first and chooses direct work, a pipeline or research itself.
+A decision it cannot make alone reaches you as a form with a recommended answer
+for each question, in the **Decisions** tab beside its chat
 and under **Needs you**.
 
 ![A project's orchestrator: its chat with you, its worker count against the limit, and beside it a task's three-question decision form waiting for your answer, already sent to Telegram with a link to send it again](docs/media/readme/orchestrator.svg)
@@ -225,7 +227,7 @@ Treat a phone-access link as a secret.
 
 Delegatus sends one anonymous install ping per UTC day to
 `https://delegatus.org/api/ping`, with exactly `id`, `v`, `os`, `arch` and
-`kind`. Turn it off in the sidebar's ⋯ menu under **Settings → Install ping**,
+`kind`. Turn it off in the sidebar's ⋯ menu under **Settings → Privacy**,
 or with `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
 [What leaves your machine](docs/guide/security-and-privacy.md#what-leaves-your-machine)
 has the details.
@@ -234,7 +236,7 @@ Memory profiles and voice-call summaries send selected rules or call text to
 Anthropic through Claude Code, using your subscription. Limits are read through
 Claude Code `/usage`. Delegatus's direct subscription-token request to Anthropic's
 usage endpoint requires **Direct Anthropic API calls with my subscription** under
-**Settings → Install ping → What leaves my machine**. It starts off on new installs;
+**Settings → Privacy**. It starts off on new installs;
 existing installations with recorded direct usage keep it on.
 
 ## License

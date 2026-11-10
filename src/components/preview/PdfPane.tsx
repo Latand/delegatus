@@ -38,6 +38,7 @@ export default function PdfPane({
   etag,
   mobile,
   onFailure,
+  contentUrl = artifactContentUrl(path),
 }: {
   path: string;
   /** Meta validator: every pdf.js range request carries it as If-Match, so a
@@ -46,6 +47,8 @@ export default function PdfPane({
   etag: string;
   mobile: boolean;
   onFailure: (failure: ArtifactFailure) => void;
+  /** Where the bytes come from; a local link reads `/api/artifact`. */
+  contentUrl?: string;
 }) {
   const { t } = useLocale();
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
@@ -61,7 +64,7 @@ export default function PdfPane({
     void loadPdfjs()
       .then((pdfjs) => {
         task = pdfjs.getDocument({
-          url: artifactContentUrl(path),
+          url: contentUrl,
           httpHeaders: { "if-match": etag },
           rangeChunkSize: RANGE_CHUNK,
           disableAutoFetch: true,
@@ -80,7 +83,7 @@ export default function PdfPane({
       cancelled = true;
       void task?.destroy().catch(() => {});
     };
-  }, [path, etag, onFailure]);
+  }, [contentUrl, etag, onFailure]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

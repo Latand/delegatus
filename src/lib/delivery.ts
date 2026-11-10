@@ -537,10 +537,10 @@ export async function resumeConversation(
   const rejected = supersededRejection(registry, known);
   if (rejected) return rejected;
   const recover = overrides.recover ?? recoverDeadStructuredConversation;
-  const bridged = (recovered: { spawned: boolean }): DeliveryOutcome => ({
+  const bridged = (recovered: NonNullable<Awaited<ReturnType<typeof recover>>>): DeliveryOutcome => ({
     ok: true,
     target: null,
-    outcome: "resumed",
+    outcome: recovered.hold ? "held" : "resumed",
     spawned: recovered.spawned,
     structured: true,
   });
@@ -744,12 +744,12 @@ export interface ConversationMessage {
   origin?: MessageOrigin;
   /** How a structured host treats a turn already running. Absent keeps the
       send default, which interrupts it; `queue` waits until the host is idle,
-      which is what a seat tick wake asks for. Only the structured transport
-      reads it. A conversation whose current owner is a legacy pane host is
+      and `context-or-queue` adds native context to a supported active host.
+      Only the structured transport reads it. A conversation whose current owner is a legacy pane host is
       not recovered into a structured send, so its message takes the legacy
       ladder, which never reads the policy and types the text into the pane
       the way it types every other message. */
-  policy?: "queue" | "steer-or-queue";
+  policy?: "queue" | "context-or-queue" | "steer-or-queue";
 }
 
 export interface DeliveryOverrides {
@@ -830,7 +830,9 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       if (!conversation) {
         const ensured = await registry.deliveryWrite({ label: "conversation.ensure" },
           () => registry.ensureConversation(entry.engine, entry.path, null));
-        if (!ensured.acquired) return failure(REGISTRY_WRITER_BUSY, 503);
+        /* Nothing is reserved yet, and the answer says so: the sender's
+           request closes as not executed instead of unknown for ever (#3782). */
+        if (!ensured.acquired) return { ...failure(REGISTRY_WRITER_BUSY, 503), admission: "refused" };
         conversation = ensured.value;
       }
       pidAddressed = !message.path;
@@ -968,7 +970,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       } catch (error) {
         return failure(error, 409);
       }
-      if (!queued) return failure(REGISTRY_WRITER_BUSY, 503);
+      if (!queued) return { ...failure(REGISTRY_WRITER_BUSY, 503), admission: "refused" };
       const reservation = queued;
       lease.act(reservation.command.operationId);
       /* #1131: an earlier attempt under this same request began typing into the

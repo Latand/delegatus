@@ -169,14 +169,23 @@ function useProjectRules(project: string | null) {
     if (!project) return;
     const sequence = reads;
     const abort = new AbortController();
+    let reading = false;
     const read = async () => {
+      // A timer must not supersede a slower read before its first answer.
+      if (reading || abort.signal.aborted) return;
+      reading = true;
       const current = ++sequence.current;
+      const request = new AbortController();
+      const cancel = () => request.abort();
+      abort.signal.addEventListener("abort", cancel, { once: true });
+      const timeout = setTimeout(cancel, 60_000);
       try {
-        const response = await fetch(`/api/role-memory?project=${encodeURIComponent(project)}`, { signal: abort.signal, cache: "no-store" });
+        const response = await fetch(`/api/role-memory?project=${encodeURIComponent(project)}`, { signal: request.signal, cache: "no-store" });
         if (!response.ok) throw Error();
         const value = projectRulesOf(await response.json());
         if (current === sequence.current && !abort.signal.aborted) { setStored(value); setFailed(null); }
       } catch { if (current === sequence.current && !abort.signal.aborted) setFailed("read"); }
+      finally { clearTimeout(timeout); abort.signal.removeEventListener("abort", cancel); reading = false; }
     };
     void read();
     const timer = setInterval(() => void read(), 15_000);
@@ -457,7 +466,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {drilled && page === "profile" ? null : <nav className="flex shrink-0 gap-2 border-b border-border px-3 py-2" aria-label={t("memoryProfile.navigation")}>
           {(["profile", "rules"] as const).map(id => <button key={id} type="button" aria-pressed={page === id} onClick={() => setPage(id)} className={`min-h-8 rounded-full px-3 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11 ${page === id ? "bg-accent-soft text-accent" : "text-secondary hover:bg-sunken"}`}>{t(id === "profile" ? "memoryProfile.profile" : "memoryProfile.allRules")}</button>)}
         </nav>}
-        {view && page === "profile" ? <MemoryProfile key={`${view.project}/${locale}`} rules={view} onDrill={setDrilled} renderRules={(scope, ids, heading) => <RuleSection kind={scope.kind} title={ids ? heading?.title ?? t("memoryProfile.topicRules") : scope.kind === "swarm" ? <><RoleMark role={scope.roleId} />{t("roleMemory.swarm", { role: roleNameById(t, scope.roleId ?? "") })}</> : scope.kind === "role" ? <><RoleMark role={scope.roleId} />{roleNameById(t, scope.roleId ?? "")}</> : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection")} subtitle={ids ? heading?.subtitle : undefined} scope={ids ? { ...scope, active: scope.active.filter(rule => ids.includes(rule.id)), left: [] } : scope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); setPage("rules"); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />} /> : null}
+        {page === "profile" ? <MemoryProfile key={`${project}/${locale}`} project={project} rules={view} onDrill={setDrilled} renderRules={(scope, ids, heading) => <RuleSection kind={scope.kind} title={ids ? heading?.title ?? t("memoryProfile.topicRules") : scope.kind === "swarm" ? <><RoleMark role={scope.roleId} />{t("roleMemory.swarm", { role: roleNameById(t, scope.roleId ?? "") })}</> : scope.kind === "role" ? <><RoleMark role={scope.roleId} />{roleNameById(t, scope.roleId ?? "")}</> : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection")} subtitle={ids ? heading?.subtitle : undefined} scope={ids ? { ...scope, active: scope.active.filter(rule => ids.includes(rule.id)), left: [] } : scope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); setPage("rules"); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />} /> : null}
         {view && page === "rules" ? (
           <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:auto-rows-auto md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
             <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : <><RoleMark role={role} />{t("roleMemory.roleSubtitle", { role: roleName })}</>} scope={roleScope} additionalScope={everyRoleScope} swarm={swarm} picker={picker} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />

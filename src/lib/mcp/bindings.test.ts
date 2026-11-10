@@ -2814,7 +2814,8 @@ test("a stage completion call is attributed by the server, and a caller cannot n
   const refused = await service.callTool("stage_report", { clientRequestId: "report-2", verdict: "pass", stageId: "not-mine" });
   expect(refused).toMatchObject({
     ok: false,
-    code: "tool_failed",
+    code: "STAGE_REPORT_NOT_HELD",
+    retryable: false,
     error: "this conversation does not hold stage not-mine",
     details: { code: "STAGE_REPORT_NOT_HELD", status: 403, slots: [{ stageId: "build", attempt: 1, state: "running" }] },
   });
@@ -3528,7 +3529,7 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
   /* Over the limit the write is refused out loud, with nothing stored (#1450). */
   const longNote = "n".repeat(SEAT_TICK_PROMPT_LIMIT + 1);
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-prompt-long", monitorPrompt: longNote }))
-    .rejects.toThrow(`monitorPrompt is ${SEAT_TICK_PROMPT_LIMIT + 1} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}`);
+    .rejects.toThrow(`monitorPrompt must be at most ${SEAT_TICK_PROMPT_LIMIT} UTF-16 code units; actual length is ${SEAT_TICK_PROMPT_LIMIT + 1}`);
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
   expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-3", verbose: true }))
     .toMatchObject({ changed: false, monitorPrompt: null });
@@ -4628,19 +4629,37 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     const read = await call("get_task", { clientRequestId: "hold-read-bound", taskId: created.taskId });
     const normalizedCreate = await call("create_task", withTaskDue({
       clientRequestId: "hold-create-normalized", project: "fixture-project", text: "Normalize waiting reasons", full: true,
-      hold: { kind: "banana", note: "x".repeat(201) },
-      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "banana", note: "x".repeat(201) } }],
+      hold: { kind: "banana", note: "x".repeat(200) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "banana", note: "x".repeat(200) } }],
     }));
     const unknownUpdate = await call("update_task", {
       clientRequestId: "hold-update-unknown", taskId: normalizedCreate.taskId, full: true,
-      hold: { kind: "banana", note: "z".repeat(201) },
-      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "banana", note: "z".repeat(201) } }],
+      hold: { kind: "banana", note: "z".repeat(200) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "banana", note: "z".repeat(200) } }],
     });
     const normalizedUpdate = await call("update_task", {
       clientRequestId: "hold-update-normalized", taskId: normalizedCreate.taskId, full: true,
-      hold: { kind: "worker", note: "y".repeat(201) },
-      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "worker", note: "y".repeat(201) } }],
+      hold: { kind: "worker", note: "y".repeat(200) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "worker", note: "y".repeat(200) } }],
     });
+    // Exact-limit notes above retain their complete text. One over refuses
+    // both top-level and nested holds, before any task row changes.
+    const beforeOverages = JSON.stringify(persistedTaskRows(TASKS_FILE));
+    const overageRefusals = [];
+    const overageNoWrites = [];
+    for (const name of ["create_task", "update_task"]) {
+      for (const nested of [false, true]) {
+        const hold = { kind: "banana", note: "n".repeat(201) };
+        const args = {
+          clientRequestId: "hold-over-" + name + "-" + nested,
+          ...(name === "create_task" ? withTaskDue({ project: "fixture-project", text: "Refuse the complete oversized note" }) : { taskId: normalizedCreate.taskId }),
+          ...(nested ? { steps: [{ id: "long", text: "Wait", state: "open", hold }] } : { hold }),
+        };
+        const response = await client.callTool({ name, arguments: args });
+        overageRefusals.push(response.structuredContent);
+        overageNoWrites.push(JSON.stringify(persistedTaskRows(TASKS_FILE)) === beforeOverages);
+      }
+    }
     const operatorUpdate = await call("update_task", {
       clientRequestId: "step-operator-update", taskId: normalizedCreate.taskId, full: true, hold: null,
       steps: [{ id: "long", text: "Choose release", state: "open", hold: { kind: "operator", note: "Choose release A or B" } }],
@@ -4653,14 +4672,14 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     }
     console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task,
       createNotes: normalizedCreate.notes, updateNotes: unknownUpdate.notes, normalizedCreate: normalizedCreate.task, unknownUpdate: unknownUpdate.task, normalizedUpdate: normalizedUpdate.task,
-      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses }));
+      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses, overageRefusals, overageNoWrites }));
     } finally { await client.close(); await server.close(); }
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
   // Cold schema admission can finish successfully after the telemetry threshold.
   assertStateChildSuccess(await child.exited, error);
-  const result = JSON.parse(output) as { createNotes: string[]; updateNotes: string[]; createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
+  const result = JSON.parse(output) as { createNotes: string[]; updateNotes: string[]; createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[]; overageRefusals: Array<{ ok: boolean; code: string; retryable: boolean; error: string; details: { field: string } }>; overageNoWrites: boolean[] };
   expect(result.createdTask.hold).toMatchObject({ kind: "pr", by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
   expect(result.updatedTask.hold).toMatchObject({ kind: "issue", by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
   expect(result.updatedTask.hold?.since).toBe(result.createdTask.hold?.since);
@@ -4680,6 +4699,14 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
   expect(result.normalizedUpdate.steps?.[0]?.hold?.since).toBe(result.normalizedCreate.steps?.[0]?.hold?.since);
   expect(result.operatorRead.steps).toEqual(result.operatorUpdate.steps);
   expect(result.operatorRead.steps?.[0]?.hold).toMatchObject({ kind: "operator", note: "Choose release A or B", since: result.normalizedCreate.steps?.[0]?.hold?.since });
+  expect(result.overageNoWrites).toEqual([true, true, true, true]);
+  expect(result.overageRefusals.map(refusal => refusal.details.field)).toEqual(["hold.note", "steps.0.hold.note", "hold.note", "steps.0.hold.note"]);
+  for (const refusal of result.overageRefusals) {
+    expect(refusal).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD", retryable: false });
+    expect(refusal.error).toContain(refusal.details.field);
+    expect(refusal.error).toContain("200 UTF-16 code units");
+    expect(refusal.error).toContain("actual length is 201");
+  }
   expect(result.statuses).toEqual(["inbox", "assigned", "blocked", "done"]);
 });
 
@@ -4896,7 +4923,9 @@ test.each([
   { id: "secure-handoff", button: false },
 ] satisfies import("../selfUpdate/types").InstallAction[])("checkout deploy prerequisite survives the production MCP control response: %j", async (action) => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+  globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => init?.method !== "POST"
+    ? Response.json({ capability: "viewer-deployments", version: 1, admissionFence: true })
+    : Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
   try {
     const bindings = viewerMcpBindings(undefined, undefined, {
       callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),

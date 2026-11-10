@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
@@ -28,6 +29,15 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
+import { FileRuntimeEventStore } from "./eventStore";
+import { claudeStructuredHostOptions, spawnStructuredConversation, type StructuredSpawnInput } from "./structuredSpawn";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { projectEngineHostEvent } from "./engineHostEvents";
+import { consumeRuntimeEvent } from "./consumers";
+import { recordSpawnTurnEnded } from "./serverConsumers";
+import * as noticeStore from "@/lib/spawnNotice/store";
+import { spawnNoticeMessageId, sweepSpawnNotices, type SpawnNoticeDeliveryRequest, type SpawnNoticeSweepPorts } from "@/lib/spawnNotice/sweep";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-delivery-"));
 const ownedKillChildren = new Set<ReturnType<typeof Bun.spawn>>();
@@ -3772,7 +3782,7 @@ test("a stale synchronization-held steer fails safely across Codex and Claude re
   }
 });
 
-for (const policy of ["queue", "steer-or-queue"] as const) {
+for (const policy of ["queue", "steer-or-queue", "context-or-queue"] as const) {
 test(`a published Codex successor receives its migration-held ${policy} message once, under the original operation (#1709)`, async () => {
   const directory = path.join(sandbox, `migration-${policy}`);
   fs.mkdirSync(directory);
@@ -5687,3 +5697,458 @@ test("the real turn boundary drains its queued message even when status publicat
     await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
   }
 });
+
+
+/** Real queue, recovery admission, spawn publication and broker. Only the
+ * provider executable/auth and runtime transport are local fixture ports. */
+async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "background" | "lost-echo" | "late-echo" | "late-result" | "unqueued", fixtureName: string = mode) {
+  const directory = path.join(sandbox, `claude-terminal-${fixtureName}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const sessionId = "00000000-0000-0000-0000-000000000077";
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\n");
+  const profile = emptyLaunchProfile({ cwd: directory });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("claude", artifactPath, "default");
+  const key = { engine: "claude" as const, sessionId };
+  const entry = {
+    key, artifactPath, cwd: directory, accountId: "default", launchProfile: profile,
+    status: "dead" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "claude-broker" as const, endpoint: "fake:terminal-recovery",
+      process: null, eventCursor: 0, protocolVersion: "fixture-v1", writerClaimEpoch: 0,
+      activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+  };
+  registry.upsert({ ...entry, structuredHost: null });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  /* The production client forwards transition options; the late echo needs
+     its `confirmedDelivery` to reach the journal, as it does in production. */
+  const client: RuntimeHostClient = mode === "late-echo"
+    ? { ...runtimeJournalClient(journal), transitionOperation: async (operationId, status, details, options) =>
+      journal.transitionOperation(operationId, status as Parameters<RuntimeJournal["transitionOperation"]>[1], details, options) }
+    : runtimeJournalClient(journal);
+  const events = new FileRuntimeEventStore(path.join(directory, "events"));
+  /* The late echo is settled by the production evidence reader, which reads
+     the default ledger; that mode keeps the pairing production has. */
+  const deliveries = mode === "late-echo" ? new FileClaudeDeliveryLedger() : new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
+  const inputFile = path.join(directory, "inputs.jsonl");
+  fs.writeFileSync(inputFile, "");
+  const children: ChildProcessWithoutNullStreams[] = [];
+  const hosts: ClaudeStreamBrokerHost[] = [];
+  const account: StructuredSpawnInput["account"] = {
+    engine: "claude", accountId: "default", kind: "managed",
+    home: path.join(directory, "account"), transcriptRoot: directory, env: { NODE_ENV: "test" },
+  };
+  // This peer speaks captured fixture protocol shapes. It proves adapter
+  // bookkeeping, not native MCP authentication or background-job survival.
+  const peer = `
+    await import(${JSON.stringify(path.resolve(import.meta.dir, "../testing/fixtureLifetime.ts"))});
+    const fs = await import('node:fs');
+    const {createInterface} = await import('node:readline');
+    const [file, mode, session] = process.argv.slice(1);
+    const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
+    createInterface({input: process.stdin}).on('line', line => {
+      const frame = JSON.parse(line);
+      fs.appendFileSync(file, line + '\\n');
+      if ((mode === 'unqueued' || mode === 'late-echo') && frame.type === 'fixture_response') { emit(frame.payload); emit({ type: 'fixture_receipt' }); }
+      if (frame.type === 'control_request') emit({type: 'control_response', response: {
+        subtype: 'success', request_id: frame.request_id,
+        response: frame.request?.subtype === 'mcp_status'
+          ? {mcpServers: [{name: 'viewer', status: 'connected', tools: [{name: 'stage_report'}]}]} : {}
+      }});
+      if (frame.type === 'user') {
+        const previous = JSON.stringify(frame).includes('previous instruction');
+        if ((mode !== 'lost-echo' && mode !== 'late-echo') || previous) emit({...frame, uuid: previous ? 'previous-input' : 'accepted-input'});
+        if (previous && mode === 'background') emit({type: 'system', subtype: 'task_started', task_id: 'fixture-task'});
+        if (!previous) emit({type: 'result', subtype: 'success', session_id: session});
+      }
+    });
+    process.on('SIGTERM', () => {
+      if (mode === 'late-result') emit({type: 'result', subtype: 'success', session_id: session});
+      process.exit(0);
+    });
+  `;
+  const open = async (resume: boolean, input?: StructuredSpawnInput) => {
+    const options = await claudeStructuredHostOptions(input ?? {
+      spec: {
+        engine: "claude", command: "claude", windowName: "terminal-recovery",
+        cwd: directory, transcript: artifactPath, launchProfile: profile,
+      } satisfies StructuredSpawnInput["spec"],
+      account,
+    }, { env: { ...process.env }, host: {} });
+    // Only missing-echo cases need a short confirmation deadline. Successful
+    // exchanges include child scheduling and durable ledger writes; one second
+    // can expire before their echo is processed on a busy runner.
+    const requestTimeoutMs = mode === "lost-echo" || mode === "late-echo" ? 1_000 : 10_000;
+    const hostOptions = {
+      ...options, sessionId, eventStore: events, deliveryLedger: deliveries, requestTimeoutMs,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: ((_command, _args, options) => {
+        const child = spawn(process.execPath, ["-e", peer, inputFile, mode, sessionId], options);
+        children.push(child);
+        return child;
+      }) satisfies NonNullable<import("./claudeStreamBrokerHost").ClaudeStreamBrokerHostOptions["spawnProcess"]>,
+    };
+    const host = resume ? await ClaudeStreamBrokerHost.adopt(sessionId, hostOptions) : await ClaudeStreamBrokerHost.start(hostOptions);
+    hosts.push(host);
+    return host;
+  };
+  let successor: ClaudeStreamBrokerHost | undefined;
+  let launches = 0;
+  const handshakes: string[] = [];
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
+    ...dependencies, registry, client, transport: () => "structured", resolveAccount: () => account,
+    spawn: async input => {
+      launches++;
+      expect(input.prompt).toBe("");
+      const admission = input.resumeAdmission!;
+      return spawnStructuredConversation({ ...input, resumeAdmission: {
+        beforeClaim: () => { admission.beforeClaim(); handshakes.push("before-claim"); },
+        claimed: claim => { admission.claimed(claim); handshakes.push("claimed"); },
+      } }, {
+        startHost: async current => { successor = await open(true, current); return successor; },
+        durableSetupTimeoutMs: 3_000,
+      });
+    },
+    requestDeliveryDrain: () => {},
+  });
+  const request = {
+    path: artifactPath, conversationId: conversation.id, operationId: `terminal-operation-${mode}`,
+    clientMessageId: `terminal-client-${mode}`, text: "continue the accepted instruction", hasImages: false,
+    kind: "send" as const, policy: "queue" as const, origin: { kind: "agent" as const, role: "builder" },
+  };
+  const dependencies = { enabled: () => true, registry: () => registry, client: () => client, recover,
+    kick: () => {}, requestMigrationTick: () => {}, republish: async () => false };
+  const close = async () => {
+    try {
+      for (const host of hosts) await host.release();
+    } finally {
+      for (const child of children) await stopFixtureProcess(child);
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+    }
+  };
+  try {
+    const predecessor = await open(false);
+    if (mode !== "idle" && mode !== "unqueued") await predecessor.send({ id: "previous-work", text: "previous instruction" });
+    const oldTurn = (await predecessor.health()).activeTurnRef;
+    const exited = new Promise<void>(resolve => children[0]!.once("close", () => resolve()));
+    children[0]!.kill(mode === "late-result" ? "SIGTERM" : "SIGKILL");
+    await exited;
+    await predecessor.release();
+    await bindStructuredDeliveryQueue([], { registry, client, recover });
+    registry.upsert(entry);
+    journal.append({ scope: `session:${conversation.id}`, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: key, hostKind: "claude-broker", host: "dead",
+      turn: "unknown", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
+    } });
+    return {
+      registry, journal, client, key, request, dependencies, events, sessionId, oldTurn, handshakes,
+      launches: () => launches, host: () => successor!, close, directory, artifactPath,
+      emit: async (payload: unknown) => {
+        const child = children.at(-1)!;
+        let buffer = "";
+        const receipt = new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => { child.stdout.off("data", observe); reject(new Error("fixture response receipt timed out")); }, 2_000);
+          const observe = (chunk: Buffer) => {
+            buffer += chunk.toString();
+            let newline: number;
+            while ((newline = buffer.indexOf("\n")) >= 0) {
+              const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+              if (line && JSON.parse(line).type === "fixture_receipt") { clearTimeout(timeout); child.stdout.off("data", observe); resolve(); }
+            }
+          };
+          child.stdout.on("data", observe);
+        });
+        child.stdin.write(JSON.stringify({ type: "fixture_response", payload }) + "\n");
+        await receipt;
+      },
+      users: () => fs.readFileSync(inputFile, "utf8").split("\n").filter(Boolean)
+        .map(line => JSON.parse(line) as { type: string; message?: { content: Array<{ type: string; text: string }> } })
+        .filter(frame => frame.type === "user"),
+      drain: () => drainHeldDeliveries(conversation.id, {
+        deliver: async ({ delivery, path: deliveryPath, clientMessageId }) => await deliverHeldStructuredMessage({
+          conversationId: conversation.id, path: deliveryPath, deliveryId: delivery.id, clientMessageId,
+          text: delivery.text, command: delivery.command,
+        }, { ...dependencies, kick: kickStructuredDeliveryQueue }) ?? "held",
+      }, registry),
+      restart: async () => {
+        await bindStructuredDeliveryQueue([], { registry, client: null });
+        await successor!.release();
+        successor = await open(true);
+        await bindStructuredDeliveryQueue([], { registry, client, recover });
+        await publishStructuredDeliveryHost({ key, host: successor });
+      },
+    };
+  } catch (error) { await close(); throw error; }
+}
+
+for (const mode of ["idle", "active", "background", "lost-echo", "late-result"] as const) {
+  test(`Claude terminal recovery preserves original delivery and notice: ${mode}`, async () => {
+    setSystemTime(new Date("2026-11-06T12:00:00Z"));
+    const f = await claudeTerminalRecoveryFixture(mode).catch(error => { setSystemTime(); throw error; });
+    try {
+      // Consume the actual producer output before adoption can repair it.
+      const terminalEvents = f.events.load(f.sessionId).filter(event => event.kind === "turn-ended");
+      expect(terminalEvents).toMatchObject(mode === "idle" ? [] : [{
+        turnId: "previous-work", status: mode === "late-result" ? "completed" : "error",
+      }]);
+      const sent: SpawnNoticeDeliveryRequest[] = [];
+      const childId = f.request.conversationId;
+      for (let replay = 0; replay < 2; replay++) for (const event of terminalEvents) {
+        const projected = projectEngineHostEvent(childId, `claude:${f.sessionId}`, event);
+        if (!projected) throw new Error("terminal event failed projection");
+        await consumeRuntimeEvent(f.journal.append(projected), {
+          flowReady: () => {}, workflowStageCompleted: () => {}, taskDeliveryAcknowledged: () => {},
+          spawnTurnEnded: turn => { recordSpawnTurnEnded(turn, {
+            child: () => ({ conversationId: childId, launcher: { conversationId: "conversation_launcher", notify: true }, contained: false }),
+            record: noticeStore.recordSpawnNoticeObligation,
+          }); },
+        });
+      }
+      for (let sweep = 0; sweep < 2; sweep++) await sweepSpawnNotices({
+        now: () => Date.parse("2026-11-06T12:00:00Z"),
+        pending: () => noticeStore.pendingSpawnNotices().filter(row => row.childConversationId === childId),
+        childRecord: noticeStore.readSpawnNoticeChild, child: async () => ({ title: "Fixture child", busy: false }),
+        recipient: launcher => ({ kind: "deliver", conversationId: launcher, path: "/sessions/launcher.jsonl" }),
+        finalMessage: () => ({ text: null, error: "fixture child exited" }),
+        origin: () => ({ kind: "agent", role: "builder", conversationId: childId }),
+        recordAttempt: noticeStore.recordSpawnNoticeAttempt, settle: noticeStore.settleSpawnNotices,
+        deliver: async notice => { sent.push(notice); return { ok: true, operationId: "fixture-notice" }; },
+      });
+      expect(sent).toHaveLength(mode === "idle" ? 0 : 1);
+      if (mode !== "idle") expect(noticeStore.readSpawnNoticeTurn(childId, "previous-work"))
+        .toMatchObject({ state: "sent", outcome: mode === "late-result" ? "completed" : "error" });
+
+      await enqueueStructuredMessage(f.request, f.dependencies);
+      await f.drain();
+      await kickStructuredDeliveryQueue();
+      expect(f.launches()).toBe(1);
+      expect(f.handshakes).toEqual(["before-claim", "claimed"]);
+      const receipt = await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client });
+      expect(receipt).toMatchObject(mode === "lost-echo"
+        ? { state: "failed", resend: "verify-first", duplicateRisk: true }
+        : { state: "delivered" });
+      const accepted = () => f.users().filter(frame => frame.message?.content.some(part => part.text.includes(f.request.text)));
+      expect(accepted()).toHaveLength(1);
+      expect(f.users().every(frame => frame.message?.content.some(part => part.text?.trim()))).toBeTrue();
+      for (const restart of [false, true]) {
+        if (restart) await f.restart();
+        await enqueueStructuredMessage(f.request, f.dependencies);
+        await f.drain();
+        await kickStructuredDeliveryQueue();
+        expect(accepted()).toHaveLength(1);
+        expect(await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client })).toEqual(receipt);
+      }
+      expect(f.events.load(f.sessionId).filter(event => event.kind === "turn-ended" && event.turnId === f.oldTurn))
+        .toHaveLength(mode === "idle" ? 0 : 1);
+    } finally { try { await f.close(); } finally { setSystemTime(); } }
+  }, 20_000);
+}
+
+/* 2026-11-09: a Claude builder absorbed an operator message into its running
+   turn about a minute after the write. The host's 30-second confirmation
+   budget had already ended the send unverified, and the echo that proved the
+   engine took it changed nothing: the operator saw "not delivered" while the
+   agent worked on the message. The late echo now settles the original
+   operation from Claude's own record of it, and nothing is written twice. */
+test("a Claude send absorbed mid-turn after its confirmation budget settles from the late echo, written once", async () => {
+  setSystemTime(new Date("2026-11-09T15:24:13Z"));
+  const f = await claudeTerminalRecoveryFixture("late-echo").catch(error => { setSystemTime(); throw error; });
+  try {
+    await enqueueStructuredMessage(f.request, f.dependencies);
+    await f.drain();
+    await kickStructuredDeliveryQueue();
+    const accepted = () => f.users().filter(frame => frame.message?.content.some(part => part.text.includes(f.request.text)));
+    expect(accepted()).toHaveLength(1);
+    expect(await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client }))
+      .toMatchObject({ state: "failed", resend: "verify-first", duplicateRisk: true });
+    const written = accepted()[0]!;
+    /* Claude's record of an input taken mid-turn, in the shape it journals:
+       the queue removal, then an attachment naming the id it echoed. */
+    const at = new Date().toISOString();
+    fs.appendFileSync(f.artifactPath, [
+      { type: "queue-operation", operation: "remove", timestamp: at, sessionId: f.sessionId, reason: "absorbed_mid_turn", commandUuid: "late-absorbed-input" },
+      { type: "attachment", uuid: "late-attachment-record", timestamp: at, entrypoint: "sdk-cli", sessionId: f.sessionId,
+        attachment: { type: "queued_command", commandMode: "prompt", prompt: written.message!.content, source_uuid: "late-absorbed-input" } },
+    ].map(record => JSON.stringify(record)).join("\n") + "\n");
+    await f.emit({ ...written, uuid: "late-absorbed-input" });
+    await waitForCondition(() => sendReceiptFor(f.registry.readOnlySnapshot(), f.request.operationId)?.state === "delivered", 3_000);
+    expect(await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client }))
+      .toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+    expect((await f.client.operationStatus(f.request.operationId))?.receipt.status).toBe("delivered");
+    expect(new FileClaudeDeliveryLedger().load(f.sessionId).filter(state => state.entry.id === f.request.operationId))
+      .toMatchObject([{ delivered: true, engineMessageId: "late-absorbed-input" }]);
+    /* The settlement wrote nothing to the engine and armed nothing. */
+    await f.drain();
+    await kickStructuredDeliveryQueue();
+    expect(accepted()).toHaveLength(1);
+    expect(f.journal.effectBatch(100).filter(effect => effect.id === `effect:${f.request.operationId}`)).toEqual([]);
+  } finally { try { await f.close(); } finally { setSystemTime(); } }
+}, 20_000);
+
+for (const mutation of ["owner", "epoch", "permission"] as const) {
+  test(`Claude terminal recovery rechecks dispatch authority after an awaited read: ${mutation}`, async () => {
+    const f = await claudeTerminalRecoveryFixture("active", `authority-${mutation}`);
+    try {
+      await f.dependencies.recover({ path: f.request.path, conversationId: f.request.conversationId });
+      const host = f.host();
+      const original = f.registry.readOnlySnapshot().entries[`claude:${f.sessionId}`]!;
+      if (!original.claimOwner) throw new Error("fixture has no current writer");
+      let permitted = true;
+      const guard = () => {
+        if (!permitted || !f.registry.ownsStructuredHostClaim(f.key, original.claimOwner!, original.claimEpoch)) {
+          throw new StructuredSendRefusedError("fixture dispatch authority changed");
+        }
+      };
+      // The same native observer must receive a positive control first.
+      await host.send({ id: "positive-control", text: "positive fixture instruction" }, undefined, guard);
+      expect(f.users().some(frame => frame.message?.content.some(part => part.text === "positive fixture instruction"))).toBeTrue();
+      guard();
+      await host.health();
+      if (mutation === "owner") f.registry.upsert({ ...original, claimOwner: "structured-host:replacement" });
+      else if (mutation === "epoch") f.registry.upsert({ ...original, claimEpoch: original.claimEpoch + 1 });
+      else permitted = false;
+      expect(guard).toThrow("fixture dispatch authority changed");
+      const refused = host.send({ id: "refused-control", text: "refused fixture instruction" }, undefined, guard);
+      if (mutation === "permission") await expect(refused).rejects.toThrow("fixture dispatch authority changed");
+      // The production persistence binding retires a replaced writer before
+      // send; its native dead-host refusal is also definitive non-dispatch.
+      else expect(await refused).toEqual({ outcome: "rejected", reason: "dead-host" });
+      expect(f.users().some(frame => frame.message?.content.some(part => part.text === "refused fixture instruction"))).toBeFalse();
+    } finally { await f.close(); }
+  }, 20_000);
+}
+
+
+for (const gap of [10_000, 40_000]) {
+  test(`unqueued Claude completion reaches one durable notice after foreground (gap ${gap})`, async () => {
+    let now = Date.parse("2026-11-09T12:00:00Z");
+    setSystemTime(new Date(now));
+    const f = await claudeTerminalRecoveryFixture("unqueued", `notice-${gap}`).catch(error => { setSystemTime(); throw error; });
+    const receiver = idleHostedConversation(`notice-recipient-${gap}`, ["00000000", "0000", "4000", "8000", gap === 10_000 ? "000000000001" : "000000000002"].join("-"));
+    let receiverJournal = receiver.openJournal();
+    const ledger = createFakeDeliveryLedger();
+    const receiverHost = new FakeEngineHost(ledger);
+    const childId = f.request.conversationId;
+    const requests: SpawnNoticeDeliveryRequest[] = [];
+    let loseReply = false;
+    let finalText = "Initial work complete.";
+    const childView: NonNullable<ReturnType<AgentRegistry["spawnNoticeChild"]>> = {
+      conversationId: childId, launcher: { conversationId: receiver.conversation.id, notify: true }, contained: false,
+    };
+    const consume = async () => {
+      // Reopen the journal writer output, including events not yet consumed.
+      const reopened = new RuntimeJournal(path.join(f.directory, "runtime.sqlite"), { structuredHosts: true });
+      try {
+        for (const event of reopened.replay(0, 1_000).events) await consumeRuntimeEvent(event, {
+          flowReady: () => {}, workflowStageCompleted: () => {}, taskDeliveryAcknowledged: () => {},
+          spawnTurnEnded: turn => { recordSpawnTurnEnded(turn, { child: () => childView, record: noticeStore.recordSpawnNoticeObligation }); },
+        });
+      } finally { reopened.close(); }
+    };
+    const ports: SpawnNoticeSweepPorts = {
+      now: () => now,
+      pending: () => noticeStore.pendingSpawnNotices().filter(row => row.childConversationId === childId),
+      childRecord: noticeStore.readSpawnNoticeChild,
+      child: async () => ({ title: "Fixture child", busy: (await f.host().health()).activeTurnRef !== null }),
+      recipient: () => ({ kind: "deliver", conversationId: receiver.conversation.id, path: receiver.artifactPath }),
+      finalMessage: () => ({ text: finalText, error: null }),
+      origin: () => ({ kind: "agent", role: "builder", conversationId: childId }),
+      recordAttempt: noticeStore.recordSpawnNoticeAttempt, settle: noticeStore.settleSpawnNotices,
+      deliver: async request => {
+        requests.push(request);
+        const client = runtimeJournalClient(receiverJournal);
+        const admitted = await enqueueStructuredMessage({ ...request, operationId: request.clientMessageId }, {
+          enabled: () => true, registry: () => receiver.registry, client: () => client,
+          requestMigrationTick: () => {}, kick: () => {},
+        });
+        if (!admitted?.ok) throw new Error("fixture notice admission refused");
+        const queue = new StructuredDeliveryQueue(journalPort(receiverJournal, false, () => "fixture-owner"), () => receiverHost);
+        await queue.drain();
+        const receipt = await resolveSendReceipt(request.clientMessageId, { registry: receiver.registry, client });
+        expect(receipt).toMatchObject({ state: "delivered" });
+        if (loseReply) { loseReply = false; throw new Error("fixture lost acceptance reply"); }
+        return { ok: true, operationId: request.clientMessageId };
+      },
+    };
+    try {
+      await f.dependencies.recover({ path: f.request.path, conversationId: childId });
+      const host = f.host();
+      expect(await host.send({ id: "foreground-notice", text: "foreground instruction" })).toMatchObject({ outcome: "turn-started" });
+      await waitForCondition(() => f.journal.replay(0, 1_000).events.some(e => e.kind === "turn-ended"));
+      await consume(); await consume();
+      await sweepSpawnNotices(ports); await sweepSpawnNotices(ports);
+      expect(requests).toHaveLength(1);
+      expect(ledger.writes).toHaveLength(1);
+      expect(noticeStore.readSpawnNoticeTurn(childId, "foreground-notice")).toMatchObject({ state: "sent" });
+      expect(requests[0]!.clientMessageId).toBe(spawnNoticeMessageId(childId, "foreground-notice"));
+      now += gap; setSystemTime(new Date(now));
+      finalText = "Background result.\nVerdict: needs_decision";
+      await f.emit({ type: "system", subtype: "task_notification", session_id: f.sessionId });
+      await f.emit({ type: "assistant", session_id: f.sessionId, parent_tool_use_id: null,
+        message: { role: "assistant", id: "background-notice-message", content: [{ type: "text", text: finalText }] } });
+      await waitForCondition(() => f.events.load(f.sessionId).filter(e => e.kind === "turn-started").length === 2);
+      const background = (await host.health()).activeTurnRef;
+      if (!background) throw new Error("fixture background start was not observed");
+      expect(background).not.toBe("foreground-notice");
+      await f.emit({ type: "result", subtype: "success", session_id: f.sessionId, uuid: "background-notice-result", is_error: false });
+      await waitForCondition(() => f.journal.replay(0, 1_000).events.filter(e => e.kind === "turn-ended").length === 2);
+      expect((await host.health()).status).toBe("idle");
+      await f.restart();
+      childView.launcher!.notify = false;
+      await consume();
+      expect(noticeStore.pendingSpawnNotices().filter(row => row.childConversationId === childId)).toHaveLength(0);
+      childView.launcher!.notify = true;
+      await consume(); await consume();
+      expect(noticeStore.pendingSpawnNotices().filter(row => row.childConversationId === childId).map(row => row.turnId)).toEqual([background]);
+      if (gap < 30_000) {
+        await sweepSpawnNotices(ports); await sweepSpawnNotices(ports);
+        expect(requests).toHaveLength(1);
+        now += 30_000; setSystemTime(new Date(now));
+      }
+      loseReply = true;
+      await sweepSpawnNotices(ports);
+      expect(ledger.writes).toHaveLength(2);
+      const attempt = noticeStore.readSpawnNoticeChild(childId)!.attempt!;
+      expect(attempt.turnIds).toEqual([background]);
+      expect(attempt.clientMessageId).toBe(spawnNoticeMessageId(childId, background));
+      expect(attempt.text).toContain("Verdict: needs_decision");
+      receiverJournal.close(); receiverJournal = receiver.openJournal();
+      finalText = "Later text must not replace the stored attempt.";
+      await consume(); await sweepSpawnNotices(ports); await sweepSpawnNotices(ports);
+      expect(ledger.writes).toHaveLength(2);
+      expect(requests).toHaveLength(3);
+      expect(requests[2]).toEqual(requests[1]);
+      expect(noticeStore.readSpawnNoticeTurn(childId, background)).toMatchObject({ state: "sent", outcome: "completed", clientMessageId: attempt.clientMessageId });
+      expect(f.journal.replay(0, 1_000).events.filter(e => e.kind === "turn-ended")).toHaveLength(2);
+      const events = f.events.load(f.sessionId);
+      expect(events.filter(e => e.kind === "turn-ended").map(e => e.turnId)).toEqual(["foreground-notice", background]);
+      for (const e of events.filter(e => e.kind === "turn-ended")) {
+        const projected = projectEngineHostEvent(childId, `claude:${f.sessionId}`, e)!;
+        expect(projected.payload.turnId).toBe(e.turnId);
+        expect(projected.payload).not.toHaveProperty("claudeResultUuid");
+      }
+    } finally { try { await f.close(); receiverJournal.close(); } finally { setSystemTime(); } }
+  }, 20_000);
+}
+
+
+for (const mutation of ["owner", "epoch"] as const) {
+  test(`unqueued Claude activity refuses a replaced writer after a read: ${mutation}`, async () => {
+    const f = await claudeTerminalRecoveryFixture("unqueued", `background-writer-${mutation}`);
+    try {
+      await f.dependencies.recover({ path: f.request.path, conversationId: f.request.conversationId });
+      const host = f.host();
+      const original = f.registry.readOnlySnapshot().entries[`claude:${f.sessionId}`]!;
+      expect(original.claimOwner).toBeTruthy();
+      await host.health();
+      f.registry.upsert({ ...original, ...(mutation === "owner" ? { claimOwner: "structured-host:replacement" } : { claimEpoch: original.claimEpoch + 1 }) });
+      const before = f.events.load(f.sessionId);
+      await f.emit({ type: "assistant", session_id: f.sessionId, message: { role: "assistant", content: [{ type: "text", text: "stale response" }] } });
+      // The peer receipt follows the response through the same stdout parser.
+      expect(f.events.load(f.sessionId)).toEqual(before);
+      expect(f.registry.readOnlySnapshot().entries[`claude:${f.sessionId}`]?.claimOwner).toBe(mutation === "owner" ? "structured-host:replacement" : original.claimOwner);
+    } finally { await f.close(); }
+  }, 20_000);
+}

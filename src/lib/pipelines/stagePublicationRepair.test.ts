@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { StageTurnEvidence } from "./durableEvidence";
+import type { PipelinePorts } from "./engine";
 
 // Literal-object helpers append to the process's Git configuration. Clear
 // launch identity/configuration here as well as in each fixture's subprocess.
@@ -28,7 +29,8 @@ function fixture({ emptyAccepted = false } = {}) {
   let workingRepo = repo;
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith("GIT_")) env[key] = undefined;
-  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "gitconfig") });
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "gitconfig"),
+    GIT_AUTHOR_DATE: "2026-10-11T04:00:00Z", GIT_COMMITTER_DATE: "2026-10-11T04:00:00Z" });
   const git = (...args: string[]) => {
     const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: workingRepo, env, encoding: "utf8" });
     if (result.status !== 0) throw new Error(result.stderr);
@@ -37,7 +39,9 @@ function fixture({ emptyAccepted = false } = {}) {
   git("init", "-q", "-b", "main"); git("init", "-q", "--bare", remote);
   git("commit", "-q", "--allow-empty", "-m", "base");
   const base = git("rev-parse", "HEAD");
-  git("remote", "add", "origin", remote); git("push", "-q", "origin", "main");
+  const deliveryRemote = "https://github.com/example/widgets.git";
+  git("config", `url.${remote}.insteadOf`, deliveryRemote);
+  git("remote", "add", "origin", deliveryRemote); git("push", "-q", "origin", "main");
   const lane = pipelineCorpus(2, 1)[1]!;
   git("checkout", "-q", "-b", lane.branch);
   fs.mkdirSync(path.join(repo, "src"));
@@ -57,7 +61,7 @@ function fixture({ emptyAccepted = false } = {}) {
   Object.assign(attempt, { state: "passed", verdict: { status: "pass", findings: [] },
     conversationId: "conversation_producer", agentPath: "/codex/producer.jsonl", paneId: null,
     startedAt: "2026-10-11T04:00:00.000Z", completedAt: "2026-10-11T04:01:00.000Z" });
-  lane.delivery = { target: { repository: "fixture", remote, branch: `refs/heads/${lane.branch}` },
+  lane.delivery = { target: { repository: "fixture", remote: deliveryRemote, branch: `refs/heads/${lane.branch}` },
     disposition: "owner", publish: "enabled", ownerId: lane.id, epoch: 1, active: true, journal: [] };
   savePipelines([lane]);
   let wall = Date.parse("2026-10-11T04:02:00.000Z");
@@ -68,11 +72,25 @@ function fixture({ emptyAccepted = false } = {}) {
   const ports = { ...defaultPipelinePorts(),
     exec: async (...args: Parameters<typeof realExec>) => {
       if (args[0] === "git" && args[1][0] === "push") pushes++;
+      if (args[0] === "gh") {
+        const argv = args[1];
+        if (argv[0] !== "pr" || !["list", "view"].includes(argv[1]!)
+          || argv[argv.indexOf("--repo") + 1] !== "example/widgets") {
+          return { code: 1, stdout: "", stderr: "fixture PR service unavailable" };
+        }
+        // The verifier reads the head actually published to the bare remote.
+        const headRefName = git("symbolic-ref", "--short", "HEAD");
+        const headRefOid = git("ls-remote", "origin", `refs/heads/${headRefName}`).split(/\s+/)[0];
+        const pr = { number: 17, headRefName, headRefOid, baseRefName: "main", state: "OPEN", isCrossRepository: false };
+        return { code: 0, stdout: JSON.stringify(argv[1] === "list" ? [pr] : pr), stderr: "" };
+      }
       return realExec(args[0], args[1], args[2], { ...env, ...args[3] }, args[4]);
     },
     now: () => new Date(wall).toISOString(), scheduleTick: () => {},
     durableTurnEvidence: async () => turn, conversationDeliveryOutstanding: () => false,
     conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false,
+    stageRepairDelivery: async (_conversationId: string, _clientMessageId: string, deadline: number) => ({ operationId: null,
+      state: wall >= deadline ? "failed" as const : "unavailable" as const, safeToReplace: false }),
     getFlow: () => null, worktreePresent: () => true,
     spawnAgent: async () => { throw new Error("this fixture cannot launch a real agent"); },
     resumeSeveredTurn: async (input: { text: string; clientMessageId: string; conversationId: string }) => {
@@ -133,7 +151,7 @@ test.each(["declined", "deadline", "second refusal"])("an unrepairable publicati
     // The first line keeps the cause and the action a person takes.
     expect(detail.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "privacy" phase');
     expect(detail).toContain("PRIVACY GATE: FAIL: fixture content");
-    expect(detail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "did not finish" : "privacy");
+    expect(detail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "delivery unknown failed" : "privacy");
     await h.tick();
     expect(h.requests).toHaveLength(1);
     expect(h.pushes()).toBe(kind === "second refusal" ? 2 : 1);
@@ -277,4 +295,113 @@ test("a refusal of an accepted head that changes no files retries three times an
     expect(h.requests).toHaveLength(0);
     expect(h.pushes()).toBe(4);
   } finally { h.cleanup(); }
+});
+
+test.each(["unreserved", "failed", "gone", "unavailable", "completed-gone", "running", "busy", "changed", "conflict"] as const)("retry-stage preserves the accepted head and replaces an unreachable producer: %s", async shape => {
+  const h = fixture();
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: eslint' >&2\necho 'src/work.ts:1: repair required' >&2\nexit 1\n", { mode: 0o700 });
+    h.ports.resumeSeveredTurn = async () => false;
+    await h.tick();
+    h.advance(21 * 60_000);
+    await h.tick();
+    expect(h.current().state).toBe("needs_decision");
+    const original = structuredClone(h.current().runs[0]!.attempts[0]!);
+    if (shape === "gone") h.git("commit", "-q", "--allow-empty", "-m", "producer repair before host loss");
+    const retainedHead = h.git("rev-parse", "HEAD");
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(h.lane.id, { action: "override-stage", stageId: "build", prompt: "Repair the named publication failure using the current instructions." }, h.ports)).error).toBeUndefined();
+    const restarted = spawnSync(process.execPath, ["-e", `
+      const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine");
+      const ports = { ...defaultPipelinePorts(), now: () => "2026-10-11T04:23:00.000Z",
+        conversationAgentActive: async () => ${shape === "running" ? "true" : ["gone", "unavailable", "completed-gone", "conflict"].includes(shape) ? "false" : "null"},
+        publicationRepairProducerGone: async () => ${["gone", "unavailable", "completed-gone"].includes(shape) ? "true" : "null"},
+        conversationTurnInterrupted: async () => ${["gone", "unavailable"].includes(shape) ? JSON.stringify("dead") : "null"},
+        conversationDeliveryOutstanding: () => ${shape === "conflict"},
+        durableTurnEvidence: async () => ({ turn: "${shape === "busy" ? "busy" : "terminal"}",
+          lastRecordAt: Date.parse("${shape === "busy" ? "2026-10-11T04:23:00.000Z" : "2026-10-11T04:01:00.000Z"}"),
+          message: { text: "accepted", ts: Date.parse("2026-10-11T04:01:00.000Z") } }),
+        stageRepairDelivery: async () => {
+          ${shape === "changed" ? `const { findPipelineRecord, savePipelines } = await import("./src/lib/pipelines/store");
+          const lane = findPipelineRecord(${JSON.stringify(h.lane.id)});
+          lane.runs[0].attempts[0].startedAt = "2026-10-11T04:00:01.000Z";
+          savePipelines([lane]);` : ""}
+          return { operationId: ${["failed", "conflict"].includes(shape) ? JSON.stringify("failed-repair") : "null"},
+            state: "${["failed", "conflict"].includes(shape) ? "failed" : ["gone", "unavailable"].includes(shape) ? "unavailable" : "unreserved"}", safeToReplace: ${shape !== "conflict"} };
+        },
+      };
+      console.log(JSON.stringify(await patchPipeline(${JSON.stringify(h.lane.id)}, { action: "retry-stage" }, ports)));
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 30_000 });
+    expect(restarted.status, restarted.stderr).toBe(0);
+    const answer = JSON.parse(restarted.stdout);
+    if (shape === "running" || shape === "busy" || shape === "changed" || shape === "conflict") {
+      expect(answer.error).toContain("may still be running");
+      expect(h.current().cursor?.state).toBe("committing");
+      return;
+    }
+    expect(answer.error).toBeUndefined();
+    const next = h.current();
+    expect(next.cursor).toMatchObject({ stageId: "build", state: "pending" });
+    expect(next.cursor!.input).toContain("src/work.ts:1: repair required");
+    expect(next.stages[0]!.prompt).toContain("current instructions");
+    expect(next.runs[0]!.attempts).toHaveLength(2);
+    expect(next.runs[0]!.attempts[1]!).toMatchObject({ n: 2, state: "pending", input: next.cursor!.input });
+    expect(next.lastPassedCommit).toBe(h.accepted);
+    expect(h.git("rev-parse", "HEAD")).toBe(retainedHead);
+    expect(h.git("merge-base", h.accepted, retainedHead)).toBe(h.accepted);
+    expect(next.runs[0]!.attempts[0]!.report).toEqual(original.report);
+    expect(next.runs[0]!.attempts[0]!.verdict).toEqual(original.verdict);
+    expect(h.pushes()).toBe(1);
+    let spawnedPrompt = "";
+    const spawnPorts: PipelinePorts = { ...h.ports, engineReadiness: undefined, resolveProjectSpawn: undefined,
+      cpuPressureHold: () => null,
+      structuredDeliveryPublication: () => "ready",
+      spawnAgent: async (input, onReserved) => {
+        spawnedPrompt = input.prompt;
+        await onReserved({ launchId: "replacement-launch", conversationId: "conversation_replacement", accountId: null });
+        return { launchId: "replacement-launch", conversationId: "conversation_replacement", sessionId: "replacement-session",
+          paneId: null, transcript: path.join(h.root, "replacement.jsonl"), accountId: null };
+      },
+    };
+    for (let n = 0; n < 3 && !spawnedPrompt; n++) await tickPipelines([], spawnPorts);
+    expect(spawnedPrompt, h.current().stateDetail ?? "replacement was not dispatched").toContain("Repair the named publication failure using the current instructions.");
+    expect(spawnedPrompt).toContain("src/work.ts:1: repair required");
+    expect(h.current().runs[0]!.attempts).toHaveLength(2);
+  } finally { h.cleanup(); }
+});
+
+test("the original stage Git binding survives a restart but a passed attempt cannot rehost it", async () => {
+  const h = fixture();
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { prepareStageGitGuard } = await import("@/lib/git/stageAttemptGuard");
+  const registryFile = path.join(h.root, "registry.json");
+  const registry = new AgentRegistry(registryFile);
+  try {
+    const conversation = registry.ensureForkedConversation("codex", path.join(h.root, "producer.jsonl"), null, emptyLaunchProfile({ cwd: h.repo }));
+    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: h.lane.id, stageId: "build", round: 1,
+      role: "builder", slot: "build:1", stageOrder: 0, parentConversationId: null });
+    const lane = h.current();
+    Object.assign(lane.runs[0]!.attempts[0]!, { state: "running", launchId: "rehost-producer", conversationId: conversation.id });
+    savePipelines([lane]);
+    await prepareStageGitGuard("rehost-producer", h.repo, h.ports.exec, h.ports.now(), async () => {});
+    registry.close();
+    for (const stageState of ["running", "passed"] as const) {
+      const lane = h.current(); lane.runs[0]!.attempts[0]!.state = stageState; savePipelines([lane]);
+      const child = spawnSync(process.execPath, ["-e", `
+        const { AgentRegistry } = await import("./src/lib/agent/registry");
+        const { stageGitEnvironment } = await import("./src/lib/runtime/stageGitEnvironment");
+        const registry = new AgentRegistry(${JSON.stringify(registryFile)});
+        try {
+          const env = await stageGitEnvironment(registry, ${JSON.stringify(conversation.id)}, "resume-operation", ${JSON.stringify(h.repo)});
+          console.log(JSON.stringify({ restored: !!env.LLV_STAGE_GIT_RECEIPT }));
+        } catch (error) { console.log(JSON.stringify({ error: error.message })); }
+        finally { registry.close(); }
+      `], { env: process.env, cwd: process.cwd(), encoding: "utf8", timeout: 20_000 });
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual(stageState === "running" ? { restored: true }
+        : { error: "stage Git rehost cannot prove its original attempt" });
+    }
+    expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+  } finally { registry.close(); h.cleanup(); }
 });

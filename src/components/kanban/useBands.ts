@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useRef } from "react";
+import { usePipelineCreationCards } from "@/hooks/useFiles";
+import type { TaskBand } from "@/components/scheme/taskBands";
 
 import { useLocale } from "@/lib/i18n";
 import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
@@ -58,6 +60,7 @@ export interface BandsInput {
 
 export function useBands(input: BandsInput) {
   const { t } = useLocale();
+  const creations = usePipelineCreationCards();
   const { groups, manual, files, flows, reviewGroups = EMPTY_FLOWS, pipelines, surfacePipelines = EMPTY_PIPELINES, tasks, allTasks, drafts, favorites = EMPTY_SET, isolatedManualPaths = EMPTY_SET, draftBands = EMPTY_MAP, now, project } = input;
   const deckFlows = useMemo(() => (reviewGroups.length ? [...flows, ...reviewGroups] : flows), [flows, reviewGroups]);
   const layoutFlows = useMemo(() => compactPipelineLayoutFlows(pipelines, deckFlows), [pipelines, deckFlows]);
@@ -98,5 +101,23 @@ export function useBands(input: BandsInput) {
     () => overview?.bands ?? projectBands(layout!, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow"), deferDoneVisibility: true }),
     [overview, projectBands, layout, allTasks, projection, draftBands, t],
   );
-  return { bands, projection };
+  const withCreations = useMemo(() => {
+    const result = [...bands];
+    for (const card of creations) {
+      const receipt = card.receipt;
+      if (!receipt || (!input.overview && receipt.project !== project) || (card.status !== "linkPending" && pipelines.some(pipeline => pipeline.id === card.id))) continue;
+      const taskBand = result.findIndex(band => band.pipeline?.id === card.id || (band.task && receipt.taskIds.includes(band.task.id)));
+      if (taskBand >= 0) {
+        const band = result[taskBand]!;
+        result[taskBand] = { ...band, creations: [...band.creations ?? [], card] };
+      } else {
+        const band: TaskBand = { id: `pipeline:${card.id}`, origin: "pipeline", task: null, pipeline: null, flow: null,
+          title: receipt.title, status: null, hue: 0, members: [], mirrors: [], groups: [], working: 0, unknown: 0,
+          conversations: 0, planned: 0, pinnedTop: false, createdAt: receipt.queuedAt, creations: [card] };
+        result.push(band);
+      }
+    }
+    return result;
+  }, [bands, creations, project, pipelines, input.overview]);
+  return { bands: withCreations, projection };
 }

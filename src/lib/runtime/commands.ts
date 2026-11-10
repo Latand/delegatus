@@ -101,6 +101,20 @@ function idempotency(body: Record<string, unknown>, operationId: string | undefi
   return id;
 }
 
+/** The conversation and key of a message-bearing request body, validated as
+    {@link parseRuntimeCommand} validates them, or null. Read before the body's
+    attachments are checked, so a refusal of those still has a key to be
+    recorded under (2026-11-09). */
+export function parseRuntimeCommandSubject(value: unknown): { conversationId: string; idempotencyKey: string } | null {
+  try {
+    const body = object(value);
+    const conversationId = requiredId(body.conversationId, "conversationId");
+    return { conversationId, idempotencyKey: idempotency(body, optionalId(body.operationId, "operationId")) };
+  } catch {
+    return null;
+  }
+}
+
 export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, options: { durableReplay?: boolean } = {}): RuntimeOperationCommand {
   const body = object(value);
   if (Buffer.byteLength(JSON.stringify(body)) > MAX_OPERATION_BYTES) throw new Error("request body exceeds 256 KiB");
@@ -200,8 +214,11 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
       throw new Error("role-memory revision is invalid");
     }
     const policy = body.policy === undefined ? undefined : body.policy;
-    if (policy !== undefined && policy !== "queue" && policy !== "steer-if-active" && policy !== "steer-or-queue" && policy !== "interrupt-active") {
+    if (policy !== undefined && policy !== "queue" && policy !== "context-or-queue" && policy !== "steer-if-active" && policy !== "steer-or-queue" && policy !== "interrupt-active") {
       throw new Error("policy is invalid");
+    }
+    if (policy === "context-or-queue" && (kind !== "send" || turnId !== undefined || imageRefs.length || body.runtime !== undefined)) {
+      throw new Error("context-or-queue requires an unfenced text send without runtime overrides");
     }
     if (policy === "steer-or-queue" && turnId !== undefined && (kind !== "send" || turnId !== null)) {
       throw new Error("steer-or-queue accepts only a null next-turn fence on send");
