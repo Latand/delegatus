@@ -108,7 +108,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  hotRegistryRows, registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
@@ -2152,6 +2152,29 @@ function entryGrantAttestors(file: RegistryFile, key: SessionKey): ((entry: { ar
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** A plain copy of a row read inside a keyed transaction. It keeps every own
+    property, including one whose value is undefined, so a comparison over the
+    copy answers as it does over the row a complete view holds. */
+function detachedRow<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(detachedRow) as T;
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) copy[key] = detachedRow((value as Record<string, unknown>)[key]);
+  return copy as T;
+}
+
+/** The registry rows one tmux census is reconciled against. */
+export interface TranscriptHostReconciliationRows {
+  /** The named entries that exist, by `engine:sessionId`. */
+  entries: Record<string, AgentRegistryEntry>;
+  /** The named launches that exist, by launch id. */
+  receipts: Record<string, SpawnReceipt>;
+  /** Every hot entry a tmux pane hosts, in collection order. */
+  hostedEntries: Array<[string, AgentRegistryEntry]>;
+  /** Every hot launch still starting, in collection order. */
+  startingReceipts: SpawnReceipt[];
 }
 
 function restoreOwnedChanges(current: unknown, retired: unknown, previous: unknown): unknown {
@@ -6251,6 +6274,48 @@ export class AgentRegistry {
       const conversation = file.conversations[conversationId];
       return [id, { conversationId, directories: (conversation?.generations ?? []).toReversed().flatMap(generation => generation.launchProfile?.cwd ? [generation.launchProfile.cwd] : []) }];
     })));
+  }
+
+  /** The rows a tmux census reads: the entries and launches it names, the hot
+      entries a pane still hosts and the hot launches still starting. An
+      archived entry has no host and a starting launch is never archived, so
+      the two selections cover what a complete view would show the census.
+      SQLite selects them by key and index inside one keyed read, which also
+      borrows an admitted writer's transaction; assembling the complete view
+      there walked every retained row on the serving thread. */
+  transcriptHostReconciliationRows(entryIds: readonly string[], launchIds: readonly string[]): TranscriptHostReconciliationRows {
+    const named = (file: RegistryFile) => {
+      const rows: TranscriptHostReconciliationRows = { entries: {}, receipts: {}, hostedEntries: [], startingReceipts: [] };
+      for (const id of new Set(entryIds)) {
+        const entry = file.entries[id];
+        if (entry) rows.entries[id] = detachedRow(entry);
+      }
+      for (const id of new Set(launchIds)) {
+        const receipt = file.receipts[id];
+        if (receipt) rows.receipts[id] = detachedRow(receipt);
+      }
+      return rows;
+    };
+    if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
+      const file = this.readOnlySnapshot();
+      const rows = named(file);
+      rows.hostedEntries = hotRegistryRows(file, "entries").filter(([, entry]) => entry.host?.kind === "tmux");
+      rows.startingReceipts = hotRegistryRows(file, "receipts").flatMap(([, receipt]) => receipt.state === "starting" ? [receipt] : []);
+      return rows;
+    }
+    return this.readKeyed(file => {
+      const rows = named(file);
+      const keys = this.sqliteStore!.transcriptHostSweepKeys();
+      for (const id of keys.hostedEntries) {
+        const entry = rows.entries[id] ?? file.entries[id];
+        if (entry?.host?.kind === "tmux") rows.hostedEntries.push([id, detachedRow(entry)]);
+      }
+      for (const id of keys.startingReceipts) {
+        const receipt = rows.receipts[id] ?? file.receipts[id];
+        if (receipt?.state === "starting") rows.startingReceipts.push(detachedRow(receipt));
+      }
+      return rows;
+    });
   }
 
   /** Current credential identity for the seat's stdio MCP heartbeat. */
