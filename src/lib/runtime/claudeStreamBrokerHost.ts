@@ -667,6 +667,8 @@ export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUse
   return users;
 }
 
+const CLAUDE_BACKGROUND_TURN_PREFIX = "claude-background:";
+
 /** One durable writer around a long-lived Claude stream-json process. */
 export class ClaudeStreamBrokerHost implements EngineHost {
   readonly supportsSteer = false;
@@ -680,6 +682,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   // you are doing"), so an ordinary message that interrupted would reach the
   // model as a refusal. It waits for the turn; the Stop control still interrupts.
   readonly sendWaitsForRunningTurn = true;
+  // The CLI reads an input written during a turn at the next tool boundary and
+  // echoes it before that turn's result (checked on 2.1.319). One input is in
+  // flight at a time, so every echo names exactly one operation.
+  readonly acceptsInputDuringTurn = true;
   readonly identity: ClaudeSessionIdentity;
 
   private readonly child: ChildProcessWithoutNullStreams;
@@ -704,6 +710,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly events: RuntimeEvent[] = [];
   private readonly deliveries: ClaudeDeliveryState[] = [];
   private readonly turnQueue: string[] = [];
+  /** Engine ids of the inputs the running turn read at a tool boundary. */
+  private readonly joinedUserUuids = new Set<string>();
   private readonly attentions = new Map<string, JsonObject>();
   /** When each open attention arrived, for the permission requests the state
       reports (#2215). Pruned against `attentions` on every state read. */
@@ -1102,6 +1110,16 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const existingPending = this.pendingDeliveries.get(entry.id);
     if (existingPending) return existingPending.promise;
+    /* One input waits behind the running turn at a time. A second one could be
+       joined with it into one echo, which would confirm neither. */
+    if (this.activeTurnId && this.turnQueue.some((id) => id !== this.activeTurnId && id !== entry.id)) {
+      return { outcome: "rejected", reason: "stale-turn" };
+    }
+    /* A turn the CLI began on its own carries no input of ours to tell its
+       result from the next one's, so a write aimed into it waits for its end. */
+    if (!duplicate && typeof normalized.expectedTurnId === "string" && this.backgroundTurn(this.activeTurnId)) {
+      return { outcome: "rejected", reason: "stale-turn" };
+    }
     const markTiming = (mark: DeliveryTimingMark) => {
       try { observeTiming?.(mark); } catch { /* Timing observers cannot affect delivery. */ }
     };
@@ -1647,11 +1665,23 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           delivery.delivered = true;
           delivery.engineMessageId = stringField(message, "uuid");
           delivery.confirmation = "inferred";
+          /* An echo ahead of the running turn's result means that turn read
+             the input at a tool boundary. It owns no turn of its own, so it
+             leaves the turn queue and the one result ends the running turn. */
+          const waiting = this.turnQueue.indexOf(delivery.entry.id);
+          const joinedTurnId = this.activeTurnId && this.activeTurnId !== delivery.entry.id && waiting >= 0
+            && !this.backgroundTurn(this.activeTurnId) ? this.activeTurnId : null;
+          if (joinedTurnId) {
+            this.turnQueue.splice(waiting, 1);
+            if (delivery.engineMessageId) this.joinedUserUuids.add(delivery.engineMessageId);
+          }
           const pending = this.pendingDeliveries.get(delivery.entry.id);
           if (pending) {
             this.pendingDeliveries.delete(delivery.entry.id);
             if (pending.timer) clearTimeout(pending.timer);
-            pending.resolve({ outcome: delivery.disposition, turnId: delivery.entry.id });
+            pending.resolve(joinedTurnId
+              ? { outcome: "steered", turnId: joinedTurnId }
+              : { outcome: delivery.disposition, turnId: delivery.entry.id });
           }
         } catch (error) {
           return this.failWithoutLedger(new Error(`Claude delivery ledger failed: ${safeError(error)}`));
@@ -1769,6 +1799,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       && Boolean(stringField(block, "name")?.trim()) && record(block.input) !== null;
   }
 
+  private backgroundTurn(turnId: string | null): boolean {
+    return turnId?.startsWith(CLAUDE_BACKGROUND_TURN_PREFIX) === true;
+  }
+
   private startBackgroundTurn(messageId: string | null, userUuid: string | null): void {
     if (this.manualCompaction || this.unavailable()) return;
     if (this.activeTurnId) {
@@ -1777,7 +1811,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const token = messageId ? `message:${messageId}` : `sequence:${this.cursor + 1}`;
     const digest = crypto.createHash("sha256").update(JSON.stringify([this.identity.sessionId, token])).digest("hex");
-    this.activeTurnId = `claude-background:${digest}`;
+    this.activeTurnId = `${CLAUDE_BACKGROUND_TURN_PREFIX}${digest}`;
     this.activeUserUuid = userUuid;
     this.emit({ kind: "turn-started", turnId: this.activeTurnId });
   }
@@ -1805,8 +1839,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (userUuid) {
       const deliveredUserUuid = this.deliveries.find(delivery => delivery.entry.id === turnId)?.engineMessageId;
       const expectedUserUuid = deliveredUserUuid ?? this.activeUserUuid;
-      if ((expectedUserUuid && userUuid !== expectedUserUuid)
-        || this.deliveries.some(delivery => delivery.entry.id !== turnId && delivery.engineMessageId === userUuid)) return;
+      if (!this.joinedUserUuids.has(userUuid) && ((expectedUserUuid && userUuid !== expectedUserUuid)
+        || this.deliveries.some(delivery => delivery.entry.id !== turnId && delivery.engineMessageId === userUuid))) return;
     }
     const interrupted = this.interruptedTurns.has(turnId);
     const status = interrupted || message.subtype === "interrupted"
@@ -1818,6 +1852,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.turnQueue[0] === turnId) this.turnQueue.shift();
     this.partialTurns.delete(turnId);
     this.interruptedTurns.delete(turnId);
+    this.joinedUserUuids.clear();
     this.assistantCandidate = null;
     this.activeUserUuid = null;
     /* Issue #765: a `result` proves the CLI's turn is over, so any control
