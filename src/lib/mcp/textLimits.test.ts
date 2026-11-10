@@ -326,7 +326,7 @@ test.each([undefined, "receipt-query"])("wrong send receipt family is diagnostic
 });
 
 test.each([
-  { status: 400, code: "PIPELINE_INVALID_FIELD", field: "expectedRevision", error: "expectedRevision belongs to another action" },
+  { status: 400, code: "PIPELINE_INVALID_FIELD", field: "expectedStageId", error: "the selected stage does not exist" },
   { status: 409, code: "STAGE_CHANGED", field: "expectedAttempt", error: "the current attempt changed; read the stage again" },
 ])("pipeline adapter preserves deterministic $code refusal and original-key replay", async refusal => {
   const seen: unknown[] = [];
@@ -335,12 +335,14 @@ test.each([
     patchPipeline: async (_id: string, request: unknown) => { seen.push(request); return refusal; },
   } as never);
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
-  const args = { clientRequestId: "guard-refused", pipelineId: "fixture", action: "skip-stage", expectedRevision: "a".repeat(64) };
+  // Use skip-stage's own guards so the domain refusal reaches the adapter.
+  // A guard belonging to another action is refused before domain admission.
+  const args = { clientRequestId: "guard-refused", pipelineId: "fixture", action: "skip-stage", expectedStageId: "build", expectedAttempt: 1 };
   expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: false, code: refusal.code, retryable: false, details: { field: refusal.field } });
   expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: false, replayed: true, retryable: false });
   expect(seen).toHaveLength(1);
-  expect(seen[0]).toMatchObject({ action: args.action, expectedRevision: args.expectedRevision });
-  expect(await service.callTool("pipeline_action", { ...args, expectedRevision: "b".repeat(64) })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+  expect(seen[0]).toMatchObject({ action: args.action, expectedStageId: args.expectedStageId, expectedAttempt: args.expectedAttempt });
+  expect(await service.callTool("pipeline_action", { ...args, expectedStageId: "review" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
   expect(seen).toHaveLength(1);
 });
 
