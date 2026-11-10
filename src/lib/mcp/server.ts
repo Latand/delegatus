@@ -331,25 +331,44 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
-/** Call-local checks survive awaited service/SDK wrappers, never a wire frame. */
+const BOARD_READ_TOOLS = new Set(["list_tasks", "list_pipelines"]);
 export interface McpResponseAuthority { checks: Array<() => void> }
+
+function boardReadFailure(tool: string, args: McpToolArgs, error: unknown): McpToolResult {
+  const details = error instanceof McpToolRefusal ? error.details : undefined;
+  return failure(tool, clientRequestId(args), typeof details?.code === "string" ? details.code : "tool_failed",
+    error instanceof Error ? error.message : String(error), details ? details.retryable === true : true, false, details);
+}
 
 function responseAuthorityResult(tool: string, args: McpToolArgs, authority: McpResponseAuthority | undefined, result: McpToolResult): McpToolResult {
   try { for (const check of authority?.checks ?? []) check(); return result; }
   catch (error) {
+    if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
     const code = error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "caller_unidentified";
     return failure(tool, clientRequestId(args), code, code === "workspace_forbidden" ? "workspace access denied" : "caller authority changed before response", false, false, { code });
   }
 }
 
-function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
+export function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
   if (!context.responseAuthority) return;
-  const runInCallerContext = AsyncLocalStorage.snapshot();
-  context.responseAuthority.checks.push(() => runInCallerContext(check));
+  const withinCall = AsyncLocalStorage.snapshot();
+  context.responseAuthority.checks.push(() => withinCall(check));
+}
+
+export interface McpBoardRead {
+  project: string;
+  scope: string;
+  assert(): void;
 }
 
 export interface McpToolCallContext {
   responseAuthority?: McpResponseAuthority;
+  /** Board selection and current authority captured before normalization can await. */
+  boardRead?: McpBoardRead;
+  /** Canonical selection resolved by the workspace fence; never a wire argument. */
+  resolvedBoardProject?: string;
+  /** Authenticated in-process operator selection; never read from tool arguments. */
+  operatorBoardProject?: string;
   /** Call-local curator disclosure fence, retained through SDK serialization. */
   curatorResponse?: { assertCurrent?: () => void };
   /** Trusted read projection; never accepted from serialized tool arguments. */
@@ -454,6 +473,7 @@ function curatorDisclosureResult(tool: string, args: McpToolArgs, authority: Mcp
   }
 }
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
+  captureBoardRead?: (args: McpToolArgs, context: McpToolCallContext) => McpBoardRead;
   /** Curator apply only: pin current disclosure authority and read its atomic
    * domain acknowledgement. This hook must never dispatch an apply. */
   curatorApplyRecovery?: (args: McpToolArgs) => Promise<{ assertCurrent: () => void; recoverCommitted: () => McpToolPayload | null }>;
@@ -2868,6 +2888,7 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        if (BOARD_READ_TOOLS.has(typedTool)) result = responseAuthorityResult(typedTool, args, context.responseAuthority, result);
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
         context.assertResult?.(result);
@@ -2905,6 +2926,7 @@ export function createMcpToolService(
           error instanceof Error ? error.message : String(error), details.code === undefined, false, details),
           context.signal?.aborted ? "cancelled" : "failure");
       }
+      try { context.boardRead?.assert(); } catch (error) { return boardReadFailure(typedTool, args, error); }
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
@@ -2917,12 +2939,14 @@ export function createMcpToolService(
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
         try {
           await measure("caller", async () => bindings[typedTool].authorizeReceipt?.(effectiveArgs));
+          context.boardRead?.assert();
           if (context.signal?.aborted) throw context.signal.reason;
           const payload = await measure("binding", () => bindings[typedTool](effectiveArgs, context));
           if (context.signal?.aborted) throw context.signal.reason;
           return finish({ ...payload, ...(normalized.clamped ? { clamped: normalized.clamped } : {}),
             ok: true, toolName: typedTool, clientRequestId: null, replayed: false }, "success");
         } catch (error) {
+          if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
           const reason = context.signal?.aborted ? context.signal.reason : error;
           const outcome = reason instanceof DeadlineExceededError ? "deadline" : context.signal?.aborted ? "cancelled" : "failure";
           return finish(failure(typedTool, null,
@@ -2982,6 +3006,7 @@ export function createMcpToolService(
       let curatorApply: Awaited<ReturnType<NonNullable<McpToolBinding["curatorApplyRecovery"]>>> | undefined;
       let scope: string | null;
       try {
+        context.boardRead?.assert();
         if (typedTool === "curate_rules" && effectiveArgs.action === "apply") {
           curatorApply = await bindings[typedTool].curatorApplyRecovery?.(effectiveArgs);
           curatorApply?.assertCurrent();
@@ -2989,9 +3014,11 @@ export function createMcpToolService(
           const assertCaller = context.assertCaller;
           if (curatorApply) context = { ...context, assertCaller: () => { assertCaller?.(); curatorApply!.assertCurrent(); } };
         }
-        scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
+        scope = await measure("caller", async () => context.boardRead?.scope ?? await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
         curatorApply?.assertCurrent();
+        context.boardRead?.assert();
       } catch (error) {
+        if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
         // Nothing is claimed yet, so the same key may be tried again as it is.
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
           return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
@@ -3588,7 +3615,9 @@ export function createMcpToolService(
             }, false);
           }
         }
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
+        context.boardRead?.assert();
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, context.boardRead?.assert));
+        context.boardRead?.assert();
         curatorApply?.assertCurrent();
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -3702,6 +3731,7 @@ export function createMcpToolService(
         let unadmitted = false;
         const bindingStartedAt = performance.now();
         try {
+          context.boardRead?.assert();
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true }
             : context);
@@ -3748,7 +3778,7 @@ export function createMcpToolService(
           /* Named issue, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || BOARD_READ_TOOLS.has(typedTool) || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
@@ -3815,11 +3845,12 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
-        // Authority is a disclosure verdict. Preserve the committed witness
-        // and the unsettled claim when the owner is no longer authorized.
+        // Preserve the curator committed witness if disclosure authority changes.
         curatorApply?.assertCurrent();
+        context.boardRead?.assert();
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
+        context.boardRead?.assert();
         curatorApply?.assertCurrent();
         return settled;
       })();
@@ -3863,11 +3894,36 @@ export function createMcpToolService(
       return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
     } finally { finish(); }
   } });
-  return { async callTool(tool, args, context = {}) {
-    const authority = context.responseAuthority ?? (tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+  return { callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+    const board = BOARD_READ_TOOLS.has(tool);
+    // Establish native proof and the canonical board before cursor filter matching.
+    if (board && "nativeCallerProof" in args) {
+      const { nativeCallerProof, ...logicalArgs } = args;
+      if (nativeCallerProof !== undefined && (typeof nativeCallerProof !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(nativeCallerProof))) {
+        return failure(tool, clientRequestId(args), "invalid_request", "nativeCallerProof must be a hook-generated proof; do not invent or copy it", false);
+      }
+      return runWithNativeCallProof(typeof nativeCallerProof === "string" ? nativeCallerProof : undefined, tool, logicalArgs,
+        () => callTool(tool, logicalArgs, context));
+    }
     const curatorResponse = context.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
-    const result = await paged.callTool(tool, args, { ...context, responseAuthority: authority, curatorResponse });
-    return responseAuthorityResult(tool, args, authority, curatorDisclosureResult(tool, args, curatorResponse, result));
+    const authority = context.responseAuthority ?? (board || tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+    context = { ...context, responseAuthority: authority, curatorResponse };
+    try {
+      if (board) {
+        const boardRead = runWithMcpCallerResolution(() => bindings[tool as McpToolName].captureBoardRead?.(args, context));
+        if (boardRead) {
+          context = { ...context, boardRead };
+          args = { ...args, project: boardRead.project };
+          retainResponseAuthority(context, boardRead.assert);
+          boardRead.assert();
+        }
+      }
+      const result = await paged.callTool(tool, args, context);
+      return responseAuthorityResult(tool, args, authority, curatorDisclosureResult(tool, args, curatorResponse, result));
+    } catch (error) {
+      if (board) return responseAuthorityResult(tool, args, authority, boardReadFailure(tool, args, error));
+      throw error;
+    }
   } };
 }
 
@@ -3989,10 +4045,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   list_flows: "Read retired flow history newest-created first, compact by default, with a 24 KB row budget and cursor pagination. Rows include identity, state, revision, spec title/length and round count. omittedCount counts matching records outside this page; omittedRecordCount counts compacted records. Follow nextCursor with the same filters and a fresh clientRequestId until hasMore is false. full:true or compact:false returns complete records; get_flow(flowId) reads one full record. A single explicit full record can exceed the budget. Unknown states are ignored; limits clamp and invalid or mismatched cursors restart with cursorReset:true.",
   get_flow: "Read one archived flow by durable id. Flows are retired; the reply grants no execution or current-head approval.",
   flow_action: "Deprecated: flows are retired. New operations refuse with FLOW_RETIRED; use pipeline run stages with review/fix edges. Replay an already accepted clientRequestId to read its original receipt without execution.",
-  list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
+  list_pipelines: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
   conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
-  list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
+  list_tasks: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. `refusedByFlag` counts, across the whole sweep and every project, the flags behind each no-active-flags refusal, and a refused item names its own `flags`. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
   resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
@@ -4754,7 +4810,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema.optional(),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
-    project: z.string().optional(),
+    project: z.string().optional().describe("Project key, display name or repository folder, case-insensitive. Omission uses the designated seat or workspace project; unrestricted readers retain all projects."),
     state: z.unknown().optional()
       .describe("A pipeline state or array of states; open includes every state except completed and closed. Unknown values are ignored."),
     includeClosed: z.boolean().optional(),
@@ -4822,7 +4878,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema.optional(),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
-    project: z.string().optional(),
+    project: z.string().optional().describe("Project key, display name or repository folder, case-insensitive. Omission uses the designated seat or workspace project; unrestricted readers retain all projects."),
     status: z.unknown().optional().describe("One status or an array: inbox, assigned, blocked, done. Unknown values are ignored."),
     statuses: z.unknown().optional().describe("Alias for a status set; takes precedence over status."),
     openOnly: z.unknown().optional().describe("true excludes done tasks."),
@@ -5327,7 +5383,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
-        const authority: McpResponseAuthority | undefined = toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
+        const authority: McpResponseAuthority | undefined = BOARD_READ_TOOLS.has(toolName) || toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
         const curatorResponse: McpToolCallContext["curatorResponse"] = toolName === "curate_rules" ? {} : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           responseAuthority: authority,

@@ -4,7 +4,7 @@ import path from "node:path";
 import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { resolveShortId } from "@/lib/shortIds";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
@@ -14,8 +14,9 @@ import { conversationWorkspacePrincipal, workspacePrincipalAccess } from "@/lib/
 import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
-import { McpToolRefusal, type McpToolBindings, type McpToolService } from "./server";
-import type { ViewerMcpDomainDependencies } from "./bindings";
+import { McpToolRefusal, retainResponseAuthority, type McpToolBindings, type McpToolService } from "./server";
+import { captureBoardAliasProof, captureBoardCaller, resolveBoardProject, type ViewerMcpDomainDependencies } from "./bindings";
+import { runWithMcpCallerResolution } from "./callerContext";
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
 
@@ -56,6 +57,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
     }
     const refuse = () => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
       replayed: false, code: "workspace_forbidden", error: "workspace access denied", retryable: false });
+    const boardRead = tool === "list_tasks" || tool === "list_pipelines";
     try {
       const store = existingTeamStore();
       const authority = dependencies.attentionAuthority();
@@ -67,24 +69,78 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           : Object.values(current.conversations).find(row => row.generations.some(generation => generation.path === id) || row.continuityPaths?.includes(id)) ?? null;
       });
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
-      if (!principal) return service.callTool(tool, input, context);
-      if (!store) denied();
-      if (!PROJECT_TOOLS.has(tool)) denied();
-      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
+      const principalIdentity = JSON.stringify(principal);
       const conversationProject = (id: string): string | null => {
         if (dependencies.workspaceProject) return dependencies.workspaceProject(id);
         const record = lookup(id);
         return conversationProjectKey(record?.projectOwnership, record?.generations.at(-1)?.launchProfile, { project: conversationCatalogEntry(id)?.project });
       };
-      const project = conversationProject(callerId ?? "");
+      const project = principal || boardRead ? conversationProject(callerId ?? "") : null;
+      const responseProjects: string[] = [];
+      const boardCaller = boardRead ? captureBoardCaller(dependencies, { ...context, responseAuthority: undefined }) : undefined;
+      const assertBoardCaller = () => runWithMcpCallerResolution(() => {
+        context?.assertCaller?.();
+        const current = dependencies.attentionAuthority();
+        const currentId = current.kind === "worker" || current.kind === "root" ? current.conversationId : null;
+        if (current.kind !== authority.kind || currentId !== callerId
+          || conversationProject(callerId ?? "") !== project
+          || JSON.stringify(conversationWorkspacePrincipal(lookup, callerId)) !== principalIdentity) denied();
+        if (principal) {
+          const currentAccess = workspacePrincipalAccess(principal);
+          if (!currentAccess(project) || !responseProjects.every(currentAccess)) denied();
+        }
+        boardCaller?.assert();
+      });
+      // Even an unrestricted caller and an early resolver refusal must retain
+      // current workspace authority through the final service/SDK await.
+      if (boardRead) {
+        assertBoardCaller();
+        retainResponseAuthority(context ?? {}, assertBoardCaller);
+      }
+      if (!principal) {
+        if (!boardRead) return service.callTool(tool, input, context);
+        const result = await service.callTool(tool, input, { ...context, assertCaller: assertBoardCaller });
+        assertBoardCaller();
+        return result;
+      }
+      if (!store) denied();
+      if (!PROJECT_TOOLS.has(tool)) denied();
+      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
       let allowed = workspacePrincipalAccess(principal);
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
-      if (typeof args.project === "string") {
+      const named = typeof input.project === "string" ? input.project.trim() : "";
+      const aliasSnapshot = boardRead ? projectAliasSnapshot({ strict: true }) : { aliases: {}, displayNames: {} };
+      const aliases = aliasSnapshot.aliases;
+      const projectRefusal = (details: Record<string, unknown>) => {
+        const permitted = (value: unknown): value is { project: string; name: string } => Boolean(value && typeof value === "object"
+          && typeof (value as { project?: unknown }).project === "string" && typeof (value as { name?: unknown }).name === "string"
+          && allowed((value as { project: string }).project));
+        const candidates = Array.isArray(details.candidateNames) ? details.candidateNames : [];
+        if (details.code === "ambiguous_project" && !candidates.every(permitted)) denied();
+        const names = candidates.filter(permitted);
+        const matches = (Array.isArray(details.closeMatches) ? details.closeMatches : []).filter(permitted);
+        responseProjects.push(...names.map(row => row.project), ...matches.map(row => row.project));
+        // Rebuild both channels, including refusals returned by the inner service.
+        return { ...refuse(), code: String(details.code),
+          error: details.code === "ambiguous_project" ? `ambiguous project: ${names.map(row => row.name).join(", ")}`
+            : `no such project; ${matches.length ? `close matches: ${matches.map(row => row.name).join(", ")}` : "no close matches"}`,
+          details: { code: details.code, retryable: false,
+            ...(details.code === "ambiguous_project" ? { candidates: names.map(row => row.project), candidateNames: names } : { closeMatches: matches }) } };
+      };
+      if (boardRead && typeof args.project === "string" && args.project.trim()) {
+        try { args.project = resolveBoardProject(args.project.trim(), dependencies); }
+        catch (error) {
+          if (!(error instanceof McpToolRefusal) || !["unknown_project", "ambiguous_project"].includes(String(error.details.code))) throw error;
+          return projectRefusal(error.details);
+        }
+      } else if (!boardRead && typeof args.project === "string") {
         const matches = allowedProjects.filter(key => key === args.project || key.startsWith(args.project as string));
         if (matches.length === 1) args.project = matches[0];
       }
+      if (boardRead && typeof args.project === "string" && !args.project.trim()) args.project = project;
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
+      const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases, aliasSnapshot.displayNames, dependencies) : undefined;
       const checks: (() => string | null | undefined)[] = [() => project];
       const task = (id: string) => {
         const source = dependencies.taskSelectionSource?.();
@@ -144,6 +200,10 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       if (args.machine || ["bridge_report", "bridge_directive"].includes(tool) && (args.seq !== undefined || args.ref !== undefined)) denied();
       if (tool === "conversation_action" && ["kill-target", "compact-all"].includes(String(args.action))) denied();
       const assert = () => {
+        if (boardRead) {
+          assertBoardCaller();
+          if (!aliasesUnchanged?.()) denied();
+        }
         allowed = workspacePrincipalAccess(principal);
         if (!checks.every(check => allowed(check()))) denied();
         const targetEngine = typeof args.conversationId === "string" ? lookup(args.conversationId)?.engine : null;
@@ -175,11 +235,21 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         }
         return value;
       };
+      let boardRefusal: ReturnType<typeof projectRefusal> | undefined;
       return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied(); }, async () => {
-        const result = await service.callTool(tool, args, { ...context, assertResult(answer) {
+        const result = await service.callTool(tool, args, { ...context,
+          ...(boardRead ? { resolvedBoardProject: typeof args.project === "string" ? args.project : undefined,
+            assertCaller() { context?.assertCaller?.(); assert(); } } : {}),
+          assertResult(answer) {
           context?.assertResult?.(answer);
           assert();
-          if (!answer.ok) return;
+          if (!answer.ok) {
+            if (boardRead && ["unknown_project", "ambiguous_project"].includes(answer.code)) {
+              // Judge full identities before the service compacts project keys.
+              boardRefusal = projectRefusal({ ...answer.details, code: answer.code });
+            }
+            return;
+          }
           if (tool === "search_transcripts") {
             const scope = answer.projectScope as { resolved?: string } | undefined;
             // The outer fence discards an unscoped search fallback wholesale.
@@ -199,6 +269,10 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           visit(answer);
         } });
         assert();
+        if (boardRead && !result.ok && ["unknown_project", "ambiguous_project"].includes(result.code)) {
+          const safe = boardRefusal?.code === result.code ? boardRefusal : projectRefusal({ ...result.details, code: result.code });
+          return { ...safe, replayed: result.replayed };
+        }
         answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
           const scope = result.projectScope as { resolved?: string } | undefined;
@@ -211,6 +285,11 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       });
     } catch (error) {
       if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") return refuse();
+      if (boardRead && error instanceof McpToolRefusal && ["orchestrator_seat_revoked", "orchestrator_seat_authority_unavailable",
+        "caller_unidentified", "project_scope_refused", "cross_project_refused"].includes(String(error.details.code))) {
+        const code = String(error.details.code), retryable = error.details.retryable === true;
+        return { ...refuse(), code, retryable, error: "board caller authority refused the read", details: { code, retryable } };
+      }
       // A broken authority store cannot silently restore installation reach.
       return { ...refuse(), code: "workspace_unavailable", error: "workspace authority is unavailable", retryable: true };
     }

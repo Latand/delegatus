@@ -47,7 +47,7 @@ import { queryLifecycleEvents } from "@/lib/lifecycle/journal";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 
-import { defaultMcpSpawnRoleParams, spawnDispatchBody, viewerMcpBindings } from "./bindings";
+import { defaultMcpSpawnRoleParams, spawnDispatchBody, viewerMcpBindings, type ViewerMcpDomainDependencies } from "./bindings";
 import type { SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import { SEAT_TICK_PROMPT_LIMIT } from "@/lib/monitor/seatTickSettings";
@@ -1727,8 +1727,20 @@ test("flow tools read archives and refuse new action effects", async () => {
   expect(actions).toEqual([]);
 });
 
+// Board reads resolve retained project membership and capture caller authority
+// before reading rows. Keep these sources explicit in the projection fixtures.
+function boardReadSources(...projects: string[]): Pick<ViewerMcpDomainDependencies,
+  "lastCompletedCatalog" | "callerAttribution" | "attentionAuthority"> {
+  return {
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: projects.map(project => ({ project, smt: 1, conversations: 1 })) }),
+    callerAttribution: () => ({ kind: "agent", conversationId: "conversation_seat", role: "builder" }),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_seat", role: "builder" }),
+  };
+}
+
 test("list_pipelines applies project, state, and closed filters to the durable registry", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...boardReadSources("viewer", "other"),
     getPipelines: () => ({ pipelines: [
       { id: "pipeline_live", project: "viewer", state: "running" },
       { id: "pipeline_paused", project: "viewer", state: "paused" },
@@ -1755,6 +1767,7 @@ test.each([false, true])("list_pipelines resolves archived ids with the same fil
   ];
   const read = (id: string) => rows.find(row => row.id === id) ?? null;
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...boardReadSources("viewer", "other"),
     getPipelines: () => { throw new Error("explicit ids traversed the hot registry"); },
     listPipelineRecords: () => { throw new Error("explicit ids traversed the hot registry"); },
     ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-reads", read: () => null }) } : {}),
@@ -1787,6 +1800,7 @@ test.each([false, true])("list_pipelines filters archived ids by PR query before
   ];
   const reads: string[] = [];
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...boardReadSources("viewer", "other"),
     getPipelines: () => { throw new Error("explicit PR query traversed the hot registry"); },
     listPipelineRecords: () => { throw new Error("explicit PR query traversed the hot registry"); },
     ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-pr-reads", read: () => { throw new Error("explicit PR query read the hot source"); } }) } : {}),
@@ -1826,6 +1840,7 @@ test("list_pipelines returns bounded rows and leaves prompts, specs and transcri
     stateDetail: "waiting on review",
   };
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...boardReadSources("viewer", "other"),
     getPipelines: () => ({ pipelines: [pipeline] }),
   } as never);
 
@@ -1845,6 +1860,7 @@ test("list_pipelines returns bounded rows and leaves prompts, specs and transcri
 
 test("list_pipelines abandons the read when the caller's deadline has already passed", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...boardReadSources("viewer", "other"),
     getPipelines: () => ({ pipelines: pipelineCorpus(1) }),
   } as never);
 
@@ -1860,6 +1876,7 @@ test("task read tools expose the pipeline-linked durable read model", async () =
     { id: "task_other", project: "other", status: "inbox", placement: "unplaced", text: "Other" },
   ];
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...boardReadSources("viewer", "other"),
     loadTasks: () => tasks,
     getPipelines: () => ({ pipelines: [{ id: "pipeline_608", taskIds: ["task_viewer"] }] }),
   } as never);
@@ -4959,7 +4976,7 @@ test("seat_tick_settings acknowledges auto-rotation and records the server-deriv
 test("list_pipelines names the successor carrying an automatic refresh", async () => {
   const pipeline = { ...pipelineCorpus(1)[0]!, id: "refresh-parent", project: "fixture", state: "completed",
     merge: { state: "refreshing", reason: null, by: null, prNumber: 11, refresh: { pipelineId: "refresh-successor" } } } as Pipeline;
-  const bindings = viewerMcpBindings(undefined, undefined, { getPipelines: () => ({ pipelines: [pipeline] }) } as never);
+  const bindings = viewerMcpBindings(undefined, undefined, { ...boardReadSources("fixture"), getPipelines: () => ({ pipelines: [pipeline] }) } as never);
   const answer = await bindings.list_pipelines({ clientRequestId: "list-refresh-successor", compact: false, project: "fixture" });
   expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
 });
