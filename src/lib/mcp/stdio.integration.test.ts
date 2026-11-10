@@ -453,11 +453,11 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
     expect(retirement.inputSchema.required ?? []).not.toContain("callerLaunchId");
 
     const first = await session.client.callTool({
-      name: "list_flows",
+      name: "list_pipelines",
       arguments: { clientRequestId: "stdio-list-flows", limit: 1 },
     });
     const replay = await session.client.callTool({
-      name: "list_flows",
+      name: "list_pipelines",
       arguments: { clientRequestId: "stdio-list-flows", limit: 1 },
     });
     const tasks = await session.client.callTool({
@@ -465,8 +465,8 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
       arguments: { clientRequestId: "stdio-list-tasks", limit: 1 },
     });
 
-    expect(first.structuredContent).toMatchObject({ ok: true, toolName: "list_flows", replayed: false });
-    expect(replay.structuredContent).toMatchObject({ ok: true, toolName: "list_flows", replayed: true });
+    expect(first.structuredContent).toMatchObject({ ok: true, toolName: "list_pipelines", replayed: false });
+    expect(replay.structuredContent).toMatchObject({ ok: true, toolName: "list_pipelines", replayed: true });
     expect(tasks.structuredContent).toMatchObject({ ok: true, toolName: "list_tasks", replayed: false });
   } finally {
     await session.close();

@@ -8,7 +8,7 @@ import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
-import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
+import { STAGE_RETIREMENT } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswerCooperatively } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
@@ -123,10 +123,7 @@ import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { backoffDelayMs, DeadlineExceededError, deadlineSignal, systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
-import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
-import { flowSelectionSource } from "@/lib/flows/store";
-import { getFlowsWithPresets } from "@/lib/flows/engine";
-import type { PatchFlowRequest } from "@/lib/flows/types";
+import { getFlowsWithPresets } from "@/lib/flows/store";
 import { pollLifecycleDigest, type LifecycleDigestRequest } from "@/lib/lifecycle/digest";
 import { queryLifecycleEvents, type LifecycleEventQuery } from "@/lib/lifecycle/journal";
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
@@ -320,7 +317,7 @@ import {
   stageReportAcknowledgement,
   type AccountLimitsInput,
 } from "./compactAnswers";
-import { changedFieldNames, fieldValues, compactFlow, compactTask, firstLine, fullAnswer, answerHint, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+import { changedFieldNames, fieldValues, compactTask, firstLine, fullAnswer, answerHint, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
 
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
@@ -914,10 +911,6 @@ export interface ViewerMcpDomainDependencies {
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
-  flowSelectionSource?: typeof flowSelectionSource;
-  patchFlow: typeof patchFlow;
-  cancelRound: typeof cancelRound;
-  closeFlow: typeof closeFlow;
   getPipelines: typeof getPipelines;
   /** #863: the bounded list read — the shared cached registry parse, with none
       of the per-caller revive `getPipelines` pays, because a list row copies
@@ -1526,10 +1519,6 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   boardFor,
   applyBoardCommand: (input, snapshot) => applyBoardCommand(input, { registrySnapshot: () => snapshot }),
   getFlowsWithPresets,
-  flowSelectionSource,
-  patchFlow,
-  cancelRound,
-  closeFlow,
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
   fleetLimitWaits: ids => readHistoryProjection(db => historyFleetLimitWaits(db, ids), { collections: ["pipelines"] }),
@@ -6295,67 +6284,8 @@ async function boardSnapshot(
   });
 }
 
-function listFlows(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  const states = stringSet(args.state, ["waiting_ready", "spawn_pending", "spawning", "reviewing", "relay_pending", "relaying", "fixing", "approved", "done_comment", "needs_decision", "paused", "closed"]);
-  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
-    ids: stringSet(args.ids), query: "", updatedSince: "" };
-  const source = dependencies.flowSelectionSource?.();
-  const limit = Math.max(1, Math.min(200, integer(args.limit, 100)));
-  const project = (flow: import("@/lib/flows/types").Flow) => fullAnswer(args) ? flow : compactFlow(flow);
-  const page = source ? boardSelection(source.filename, "flows").page(source, scope, args.cursor, limit, project)
-    : listPage(dependencies.getFlowsWithPresets().flows, {
-      scope, cursor: args.cursor, limit,
-      identity: flow => ({ id: flow.id, time: flow.createdAt ?? "" }),
-      matches: flow => (!scope.project || flow.project === scope.project)
-        && (!states.length || states.includes(flow.state))
-        && (scope.includeClosed || (flow.state !== "closed" && !flow.closedAt))
-        && (!scope.ids.length || scope.ids.includes(flow.id)),
-      project,
-    });
-  const { rows: flows, ...pagination } = page;
-  return redactPayload({ ...pagination, flows, ...FLOW_ARCHIVE, compact: !fullAnswer(args),
-    omittedRecordCount: fullAnswer(args) ? 0 : flows.length,
-    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true, compact:false or get_flow(flowId) reads complete records." });
-}
-
-async function getFlow(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  const flowId = required(args, "flowId");
-  const source = dependencies.flowSelectionSource?.();
-  const flow = source ? source.read(flowId) : dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
-  if (!flow) throw new Error("flow not found");
-  return redactPayload({ flowId, flow, ...FLOW_ARCHIVE });
-}
-
 function mutationReceipt(operationId: string): { operationId: string; receipt: { operationId: string; status: "delivered" } } {
   return { operationId, receipt: { operationId, status: "delivered" } };
-}
-
-/** The conversation a flow decision is submitted as. A decision reports the
-    implementer's OWN turn, so a deputy speaks as itself here, never as its
-    seat: it is nobody's implementer, and the seat's turn is not its turn to
-    settle (docs/design/ghost-seat.md §4 rule 2). */
-export function flowDecisionCaller(caller: CallerAttribution): string | null {
-  if (caller.kind === "unidentified") return null;
-  return caller.via?.deputy ?? caller.conversationId;
-}
-
-async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  const flowId = required(args, "flowId");
-  const action = required(args, "action");
-  if (action === "agent-decision") {
-    const { submitFlowDecision } = await import("@/lib/flows/decisions");
-    const { flowDecisionRequestSchema } = await import("@/lib/flows/decisionSchema");
-    const request = flowDecisionRequestSchema.parse(args);
-    let result: Awaited<ReturnType<typeof submitFlowDecision>>;
-    try { result = await submitFlowDecision(request, flowDecisionCaller(attributionOf(dependencies))); }
-    catch (error) {
-      if (error instanceof FlowRetiredError) throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
-      throw error;
-    }
-    return redactPayload({ ...result, ...FLOW_ARCHIVE, outcome: result.decision.disposition === "accepted" ? "accepted" : "settled",
-      nextAction: result.decision.disposition === "accepted" ? "original-key-lookup" : "follow-disposition" });
-  }
-  throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
 }
 
 /** A seat's list scope comes from its authenticated designation. */
@@ -8892,9 +8822,6 @@ export function viewerMcpBindings(
     },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
-    list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),
-    get_flow: (args) => Promise.resolve(getFlow(args, domainDependencies)),
-    flow_action: (args) => flowAction(args, domainDependencies),
     list_pipelines: reads.list_pipelines,
     list_tasks: reads.list_tasks,
     get_task: reads.get_task,
