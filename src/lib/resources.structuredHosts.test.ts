@@ -105,13 +105,11 @@ async function settle<T>(read: () => T | null, timeoutMs = 3_000): Promise<T | n
 function dependencies(over: Partial<ResourceSnapshotDependencies> = {}): ResourceSnapshotDependencies {
   return {
     readFiles: async () => [],
-    readHosts: async () => ({ hosts: [], observation: "available", conflicts: [], canonicalFor: () => null }),
     proc: {
       systemMemory: () => null,
       ppidMap: () => new Map(),
       processMemory: () => new Map(),
     },
-    captureAttachReferences: () => new Map(),
     readStructuredHosts: async () => [],
     listAgentProcesses: () => [],
     directoryExists: () => true,

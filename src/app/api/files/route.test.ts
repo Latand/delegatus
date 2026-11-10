@@ -203,7 +203,7 @@ const { fileScanCoordinatorStatus } = await import("@/lib/scanner/scanCoordinato
 const { postSnapshot } = await import("@/app/api/agent/snapshot/handler");
 const { resetPresenceForTest, upsertPresence } = await import("@/lib/view/presenceStore");
 const { controllerFileScan } = await import("@/lib/pipelines/controller");
-const { allowedKillTarget, buildResourceSnapshot, lastResourceTargetRefs, noteSessionTargets, readResourceFileSnapshot } = await import("@/lib/resources");
+const { buildResourceSnapshot, lastResourceTargetRefs, noteSessionTargets, readResourceFileSnapshot } = await import("@/lib/resources");
 // The HTTP adapter supplies Next after(); these direct handler tests own its
 // completion scheduler. Compiled HTTP and browser replays exercise the adapter.
 const { GET, prepareBoardSummary } = await import("./operatorProjection");
@@ -1416,7 +1416,7 @@ test("concurrent fresh callers share one pending generation through failure and 
   expect(scans).toBe(scansAfterRecovery);
 });
 
-test("a fresh resource snapshot fences a pre-kill refresh before host election", async () => {
+test("a fresh resource snapshot fences a pre-kill refresh before reading hosts", async () => {
   const now = Date.now();
   const before = { ...file("/sessions/resource-before.jsonl"), title: "Before kill", activity: "idle" as const };
   const after = { ...file("/sessions/resource-after.jsonl"), title: "After kill", activity: "recent" as const, mtime: 2 };
@@ -1433,51 +1433,26 @@ test("a fresh resource snapshot fences a pre-kill refresh before host election",
   scannedFiles = [after];
 
   let filesFresh: boolean | undefined;
-  let hostEntries: Array<{ path: string }> = [];
   let resourceSettled = false;
-  const resourceRef = {
-    tmuxServerPid: 900,
-    tmuxServerStartIdentity: "900:one",
-    panePid: 100,
-    paneStartIdentity: "100:one",
-    paneId: "%1",
-  };
   const payloadPromise = buildResourceSnapshot(true, {
     readFiles: async (fresh) => {
       filesFresh = fresh;
       return readResourceFileSnapshot(fresh);
     },
-    readHosts: async (_fresh, entries) => {
-      hostEntries = entries;
-      const selected = entries[0]!;
-      const target = selected.path === after.path ? "agents:after" : "agents:before";
-      const host = {
-        tmuxServerPid: 900,
-        paneId: "%1",
-        panePid: 100,
-        agentPid: 200,
-        display: target,
-        engine: "codex" as const,
-        cwd: "/repo",
-        agentArgv: ["codex", "resume", selected.path],
-        agentIdentity: "200:one",
-        launchId: null,
-        claimedPaths: [selected.path],
-        primaryPath: selected.path,
-      };
-      return {
-        hosts: [host],
-        observation: "available" as const,
-        conflicts: [],
-        canonicalFor: (pathname: string) => pathname === selected.path ? host : null,
-      };
-    },
+    readStructuredHosts: async () => [{
+      id: "codex:resource-after", engine: "codex" as const, sessionId: "resource-after", pid: 100, startIdentity: "100:one",
+      bootEpoch: "boot-one", cwd: "/repo", path: after.path, conversationId: null, title: null, role: null, model: null,
+      stage: null, seat: false, turnBusy: false, owned: true,
+    }],
+    processIdentity: (pid) => `${pid}:one`,
+    bootEpoch: () => "boot-one",
+    directoryExists: () => true,
+    listAgentProcesses: () => [],
     proc: {
       systemMemory: () => null,
       ppidMap: () => new Map([[200, 100]]),
       processMemory: () => new Map([[100, { rssBytes: 10, swapBytes: 0 }], [200, { rssBytes: 20, swapBytes: 0 }]]),
     },
-    captureAttachReferences: () => new Map([[resourceRef.paneId, resourceRef]]),
   }).then((payload) => {
     resourceSettled = true;
     return payload;
@@ -1489,134 +1464,15 @@ test("a fresh resource snapshot fences a pre-kill refresh before host election",
   const payload = await payloadPromise;
   expect(resourceSettled).toBeTrue();
   expect(scans).toBe(2);
-  expect(hostEntries.map((entry) => entry.path)).toEqual([after.path]);
   expect(payload.sessions).toEqual([expect.objectContaining({
-    target: "agents:after",
+    target: "structured:codex:resource-after",
     path: after.path,
     title: "After kill",
     activity: "recent",
     lastActiveAt: "1970-01-01T00:00:02.000Z",
   })]);
-  expect(lastResourceTargetRefs()).toEqual([{ target: "agents:after", ref: resourceRef }]);
-  expect(allowedKillTarget("agents:after")).toBeNull();
-  expect(allowedKillTarget("agents:before")).toBeNull();
+  expect(lastResourceTargetRefs()).toMatchObject([{ target: "structured:codex:resource-after", ref: { kind: "structured", pid: 100 } }]);
   releasePreKillRefresh();
-});
-
-test("a fresh resource snapshot replaces stale process and pane observations before host reconciliation", async () => {
-  const sessionId = "199e8e95-0e87-\x34b4f-84bf-f62b3c0993a3";
-  const pathname = `/home/user/.claude/projects/-repo/${sessionId}.jsonl`;
-  const transcript = {
-    ...file(pathname),
-    root: "claude-projects" as const,
-    engine: "claude" as const,
-    fmt: "claude" as const,
-    title: "Plain Claude CLI",
-    activity: "live" as const,
-    mtime: 2,
-  };
-  const oldCli = { agentPid: 200, panePid: 100, paneId: "%1", target: "agents:old" };
-  const newCli = { agentPid: 201, panePid: 101, paneId: "%2", target: "agents:new" };
-  let processMemo = oldCli;
-  let paneMemo = oldCli;
-  const liveProcess = newCli;
-  const livePane = newCli;
-  scannedFiles = [transcript];
-  hydrateScannedFiles = (files, options) => {
-    if ((options as { fresh?: boolean }).fresh === true) {
-      processMemo = liveProcess;
-      paneMemo = livePane;
-    }
-    const owner = processMemo.agentPid === paneMemo.agentPid && processMemo.panePid === paneMemo.panePid
-      ? processMemo
-      : null;
-    return files.map((entry) => ({
-      ...entry,
-      pid: owner?.agentPid ?? null,
-      proc: owner ? "running" as const : null,
-    }));
-  };
-
-  const registry = agentRegistry();
-  const key = { engine: "claude" as const, sessionId };
-  registry.upsert({
-    key,
-    artifactPath: pathname,
-    cwd: "/repo",
-    accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
-    status: "live",
-    host: null,
-    claimEpoch: 0,
-    claimOwner: null,
-    pendingAction: null,
-  });
-
-  const resourceRef = {
-    tmuxServerPid: 900,
-    tmuxServerStartIdentity: "900:one",
-    panePid: newCli.panePid,
-    paneStartIdentity: `${newCli.panePid}:one`,
-    paneId: newCli.paneId,
-  };
-  const payload = await buildResourceSnapshot(true, {
-    readFiles: async (fresh) => (await currentFileScan({ fresh })).snapshot.files,
-    readHosts: async (fresh, entries) => {
-      if (fresh) {
-        processMemo = liveProcess;
-        paneMemo = livePane;
-      }
-      const primaryPath = entries.find((entry) => entry.pid === processMemo.agentPid)?.path ?? null;
-      const host = {
-        tmuxServerPid: 900,
-        paneId: paneMemo.paneId,
-        panePid: paneMemo.panePid,
-        agentPid: processMemo.agentPid,
-        display: paneMemo.target,
-        engine: "claude" as const,
-        cwd: "/repo",
-        agentArgv: ["claude"],
-        agentIdentity: `${processMemo.agentPid}:one`,
-        launchId: null,
-        claimedPaths: primaryPath ? [primaryPath] : [],
-        primaryPath,
-      };
-      if (primaryPath) {
-        const current = registry.snapshot().entries[`claude:${sessionId}`]!;
-        registry.upsert({ ...current, artifactPath: primaryPath, status: "live" });
-      } else {
-        registry.markUnhosted(key);
-      }
-      return {
-        hosts: [host],
-        observation: "available" as const,
-        conflicts: [],
-        canonicalFor: (candidate: string) => candidate === primaryPath ? host : null,
-      };
-    },
-    proc: {
-      systemMemory: () => null,
-      ppidMap: () => new Map([[newCli.agentPid, newCli.panePid]]),
-      processMemory: () => new Map([
-        [newCli.panePid, { rssBytes: 10, swapBytes: 0 }],
-        [newCli.agentPid, { rssBytes: 20, swapBytes: 0 }],
-      ]),
-    },
-    captureAttachReferences: () => new Map([[resourceRef.paneId, resourceRef]]),
-  });
-
-  expect(scans).toBe(1);
-  expect(payload.sessions).toEqual([expect.objectContaining({
-    target: newCli.target,
-    path: pathname,
-    title: "Plain Claude CLI",
-    activity: "live",
-    lastActiveAt: "1970-01-01T00:00:02.000Z",
-  })]);
-  expect(registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
-    artifactPath: pathname,
-    status: "live",
-  });
 });
 
 test("a client automatically converges from a persisted restart snapshot to its completed generation", async () => {

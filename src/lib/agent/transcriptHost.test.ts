@@ -7,7 +7,7 @@ import path from "node:path";
 import { withSpawnCapability, type ResumeSpec } from "@/lib/agent/cli";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
-import { beginRegistryResume, createTranscriptHostObserver, createTranscriptHostResolver, reconcileObservedTranscriptHosts, type TranscriptHost } from "@/lib/agent/transcriptHost";
+import { beginRegistryResume, createTranscriptHostObserver, createTranscriptHostResolver, reconcileObservedTranscriptHosts, reconcileObservedTranscriptHostsOffLoop, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import { TmuxDeliveryUncertainError } from "@/lib/tmux";
 import type { AgentProcess } from "@/lib/scanner/process";
 import type { PaneRef, SpawnedPane } from "@/lib/tmux";
@@ -254,6 +254,72 @@ test("completed launch host polls reuse the SQLite registry read cache", () => {
   reconcileObservedTranscriptHosts([host], { registry, evidenceForHost: () => hostEvidence });
 
   expect(snapshotLoads).toBe(warmedLoads);
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test("a tmux census under the admitted writer assembles no complete registry view", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-reconcile-admitted-"));
+  let snapshotLoads = 0;
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+    onSqliteSnapshotLoad: () => { snapshotLoads += 1; },
+  });
+  const departed = ["019f4906", "3f67", "7b72", "9fbc", "0000000000aa"].join("-");
+  const evidenceFor = (paneId: string, sessionId: string): TmuxHostEvidence => ({
+    kind: "tmux",
+    endpoint: "/run/user/1000/agent-log-viewer",
+    server: { pid: 900, startIdentity: "900:one" },
+    paneId,
+    panePid: { pid: 100, startIdentity: "100:one" },
+    windowName: "codex-resume",
+    agent: { pid: 200, startIdentity: "200:one" },
+    argv: ["codex", "resume", sessionId],
+  });
+  const hosted = (sessionId: string, artifactPath: string, paneId: string) => registry.upsert({
+    key: { engine: "codex", sessionId },
+    artifactPath,
+    cwd: "/repo",
+    accountId: null,
+    status: "live",
+    host: evidenceFor(paneId, sessionId),
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  hosted(SESSION, PATHNAME, "%1");
+  hosted(departed, PATHNAME.replace(SESSION, departed), "%2");
+  const host: TranscriptHost = {
+    tmuxServerPid: 900,
+    paneId: "%1",
+    panePid: 100,
+    agentPid: 200,
+    display: "agents:4.0",
+    windowName: "codex-resume",
+    engine: "codex",
+    cwd: "/repo",
+    agentArgv: ["codex", "resume", SESSION],
+    agentIdentity: "200:one",
+    launchId: null,
+    claimedPaths: [PATHNAME],
+    primaryPath: PATHNAME,
+  };
+  // The serving process reads through a prepared view on its own connection.
+  await registry.prepareReadOnlySnapshot();
+  const preparedLoads = snapshotLoads;
+
+  await reconcileObservedTranscriptHostsOffLoop([host], registry, () => {}, () => evidenceFor("%1", SESSION));
+  const censusLoads = snapshotLoads - preparedLoads;
+  // The pane missing from the census lost its host; the observed one kept it.
+  const afterCensus = registry.readOnlySnapshot().entries;
+  expect(afterCensus[`codex:${departed}`]).toMatchObject({ status: "unhosted", host: null });
+  expect(afterCensus[`codex:${SESSION}`]).toMatchObject({ status: "live", host: evidenceFor("%1", SESSION) });
+
+  const beforeEmptyCensus = snapshotLoads;
+  await reconcileObservedTranscriptHostsOffLoop([], registry, () => {}, () => evidenceFor("%1", SESSION));
+  const emptyCensusLoads = snapshotLoads - beforeEmptyCensus;
+  expect(registry.readOnlySnapshot().entries[`codex:${SESSION}`]).toMatchObject({ status: "unhosted", host: null });
+
+  expect({ censusLoads, emptyCensusLoads }).toEqual({ censusLoads: 0, emptyCensusLoads: 0 });
   fs.rmSync(directory, { recursive: true, force: true });
 });
 

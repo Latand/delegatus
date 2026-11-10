@@ -40,10 +40,7 @@ test("snapshot collection performs exactly one discovery and shares its entries"
       discoveries += 1;
       return { snapshot: { files: [entry], projectCatalog: [], complete: true } } as never;
     },
-    resolveSiblings: async (_caller, files) => {
-      expect(files).toEqual([entry]);
-      return { selfResolution: "omitted" as const, agents: [] };
-    },
+    resolveSiblings: async () => ({ selfResolution: "omitted" as const, agents: [] }),
   });
   expect(discoveries).toBe(1);
   expect(result.conversations[0]?.path).toBe(entry.path);

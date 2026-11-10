@@ -9,30 +9,113 @@ import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTe
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
-type RepositoryDirectoryVersion = { path: string; identity: string; mtimeMs: number; ctimeMs: number };
+/** `mount` marks a directory on another device. The walk never enters it, so
+ * its own timestamps say nothing about the checkout; its identity does: an
+ * unmount or a new mount there changes the device and uncovers other entries. */
+type RepositoryDirectoryVersion = { path: string; identity: string; mtimeMs: number; ctimeMs: number; mount?: true };
+const directoryVersionHolds = (directory: RepositoryDirectoryVersion, current: fs.Stats | undefined) =>
+  !!current?.isDirectory() && !current.isSymbolicLink()
+  && `${current.dev}:${current.ino}` === directory.identity
+  && (directory.mount || current.mtimeMs === directory.mtimeMs && current.ctimeMs === directory.ctimeMs);
 type RepositoryLinkSnapshot = { lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] };
-type RepositoryLinkRead = { at: number; targets: Promise<string[]>; directories?: RepositoryDirectoryVersion[]; physicalTargets?: string[] };
+type RepositoryLinkRead = { at: number; targets: Promise<string[]>; directories?: RepositoryDirectoryVersion[]; physicalTargets?: string[]; validatedAt?: number };
 type RepositoryDiscovery = { repository: string | null; signature: string };
+/** Completed checkout reads that outlive one tick, keyed by checkout. Each is
+ * used again only while every directory it lists still validates. */
+export type RetainedCheckoutReads = Map<string, { at: number; lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] }>;
+/** A retained read older than this is repeated in full. */
+export const RETAINED_CHECKOUT_READ_MAX_AGE_MS = 10 * 60_000;
 const sameStrings = (left: readonly string[], right: readonly string[]) =>
   left.length === right.length && left.every((value, index) => value === right[index]);
 const sameRepositoryDiscovery = (left: RepositoryDiscovery, right: RepositoryDiscovery) =>
   left.repository === right.repository && left.signature === right.signature;
-function resolveObservedPhysicalPath(candidate: string): string {
-  const original = path.resolve(candidate);
-  let current = original;
-  const suffix: string[] = [];
-  for (;;) {
-    try { return path.join(fs.realpathSync(current), ...suffix); }
+const UNRESOLVED_LINK_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP"]);
+const LINK_HOP_LIMIT = 256;
+const segments = (file: string) => file.split(path.sep).filter(Boolean);
+
+/** Walks a path the way the kernel does, one component at a time, where the
+ * kernel itself gives no answer: a dangling link, a loop, a chain longer than
+ * the kernel follows. `..` is applied to the directory actually reached.
+ * Returns every link the walk passed and the place where it ended, so a chain
+ * that enters an attempt root at any hop names a path inside that root. A
+ * cycle ends the walk once every hop of it is listed. A chain longer than the
+ * hop limit throws: the caller then holds the root. */
+function followLinkChain(candidate: string): string[] {
+  const top = path.parse(candidate).root, pending = segments(candidate.slice(top.length));
+  const places: string[] = [], seen = new Set<string>();
+  let reached = top;
+  while (pending.length) {
+    const name = pending.shift()!;
+    if (name === ".") continue;
+    if (name === "..") { reached = path.dirname(reached); continue; }
+    const current = path.join(reached, name);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(current); }
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-      const parent = path.dirname(current);
-      if (parent === current) return original;
-      suffix.unshift(path.basename(current));
-      current = parent;
+      return [...places, path.join(current, ...pending)];
+    }
+    if (!stat.isSymbolicLink()) { reached = current; continue; }
+    const state = `${current}\0${pending.join(path.sep)}`;
+    if (seen.has(state)) return places;
+    seen.add(state);
+    if (seen.size > LINK_HOP_LIMIT) throw new Error("checkout link chain exceeded its hop limit");
+    places.push(current);
+    const link = fs.readlinkSync(current);
+    if (path.isAbsolute(link)) reached = path.parse(link).root;
+    pending.unshift(...segments(path.isAbsolute(link) ? link.slice(reached.length) : link));
+  }
+  return [...places, reached];
+}
+
+/** The physical places a link target names. The kernel answers for a path
+ * that resolves and holds no `..`; this runtime's realpath collapses `..`
+ * before it resolves links, so such a path, like every path the kernel
+ * refuses, is walked by hand. */
+function resolveObservedPhysicalPaths(candidate: string): string[] {
+  const target = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
+  if (!segments(target).includes("..")) {
+    try { return [fs.realpathSync(target)]; }
+    catch (error) {
+      if (!UNRESOLVED_LINK_CODES.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
     }
   }
+  return followLinkChain(target);
 }
+/** A link target under its lexical name and under each physical one. */
+const observedTargets = (targets: readonly string[]) =>
+  targets.flatMap(target => [path.resolve(target), ...resolveObservedPhysicalPaths(target)]);
+
+/** A relative link target, joined to the link's directory without collapsing
+ * `..` across a component that may itself be a link. Leading `..` inside the
+ * checkout climbs directories the walk listed as real ones, each tracked by
+ * identity, so those are applied here and the common relative link keeps the
+ * kernel's fast answer. */
+function uncollapsedLinkTarget(repository: string, link: string, value: string): string {
+  if (path.isAbsolute(value)) return value;
+  let directory = path.dirname(link);
+  const names = value.split(path.sep);
+  while (names.length && (names[0] === "." || names[0] === ".." && directory !== repository && inside(directory, repository))) {
+    if (names.shift() === "..") directory = path.dirname(directory);
+  }
+  return [directory, ...names].join(path.sep);
+}
+
+/** Longer than one tick of the kernel's coarse clock at any common HZ. */
+const TIMESTAMP_GRANULE_MS = 20;
+/** Covers a file system that stores whole seconds, with room for clock skew. */
+const COARSE_TIMESTAMP_GRANULE_MS = 2_000;
+/** Timestamps with no sub-second part are taken as whole-second storage. A
+ * finer file system shows them by chance once in a thousand directories and
+ * only waits longer for it. */
+const timestampGranuleMs = (stat: fs.Stats) =>
+  stat.mtimeMs % 1_000 === 0 && stat.ctimeMs % 1_000 === 0 ? COARSE_TIMESTAMP_GRANULE_MS : TIMESTAMP_GRANULE_MS;
+/** How long until the directory's last change is a full granule old. */
+const granuleRemainingMs = (stat: fs.Stats, now: number) => {
+  const granule = timestampGranuleMs(stat);
+  return Math.max(0, granule - Math.abs(now - stat.ctimeMs), granule - Math.abs(now - stat.mtimeMs));
+};
 
 async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
   const deadline = performance.now() + (timeout ?? 15_000);
@@ -56,8 +139,25 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
     } finally { if (timer) clearTimeout(timer); }
   };
   const visit = async (current: string): Promise<void> => {
-    const before = fs.lstatSync(current);
-    if (before.dev !== rootDevice) return;
+    let before = fs.lstatSync(current);
+    const skipMount = () => {
+      if (before.dev === rootDevice) return false;
+      directories.push({ path: current, identity: `${before.dev}:${before.ino}`, mtimeMs: before.mtimeMs, ctimeMs: before.ctimeMs, mount: true });
+      return true;
+    };
+    if (skipMount()) return;
+    // The kernel stamps a directory from a coarse clock, and some file systems
+    // store whole seconds. An entry made in the same granule as the
+    // directory's previous change leaves its timestamps as they were, so a
+    // list read inside that granule could pair with timestamps that a later
+    // link shares. Such a list is read again once the granule passed; from
+    // then on every change moves the timestamps and the validators see it.
+    for (let wait = granuleRemainingMs(before, Date.now()); wait > 0; wait = granuleRemainingMs(before, Date.now())) {
+      checkBudget();
+      await new Promise(resolve => setTimeout(resolve, Math.max(wait, TIMESTAMP_GRANULE_MS)));
+      before = fs.lstatSync(current);
+      if (skipMount()) return;
+    }
     const entries = await readEntries(current);
     checkBudget();
     const after = fs.lstatSync(current, { throwIfNoEntry: false });
@@ -85,13 +185,13 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
   return { links, directories };
 }
 
-/** Each link's lexical and physical targets, including dangling links. */
+/** Each link's target as written, including dangling links. */
 async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
   const deadline = performance.now() + (timeout ?? 15_000);
   const inventory = await repositoryLinks(repository, timeout), lexicalTargets: string[] = [];
   for (const link of inventory.links) {
     let target: string;
-    try { target = path.resolve(path.dirname(link), fs.readlinkSync(link)); }
+    try { target = uncollapsedLinkTarget(repository, link, fs.readlinkSync(link)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
     lexicalTargets.push(target);
   }
@@ -103,9 +203,7 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
     if (performance.now() >= deadline)
       throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
     const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
-    if (!current?.isDirectory() || current.isSymbolicLink()
-      || `${current.dev}:${current.ino}` !== directory.identity
-      || current.mtimeMs !== directory.mtimeMs || current.ctimeMs !== directory.ctimeMs) {
+    if (!directoryVersionHolds(directory, current)) {
       throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
     }
   }
@@ -116,37 +214,72 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
  * so the cost is one walk per checkout rather than one per checkout per root.
  * Directory identity and change timestamps invalidate a negative result as
  * soon as any inventoried directory changes. Older reads are also repeated;
- * every walk ends by the tick's budget, then remaining roots are deferred. */
+ * every walk ends by the tick's budget, then remaining roots are deferred.
+ *
+ * One pass over every consumer checkout of a busy machine takes longer than
+ * the ten-second age and can take longer than a whole tick. A caller that
+ * lives across ticks passes `retained`: completed reads are kept there and
+ * serve later ticks for `RETAINED_CHECKOUT_READ_MAX_AGE_MS`, under the same
+ * directory validation, so a pass finishes over several ticks and an
+ * unchanged checkout is walked once per that age.
+ *
+ * Validation reads every inventoried directory. One reference observation
+ * asks for it several times per checkout, and a sweep makes several such
+ * observations per root. With `validationReuseMs`, a validation that just
+ * succeeded answers those repeats. `unchangedAll` never reuses one: it is the
+ * synchronous fence a sweep holds before each destructive step, and a
+ * directory that passes it also passed every earlier check of the same read. */
 export class RepositoryLinkInventory {
   private readonly reads = new Map<string, RepositoryLinkRead>();
   private readonly repositoriesOf = new Map<string, RepositoryDiscovery>();
   private readonly deadline: number;
   readonly walks: string[] = [];
-  constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number } = {}) {
+  private readonly freshMs: number;
+  constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number; retained?: RetainedCheckoutReads; validationReuseMs?: number } = {}) {
     this.deadline = this.now() + (options.budgetMs ?? 30_000);
+    this.freshMs = options.freshMs ?? (options.retained ? RETAINED_CHECKOUT_READ_MAX_AGE_MS : 10_000);
+    // A checkout that stopped being a consumer is never asked for again.
+    const now = this.now();
+    for (const [repository, kept] of options.retained ?? []) {
+      if (now - kept.at > this.freshMs || now < kept.at) options.retained!.delete(repository);
+    }
+  }
+  /** A read kept from an earlier tick enters this one as its cached read. Its
+   * age and its directories are judged by the same rule as any cached read. */
+  private retainedRead(repository: string, now: number): RepositoryLinkRead | undefined {
+    const kept = this.options.retained?.get(repository);
+    if (!kept || now - kept.at > this.freshMs || now < kept.at) return undefined;
+    const read: RepositoryLinkRead = { at: kept.at, targets: Promise.resolve(kept.lexicalTargets), directories: kept.directories };
+    this.lexicalTargets.set(read, kept.lexicalTargets);
+    this.reads.set(repository, read);
+    return read;
   }
   private now() { return (this.options.now ?? Date.now)(); }
   private directoriesUnchanged(directories: readonly RepositoryDirectoryVersion[]) {
-    return directories.every(directory => {
-      const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
-      return !!current?.isDirectory() && !current.isSymbolicLink()
-        && `${current.dev}:${current.ino}` === directory.identity
-        && current.mtimeMs === directory.mtimeMs && current.ctimeMs === directory.ctimeMs;
-    });
+    return directories.every(directory => directoryVersionHolds(directory, fs.lstatSync(directory.path, { throwIfNoEntry: false })));
+  }
+  /** Validates a completed read and records when it last held. */
+  private readUnchanged(read: RepositoryLinkRead, reuse: boolean) {
+    if (!read.directories) return false;
+    const reuseMs = this.options.validationReuseMs ?? 0;
+    if (reuse && reuseMs > 0 && read.validatedAt !== undefined && performance.now() - read.validatedAt <= reuseMs) return true;
+    const unchanged = this.directoriesUnchanged(read.directories);
+    read.validatedAt = unchanged ? performance.now() : undefined;
+    return unchanged;
   }
   /** Synchronous last check after the inventory's asynchronous observations. */
   unchanged(repository: string) {
     const read = this.reads.get(repository);
-    return !!read?.directories && this.directoriesUnchanged(read.directories);
+    return !!read && this.readUnchanged(read, true);
   }
   /** Last synchronous fence for every checkout observed during this sweep. */
   unchangedAll() {
     for (const read of this.reads.values()) {
-      if (!read.directories || !this.directoriesUnchanged(read.directories) || !read.physicalTargets) return false;
+      if (!this.readUnchanged(read, false) || !read.physicalTargets) return false;
       const lexical = this.lexicalTargets.get(read);
       if (!lexical) return false;
       try {
-        if (!sameStrings(read.physicalTargets, lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]))) return false;
+        if (!sameStrings(read.physicalTargets, observedTargets(lexical))) return false;
       } catch { return false; }
     }
     for (const [cwd, observed] of this.repositoriesOf) {
@@ -192,17 +325,18 @@ export class RepositoryLinkInventory {
     return discovery.repository;
   }
   async targets(repository: string): Promise<string[]> {
-    const now = this.now(), cached = this.reads.get(repository);
-    if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)
-      && (!cached.directories || this.directoriesUnchanged(cached.directories))) {
+    const now = this.now(), cached = this.reads.get(repository) ?? this.retainedRead(repository, now);
+    if (cached && now - cached.at <= this.freshMs
+      && (!cached.directories || this.readUnchanged(cached, true))) {
       // A link can point through an external alias whose own directory is
       // outside the checkout. Re-resolve its physical destination on every
       // use; checkout directory metadata cannot invalidate that alias change.
       const lexical = await cached.targets;
-      const physical = lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]);
+      const physical = observedTargets(lexical);
       cached.physicalTargets = physical;
       return physical;
     }
+    this.options.retained?.delete(repository);
     const remaining = this.deadline - now;
     if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
     const snapshot = repositoryLinkTargets(repository, Math.min(15_000, remaining));
@@ -221,11 +355,12 @@ export class RepositoryLinkInventory {
         read.directories = result.directories;
         this.lexicalTargets.set(read, result.lexicalTargets);
         read.at = this.now();
+        this.options.retained?.set(repository, { at: read.at, lexicalTargets: result.lexicalTargets, directories: result.directories });
       }
     }, () => undefined);
     this.walks.push(repository);
     const lexical = await observed;
-    const physical = lexical.flatMap(target => [target, resolveObservedPhysicalPath(target)]);
+    const physical = observedTargets(lexical);
     read.physicalTargets = physical;
     return physical;
   }

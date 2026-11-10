@@ -160,24 +160,11 @@ test("both paths declare the same segment config", () => {
   expect(legacy.dynamic).toBe(alias.dynamic);
 });
 
-test("the batch target lookup is mounted under both names too", async () => {
-  const aliasTargets = await import("./targets/route");
-  const legacyTargets = await import("../tmux/targets/route");
-  for (const file of [path.join(import.meta.dir, "targets/route.ts"), path.join(import.meta.dir, "../tmux/targets/route.ts")]) {
-    const source = fs.readFileSync(file, "utf8");
-    expect(source).toContain("const workspacePOST = conversationHostTargetsPOST;");
-    expect(source).toContain("workspacePOST);");
-  }
-  expect(typeof aliasTargets.POST).toBe("function");
-  expect(typeof legacyTargets.POST).toBe("function");
-});
-
 test("the legacy path's description says plainly that no tmux is involved", () => {
   /* Acceptance criterion 2 of #1301. A reader who lands on the old name must be
      told there, in the file, rather than inferring the transport from the path. */
   for (const [file, mount] of [
     [path.join(import.meta.dir, "..", "tmux", "route.ts"), "export const GET"],
-    [path.join(import.meta.dir, "..", "tmux", "targets", "route.ts"), "export const POST"],
   ] as const) {
     const source = fs.readFileSync(file, "utf8");
     const description = source.slice(0, source.indexOf(mount));

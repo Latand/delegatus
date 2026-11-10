@@ -6,7 +6,8 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
-import { registryHasLookupIndex, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryHasLookupIndex, registryRowProjection, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { DatabaseReplacedError } from "@/lib/state/currentDatabase";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { cacheSizes } from "@/lib/cacheTelemetry";
@@ -35,12 +36,12 @@ function fixture() {
   const initial = seed.snapshot();
   seed.close();
   const filename = path.join(directory, "agent-registry.sqlite");
-  const open = (options: { onSnapshotLoad?: () => void } = {}) => {
+  const open = (options: { onSnapshotLoad?: () => void; onRowPayloadRead?: (collection: string, count: number) => void } = {}) => {
     const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry, ...options });
     stores.push(store);
     return store;
   };
-  return { filename, open, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
+  return { filename, open, initial, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
 }
 
 // Observe ownership without changing admission or replacing the real reader.
@@ -1538,4 +1539,260 @@ test.each([256, 257, 512])("a %i row hot journal batch retains the validated col
   writer.mutate(file => { file.receipts["cold-batch"]!.error = "archive changed"; }, false);
   expect((reader.readOnlySnapshot()).file.receipts["cold-batch"]!.error).toBe("archive changed");
   expect(held.file.receipts["cold-batch"]!.error).toBe("retained history");
+});
+
+test("a complete header read measures its rows in batches", async () => {
+  const { open, kept } = fixture();
+  const writer = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 600; index++) {
+      const id = `batched-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const reader = open();
+  const started = performance.now();
+  const view = await reader.prepareReadOnlySnapshot();
+  const measurements = performanceSpans.snapshot(started).records
+    .filter(record => record.kind === "sync" && performanceSites[record.site] === "registry.headers")
+    .reduce((total, record) => total + record.count, 0);
+  expect(Object.keys(view.file.receipts).filter(id => id.startsWith("batched-receipt-")))
+    .toEqual(Array.from({ length: 600 }, (_, index) => `batched-receipt-${index}`));
+  // 600 archived headers and the keys of their collection, a row at a time,
+  // are more than 1,200 measurements.
+  expect(measurements).toBeGreaterThan(0);
+  expect(measurements).toBeLessThan(60);
+}, 30_000);
+
+test("a peer's appended and removed rows keep the kept collection order", () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    file.receipts["cold-order"] = { ...template, launchId: "cold-order", state: "failed",
+      createdAt: "2020-01-01T00:00:00Z", error: "retained history" };
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const before = Object.keys(reader.readOnlySnapshot().file.receipts);
+  const headerReads = (started: number) => performanceSpans.snapshot(started).records
+    .filter(record => performanceSites[record.site] === "registry.headers").length;
+
+  writer.mutate(file => {
+    file.receipts["appended-one"] = { ...template, launchId: "appended-one" };
+    file.receipts["appended-two"] = { ...template, launchId: "appended-two" };
+  }, false);
+  let started = performance.now();
+  const appended = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+
+  writer.mutate(file => { delete file.receipts[removed]; }, false);
+  started = performance.now();
+  const shortened = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(shortened.receipts)).toEqual([...before, "appended-one", "appended-two"].filter(key => key !== removed));
+  // The view the reader held keeps the order it was built with.
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+  // A store that reads the order whole agrees.
+  expect(Object.keys(open().readOnlySnapshot().file.receipts)).toEqual(Object.keys(shortened.receipts));
+});
+
+test("a peer's archive changes refresh the view from the journal", () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  const retained = (id: string) => ({ ...template, launchId: id, state: "failed" as const,
+    createdAt: "2020-01-01T00:00:00Z", error: "retained history" });
+  writer.mutate(file => {
+    for (let index = 0; index < 40; index++) file.receipts[`cold-${index}`] = retained(`cold-${index}`);
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const held = reader.readOnlySnapshot().file;
+  const heldKeys = Object.keys(held.receipts);
+  const collections = ["entries", "receipts", "conversations", "conversationAliases", "heldDeliveries", "deliveryOperationOwners", "lineageEdges", "memberships"] as const;
+  const refreshed = () => {
+    const started = performance.now();
+    const view = reader.readOnlySnapshot().file;
+    const headerReads = performanceSpans.snapshot(started).records
+      .filter(record => performanceSites[record.site] === "registry.headers").length;
+    const complete = open().readOnlySnapshot().file;
+    for (const collection of collections) {
+      expect(Object.keys(view[collection])).toEqual(Object.keys(complete[collection]));
+      expect(view[collection]).toEqual(complete[collection]);
+    }
+    return { view, headerReads };
+  };
+
+  // A rewritten archived row leaves the archive.
+  writer.mutate(file => { file.receipts["cold-3"]!.error = "rewritten"; }, false);
+  const rewritten = refreshed();
+  expect(rewritten.view.receipts["cold-3"]!.error).toBe("rewritten");
+  expect(rewritten.headerReads).toBe(0);
+
+  // A peer's archive pass takes it back, with rows the view never held.
+  writer.mutate(file => {
+    for (let index = 40; index < 48; index++) file.receipts[`cold-${index}`] = retained(`cold-${index}`);
+  }, false);
+  reader.readOnlySnapshot();
+  while (writer.archiveInactive(1024) > 0) { /* archive the new rows */ }
+  const archived = refreshed();
+  expect(archived.view.receipts["cold-47"]!.error).toBe("retained history");
+  expect(archived.view.receipts["cold-3"]!.error).toBe("rewritten");
+  expect(archived.headerReads).toBe(0);
+
+  // An archived row is removed.
+  writer.mutate(file => { delete file.receipts["cold-5"]; }, false);
+  const removed = refreshed();
+  expect(removed.view.receipts["cold-5"]).toBeUndefined();
+  expect(removed.headerReads).toBe(0);
+
+  // The view held from before every change still reads its own versions.
+  expect(Object.keys(held.receipts)).toEqual(heldKeys);
+  expect(held.receipts["cold-3"]!.error).toBe("retained history");
+  expect(held.receipts["cold-5"]!.error).toBe("retained history");
+});
+
+test("a traversal of archived rows asks the filesystem for the file identity once", async () => {
+  const { open, filename, kept } = fixture();
+  const writer = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 300; index++) {
+      const id = `identity-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const view = writer.readOnlySnapshot().file;
+  const traverse = () => Object.values(view.receipts).filter(receipt => receipt.error === "retained history").length;
+  expect(traverse()).toBe(300);
+  await Promise.resolve();
+  const stat = spyOn(fs, "statSync");
+  try {
+    expect(traverse()).toBe(300);
+    const asked = stat.mock.calls.filter(call => call[0] === filename).length;
+    // One answer covers the run; a row at a time it was asked 300 times.
+    expect(asked).toBeGreaterThan(0);
+    expect(asked).toBeLessThan(5);
+    // The next run asks again, so a replaced file is still refused.
+    await Promise.resolve();
+    stat.mockClear();
+    expect(traverse()).toBe(300);
+    expect(stat.mock.calls.filter(call => call[0] === filename).length).toBeGreaterThan(0);
+  } finally { stat.mockRestore(); }
+});
+
+for (const replacement of ["other payloads under the same version ids", "no archived versions"] as const) {
+  test(`a file replaced inside one synchronous run refuses the held view's archived rows: ${replacement}`, async () => {
+    const { open, filename, initial, kept } = fixture();
+    const store = open();
+    const template = store.readOnlySnapshot().file.receipts[kept]!;
+    store.mutate(file => {
+      for (let index = 0; index < 4; index++) {
+        const id = `cold-${index}`;
+        file.receipts[id] = { ...template, launchId: id, state: "failed", error: `original-${index}`, createdAt: "2020-01-01T00:00:00Z" };
+      }
+    }, false);
+    while (store.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+    const view = store.readOnlySnapshot().file;
+    const raw = new Database(filename);
+    raw.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    raw.close();
+    const other = `${filename}.replacement`;
+    if (replacement === "no archived versions") {
+      new SqliteAgentRegistryStore(other, { initialSnapshot: initial, normalize: normalizeRegistry }).close();
+    } else {
+      fs.copyFileSync(filename, other);
+      const edited = new Database(other);
+      edited.exec("DROP TRIGGER registry_archive_immutable_update");
+      edited.exec("UPDATE registry_archive SET value_json=replace(value_json,'original-','other-database-')");
+      edited.close();
+    }
+    await Promise.resolve();
+    // This read keeps the file identity for the rest of the synchronous run.
+    expect(view.receipts["cold-0"]!.error).toBe("original-0");
+    fs.renameSync(other, filename);
+    // The connection moves to the new file on its next statement. Nothing read
+    // from that file may answer for, or be remembered under, the held view.
+    expect(() => view.receipts["cold-1"]).toThrow(DatabaseReplacedError);
+    expect(() => view.receipts["cold-1"]).toThrow(DatabaseReplacedError);
+    expect(() => view.receipts["cold-2"]).toThrow(DatabaseReplacedError);
+    await Promise.resolve();
+    expect(() => view.receipts["cold-3"]).toThrow(DatabaseReplacedError);
+    const fresh = store.readOnlySnapshot().file;
+    expect(fresh.receipts["cold-1"]?.error ?? null).toBe(replacement === "no archived versions" ? null : "other-database-1");
+  });
+}
+
+test("a fresh preparation keeps the projections of unchanged archived versions", async () => {
+  const { open, kept } = fixture();
+  let reads = 0;
+  const store = open({ onRowPayloadRead: (collection, count) => { if (collection === "receipts") reads += count; } });
+  const peer = open();
+  const template = store.readOnlySnapshot().file.receipts[kept]!;
+  store.mutate(file => {
+    for (let index = 0; index < 200; index++) {
+      const id = `cold-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (store.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const projector = { id: "fresh-preparation-state", collection: "receipts" as const, project: (row: { state: string }) => row.state };
+  const project = (file: RegistryFile) => {
+    const before = reads;
+    const states = registryRowProjection(file, projector);
+    return { read: reads - before, failed: states.filter(([, state]) => state === "failed").length };
+  };
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 200, failed: 200 });
+  peer.mutate(file => { file.receipts[kept]!.error = "peer commit"; }, false);
+  // Every archived version is the one already projected: nothing is read again.
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 0, failed: 200 });
+  // A version that entered the archive since is the only one read.
+  peer.mutate(file => {
+    file.receipts["cold-new"] = { ...template, launchId: "cold-new", state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+  }, false);
+  while (peer.archiveInactive(1024) > 0) { /* archive the new row */ }
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 1, failed: 201 });
+});
+
+test("a hot row a peer deletes and adds again with the same content takes its new place among archived rows", () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  const moving = { ...template, launchId: "moving" };
+  writer.mutate(file => {
+    file.receipts.moving = moving;
+    file.receipts.archived = { ...template, launchId: "archived", state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained row */ }
+  const before = Object.keys(reader.readOnlySnapshot().file.receipts);
+  expect(before.indexOf("moving")).toBeLessThan(before.indexOf("archived"));
+  writer.mutate(file => { delete file.receipts.moving; }, false);
+  writer.mutate(file => { file.receipts.moving = moving; }, false);
+  const refreshed = Object.keys(reader.readOnlySnapshot().file.receipts);
+  expect(refreshed).toEqual(Object.keys(open().readOnlySnapshot().file.receipts));
+  expect(refreshed.indexOf("archived")).toBeLessThan(refreshed.indexOf("moving"));
+});
+
+test("a refresh lists an owner synthesized from a delivery in the order a whole load gives it", () => {
+  const { open, delivery } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.readOnlySnapshot().file.heldDeliveries[delivery.id]!;
+  const held = (id: string, delivered: boolean) => ({ ...template, id, clientMessageId: `message-${id}`,
+    command: { ...template.command, operationId: `operation-${id}` },
+    ...(delivered ? { state: "delivered", deliveredAt: "2020-01-01T00:00:00Z" } : {}) }) as typeof template;
+  writer.mutate(file => { file.heldDeliveries.first = held("first", true); }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the delivered row */ }
+  writer.mutate(file => {
+    file.heldDeliveries.second = held("second", false);
+    file.heldDeliveries.third = held("third", false);
+  }, false);
+  reader.readOnlySnapshot();
+  // The archived delivery returns to the hot rows; its owner is synthesized again.
+  writer.mutate(file => { file.heldDeliveries.first!.error = "rewritten"; }, false);
+  const refreshed = Object.keys(reader.readOnlySnapshot().file.deliveryOperationOwners);
+  expect(refreshed).toEqual(Object.keys(open().readOnlySnapshot().file.deliveryOperationOwners));
+  expect(refreshed.indexOf("operation-first")).toBeLessThan(refreshed.indexOf("operation-second"));
 });

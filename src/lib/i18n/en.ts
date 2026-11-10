@@ -1366,7 +1366,6 @@ export const en = {
   "composer.escapeSentWaiting": "sent Escape — waiting for the agent to stop",
   "composer.spawnAria": "Launch an agent with a prompt",
   "composer.resolvingAria": "Message the existing agent — delivery starts after its host is resolved",
-  "composer.sendAria": "Send a message to the agent in tmux {target}",
   "composer.sendStructuredAria": "Send a message through the structured runtime host",
   "composer.queueAria": "Queue of sent messages",
   "composer.removeFromQueue": "Remove from queue",

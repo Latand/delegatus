@@ -63,7 +63,7 @@ export async function collectSnapshot(
   );
   observePhase(dependencies.observePhase, "session-titles", phaseStartedAt, { files: files.length });
   phaseStartedAt = performance.now();
-  const siblings = await dependencies.resolveSiblings(body.caller, files);
+  const siblings = await dependencies.resolveSiblings(body.caller);
   observePhase(dependencies.observePhase, "siblings", phaseStartedAt, { agents: siblings.agents.length });
   phaseStartedAt = performance.now();
   const snapshot = await composeSnapshot({

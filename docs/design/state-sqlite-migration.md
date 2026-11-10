@@ -22,7 +22,7 @@ The pinned stage specification also names agent transcripts as a store that stay
 2. **The first-boot import reuses one helper, written in slice 1.** The helper holds the legacy file's own write lock, imports in one `BEGIN IMMEDIATE` transaction, and verifies counts plus a row digest before `COMMIT`. It then renames the file to `<name>.imported-<release>` and **leaves a tombstone directory at the old path**. A stale writer (an old release's MCP process or a manual downgrade) then fails with EISDIR, and cannot silently create a file that nothing reads.
 3. **For one release after each slice, a rollback release that predates it gets its JSON back.** The existing demotion checkpoint writes the legacy file from SQLite. On roll-forward, a per-row revision merge folds back what the rollback release changed.
 4. **`agent-registry.json` goes away in one slice.** Every process that opens the registry currently parses the 63 MB file eagerly and rewrites it on start. Three readers read the file directly. Each gets a SQLite source, and the `off`/`dual-write`/`read` modes lose their default role (§5).
-5. **Durability:** keep WAL with `synchronous=FULL` (it is already set). Run a full `integrity_check` at activation (measured at 69–177 ms). Take a `VACUUM INTO` backup every 10 minutes when anything changed (measured at 0.2–0.33 s for each database). Keep 15 generations, within a 2 GB budget. If the database is unreadable, the Viewer falls back to the newest backup that passes its check, keeps the damaged files, and raises a visible incident.
+5. **Durability:** keep WAL with `synchronous=FULL` (it is already set). Run a full `integrity_check` at activation (measured at 69–177 ms). Take a `VACUUM INTO` backup every hour when anything changed (measured at 0.2–0.33 s for each database at the original sizes). Keep 11 or 12 generations, within a 2 GB budget. If the database is unreadable, the Viewer falls back to the newest backup that passes its check, keeps the damaged files, and raises a visible incident.
 6. **Slice 1 is tasks.** `tasks.pending.json` does not exist, in code or on disk (§3). The task store's three sections (`tasks`, `recentCreates`, `migrations`) move together.
 
 ## 1. How the inventory was built
@@ -303,11 +303,13 @@ The activating release runs `PRAGMA integrity_check` on `state.sqlite` and `agen
 
 ### 7.3 Backups: cadence and retention
 
-The **active Viewer release** owns the timer. It is the only process that knows the database's migration state and holds write authority, and the timer re-arms at each activation. The timer is `VACUUM INTO 'state/backups/sqlite/<db>-<UTC timestamp>.sqlite.partial'`, followed by `integrity_check` on the copy, fsync, a rename to drop `.partial`, and a directory fsync. It runs every **10 minutes**, and it skips a database whose revision has not changed since its last backup (the sum of collection revisions, or the registry revision).
+The **active Viewer release** owns the timer. It is the only process that knows the database's migration state and holds write authority, and the timer re-arms at each activation. The timer is `VACUUM INTO 'state/backups/sqlite/<db>-<UTC timestamp>.sqlite.partial'`, followed by `integrity_check` on the copy, fsync, a rename to drop `.partial`, and a directory fsync. It runs every **hour**, and it skips a database whose revision has not changed since its last backup (the sum of collection revisions, or the registry revision).
 
 Measured from production into a temp directory: `state.sqlite` took 329 ms and produced 42 MB; `agent-registry.sqlite` took 218 ms and produced 85 MB. `VACUUM INTO` holds only a read transaction, so writers continue.
 
-Retention, per database: the **newest 6** (one hour at full cadence), then **one per 4 hours for 24 hours** (6), then **one per day for 3 days** (3). That is 15 generations, about 1.9 GB for the two databases today, capped at a **2 GB** total budget: beyond the cap, the oldest daily and 4-hourly generations are evicted first, and the newest 3 are never evicted.
+The cadence was 10 minutes at those sizes. A later measurement on a busy installation found copies of 0.86 GB (`state.sqlite`) and 1.86 GB (`agent-registry.sqlite`); both databases change continuously, so every 10-minute pass rewrote 2.7 GB, about 390 GB a day. The cadence is now one hour, which divides that write volume by six.
+
+Retention, per database: the **newest 3** (three hours at full cadence), then **one per 4 hours for 24 hours** (5 or 6 at full cadence, depending on the hour: a 4-hour window the newest 3 already cover gets no second copy, and the newest 3 span one such window or two), then **one per day for 3 days** (3). That is 11 or 12 generations at full cadence, capped at a **2 GB** total budget: beyond the cap, the oldest daily and 4-hourly generations are evicted first, and the newest 3 are never evicted. When three generations of the databases already exceed the budget, the retained set is those newest 3 of each.
 
 A backup is skipped with an incident when free space on the filesystem is below twice the database size. `mcp-receipts.sqlite` gets a daily backup with 3 generations. The runtime journal keeps its own retention (`docs/runtime-journal-retention.md`).
 
@@ -333,7 +335,7 @@ A schema statement the running SQLite cannot compile is not damage, and none of 
 
 - **kill -9 of any writer:** at most the transaction in flight, and it rolls back as a whole. The WAL does not depend on the process, and leases held by a dead PID are reclaimed through the process-identity check.
 - **Power loss or kernel crash:** committed transactions survive, because `FULL` fsyncs the WAL on every commit, provided the device honours flush. The transaction in flight is lost whole. The #1870 failure, a renamed but unwritten file, cannot happen to a SQLite row.
-- **Media or filesystem corruption:** up to one backup interval, 10 minutes plus the time of the last change. The incident names the gap.
+- **Media or filesystem corruption:** up to one backup interval, one hour plus the time of the last change. The incident names the gap.
 - **Stores that stay files:** caches are rebuilt; markers are already written durably; append logs can lose their last line, and their readers skip torn tails.
 
 ## 8. Delivery plan

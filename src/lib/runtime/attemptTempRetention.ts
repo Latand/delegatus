@@ -5,7 +5,7 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement } from "@/lib/recordedChecks/store";
@@ -135,6 +135,9 @@ export type AttemptTempSweepOptions = {
   capBytes?: number;
   mode?: "on" | "dry-run";
   onRetired?: (count: number, bytes: number) => void;
+  /** Checkout reads kept by a caller that lives across ticks. Passing it also
+   * lets one reference observation reuse a validation of the last seconds. */
+  checkoutReads?: RetainedCheckoutReads;
 };
 export async function sweepAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions) {
   // Serving generations may overlap. One process-shared owner must retain the
@@ -166,7 +169,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     }
   };
   const budget = Math.max(1, Math.min(32, options.maxRoots ?? (store.bytes() > capBytes ? 32 : 4)));
-  const inventory = new RepositoryLinkInventory({ now, budgetMs: Math.min(30_000, options.runBudgetMs ?? 40_000) });
+  // A caller that lives across ticks keeps completed checkout reads, and its
+  // repeated validations inside one reference observation reuse a result of
+  // the last few seconds. Each destructive step below still waits for
+  // `unchangedAll`, which reads every inventoried directory again.
+  const inventory = new RepositoryLinkInventory({ now, budgetMs: Math.min(30_000, options.runBudgetMs ?? 40_000),
+    retained: options.checkoutReads, validationReuseMs: options.checkoutReads ? 5_000 : 0 });
   const references = options.references
     ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
   const pressure = store.bytes() > capBytes;
