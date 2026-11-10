@@ -703,10 +703,15 @@ export function evaluateActivityLiveness(input: Parameters<typeof evaluateLivene
       workProcesses: input.workProcesses }, input.now, input.stallAfterMs)
     : undefined;
   const silent = input.silentForMs !== null && input.silentForMs >= input.stallAfterMs;
+  /* A host that exited over an unanswered tool call left its turn open for
+     certain: the open call is what keeps the boundary unverified, and it can
+     no longer be answered (#3740). Past the stall window that row stays a
+     stall, with its silence, so the board and the seat wake keep naming it. */
+  const goneOverOpenCall = input.host.state === "gone" && input.turnState === "busy" && !!input.activityFacts?.openCall;
   const verified = input.turnVerified !== false
     && !(input.host.state === "alive" && input.turnState !== "idle" && input.activityFacts?.backgroundVerified === false
       && activity?.state !== "checking" && silent)
-    && !((input.activityFacts?.turnBoundaryVerified === false || input.unresolvedActivityOwnership)
+    && !((input.activityFacts?.turnBoundaryVerified === false && !goneOverOpenCall || input.unresolvedActivityOwnership)
       && activity?.state !== "checking" && silent);
   const verdict = evaluateLiveness({ ...input, turnVerified: verified,
     settledStage: input.settledStage && activity?.state !== "checking" && !input.activityFacts?.openCall,

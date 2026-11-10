@@ -3,7 +3,7 @@ import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
-import { stageGitEnvironment } from "./stageGitEnvironment";
+import { assertStageGitRehostProvable, stageGitEnvironment } from "./stageGitEnvironment";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -2945,6 +2945,10 @@ export async function spawnStructuredConversation(
          row qualifies only with a proven-dead engine. The termination ladder
          settles the scope and descendants, preserving live or uncertain
          writer claims and any unresolved survivors. */
+      /* A stage resume the binding check below will refuse must be refused
+         here, while the recorded process is still running (#3811): stopping
+         it first left a parked attempt with neither its host nor a resume. */
+      if (!adoptionClaim?.claimOwner) await assertStageGitRehostProvable(input.registry, input.receipt.conversationId, input.spec.cwd);
       if (!adoptionClaim?.claimOwner
         && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop)) {
         assertResumeSurvivorsRetired();

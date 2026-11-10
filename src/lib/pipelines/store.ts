@@ -240,7 +240,7 @@ function isRuntimeSwitches(value: unknown): boolean {
     && seat(item.from) && seat(item.to)
     && typeof item.from.conversationId === "string" && textOrNull(item.from.launchId) && textOrNull(item.from.sessionId) && textOrNull(item.from.agentPath)
     && typeof item.to.accountId === "string" && typeof item.to.accountPinned === "boolean"
-    && ["cutAt", "continuedAt", "settledAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
+    && ["cutAt", "continuedAt", "settledAt", "stopDispatchedAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
     && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
     && (item.retry === undefined || item.retry && typeof item.retry.reason === "string" && item.retry.reason.length <= 2000
       && typeof item.retry.requestedAt === "string" && Number.isFinite(Date.parse(item.retry.requestedAt))

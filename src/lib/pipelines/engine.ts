@@ -8888,7 +8888,8 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       }
       if (!record.retry && !attempt.report) {
         const limited = attempt.providerWait?.condition.kind === "usage_limit";
-        const sourceStoppedForHandoff = !parked && record.mode === "handoff" && ["switching", "continuing"].includes(record.phase);
+        const sourceStoppedForHandoff = !parked && record.mode === "handoff"
+          && (["switching", "continuing"].includes(record.phase) || record.phase === "cutting" && !!record.stopDispatchedAt);
         const dead = !limited && !sourceStoppedForHandoff && (ports.runtimeSwitchSourceUnavailable?.(record.from.conversationId)
           || await ports.conversationTurnInterrupted?.(record.from.conversationId) === "dead");
         if (limited || dead) {
@@ -17918,6 +17919,10 @@ export async function patchPipeline(
         await persist();
         return { pipeline };
       }
+      const parkedRunningReceipt = (state: string, receipt: { error?: string | null } | null | undefined, settlementWasPending = false): boolean =>
+        state === "path-pending" && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
+        && attempt.launchId === retryLaunchId && !!attempt.agentPath && !!attempt.conversationId && !!attempt.completedAt
+        && attempt.state === "needs_decision" && !attempt.report && !isStructuredSpawnPark(pipeline, attempt) && !stagedLaunchRecovery(receipt);
       const validateRetryReceipt = (settlementWasPending = false): { conflict: { error: string; status: number } | null; claimRequired: boolean } => {
         if (!receiptRetry) return { conflict: null, claimRequired: false };
         const receipt = ports.spawnReceipt(retryLaunchId);
@@ -17941,6 +17946,17 @@ export async function patchPipeline(
         ) {
           return { conflict: null, claimRequired: false };
         }
+        /* A stage that ran and was then parked can still hold a launch
+           receipt that never closed, when its transcript bound the attempt
+           before the receipt completed (#3760). The stage is the one to
+           retry; its host is stopped below before the reset. A launch that
+           never produced a turn keeps the spawn recovery rules above. */
+        if (
+          state === "path-pending"
+          && parkedRunningReceipt(state, receipt, settlementWasPending)
+        ) {
+          return { conflict: null, claimRequired: false };
+        }
         if (
           explicitReceiptRetry
           || settlementWasPending
@@ -17948,7 +17964,9 @@ export async function patchPipeline(
           || state !== "completed"
         ) {
           return {
-            conflict: { error: `the clicked launch settled as ${state}; retry was cancelled`, status: 409 },
+            conflict: { error: state === "path-pending" || state === "starting"
+              ? `the clicked launch is still ${state}; retry was cancelled. Stop the stage's agent, then retry the stage`
+              : `the clicked launch settled as ${state}; retry was cancelled`, status: 409 },
             claimRequired: false,
           };
         }
@@ -18013,6 +18031,21 @@ export async function patchPipeline(
         recordSettledPublicationFailure(pipeline, attempt, ports);
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
+      }
+      if (receiptRetry && stage && attempt && parkedRunningReceipt(
+        (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId) : ports.spawnReceipt(retryLaunchId)?.state) ?? "", ports.spawnReceipt(retryLaunchId))) {
+        if (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
+          return { error: "the parked attempt has a pending delivery; retry once that delivery settles", status: 409 };
+        }
+        const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+          await persist();
+          return { error: "the host of the parked attempt has not confirmed termination; retry once it has stopped", status: 409 };
+        }
+        if (attempt.report) {
+          await persist();
+          return { error: "the parked attempt recorded a stage report while its host was stopping", status: 409 };
+        }
       }
       if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       if (unreservedSpawnRetry) {
