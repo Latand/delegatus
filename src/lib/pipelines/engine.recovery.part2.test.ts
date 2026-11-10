@@ -501,7 +501,9 @@ test.each([
     }
     const ports = defaultPipelinePorts();
     const spawn = ports.spawnAgent;
-    await drainStageActivations({ ...ports, now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready",
+    // reserveActivationOnly uses the parent harness's synthetic checkout.
+    await drainStageActivations({ ...ports, worktreePresent: () => true,
+      now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready",
       spawnAgent: (input) => spawn(input, async (reservation) => {
         fs.writeFileSync(process.env.LLV_TEST_MARKER, reservation.launchId);
         process.exit(0);
@@ -574,7 +576,9 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
       transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
     }});
     registry.beginSpawnRequestAsync = async () => { process.exit(0); };
-    await drainStageActivations({ ...defaultPipelinePorts(), now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready" });
+    // The checkout is synthetic; this child exits before receipt reservation.
+    await drainStageActivations({ ...defaultPipelinePorts(), worktreePresent: () => true,
+      now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready" });
     process.exit(2);
   `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_CLOCK: h.ports.now() }, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
