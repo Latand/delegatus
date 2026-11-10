@@ -36,8 +36,6 @@ let transcriptReads = 0;
 let lastTranscriptReadFresh: boolean | undefined;
 let lastTranscriptReadFiles: unknown;
 let completedScanReads = 0;
-let pidResolutionFiles: unknown;
-let pidTargets = new Map<number, string | null>();
 let resourceTarget: Record<string, unknown> | null = null;
 const endpoint = {
   kind: "tmux-tmpdir" as const,
@@ -114,7 +112,6 @@ beforeAll(() => {
   process.env.HOME = routeCodexHome;
   process.env.XDG_CONFIG_HOME = path.join(routeCodexHome, "config");
   setConversationHostDependenciesForTests({
-    canonicalTranscriptTarget: (observed, pathname) => observed.canonicalFor(pathname)?.display ?? null,
     readTranscriptHosts: async (fresh, files) => {
       transcriptReads += 1;
       lastTranscriptReadFresh = fresh;
@@ -172,10 +169,6 @@ beforeAll(() => {
     collectImagePayloads: () => ({ images: collectedImages, error: null }),
     killPane: async () => {},
     panePidOf: async () => null,
-    resolveRequestedTmuxTarget: async (pid: number | null, files?: unknown) => {
-      pidResolutionFiles = files;
-      return pid === null ? null : pidTargets.get(pid) ?? null;
-    },
     resolveTmuxAttach: async () => attachResolution as never,
     tmuxEndpointDescriptor: () => endpoint,
     priorSubmission: (_conversationId, clientMessageId) => (knownSubmissions.includes(clientMessageId) ? "admitted" : "not-executed"),
@@ -429,21 +422,6 @@ test("/api/tmux attributes by path before a recycled pid and rejects conflicting
   }
 });
 
-test("/api/tmux GET uses the transcript host when a recycled pid disagrees", async () => {
-  transcriptReads = 0;
-  completedScanReads = 0;
-  lastTranscriptReadFiles = undefined;
-  pidTargets = new Map([[77, "agents:9.0"]]);
-
-  const response = await GET(get(`http://127.0.0.1/api/tmux?pid=77&path=${encodeURIComponent(PATHNAME)}`));
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ target: "agents:4.0" });
-  expect(transcriptReads).toBe(1);
-  expect(completedScanReads).toBe(1);
-  expect(lastTranscriptReadFiles).toBe(completedFiles);
-});
-
 test("/api/tmux attach resolves a fresh transcript host and returns an uncached opaque command", async () => {
   transcriptReads = 0;
   completedScanReads = 0;
@@ -499,31 +477,6 @@ test("/api/tmux attach reports a restarted server and rejects malformed, cross-o
     headers: { host: "127.0.0.1", origin: "https://evil.example", "sec-fetch-site": "cross-site" },
   }));
   expect(hostile.status).toBe(403);
-});
-
-test("/api/tmux GET keeps pid lookup for pid-only compatibility requests", async () => {
-  completedScanReads = 0;
-  pidResolutionFiles = undefined;
-  pidTargets = new Map([[77, "agents:9.0"]]);
-
-  const response = await GET(get("http://127.0.0.1/api/tmux?pid=77"));
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ target: "agents:9.0" });
-  expect(completedScanReads).toBe(1);
-  expect(pidResolutionFiles).toBe(completedFiles);
-});
-
-test("/api/tmux GET never answers a pid beside a supplied path the transcript roots refuse", async () => {
-  pidResolutionFiles = undefined;
-  pidTargets = new Map([[77, "agents:9.0"]]);
-
-  for (const identity of ["conversation_0000000000000000", "spawn:launch-fixture"]) {
-    const response = await GET(get(`http://127.0.0.1/api/tmux?pid=77&path=${encodeURIComponent(identity)}`));
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ target: null });
-  }
-  expect(pidResolutionFiles).toBeUndefined();
 });
 
 test("/api/tmux POST carries concurrent sends through the delivery seam", async () => {

@@ -58,7 +58,6 @@ import { POST as pipelinesPOST } from "@/app/api/pipelines/route";
 import { POST as preflightPOST } from "@/app/api/pipelines/preflight/route";
 import * as scanCache from "@/lib/scanner/scanCache";
 import * as transcriptHost from "@/lib/agent/transcriptHost";
-import * as tmux from "@/lib/tmux";
 import { GET as conversationsGET } from "@/app/api/conversations/route";
 import { GET as filesGET } from "@/app/api/files/route";
 import { createFilesProjectionQueue, type FilesProjectionQueue } from "@/app/api/files/projectionQueue";
@@ -501,7 +500,7 @@ describe("workspace authority", () => {
     }
   });
 
-  test("a pid beside an authorized conversation, launch or path never looks up or sends to another workspace's process", async () => {
+  test("a pid beside an authorized conversation, launch or path never sends to another workspace's process", async () => {
     const registry = agentRegistry();
     const ownTranscript = path.join(root, "own.jsonl");
     const foreignTranscript = path.join(root, "foreign.jsonl");
@@ -516,35 +515,27 @@ describe("workspace authority", () => {
       { ...catalogEntryToFileEntry(catalogRow(ownTranscript, "repo-alpha"), now), pid: ownPid, proc: "running" as const },
       { ...catalogEntryToFileEntry(catalogRow(foreignTranscript, "repo-beta"), now), pid: foreignPid, proc: "running" as const },
     ];
-    const pidLookups: number[] = [];
     const sends: unknown[] = [];
-    const resolvePid = async (pid: number) => { pidLookups.push(pid); return pid === foreignPid ? "beta-agent:1.0" : pid === ownPid ? "alpha-agent:1.0" : null; };
     const scanned = async () => ({ snapshot: { files } }) as never;
     const emptyHosts = async () => ({ hosts: [], observation: "available", canonicalFor: () => null }) as never;
     const deliver = async (message: unknown) => { sends.push(message); return { ok: true, target: "probe:0.0", operationId: "op-probe" } as never; };
     setConversationHostDependenciesForTests({
-      completedFileScan: scanned, readTranscriptHosts: emptyHosts, resolveRequestedTmuxTarget: resolvePid as never,
+      completedFileScan: scanned, readTranscriptHosts: emptyHosts,
       deliverConversationMessage: deliver as never,
       // Structured admission declines, so a send that passes the gate reaches the legacy pid ladder.
       enqueueStructuredMessage: (async (message: unknown) => { sends.push(message); return null; }) as never,
     });
     const scan = spyOn(scanCache, "completedFileScan").mockImplementation(scanned);
     const hosts = spyOn(transcriptHost, "readTranscriptHosts").mockImplementation(emptyHosts);
-    const tmuxLookup = spyOn(tmux, "resolveRequestedTmuxTarget").mockImplementation(resolvePid as never);
     const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
     const send = (route: string, actor: Member, body: Record<string, unknown>) => request(`/api/${route}`, actor, "POST", { text: "probe", ...body });
     try {
       for (const route of ["conversation-host", "tmux"]) {
-        const { GET, POST: sendPOST } = await import(`../../app/api/${route}/route.ts`);
-        const { POST } = await import(`../../app/api/${route}/targets/route.ts`);
+        const { POST: sendPOST } = await import(`../../app/api/${route}/route.ts`);
         const identities = [receipt.conversationId, `spawn:${receipt.launchId}`, ownTranscript];
         for (const actor of [member, manager]) {
           for (const pid of [foreignPid, unknownPid]) {
             for (const identity of identities) {
-              for (const key of ["path", "conversationId"]) {
-                const lookup = await GET(request(`/api/${route}?${key}=${encodeURIComponent(identity)}&pid=${pid}`, actor));
-                expect(lookup.status, `${route} GET ${key}=${identity} pid=${pid}`).toBe(403);
-              }
               for (const structured of ["1", "0"]) {
                 process.env.LLV_STRUCTURED_HOSTS = structured;
                 for (const body of [{ conversationId: identity, pid }, { path: identity, pid }, { conversationId: identity, pid: String(pid) }]) {
@@ -553,33 +544,17 @@ describe("workspace authority", () => {
                 }
               }
             }
-            const batch = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [
-              { id: "conversation", path: receipt.conversationId, pid },
-              { id: "launch", path: `spawn:${receipt.launchId}`, pid },
-            ] }));
-            expect(batch.status).toBe(403);
-            expect((await GET(request(`/api/${route}?pid=${pid}`, actor))).status).toBe(403);
-            expect((await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [{ id: "pid", pid }] }))).status).toBe(403);
           }
-          expect(pidLookups).toEqual([]);
           expect(sends).toEqual([]);
           // The member's own agent pid, beside its own conversation, still reaches the handlers.
-          expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${ownPid}`, actor))).json()).toEqual({ target: "alpha-agent:1.0" });
-          expect(pidLookups).toEqual([ownPid]);
           process.env.LLV_STRUCTURED_HOSTS = "0";
           expect((await sendPOST(send(route, actor, { conversationId: `spawn:${receipt.launchId}`, pid: ownPid }))).status).toBe(200);
           expect(sends).toEqual([expect.objectContaining({ pid: ownPid, path: "", text: "probe" })]);
-          pidLookups.length = 0;
           sends.length = 0;
         }
-        // The owner's pid lookups and pid-addressed sends are unchanged.
-        expect(await (await GET(request(`/api/${route}?pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
-        expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
-        expect(await (await POST(request(`/api/${route}/targets`, owner, "POST", { reqs: [{ id: "pid", pid: foreignPid }] }))).json()).toEqual({ targets: { pid: "beta-agent:1.0" } });
-        expect(pidLookups).toEqual([foreignPid, foreignPid, foreignPid]);
+        // The owner's pid-addressed sends are unchanged.
         expect((await sendPOST(send(route, owner, { conversationId: `spawn:${receipt.launchId}`, pid: foreignPid }))).status).toBe(200);
         expect(sends).toEqual([expect.objectContaining({ pid: foreignPid, path: "" })]);
-        pidLookups.length = 0;
         sends.length = 0;
       }
     } finally {
@@ -588,7 +563,6 @@ describe("workspace authority", () => {
       setConversationHostDependenciesForTests(null);
       scan.mockRestore();
       hosts.mockRestore();
-      tmuxLookup.mockRestore();
     }
   });
 

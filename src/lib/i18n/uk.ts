@@ -1356,7 +1356,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.escapeSentWaiting": "надіслано Escape — чекаємо, поки агент зупиниться",
   "composer.spawnAria": "Запустити агента з промптом",
   "composer.resolvingAria": "Повідомлення наявному агенту — доставка почнеться після відновлення його хоста",
-  "composer.sendAria": "Надіслати повідомлення агенту в tmux {target}",
   "composer.sendStructuredAria": "Надіслати повідомлення через структурований runtime-хост",
   "composer.queueAria": "Черга надісланих повідомлень",
   "composer.removeFromQueue": "Прибрати з черги",
