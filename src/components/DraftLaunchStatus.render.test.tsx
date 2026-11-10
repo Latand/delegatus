@@ -43,8 +43,8 @@ test("a verified launch failure replaces the generic attention copy with the tea
   const generic = renderToStaticMarkup(<DraftLaunchStatus phase="attention" />);
   const html = renderToStaticMarkup(<DraftLaunchStatus
     phase="attention"
-    error="Claude account botfatherdev-2 needs re-login. Open Accounts, sign in, and retry."
+    error="Claude account work-2 needs re-login. Open Accounts, sign in, and retry."
   />);
-  expect(html).toContain("Claude account botfatherdev-2 needs re-login");
+  expect(html).toContain("Claude account work-2 needs re-login");
   expect(html).not.toBe(generic);
 });

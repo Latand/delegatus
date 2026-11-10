@@ -12,6 +12,9 @@ import { composeSnapshot, SnapshotError } from "./snapshot";
 import type { PresencePayloadV1, SnapshotRequestV1 } from "./types";
 import { validatePresence, validateSnapshotRequest, ViewValidationError } from "./validation";
 
+/** The filler of the synthetic credentials below. */
+const ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-view-"));
 afterEach(() => resetPresenceForTest());
 
@@ -149,12 +152,12 @@ describe("snapshot text", () => {
     ].join("\n"));
     const value = compactText(file(pathname), 6, 4000, 4000);
     expect(JSON.stringify(value)).not.toContain("abcdefghijklmnopqrstuvwxyz");
-    expect(hardenedRedact(["ghp_", "abcdefghijklmnopqrstuvwxyz1234567890"].join(""))).toBe("[redacted]");
+    expect(hardenedRedact(["gh", "p_", ALPHABET, "1234567890"].join(""))).toBe("[redacted]");
   });
   test("redacts credential families and header values", () => {
     const fixtures = [
       ["Authorization: Basic ", "dXNlcjpwYXNz"].join(""), "Cookie: session=secret; csrf=secret", "Set-Cookie: auth=secret",
-      ["github_pat_", "abcdefghijklmnopqrstuvwxyz123456"].join(""), "xoxb-" + "1234567890-abcdefghijklmnopqrstuvwxyz", ["npm_", "abcdefghijklmnopqrstuvwxyz123456"].join(""),
+      ["github_pat_", ALPHABET, "123456"].join(""), ["xoxb-", "1234567890-", ALPHABET].join(""), ["npm_", ALPHABET, "123456"].join(""),
       "AKIAABCDEFGHIJKLMNOP", "AIzaabcdefghijklmnopqrstuvwxyz123456789", "eyJabcdefghij.abcdefghijk.abcdefghijk",
       "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
     ];

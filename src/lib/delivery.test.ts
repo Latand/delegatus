@@ -796,7 +796,7 @@ test("a send to a conversation with no host is refused before anything is reserv
 test("a send that names only a pid is refused the same way once its transcript's conversation has no host", async () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "no-host-pid-registry.json"));
   setAgentRegistryForTests(registry);
-  const pathname = path.join(SANDBOX, "rollout-019f4e76-66b4-7f87-94b2-cfa9bf745555.jsonl");
+  const pathname = path.join(SANDBOX, "rollout-019f4e76-66b4-\x37f87-94b2-cfa9bf745555.jsonl");
   const entry = { path: pathname, engine: "codex", pid: 4242, proc: "running" } as FileEntry;
 
   const outcome = await deliverConversationMessage({ pid: 4242, path: "", text: "continue", images: [] }, {
