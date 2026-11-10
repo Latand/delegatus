@@ -1341,7 +1341,8 @@ function pipelineIndexRevision(filename: string, table: "pipeline_evidence_clock
   return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
-export type PipelineRecipientSelection = { ids: readonly string[]; conversationIds: readonly string[] };
+export type PipelineRecipientSelection = { ids: readonly string[]; conversationIds: readonly string[];
+  agentPaths?: readonly string[]; sessionIds?: readonly string[] };
 
 /** Freshness follows the complete selected ownership set and its row revisions.
  * An unrelated writer cannot revoke a published recipient's dispatch proof. */
@@ -1376,16 +1377,20 @@ function recipientPipelineEvidenceKeys(db: BunDatabase, selection: PipelineRecip
   if (db.query("SELECT 1 FROM pipeline_owner_refs WHERE kind IN ('unknown','archive:unknown') LIMIT 1").get()) {
     throw new Error("recipient pipeline ownership contains unknown rows");
   }
-  const keys = db.query<{ collection: string; row_key: string }, [string, string]>(`
+  const keys = db.query<{ collection: string; row_key: string }, [string, string, string, string]>(`
     WITH matches AS MATERIALIZED (
       SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
         AND row_key IN (SELECT value FROM json_each(?))
       UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
-        WHERE kind IN ('conversationId','archive:conversationId') AND identity IN (SELECT value FROM json_each(?)) LIMIT 257)
+        WHERE kind IN ('conversationId','archive:conversationId') AND identity IN (SELECT value FROM json_each(?))
+      UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
+        WHERE kind IN ('agentPath','archive:agentPath') AND identity IN (SELECT value FROM json_each(?))
+      UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
+        WHERE kind IN ('sessionId','archive:sessionId') AND identity IN (SELECT value FROM json_each(?)) LIMIT 257)
     SELECT collection,row_key FROM matches
     UNION SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
       AND row_key IN (SELECT row_key FROM matches)
-    ORDER BY collection,row_key LIMIT 257`).all(JSON.stringify(selection.ids), JSON.stringify(selection.conversationIds));
+    ORDER BY collection,row_key LIMIT 257`).all(JSON.stringify(selection.ids), JSON.stringify(selection.conversationIds), JSON.stringify(selection.agentPaths ?? []), JSON.stringify(selection.sessionIds ?? []));
   if (keys.length > 256) throw new Error("recipient pipeline ownership exceeds its bounded read");
   return keys;
 }

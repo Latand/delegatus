@@ -34,7 +34,7 @@ import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
 import { stateLockProcessKind } from "@/lib/state/lockWait";
 import { statePath } from "@/lib/configDir";
-import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
+import { recipientPipelineEvidenceRevision, type PipelineRecipientSelection } from "@/lib/state/sqliteStateStore";
 import { loadPipelineOwnershipForStartupAsync, pipelineRegistryHealthAsync, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 
 import {
@@ -1963,6 +1963,11 @@ function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRe
   // lookups keep retained conversations and memberships off the retry loop.
   const snapshot = host ? sourceSnapshot : startupSnapshot(registry, sourceSnapshot);
   const memberships: RegistryFile["memberships"] = {};
+  const byAgentPath = new Map<string, Set<string>>(), bySessionId = new Map<string, Set<string>>();
+  const bind = (index: Map<string, Set<string>>, value: string | null | undefined, id: string) => {
+    if (!value) return;
+    const ids = index.get(value) ?? new Set<string>(); ids.add(id); index.set(value, ids);
+  };
   const canonicalIds = new Map<string, ViewerConversationId>();
   const take = (conversationId: ViewerConversationId) => {
     if (canonicalIds.has(conversationId)) return;
@@ -1978,7 +1983,14 @@ function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRe
   for (const key of hostKeys) {
     const entry = snapshot.entries[key];
     if (!entry || !startupHostInScope(registry, key)) continue;
-    for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) take(conversation.id);
+    for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) {
+      take(conversation.id);
+      const id = resolveConversationAlias(snapshot, conversation.id);
+      bind(byAgentPath, entry.artifactPath, id);
+      bind(bySessionId, entry.key.sessionId, id);
+      const generation = conversation.generations.at(-1);
+      if (generation?.id === entry.key.sessionId) bind(byAgentPath, generation.path, id);
+    }
     yield;
   }
   // Pending structured spawns can have membership before an entry exists.
@@ -1996,7 +2008,7 @@ function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRe
     ids.push(id); byPipeline.set(entry.containerId, ids);
     yield;
   }
-  return { memberships, resolve, byPipeline, selectedIds: new Set(canonicalIds.keys()), snapshot: sourceSnapshot };
+  return { memberships, resolve, byPipeline, byAgentPath, bySessionId, selectedIds: new Set(canonicalIds.keys()), snapshot: sourceSnapshot };
 }
 
 /** A host, conversation, pending launch, alias or membership changed after
@@ -2046,7 +2058,13 @@ export async function pipelineStartupMembershipsAsync(registry: AgentRegistry, b
 }
 
 function startupMembershipIdentity(selection: ReturnType<typeof pipelineStartupMemberships>): string {
-  return JSON.stringify([...selection.selectedIds].map(id => [id, selection.resolve(id), selection.memberships[id] ?? []]));
+  return JSON.stringify([[...selection.selectedIds].map(id => [id, selection.resolve(id), selection.memberships[id] ?? []]),
+    [...selection.byAgentPath].map(([value, ids]) => [value, [...ids]]), [...selection.bySessionId].map(([value, ids]) => [value, [...ids]])]);
+}
+
+function recipientPipelineSelection(selection: ReturnType<typeof pipelineStartupMemberships>): PipelineRecipientSelection {
+  return { ids: [...selection.byPipeline.keys()], conversationIds: [...selection.selectedIds],
+    agentPaths: [...selection.byAgentPath.keys()], sessionIds: [...selection.bySessionId.keys()] };
 }
 
 async function deferredPipelineStartupEvidence(registry: AgentRegistry, host?: AgentRegistryEntry, prepared?: ReturnType<typeof pipelineStartupMemberships>): Promise<PipelineStartupEvidence> {
@@ -2075,19 +2093,21 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
   if (!available) return deferredPipelineStartupEvidence(registry, host, selection);
   const settled = new Set<string>();
   const deferred = new Set<string>();
-  const { memberships, resolve, byPipeline, selectedIds, snapshot } = selection ?? (host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry));
+  const membershipSelection = selection ?? (host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry));
+  const { memberships, resolve, byPipeline, byAgentPath, bySessionId, selectedIds, snapshot } = membershipSelection;
+  const recipient = recipientPipelineSelection(membershipSelection);
   let pipelines;
   let preservedIds: Set<string>;
   try {
-    pipelines = await loadPipelineOwnershipForStartupAsync(host ? [...byPipeline.keys()] : undefined, host ? selectedIds : undefined);
-    preservedIds = new Set((await pipelineRegistryHealthAsync(host ? { ids: [...byPipeline.keys()], conversationIds: [...selectedIds] } : undefined)).map((issue) => issue.id));
+    pipelines = await loadPipelineOwnershipForStartupAsync(host ? recipient.ids : undefined, host ? selectedIds : undefined, recipient);
+    preservedIds = new Set((await pipelineRegistryHealthAsync(host ? recipient : undefined)).map((issue) => issue.id));
   } catch (error) {
     reportPipelineStartupRefusal(error);
     return deferredPipelineStartupEvidence(registry, host, selection);
   }
   if (host) {
     const current = pipelineStartupMemberships(registry, host);
-    if (startupMembershipIdentity(current) !== startupMembershipIdentity({ memberships, resolve, byPipeline, selectedIds, snapshot })) {
+    if (startupMembershipIdentity(current) !== startupMembershipIdentity(membershipSelection)) {
       return { ...await deferredPipelineStartupEvidence(registry, host), changed: true };
     }
   } else if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) throw new StartupMembershipChangedError();
@@ -2105,13 +2125,17 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
       for (const id of byPipeline.get(pipeline.id) ?? []) deferred.add(resolve(id));
     }
     for (const attempt of pipeline.attempts) {
-      if (!attempt.conversationId?.startsWith("conversation_") || !selectedIds.has(attempt.conversationId)) continue;
-      const id = resolve(attempt.conversationId);
-      if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
-      if (blocked || (strictRecipient && attempt.suspended)) deferred.add(id);
+      const ids = new Set<string>();
+      if (attempt.conversationId?.startsWith("conversation_") && selectedIds.has(attempt.conversationId)) ids.add(resolve(attempt.conversationId));
+      for (const id of byAgentPath.get(attempt.agentPath ?? "") ?? []) ids.add(id);
+      for (const id of bySessionId.get(attempt.sessionId ?? "") ?? []) ids.add(id);
+      for (const id of ids) {
+        if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
+        if (blocked || (strictRecipient && attempt.suspended)) deferred.add(id);
+      }
     }
   }
-  return { settled, deferred, membershipIdentity: host ? startupMembershipIdentity({ memberships, resolve, byPipeline, selectedIds, snapshot }) : undefined };
+  return { settled, deferred, membershipIdentity: host ? startupMembershipIdentity(membershipSelection) : undefined };
 }
 
 export interface StructuredStartupDependencies {
@@ -2299,7 +2323,7 @@ async function prepareStructuredStartupRecipientOnce(
   const seatIdentity = () => JSON.stringify(relevantSeats().map(seat => [seat.project,seat.conversationId,seat.seatEpoch,seat.state]));
   const capturedSeats = seatIdentity();
   const selection = pipelineStartupMemberships(registry, entry);
-  const pipelineSelection = { ids: [...selection.byPipeline.keys()], conversationIds: [...selection.selectedIds] };
+  const pipelineSelection = recipientPipelineSelection(selection);
   const evidenceVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"), pipelineSelection);
   if (!evidenceVersion) refuse("recipient pipeline ownership index is unavailable or incomplete");
   const membershipIdentity = startupMembershipIdentity(selection);
@@ -2372,7 +2396,7 @@ async function prepareStructuredStartupRecipientOnce(
         return await dependencies.pipelineEvidence?.(registry,entry) ?? pipelineStartupEvidence(registry,true,entry,undefined,true);
       },"preparing addressed startup recipient",dependencies.observeLeaseHold,true,
       { signal, waitMs: Math.max(0,deadline-performance.now()),
-        recipient: { ids: [...selection.byPipeline.keys()], conversationIds: [...selection.selectedIds] } });
+        recipient: pipelineSelection });
       check();
       if (evidence.changed || evidence.deferred.has(conversation!.id)) refuse("recipient pipeline authority is unavailable or held");
     })));
