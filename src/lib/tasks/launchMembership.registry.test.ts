@@ -298,11 +298,18 @@ test("a dedicated task launch joins exactly its task at the reservation; the rep
   expect(loadTasks().length).toBe(1);
 });
 
-function queuedTmuxReceipt(registry: InstanceType<typeof AgentRegistry>, attempt: string, retryAt: string, taskIds?: string[]) {
+/** A runtime host that holds no operation and no session. */
+const QUIET_RUNTIME_CLIENT = {
+  operationStatus: async () => null,
+  snapshot: async () => ({ revision: 0, sessions: [] }),
+  effectBatch: async () => [],
+} as unknown as RuntimeHostClient;
+
+function queuedPinnedReceipt(registry: InstanceType<typeof AgentRegistry>, attempt: string, retryAt: string, taskIds?: string[]) {
   const begun = registry.beginSpawnRequest({
     engine: "claude",
     cwd: stateDir,
-    transport: "tmux",
+    transport: "structured",
     accountId: "account-a",
     accountPin: true,
     clientAttemptId: attempt,
@@ -333,20 +340,20 @@ test("a queued pinned launch recovered for its first execution keeps the members
   saveTasks([task("queued-target", "Target of a queued launch")]);
   const registry = registryAt("queued");
   const retryAt = new Date(Date.now() - 1_000).toISOString();
-  const kept = queuedTmuxReceipt(registry, "queued_kept_attempt", retryAt, ["queued-target"]);
-  const orphaned = queuedTmuxReceipt(registry, "queued_orphaned_attempt", retryAt, ["queued-target"]);
+  const kept = queuedPinnedReceipt(registry, "queued_kept_attempt", retryAt, ["queued-target"]);
+  const orphaned = queuedPinnedReceipt(registry, "queued_orphaned_attempt", retryAt, ["queued-target"]);
   expect(holders(kept.conversationId)).toEqual(["queued-target"]);
   /* The second launch loses its membership row while it waits in the queue
      (its target deleted, or its write lost); the first keeps its row. */
   saveTasks(loadTasks().map((candidate) => ({ ...candidate, assignments: candidate.assignments.filter((assignment) => assignment.conversationId !== orphaned.conversationId) })));
   const spawned: string[] = [];
   const restarted = registryAt("queued");
-  const tick = await terminalizeStaleStructuredSpawns(restarted, null, {
+  const tick = await terminalizeStaleStructuredSpawns(restarted, QUIET_RUNTIME_CLIENT, {
     now: () => Date.now(),
     resolveSpawnAccount: () => account,
     resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
-    spawnTmuxAgent: async (_spec, _prompt, receipt) => {
-      spawned.push(receipt?.launchId ?? "unknown");
+    spawnStructuredConversation: async ({ receipt }) => {
+      spawned.push(receipt.launchId);
       throw new Error("stop at the actuation seam");
     },
   });
@@ -362,7 +369,7 @@ test("a queued pinned launch recovered for its first execution keeps the members
 test("an unavailable task store keeps a recovered queued launch from executing: the receipt fails and no agent is started", async () => {
   saveTasks([]);
   const registry = registryAt("queued-unavailable");
-  const receipt = queuedTmuxReceipt(registry, "queued_unavailable_attempt", new Date(Date.now() - 1_000).toISOString());
+  const receipt = queuedPinnedReceipt(registry, "queued_unavailable_attempt", new Date(Date.now() - 1_000).toISOString());
   expect(loadTasks().length).toBe(1);
   /* The store becomes unreadable between reservation and recovery: a
      malformed row lands under a new collection revision (#1870). */
@@ -382,12 +389,12 @@ test("an unavailable task store keeps a recovered queued launch from executing: 
   try {
     const spawned: string[] = [];
     const restarted = registryAt("queued-unavailable");
-    const tick = await terminalizeStaleStructuredSpawns(restarted, null, {
+    const tick = await terminalizeStaleStructuredSpawns(restarted, QUIET_RUNTIME_CLIENT, {
       now: () => Date.now(),
       resolveSpawnAccount: () => account,
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
-      spawnTmuxAgent: async (_spec, _prompt, claimed) => {
-        spawned.push(claimed?.launchId ?? "unknown");
+      spawnStructuredConversation: async ({ receipt: claimed }) => {
+        spawned.push(claimed.launchId);
         throw new Error("an agent must not start outside every task");
       },
     });

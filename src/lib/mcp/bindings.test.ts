@@ -1025,18 +1025,7 @@ test("real admitted deliveries keep the same MCP author when identical operator 
     const transcriptPath = path.join(sandbox, `${engine}-delivered.jsonl`);
     fs.writeFileSync(transcriptPath, "");
     const conversation = registry.ensureConversation(engine, transcriptPath, "default");
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: transcriptPath, conversationId: conversation.id, text, images: [],
-      clientMessageId: `${engine}-delivered-author`,
-      origin: { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" },
-    }, {
-      recover: async () => null,
-      pathAllowed: () => true,
-      listFiles: async () => [{ root: `${engine}-sessions`, path: transcriptPath, project: "fixture", mtime: 0, size: 0 } as FileEntry],
-      resumeSpecFor: (() => ({ command: "resume", transcript: transcriptPath, launchProfile: emptyLaunchProfile() })) as never,
-      deliver: async () => ({ ok: true as const, outcome: "resumed" as const, target: "%7" }),
-    });
-    expect(outcome.ok).toBe(true);
+    seedStoredDeliveredMessage(registry, { conversationId: conversation.id, text, clientMessageId: `${engine}-delivered-author`, origin: { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" } });
     const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === `${engine}-delivered-author`)!;
     const agentAt = delivery.deliveredAt!;
     const operatorAt = new Date(Date.parse(agentAt) - 30_000).toISOString();
@@ -1234,16 +1223,7 @@ test("a legacy Codex delivery treats a compact marker in its content as literal 
   const sender = { kind: "agent" as const, role: "builder", project: "wardrobe-agent", conversationId: "conversation_builder" };
   const compactRef = `a.${structuredUserReference("c".repeat(64), true).slice(2)}.${"A".repeat(16)}`;
   const text = `<!-- llv:structured-user ctx=${compactRef} -->\nClaimed agent content`;
-  const outcome = await deliverConversationMessage({
-    pid: 1, path: transcriptPath, conversationId: conversation.id, text, images: [],
-    clientMessageId: "literal-codex-marker", origin: sender,
-  }, {
-    recover: async () => null, pathAllowed: () => true,
-    listFiles: async () => [{ root: "codex-sessions", path: transcriptPath, project: "fixture", mtime: 0, size: 0 } as FileEntry],
-    resumeSpecFor: (() => ({ command: "resume", transcript: transcriptPath, launchProfile: emptyLaunchProfile() })) as never,
-    deliver: async () => ({ ok: true as const, outcome: "resumed" as const, target: "%7" }),
-  });
-  expect(outcome.ok).toBe(true);
+  seedStoredDeliveredMessage(registry, { conversationId: conversation.id, text, clientMessageId: "literal-codex-marker", origin: sender });
   const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries)
     .find((row) => row.clientMessageId === "literal-codex-marker")!;
   fs.writeFileSync(transcriptPath, `${JSON.stringify({ type: "response_item", timestamp: delivery.deliveredAt,
@@ -1282,16 +1262,7 @@ test("a member's identical turn keeps its name beside a real agent delivery on e
     const transcriptPath = path.join(sandbox, `${engine}-member-agent.jsonl`);
     fs.writeFileSync(transcriptPath, "");
     const conversation = registry.ensureConversation(engine, transcriptPath, "default");
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: transcriptPath, conversationId: conversation.id, text, images: [],
-      clientMessageId: `${engine}-agent-seam`, origin: { kind: "agent", role: "reviewer", project: "fixture", conversationId: "conversation_sender" },
-    }, {
-      recover: async () => null, pathAllowed: () => true,
-      listFiles: async () => [{ root: `${engine}-sessions`, path: transcriptPath, project: "fixture", mtime: 0, size: 0 } as FileEntry],
-      resumeSpecFor: (() => ({ command: "resume", transcript: transcriptPath, launchProfile: emptyLaunchProfile() })) as never,
-      deliver: async () => ({ ok: true as const, outcome: "resumed" as const, target: "%7" }),
-    });
-    expect(outcome.ok).toBe(true);
+    seedStoredDeliveredMessage(registry, { conversationId: conversation.id, text, clientMessageId: `${engine}-agent-seam`, origin: { kind: "agent", role: "reviewer", project: "fixture", conversationId: "conversation_sender" } });
     const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === `${engine}-agent-seam`)!;
     const agentAt = delivery.deliveredAt!;
     const memberAt = new Date(Date.parse(agentAt) - 30_000).toISOString();
@@ -3875,6 +3846,7 @@ test("an ambiguous send's operation id and resend guidance survive the control r
 import { McpDispatchNotExecutedError, McpDispatchUncertainError, McpDispatchVerdictError, McpToolRefusal, type McpDispatchTracker, type McpRequestBinding } from "./server";
 import { productionDomainDependencies, productionViewerControlDependencies, sendDownstreamKey, viewerMcpRecoverableTools } from "./bindings";
 import { SEND_UNVERIFIED_REASON } from "@/lib/runtime/sendSettlement";
+import { seedStoredDeliveredMessage } from "@/test-helpers/storedDelivery";
 import { projectForCwd } from "@/lib/scanner/describe";
 
 const originalControlUrl = process.env.LLV_VIEWER_CONTROL_URL;

@@ -589,64 +589,6 @@ function realAdmission(afterRuntimeRead?: () => void) {
   });
 }
 
-for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
-  for (const compaction of ["count", "age"] as const) {
-    for (const rotate of [false, true]) {
-      test(`compacted legacy relay retry does not actuate: mount ${mount}, ${compaction}, rotation ${rotate}`, async () => {
-        const sender = actor("project-a");
-        const recipient = actor("project-b");
-        const recipientPath = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.path;
-        fs.writeFileSync(recipientPath, "");
-        const typed: string[] = [];
-        setConversationHostDependenciesForTests({
-          collectImagePayloads: () => ({ images: [], error: null }),
-          enqueueStructuredMessage: async () => null,
-          deliverConversationMessage: (message) => deliverConversationMessage(message, {
-            recover: async () => null,
-            pathAllowed: () => true,
-            listFiles: async () => [{ root: "codex-sessions", path: recipientPath, project: "project-b", mtime: 0, size: 0 } as never],
-            resumeSpecFor: () => ({ command: "codex", args: [], cwd: root, env: {} }) as never,
-            deliver: async ({ payload }) => { typed.push(payload); return { ok: true, outcome: "delivered-to-live", target: "%7" }; },
-          }),
-          recordOperatorRequest: () => null,
-        });
-        const body = { ...relayBody(recipient.id, "report"), project: "project-b", clientMessageId: "legacy-compacted" };
-        expect((await post(request(sender.capability, body))).status).toBe(200);
-        expect(typed).toHaveLength(1);
-        const original = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
-        expect(original.state).toBe("delivered");
-        if (compaction === "count") {
-          await Bun.sleep(2);
-          const generation = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.id;
-          for (let index = 0; index < 100; index++) {
-            const later = registry.holdDelivery(recipient.id as `conversation_${string}`, `later ${index}`, `legacy-later-${index}`);
-            registry.beginDeliveryAttempt(later.id, generation);
-            registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
-          }
-        }
-        if (rotate) actor("project-b");
-        const filename = registry.filename;
-        registry.close();
-        registry = new AgentRegistry(filename, undefined, undefined, compaction === "age" ? { now: () => Date.now() + 8 * 86_400_000 } : {});
-        setAgentRegistryForTests(registry);
-        const before = registry.readOnlySnapshot();
-        expect(before.heldDeliveries[original.id]).toBeUndefined();
-        expect(before.deliveryOperationOwners[original.command.operationId]).toMatchObject({ terminalState: "delivered" });
-        const retryBody = mount === 2 ? { ...body, conversationId: undefined } : body;
-        const retry = await post(request(sender.capability, retryBody));
-        expect(retry.status).toBe(200);
-        expect(typed).toHaveLength(1);
-        expect(await retry.json()).toMatchObject({ operationId: original.command.operationId, outcome: "delivered",
-          receipt: { operationId: original.command.operationId, status: "delivered", conversationId: recipient.id } });
-        const other = actor("project-c");
-        expect((await post(request(other.capability, body))).status).toBe(409);
-        expect(typed).toHaveLength(1);
-        expect(registry.readOnlySnapshot().heldDeliveries).toEqual(before.heldDeliveries);
-      });
-    }
-  }
-}
-
 for (const [name, attachment] of [
   ["files", { files: [{ name: "note.txt", base64: "aGk=" }] }],
   ["images", { images: [{ name: "image.png", base64: "aGk=" }] }],

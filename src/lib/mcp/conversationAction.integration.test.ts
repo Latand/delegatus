@@ -141,11 +141,7 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
       registry: () => registry,
       structuredEnabled: () => true,
       dispatchStructuredControl: request => dispatchStructuredControl(request, { registry, client: runtimeClient }),
-      interruptConversation: async () => { throw new Error("unexpected legacy interrupt"); },
-      killConversation: async () => { throw new Error("unexpected legacy kill"); },
       resumeConversation: async () => { throw new Error("unexpected legacy resume"); },
-      compactConversation: async () => { throw new Error("unexpected legacy compact"); },
-      answerDialogKey: async () => { throw new Error("unexpected legacy dialog"); },
       // The simulated provider is not a native CLI in process discovery. Read
       // its real transcript with the process identity this fixture owns.
       pendingQuestion: async pathname => {

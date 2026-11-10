@@ -15,7 +15,6 @@ import { emptyLaunchProfile, type DurableQuotaObservation } from "@/lib/accounts
 import { accountPark } from "@/lib/runtime/accountPark";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
-import { TmuxDeliveryUncertainError } from "@/lib/tmux";
 import { LIMITS_RATE_LIMITED_REASON } from "@/lib/types";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
@@ -2484,55 +2483,6 @@ test.skip("issue 1065: a structured relay settles from the delivery journal's de
   }
 });
 
-test.skip("an ambiguous legacy relay parks without replaying the payload", async () => {
-  let deliveries = 0;
-  const restoreDelivery = setRelayDeliveryForTest(async () => {
-    deliveries += 1;
-    throw new TmuxDeliveryUncertainError(
-      "legacy relay delivery is uncertain after actuation started: tmux pasted the findings before Enter confirmation failed",
-    );
-  });
-  const implementer = writeCodexEntry("relay-uncertain-implementer.jsonl", {
-    id: ["069f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-"),
-    cwd: "/repo",
-  }, Date.now() / 1_000);
-  const findingsPath = path.join(process.env.LLV_STATE_DIR!, "relay-uncertain-findings.md");
-  fs.writeFileSync(findingsPath, "VERDICT: REQUEST_CHANGES\n\nPreserve this single delivery.\n");
-  saveFlows([raceFlow({
-    id: "flow-relay-uncertain",
-    implementerPath: implementer.path,
-    state: "relaying",
-    rounds: [{
-      ...newRound(raceFlow({ rounds: [] }), "marker", "head ready"),
-      findingsPath,
-      verdict: "REQUEST_CHANGES",
-      findingsCount: 1,
-      reviewedAt: "2026-08-05T20:47:07.961Z",
-      terminalAt: "2026-08-05T20:47:07.961Z",
-    }],
-  })]);
-
-  try {
-    await tickFlows([implementer]);
-    expect(deliveries).toBe(1);
-    expect(loadFlows()[0]).toMatchObject({
-      state: "needs_decision",
-      stateDetail: expect.stringContaining("legacy relay delivery is uncertain after actuation started"),
-      rounds: [{
-        relayRetryCount: 0,
-        relayRetryAt: null,
-        relayedAt: null,
-        error: expect.stringContaining("tmux pasted the findings"),
-      }],
-    });
-
-    await tickFlows([implementer]);
-    expect(deliveries).toBe(1);
-  } finally {
-    restoreDelivery();
-  }
-});
-
 test.skip("a restart-interrupted relay retries through the idempotent structured path", async () => {
   let deliveries = 0;
   const restoreDelivery = setRelayDeliveryForTest(async (flow, _entries, _text, options) => {
@@ -2594,53 +2544,6 @@ test.skip("a restart-interrupted relay retries through the idempotent structured
         relayRetryRequiresIdempotency: false,
         relayedAt: expect.any(String),
         error: null,
-      }],
-    });
-  } finally {
-    restoreDelivery();
-  }
-});
-
-test.skip("a restart-interrupted legacy relay parks before a newly available structured delivery", async () => {
-  let deliveries = 0;
-  const restoreDelivery = setRelayDeliveryForTest(async (flow) => {
-    deliveries += 1;
-    return flow.implementerPath;
-  });
-  const implementer = writeCodexEntry("relay-restart-legacy-implementer.jsonl", {
-    id: ["089f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-"),
-    cwd: "/repo",
-  }, Date.now() / 1_000);
-  const findingsPath = path.join(process.env.LLV_STATE_DIR!, "relay-restart-legacy-findings.md");
-  fs.writeFileSync(findingsPath, "VERDICT: REQUEST_CHANGES\n\nDo not duplicate this legacy relay.\n");
-  saveFlows([raceFlow({
-    id: "flow-relay-restart-legacy",
-    implementerPath: implementer.path,
-    state: "relaying",
-    rounds: [{
-      ...newRound(raceFlow({ rounds: [] }), "marker", "head ready"),
-      findingsPath,
-      verdict: "REQUEST_CHANGES",
-      findingsCount: 1,
-      reviewedAt: "2026-08-05T20:47:07.961Z",
-      terminalAt: "2026-08-05T20:47:07.961Z",
-      relayStartedAt: "2026-08-05T20:47:08.000Z",
-      relayDeliveryTransport: "legacy",
-    }],
-  })]);
-
-  try {
-    await tickFlows([implementer]);
-
-    expect(deliveries).toBe(0);
-    expect(loadFlows()[0]).toMatchObject({
-      state: "needs_decision",
-      stateDetail: expect.stringContaining("legacy relay was interrupted before delivery settlement"),
-      rounds: [{
-        relayRetryCount: 0,
-        relayRetryAt: null,
-        relayDeliveryTransport: "legacy",
-        relayedAt: null,
       }],
     });
   } finally {
@@ -2832,91 +2735,6 @@ test.skip("relayFixOrPark treats a 0 limit as unlimited", () => {
   expect(clone.state).toBe("fixing");
 });
 
-test.skip("a pane-mode Claude review launch under structured transport parks without a tmux pane and fails its receipt", async () => {
-  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
-  const previousClaudeHome = process.env.LLV_CLAUDE_HOME;
-  process.env.LLV_SPAWN_TRANSPORT = "structured";
-  process.env.LLV_CLAUDE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-no-tmux-home-"));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-no-tmux-repo-"));
-  try {
-    expect(spawnSync("git", ["init", "-b", "main"], { cwd }).status).toBe(0);
-    expect(spawnSync("git", ["config", "user.email", "flow@example.com"], { cwd }).status).toBe(0);
-    expect(spawnSync("git", ["config", "user.name", "Flow Test"], { cwd }).status).toBe(0);
-    fs.writeFileSync(path.join(cwd, "work.txt"), "committed\n");
-    expect(spawnSync("git", ["add", "work.txt"], { cwd }).status).toBe(0);
-    expect(spawnSync("git", ["commit", "-m", "reviewed"], { cwd }).status).toBe(0);
-    const implementer = writeCodexEntry("no-tmux-pane-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f130"].join("-"), cwd }, Date.now() / 1_000);
-    const startedAt = new Date().toISOString();
-    const flow: Flow = {
-      id: "flow-no-tmux-pane",
-      template: "implement-review-loop",
-      project: "repo",
-      cwd,
-      implementerPath: implementer.path,
-      roles: {
-        implementer: { engine: "codex", model: null, effort: "high" },
-        reviewer: { engine: "claude", model: "fable", effort: "high" },
-      },
-      reviewerFallback: null,
-      baseRef: "base",
-      baseMode: "head",
-      mode: "auto",
-      reviewerMode: "pane",
-      roundLimit: 5,
-      state: "spawning",
-      pausedState: null,
-      stateDetail: null,
-      rounds: [{
-        n: 1,
-        reviewerPath: null,
-        reviewerRole: null,
-        accountId: null,
-        attemptedAccounts: [],
-        autoRetryCount: 0,
-        sessionId: null,
-        reviewerPid: null,
-        reviewerIdentity: null,
-        reviewerPane: null,
-        findingsPath: null,
-        triggeredBy: "marker",
-        readyNote: null,
-        reviewHeadSha: null,
-        verdict: null,
-        findingsCount: null,
-        startedAt,
-        spawnStartedAt: null,
-        relayStartedAt: null,
-        relayDelivery: null,
-        reviewedAt: null,
-        terminalAt: null,
-        relayedAt: null,
-        error: null,
-      }],
-      createdAt: startedAt,
-      closedAt: null,
-    };
-    saveFlows([flow]);
-
-    await tickFlows([implementer]);
-
-    const parked = loadFlows()[0]!;
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.stateDetail).toMatch(/structured transport prohibits legacy tmux Claude launches/);
-    expect(parked.rounds[0]).toMatchObject({ reviewerPane: null, reviewerPid: null });
-    const launchId = parked.rounds[0]!.launchId;
-    expect(launchId).toBeTruthy();
-    const receipt = (await import("@/lib/agent/registry")).agentRegistry().snapshot().receipts[launchId!];
-    expect(receipt).toMatchObject({ state: "failed", pane: null });
-    expect(receipt!.error).toMatch(/structured transport prohibits legacy tmux Claude launches/);
-  } finally {
-    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
-    else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
-    if (previousClaudeHome === undefined) delete process.env.LLV_CLAUDE_HOME;
-    else process.env.LLV_CLAUDE_HOME = previousClaudeHome;
-    fs.rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
 /* --- the review verdict must reach a pane-less structured implementer ------ */
 
 function structuredImplementer(name: string) {
@@ -2933,38 +2751,12 @@ function structuredImplementer(name: string) {
   return { flow, implementerPath, conversationId: conversation.id, entries: new Map([[implementerPath, entryFor(implementerPath, 1)]]) };
 }
 
-test.skip("a review relay reaches a pane-less structured implementer instead of dying on the tmux ladder", async () => {
-  const subject = structuredImplementer("structured-implementer");
-  const enqueued: Array<{ text: string; conversationId?: string | null }> = [];
-  const legacy: string[] = [];
-
-  const target = await sendToImplementer(subject.flow, subject.entries, "REQUEST_CHANGES: fix the fence", {
-    recover: async () => ({ target: null, path: subject.implementerPath, conversationId: subject.conversationId, spawned: false }),
-    enqueueStructured: async (request) => {
-      enqueued.push({ text: request.text, conversationId: request.conversationId });
-      return { ok: true, structured: true, target: null, outcome: "queued", operationId: "op-relay", receipt: {} as never };
-    },
-    /* The legacy ladder is what refused flow 0d1364f8's relay outright. If the
-       structured branch is ever skipped for a structured implementer, this
-       records the regression rather than letting it pass silently. */
-    deliver: async () => {
-      legacy.push("tmux");
-      return { ok: false, outcome: "failed", error: "structured transport prohibits legacy tmux Claude launches", status: 409 };
-    },
-  });
-
-  expect(target).toBe(subject.implementerPath);
-  expect(enqueued).toEqual([{ text: "REQUEST_CHANGES: fix the fence", conversationId: subject.conversationId }]);
-  expect(legacy).toEqual([]);
-});
-
 test.skip("a structured relay that cannot be owned surfaces its reason instead of reporting delivery", async () => {
   const subject = structuredImplementer("unowned-implementer");
 
   await expect(sendToImplementer(subject.flow, subject.entries, "relay", {
     recover: async () => ({ target: null, path: subject.implementerPath, conversationId: subject.conversationId, spawned: false }),
     enqueueStructured: async () => ({ ok: false, structured: true, outcome: "failed", error: "runtime host is unavailable", status: 503 }),
-    deliver: async () => ({ ok: true, outcome: "delivered-to-live", target: "%7" }),
   })).rejects.toThrow("runtime host is unavailable");
 });
 
@@ -2995,71 +2787,6 @@ test.skip("uncertain structured relay retries reuse the current durable client-m
   expect(clientMessageIds).toHaveLength(2);
   expect(clientMessageIds[0]).toMatch(/^flow_relay_[0-9a-f]{32}$/);
   expect(clientMessageIds[1]).toBe(clientMessageIds[0]);
-});
-
-test.skip("restart-interrupted legacy relay stays terminal because pane delivery has no dedupe receipt", async () => {
-  const subject = structuredImplementer("legacy-interrupted-relay");
-  let legacyAttempted = false;
-
-  await expect(sendToImplementer(subject.flow, subject.entries, "uncertain relay", {
-    recover: async () => null,
-    requireIdempotentDelivery: true,
-    deliver: async () => {
-      legacyAttempted = true;
-      return { ok: true, outcome: "delivered-to-live", target: "%7" };
-    },
-  })).rejects.toThrow("interrupted relay cannot retry safely because the implementer has no idempotent structured delivery");
-
-  expect(legacyAttempted).toBe(false);
-});
-
-test.skip("legacy relay delivery preserves ambiguous tmux actuation", async () => {
-  const previousHome = process.env.LLV_CODEX_HOME;
-  const home = path.join(process.env.LLV_STATE_DIR!, "relay-uncertain-codex-home");
-  process.env.LLV_CODEX_HOME = home;
-  const sessionId = ["079f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-");
-  const implementerPath = path.join(home, "sessions", "2026", "08", "06", `rollout-${sessionId}.jsonl`);
-  fs.mkdirSync(path.dirname(implementerPath), { recursive: true });
-  fs.writeFileSync(implementerPath, `${JSON.stringify({
-    type: "session_meta",
-    payload: { id: sessionId, cwd: "/repo" },
-  })}\n`);
-  const flow = raceFlow({ implementerPath, implementerConversationId: null });
-
-  try {
-    await expect(sendToImplementer(flow, new Map([[implementerPath, entryFor(implementerPath, 1)]]), "one relay", {
-      deliver: async () => ({
-        ok: false,
-        outcome: "failed",
-        error: "Enter confirmation failed after paste",
-        status: 500,
-        actuation: "started",
-      }),
-    })).rejects.toMatchObject({
-      name: "TmuxDeliveryUncertainError",
-      message: expect.stringContaining("legacy relay delivery is uncertain after actuation started"),
-    });
-  } finally {
-    if (previousHome === undefined) delete process.env.LLV_CODEX_HOME;
-    else process.env.LLV_CODEX_HOME = previousHome;
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test.skip("a conversation with no structured host falls through to the legacy transcript host", async () => {
-  const subject = structuredImplementer("legacy-implementer");
-  let structuredAttempted = false;
-
-  /* This fixture has no resume spec, so the legacy ladder is entered and stops
-     at its first gate. That is the evidence the test wants: the relay left the
-     structured branch rather than enqueueing against a host it never recovered,
-     so legacy pane-hosted flows keep exactly today's behavior. */
-  await expect(sendToImplementer(subject.flow, subject.entries, "relay text", {
-    recover: async () => null,
-    enqueueStructured: async () => { structuredAttempted = true; return null; },
-  })).rejects.toThrow("implementer session cannot be resumed");
-
-  expect(structuredAttempted).toBe(false);
 });
 
 /**
@@ -3456,131 +3183,3 @@ test.skip.each(["settlement", "hostless marker"] as const)("a superseded headles
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-
-test.skip("a legacy review relay resumes with the durable ultrafast tier", async () => {
-  const previousHome = process.env.LLV_CODEX_HOME;
-  const home = path.join(process.env.LLV_STATE_DIR!, "relay-ultrafast-home");
-  process.env.LLV_CODEX_HOME = home;
-  const sessionId = crypto.randomUUID();
-  const implementerPath = path.join(home, "sessions", `rollout-${sessionId}.jsonl`);
-  fs.mkdirSync(path.dirname(implementerPath), { recursive: true });
-  fs.writeFileSync(implementerPath, JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: "/repo" } }) + "\n");
-  const registry = agentRegistry();
-  const conversation = registry.ensureConversation("codex", implementerPath, null);
-  registry.updateConversationLaunchProfile(conversation.id, {
-    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
-  });
-  const flow = raceFlow({ implementerPath, implementerConversationId: conversation.id });
-  let delivered = false;
-  try {
-    expect(await sendToImplementer(flow, new Map([[implementerPath, entryFor(implementerPath, 1)]]), "review findings", {
-      recover: async () => null,
-      deliver: async ({ spec }) => {
-        expect(spec.command).toContain("service_tier=ultrafast");
-        expect(spec.launchProfile).toMatchObject({ fast: true, serviceTier: "ultrafast" });
-        delivered = true;
-        return { ok: true, outcome: "resumed", target: "%7" };
-      },
-    })).toBe(implementerPath);
-    expect(delivered).toBeTrue();
-  } finally {
-    if (previousHome === undefined) delete process.env.LLV_CODEX_HOME;
-    else process.env.LLV_CODEX_HOME = previousHome;
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test.skip.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering accounts and records required or preferred admission", async (reviewerMode) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reviewer-tier-"));
-  const cwd = path.join(root, "repo");
-  fs.mkdirSync(cwd);
-  expect(spawnSync("git", ["init", "-b", "main"], { cwd }).status).toBe(0);
-  expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "Base"], { cwd }).status).toBe(0);
-  const codex = await import("@/lib/accounts/codex");
-  const accounts = ["account-a", "account-c"].map((id) => ({
-    id, label: id === "account-a" ? "Account A" : "Account C", kind: "managed" as const,
-    home: path.join(root, id), sessionsDir: path.join(root, id, "sessions"),
-    authPresent: true, loginPane: null, createdAt: 0,
-  }));
-  const catalog = (id: string, offers: boolean) => {
-    const home = accounts.find(account => account.id === id)!.home;
-    fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{
-      slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, ...(offers ? [{ id: "ultrafast" }] : [])],
-    }] }));
-  };
-  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
-  const previousRegistry = agentRegistry();
-  const registry = new AgentRegistry(path.join(root, "registry.json"));
-  setAgentRegistryForTests(registry);
-  const accountList = spyOn(codex, "listCodexAccounts").mockReturnValue(accounts);
-  const tmux = await import("@/lib/tmux");
-  const exec = await import("./exec");
-  const paneLaunch = spyOn(tmux, "spawnAgentWithPrompt").mockImplementation(async () => { throw new Error("captured pane launch"); });
-  const headlessLaunch = spyOn(exec, "startHeadlessReview").mockImplementation(() => { throw new Error("captured headless launch"); });
-  try {
-    registry.setEngineRouting("codex", "account-a");
-    for (const scenario of ["explicit", "preferred", "preferred-exhausted", "required-exhausted", "required-missing", "preferred-missing", "pool-excludes-offering", "pinned-required", "pinned-preferred", "attempted-offering"] as const) {
-      const missing = scenario === "required-missing" || scenario === "preferred-missing";
-      const exhausted = scenario === "preferred-exhausted" || scenario === "required-exhausted";
-      const preferred = scenario.startsWith("preferred") || scenario === "pinned-preferred";
-      catalog("account-a", false); catalog("account-c", !missing);
-      const now = new Date().toISOString();
-      registry.recordQuotaEvaluation({ engine: "codex", bootId: "tier-fixture", signature: null, minimumGapMs: 0, now,
-        observations: accounts.map(account => ({
-          engine: "codex", accountId: account.id, authenticated: true, authCheckedAt: now, observedAt: now,
-          bootId: "tier-fixture", provenance: { source: "live", reason: null, staleSince: null },
-          limits: { session: { usedPercent: account.id === "account-c" ? exhausted ? 100 : 20 : 0, resetsAt: Math.floor(Date.now() / 1000) + 3600 }, weekly: null, capturedAt: Math.floor(Date.now() / 1000), plan: null },
-        })),
-      });
-      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: accounts
-        .filter(account => scenario !== "pool-excludes-offering" || account.id === "account-a")
-        .map(account => ({ engine: "codex", accountId: account.id, project: "tier-project", createdAt: now })) });
-      paneLaunch.mockClear(); headlessLaunch.mockClear();
-      const implementer = writeCodexEntry(`reviewer-tier-${reviewerMode}-${scenario}.jsonl`, { id: crypto.randomUUID(), cwd }, Date.now() / 1000);
-      const flow = raceFlow({ id: `tier-${reviewerMode}-${scenario}`, project: "tier-project", cwd, implementerPath: implementer.path, reviewerMode, state: "spawning",
-        roles: { implementer: { engine: "codex", model: null, effort: "high" }, reviewer: {
-          engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast",
-          serviceTierSource: preferred ? "role-default" : "explicit",
-        } } });
-      flow.rounds = [newRound(flow, "button", null)];
-      const round = flow.rounds[0]!;
-      if (scenario.startsWith("pinned")) round.accountId = "account-a";
-      if (scenario === "attempted-offering") round.attemptedAccounts = ["codex:account-c"];
-      saveFlows([flow]);
-      await tickFlow(flow, [implementer], new Map([[implementer.path, implementer]]), () => saveFlows([flow]));
-      if (["required-missing", "required-exhausted", "pool-excludes-offering", "pinned-required"].includes(scenario)) {
-        expect(flow.state).toBe("needs_decision");
-        if (scenario === "required-exhausted") expect(flow.stateDetail).toMatch(/exhausted|no allowed codex account has capacity/);
-        else expect(flow.stateDetail).toContain("offers serviceTier ultrafast");
-        expect(paneLaunch).not.toHaveBeenCalled(); expect(headlessLaunch).not.toHaveBeenCalled();
-        expect(round.launchId).toBeNull();
-        expect(round.accountId).toBe(scenario === "pinned-required" ? "account-a" : null);
-        continue;
-      }
-      const fallback = scenario === "preferred-exhausted" || scenario === "preferred-missing" || scenario === "pinned-preferred";
-      const applied = fallback ? undefined : "ultrafast";
-      expect(round.accountId).toBe(fallback ? "account-a" : "account-c");
-      expect(round.reviewerRole?.serviceTier).toBe(applied);
-      expect(registry.readOnlySnapshot().receipts[round.launchId!]!.launchProfile.serviceTier ?? null).toBe(applied ?? null);
-      if (reviewerMode === "pane") {
-        expect(paneLaunch).toHaveBeenCalledTimes(1);
-        const spec = paneLaunch.mock.calls[0]![0];
-        if (applied) expect(spec.command).toContain("service_tier=ultrafast");
-        else expect(spec.command).not.toContain("service_tier=");
-        expect(spec.command).toContain(accounts.find(account => account.id === round.accountId)!.home);
-      } else {
-        expect(headlessLaunch).toHaveBeenCalledTimes(1);
-        expect(headlessLaunch.mock.calls[0]![2].serviceTier).toBe(applied);
-        expect(headlessLaunch.mock.calls[0]![6]?.home).toBe(accounts.find(account => account.id === round.accountId)!.home);
-      }
-      if (fallback) expect(round.reviewerRole?.preferredServiceTier).toBe("ultrafast");
-    }
-  } finally {
-    paneLaunch.mockRestore(); headlessLaunch.mockRestore(); accountList.mockRestore();
-    setAgentRegistryForTests(previousRegistry);
-    clearAccountFixture(BINDINGS_SOURCE);
-    saveFlows([]);
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}, 20_000);

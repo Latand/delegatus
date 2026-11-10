@@ -3,11 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
-import { reconcileObservedTranscriptHosts, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import type { FileEntry } from "@/lib/types";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
-/** Real registry reconciliation with synthetic process identities only. */
+/** A stored pane-hosted launch with synthetic process identities only. */
 export function childControlFixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "child-owner-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"));
@@ -22,13 +21,12 @@ export function childControlFixture() {
   const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: directory, accountId: "fixture" });
   if (begun.kind !== "created") throw new Error("fixture spawn admission failed");
   registry.bindSpawnPane(begun.receipt.launchId, { ...evidence, target: "agents:4.0" });
-  const observed: TranscriptHost = {
-    tmuxServerPid: 900, paneId: "%1", panePid: 100, agentPid: 200,
-    display: "agents:4.0", windowName: "claude", engine: "claude", cwd: directory,
-    agentArgv: ["claude"], agentIdentity: "200:one", launchId: begun.receipt.launchId,
-    claimedPaths: [childPath, rootPath], primaryPath: childPath,
-  };
-  reconcileObservedTranscriptHosts([observed], { registry, evidenceForHost: () => evidence });
+  /* The launch settles on the pane's root transcript, as it did when the
+     stored row was written. */
+  registry.completeObservedSpawn(begun.receipt.launchId, {
+    key: { engine: "claude", sessionId }, artifactPath: rootPath, cwd: directory, accountId: null,
+    status: "live", host: evidence, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
   const rootConversation = registry.ensureConversation("claude", rootPath, "fixture");
   const childConversation = registry.ensureConversation("claude", childPath, "fixture");
   registry.reconcileConversations([{
@@ -53,5 +51,5 @@ export function childControlFixture() {
   const fresh: RuntimeSessionView = {
     ...stale, legacy: true, session: { ...stale.session, hostKind: "tmux-legacy", host: "hosted" },
   };
-  return { registry, root, child, stale, fresh, observed, rootConversation, childConversation };
+  return { registry, root, child, stale, fresh, rootConversation, childConversation };
 }

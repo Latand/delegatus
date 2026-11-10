@@ -33,7 +33,6 @@ import { readStructuredHostRecords, terminateStructuredHostTree } from "./struct
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { ADMISSION_RETRY_DEADLINE_MS, INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, stagedLaunchRecovery, STAGED_RECOVERY_BUDGET_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, claudeHostLaunchPaths, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
-import { materializeStructuredTerminal } from "./structuredTerminal";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { orphanWriterTree } from "./fixtures/orphanWriterTree";
@@ -6034,25 +6033,6 @@ describe.each(["codex", "claude"] as const)("%s structured spawn round trip", (e
       expect(homeState.projects?.[cwd]?.hasTrustDialogAccepted).toBeTrue();
     }
     expect(registry.snapshot().receipts[begun.receipt.launchId]?.pane).toBeNull();
-    const registryBeforeAttach = registry.snapshot();
-    let terminalCommand = "";
-    const attached = await materializeStructuredTerminal(artifactPath, {
-      registry,
-      spawn: async (command) => {
-        terminalCommand = command.command;
-        return {
-          paneId: "%77",
-          panePid: 7700,
-          display: "agents:view.0",
-          host: undefined,
-          ...command,
-        };
-      },
-    });
-    expect(attached).toEqual({ target: "%77", display: "agents:view.0" });
-    expect(terminalCommand).toContain("tail -n 200 -F");
-    expect(terminalCommand.includes("codex resume") || terminalCommand.includes("claude --resume")).toBeFalse();
-    expect(registry.snapshot().entries).toEqual(registryBeforeAttach.entries);
     await waitFor(() => host.sent.length === 1);
     host.finishTurn();
 

@@ -6,7 +6,6 @@ import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, op
 import os from "node:os";
 import path from "node:path";
 
-import { createTranscriptHostObserver } from "@/lib/agent/transcriptHost";
 import { procBackend } from "@/lib/proc";
 import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
@@ -873,44 +872,6 @@ describe("resource observation", () => {
       expect(readFileSync(path.join(directory, "workers"), "utf8")).toBe("x");
     });
     expect(overLimitPersistAttempts).toBe(0);
-  });
-
-  test("two handoff paths for one stable conversation form one conflict", async () => {
-    const secondPath = `/home/user/.codex/sessions/2026/07/10/rollout-2026-07-10-${SECOND_SESSION_ID}.jsonl`;
-    const files = resourceWorkerFileSnapshot([
-      entry,
-      { ...entry, path: secondPath, name: secondPath, pid: 201 },
-    ], () => "conversation_test");
-    const conversationByPath = new Map(files.map((file) => [file.path, file.conversationId]));
-    const observe = createTranscriptHostObserver({
-      listFiles: async () => files as FileEntry[],
-      panes: async () => ({
-        kind: "available",
-        panes: new Map([
-          [100, { paneId: "%1", target: "agents:4.0" }],
-          [101, { paneId: "%2", target: "agents:5.0" }],
-        ]),
-      }),
-      ppidMap: () => new Map([[200, 100], [201, 101]]),
-      agents: () => [
-        { pid: 200, engine: "codex", argv: ["codex", "resume", SESSION_ID], cwd: "/repo", tty: 1 },
-        { pid: 201, engine: "codex", argv: ["codex", "resume", SECOND_SESSION_ID], cwd: "/repo", tty: 1 },
-      ],
-      serverPid: async () => 900,
-      resumeRecords: async () => null,
-      identity: (pid) => `${pid}:one`,
-      conversationIdForPath: (pathname) => conversationByPath.get(pathname) ?? null,
-    });
-
-    const snapshot = await observe(true, files as FileEntry[]);
-
-    expect(snapshot.conflicts).toEqual([{
-      conversationId: "conversation_test",
-      paths: [PATHNAME, secondPath],
-      paneIds: ["%1", "%2"],
-    }]);
-    expect(snapshot.canonicalFor(PATHNAME)).toBeNull();
-    expect(snapshot.canonicalFor(secondPath)).toBeNull();
   });
 
   test("worker launch selection pairs existing workers with source, standalone, and prepack runtimes", () => {

@@ -49,7 +49,6 @@ import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdent
 import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
-import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { withoutOperationLease } from "@/lib/operationLease";
 
@@ -65,7 +64,7 @@ import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPer
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
-import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
+import { runtimeImageCapability } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
@@ -980,7 +979,6 @@ export interface StructuredSpawnRecoveryOptions {
   resolveSpawnAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null) => AccountContext;
   resolvePinnedSpawnAdmission?: (engine: "claude" | "codex" | "copilot", account: AccountContext) => Promise<SpawnAccountAdmission>;
   spawnStructuredConversation?: typeof spawnStructuredConversation;
-  spawnTmuxAgent?: typeof spawnAgentWithPrompt;
   publishFilesRevision?: typeof publishFilesRevision;
   /** Recovery-only override for isolated admission fixtures. */
   curationSources?: SeatTickSources;
@@ -1116,68 +1114,37 @@ async function actuateQueuedPinnedSpawn(
   }
   if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "owner relay queued launch authorization revoked");
+  /* A launch queued by a release that hosted agents in terminal panes names a
+     transport no release has. It ends here with a reason the operator can act
+     on; nothing is started. */
+  if (receipt.transport === "tmux") {
+    return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "this launch was queued for the removed terminal transport; launch it again");
+  }
   let response: SpawnResponse | null = null;
-  let tmuxImagePaths: string[] = [];
   try {
-    if (receipt.transport === "tmux") {
-      await releaseIfCancelled();
-      curatorAuthorize();
-      const images = claimedQueue.imageRefs.length
-        ? (() => {
-            const imageStore = runtimeImageStore();
-            return claimedQueue.imageRefs.map((ref) => ({
-              base64: imageStore.read(ref).toString("base64"),
-              mime: ref.mime,
-            }));
-          })()
-        : [];
-      const bundle = buildImagePayload(claimedQueue.prompt, images);
-      tmuxImagePaths = bundle.imagePaths;
-      assertActive();
-      await (options.spawnTmuxAgent ?? spawnAgentWithPrompt)(
-        claimedQueue.spec,
-        bundle.payload,
-        admissionClaim.receipt,
-      );
-      assertActive();
-      const launched = registry.spawnReceipt(receipt.launchId);
-      if (launched?.state === "prompt-delivered" || launched?.state === "host-verified") {
-        (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));
-      }
-    } else {
-      if (!client) {
-        throw new Error(supervisedRuntimeHostUnavailableReason("structured spawn runtime host"));
-      }
-      assertActive();
-      response = await (options.spawnStructuredConversation ?? spawnStructuredConversation)({
-        engine: receipt.engine,
-        receipt: admissionClaim.receipt,
-        spec: claimedQueue.spec,
-        account,
-        ["prompt"]: claimedQueue.prompt,
-        imageRefs: claimedQueue.imageRefs,
-        registry,
-        client,
-        admissionActive: assertActive,
-        ...(claimedQueue.admissionDeadlineAt ? { admissionRetryMs: 0 } : {}),
-        authorize: () => {
-          assertActive();
-          if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
-            throw new Error("owner relay queued launch authorization revoked");
-          curatorAuthorize();
-        },
-      });
+    if (!client) {
+      throw new Error(supervisedRuntimeHostUnavailableReason("structured spawn runtime host"));
     }
+    assertActive();
+    response = await (options.spawnStructuredConversation ?? spawnStructuredConversation)({
+      engine: receipt.engine,
+      receipt: admissionClaim.receipt,
+      spec: claimedQueue.spec,
+      account,
+      ["prompt"]: claimedQueue.prompt,
+      imageRefs: claimedQueue.imageRefs,
+      registry,
+      client,
+      admissionActive: assertActive,
+      ...(claimedQueue.admissionDeadlineAt ? { admissionRetryMs: 0 } : {}),
+      authorize: () => {
+        assertActive();
+        if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+          throw new Error("owner relay queued launch authorization revoked");
+        curatorAuthorize();
+      },
+    });
   } catch (error) {
-    if (receipt.transport === "tmux") {
-      await registry.failSpawnOffLoop(receipt.launchId, structuredSpawnFailureReason(error));
-      const failed = registry.spawnReceipt(receipt.launchId) ?? admissionClaim.receipt;
-      if (!failed.pane) deleteInboxImages(tmuxImagePaths);
-      if (failed.queuedPinnedSpawn && failed.admissionOwner) {
-        return (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, failed.launchId, failed.admissionOwner))).receipt;
-      }
-      return failed;
-    }
     const current = registry.spawnReceipt(receipt.launchId);
     if (current?.queuedPinnedSpawn && current.admissionOwner) {
       (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, receipt.launchId, admissionClaim.receipt.admissionOwner)));

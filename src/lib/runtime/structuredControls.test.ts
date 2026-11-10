@@ -248,11 +248,7 @@ test("conversation_action answer through the real control boundary never approve
       registry: () => fixture.registry,
       structuredEnabled: () => true,
       dispatchStructuredControl: (request) => dispatchStructuredControl(request, { registry: fixture.registry, client, enabled: () => true, kick: () => {} }),
-      interruptConversation: async () => { throw new Error("unexpected"); },
-      killConversation: async () => { throw new Error("unexpected"); },
       resumeConversation: async () => { throw new Error("unexpected"); },
-      compactConversation: async () => { throw new Error("unexpected"); },
-      answerDialogKey: async () => { throw new Error("unexpected"); },
       pendingQuestion: async () => ({ kind: "plan", toolUseId: "toolu_old_plan", transcriptPath: fixture.path, pid: 1, paneTarget: null, askedAt: "2026-10-12T09:00:00.000Z" }),
     },
   );

@@ -87,7 +87,6 @@ beforeAll(() => {
     },
     recordOperatorRequest: (_request, input) => { operatorActivityRequests.push({ ...input }); return null; },
     deliverConversationMessage: (message: unknown) => delivery(message),
-    reconfigureConversation: async () => ({ ok: true, outcome: "reconfigured", target: "agents:4.0" }),
     conversationActions: ["interrupt", "kill", "resume", "compact", "permission"],
     applyConversationAction: async (request) => {
       if (process.env.LLV_STRUCTURED_HOSTS === "1") {

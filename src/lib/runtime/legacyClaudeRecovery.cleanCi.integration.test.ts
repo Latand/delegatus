@@ -8,7 +8,6 @@ import { expect, test } from "bun:test";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
-import { createTranscriptHostObserver, reconcileObservedTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { sendDownstreamKey, viewerMcpBindings } from "@/lib/mcp/bindings";
 import type { FileEntry } from "@/lib/types";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -256,50 +255,6 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
     journalClosed = false;
     client = runtimeClient(journal);
 
-    const stat = fs.statSync(artifactPath);
-    const fileEntry = {
-      path: artifactPath,
-      root: "claude-projects",
-      name: `${sessionId}.jsonl`,
-      project: "fixture-workspace",
-      title: "legacy Fable recovery fixture",
-      engine: "claude",
-      kind: "session",
-      fmt: "claude",
-      parent: null,
-      mtime: stat.mtimeMs / 1000,
-      size: stat.size,
-      activity: "live",
-      proc: "running",
-      pid: 200,
-      model: "claude-fable-fixture",
-      effort: "high",
-      pendingQuestion: null,
-      waitingInput: null,
-    } satisfies FileEntry;
-    const observe = createTranscriptHostObserver({
-      listFiles: async () => [fileEntry],
-      panes: async () => ({ kind: "available" as const, panes: new Map([[100, { paneId: "%1", target: "fixture:1.0" }]]) }),
-      ppidMap: () => new Map([[200, 100]]),
-      agents: () => [{ pid: 200, engine: "claude" as const, argv: ["claude"], cwd: workspace, tty: 1 }],
-      serverPid: async () => 900,
-      resumeRecords: async () => null,
-      identity: (pid) => `${pid}:fixture`,
-      writesPath: () => false,
-    });
-    const observed = await observe(true);
-    expect(observed.canonicalFor(artifactPath)).toBeNull();
-    const evidence: TmuxHostEvidence = {
-      kind: "tmux",
-      endpoint: path.join(directory, "fixture.sock"),
-      server: { pid: 900, startIdentity: "900:fixture" },
-      paneId: "%1",
-      panePid: { pid: 100, startIdentity: "100:fixture" },
-      windowName: "fixture",
-      agent: { pid: 200, startIdentity: "200:fixture" },
-      argv: ["claude"],
-    };
-    reconcileObservedTranscriptHosts(observed.hosts, { registry, evidenceForHost: () => evidence });
     expect(registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({ status: "dead", host: null });
 
     registry.reconcileConversations([{
