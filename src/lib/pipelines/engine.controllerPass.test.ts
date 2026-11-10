@@ -344,7 +344,7 @@ test("the real controller returns while a 20 second fenced Git job remains pendi
   };
   const heartbeats: FlowPipelineControllerHeartbeat[] = [];
   const controller = new FlowPipelineController({
-    tickPipelines: files => tickPipelinesController(files, h.ports), tickFlows: async () => ({ changed: false }),
+    tickPipelines: files => tickPipelinesController(files, h.ports),
     now: () => 0, scan: async () => ({ files: [], complete: false }), publishHeartbeat: value => heartbeats.push(value), log: () => {},
   }, { maxPasses: 1 });
   const started = performance.now();

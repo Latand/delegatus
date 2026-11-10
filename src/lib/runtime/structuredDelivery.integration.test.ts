@@ -5899,7 +5899,7 @@ for (const mode of ["idle", "active", "background", "lost-echo", "late-result"] 
         const projected = projectEngineHostEvent(childId, `claude:${f.sessionId}`, event);
         if (!projected) throw new Error("terminal event failed projection");
         await consumeRuntimeEvent(f.journal.append(projected), {
-          flowReady: () => {}, workflowStageCompleted: () => {}, taskDeliveryAcknowledged: () => {},
+          taskDeliveryAcknowledged: () => {},
           spawnTurnEnded: turn => { recordSpawnTurnEnded(turn, {
             child: () => ({ conversationId: childId, launcher: { conversationId: "conversation_launcher", notify: true }, contained: false }),
             record: noticeStore.recordSpawnNoticeObligation,
@@ -6042,7 +6042,7 @@ for (const gap of [10_000, 40_000]) {
       const reopened = new RuntimeJournal(path.join(f.directory, "runtime.sqlite"), { structuredHosts: true });
       try {
         for (const event of reopened.replay(0, 1_000).events) await consumeRuntimeEvent(event, {
-          flowReady: () => {}, workflowStageCompleted: () => {}, taskDeliveryAcknowledged: () => {},
+          taskDeliveryAcknowledged: () => {},
           spawnTurnEnded: turn => { recordSpawnTurnEnded(turn, { child: () => childView, record: noticeStore.recordSpawnNoticeObligation }); },
         });
       } finally { reopened.close(); }
