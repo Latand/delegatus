@@ -134,7 +134,7 @@ test("structured resume recovery returns a pane-less target and skips legacy hos
   expect(legacyHostCalls).toBe(0);
 });
 
-test("dead structured send recovery delivers through the new host with zero tmux commands", async () => {
+test("dead structured send recovery delivers through the new host", async () => {
   const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf755555";
   const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
   fs.writeFileSync(pathname, "");
@@ -165,7 +165,6 @@ test("dead structured send recovery delivers through the new host with zero tmux
     pendingAction: null,
   });
   let recoveryCalls = 0;
-  let tmuxCommands = 0;
   const enqueued: unknown[] = [];
 
   const outcome = await deliverConversationMessage({
@@ -199,13 +198,6 @@ test("dead structured send recovery delivers through the new host with zero tmux
         },
       };
     },
-    targetForKnownPid: async () => {
-      tmuxCommands += 1;
-      return "%1";
-    },
-    sendText: async () => {
-      tmuxCommands += 1;
-    },
   } as never);
 
   expect(recoveryCalls).toBe(1);
@@ -215,7 +207,6 @@ test("dead structured send recovery delivers through the new host with zero tmux
     clientMessageId: "dead-send-one",
     text: "deliver after recovery",
   }]);
-  expect(tmuxCommands).toBe(0);
   expect(outcome).toMatchObject({
     ok: true,
     target: null,
@@ -819,108 +810,6 @@ test("image-only reservations stay request-local and never drain without the cli
   ]);
 });
 
-test("large text uses a request-local reservation and still reaches ordinary delivery", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "large-text-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const text = "x".repeat(32_001);
-  let delivered = "";
-  const outcome = await deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text, images: [], clientMessageId: "large-text",
-  }, {
-    targetForKnownPid: async () => "%1",
-    sendText: async (_target, payload) => { delivered = payload; },
-  });
-
-  expect(outcome.ok).toBe(true);
-  expect(delivered).toBe(text);
-  expect(registry.holdDelivery(conversation.id, "", "large-text", "ephemeral-text")).toMatchObject({ state: "delivered", text: "" });
-});
-
-test("a legacy send is actuated inside its conversation's actuation section, after the work already in it (#1709)", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-section-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const events: string[] = [];
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => { release = resolve; });
-  const earlier = withConversationActuation(conversation.id, async () => { events.push("earlier actuation starts"); await released; events.push("earlier actuation ends"); });
-  const send = deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text: "x".repeat(32_001), images: [], clientMessageId: "legacy-in-section",
-  }, {
-    targetForKnownPid: async () => "%1",
-    sendText: async () => { events.push("legacy send actuates"); },
-  });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  expect(events).toEqual(["earlier actuation starts"]);
-  release();
-  await earlier;
-  expect((await send).ok).toBe(true);
-  expect(events).toEqual(["earlier actuation starts", "earlier actuation ends", "legacy send actuates"]);
-});
-
-test("a legacy send's recovery runs outside the actuation section; its reservation, claim and actuation wait for it (#1709)", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-narrow-section-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const events: string[] = [];
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => { release = resolve; });
-  const holder = withConversationActuation(conversation.id, () => released);
-  const send = deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text: "narrow section", images: [], clientMessageId: "legacy-narrow",
-  }, {
-    recover: async () => { events.push("recovery checked"); return null; },
-    targetForKnownPid: async () => "%1",
-    sendText: async () => { events.push("actuated"); },
-  });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  /* The section is held by someone else: recovery ran, and nothing is reserved until the section is this send's. */
-  expect(events).toEqual(["recovery checked"]);
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-  release();
-  await holder;
-  expect((await send).ok).toBe(true);
-  expect(events).toEqual(["recovery checked", "actuated"]);
-});
-
-test("a queue send to a conversation a legacy pane host owns is typed into that host, never handed to the structured transport", async () => {
-  const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf722222";
-  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
-  fs.writeFileSync(pathname, "");
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-queue-policy-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", pathname, "default");
-  registry.upsert({
-    key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: SANDBOX, accountId: "default",
-    launchProfile: emptyLaunchProfile({ cwd: SANDBOX, role: "root" }), status: "idle",
-    host: KILL_HOST, claimEpoch: 1, claimOwner: null, pendingAction: null,
-  });
-  const entry: FileEntry = {
-    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer", title: "seat",
-    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "live",
-    proc: "running", pid: KILL_HOST.agent.pid, model: "gpt-5.6-sol", effort: "high", fast: false,
-    pendingQuestion: null, waitingInput: null,
-  };
-  const typed: string[] = [];
-  const outcome = await deliverConversationMessage({
-    pid: null, path: pathname, conversationId: conversation.id, text: "seat wake", images: [], clientMessageId: "seat-tick:legacy-pane:1", policy: "queue",
-  }, {
-    /* The real recovery, which answers null for a legacy owner, so the policy never reaches a structured host. */
-    recover: (request) => recoverDeadStructuredConversation(request, { registry, client: {} as RuntimeHostClient, transport: () => "structured" }),
-    enqueueStructured: (async () => { throw new Error("a legacy owner must not reach the structured transport"); }) as never,
-    pathAllowed: () => true,
-    listFiles: async () => [entry],
-    resumeSpecFor: () => ({ command: "codex", args: [], cwd: SANDBOX, env: {} }) as never,
-    deliver: async ({ payload }) => { typed.push(payload); return { ok: true, outcome: "delivered-to-live" as const, target: "%7" }; },
-  });
-
-  expect(outcome).toMatchObject({ ok: true });
-  expect(typed).toEqual(["seat wake"]);
-  expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((item) => [item.clientMessageId, item.state]))
-    .toEqual([["seat-tick:legacy-pane:1", "delivered"]]);
-});
-
 test("a reservation the migration drain claimed recovers into a structured send that continues the drain's section with its lease (#1709)", async () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "legacy-lease-registry.json"));
   setAgentRegistryForTests(registry);
@@ -948,193 +837,6 @@ const tickWhileWaiting = (registry: AgentRegistry) => reconcileMigrations(
   registry,
   { remapBoardPaths: () => { throw new Error("no board repair in this fixture"); }, transferBoardPathPlacements: () => { throw new Error("no board repair in this fixture"); } },
 );
-
-test("a migration tick while a legacy text send waits for its section cannot cancel it: the send delivers its own text and records it delivered (#1709)", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-wait-tick-text-registry.json"));
-  setAgentRegistryForTests(registry);
-  /* No owner evidence: the tick cancels an unclaimed reservation of this conversation and blanks its text. */
-  const conversation = registry.ensureConversation("codex", "", "default");
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => { release = resolve; });
-  const holder = withConversationActuation(conversation.id, () => released);
-  const sent: string[] = [];
-  const send = deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text: "the instruction as it was sent", images: [], clientMessageId: "legacy-wait-tick-text",
-  }, {
-    recover: async () => null,
-    targetForKnownPid: async () => "%1",
-    sendText: async (_target, payload) => { sent.push(payload); },
-  });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  await tickWhileWaiting(registry);
-  release();
-  await holder;
-
-  const outcome = await send;
-  expect(outcome).toEqual({ ok: true, target: "%1" });
-  expect(sent).toEqual(["the instruction as it was sent"]);
-  expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((item) => [item.clientMessageId, item.state, item.attempts]))
-    .toEqual([["legacy-wait-tick-text", "delivered", 1]]);
-});
-
-test("a migration tick while a legacy image send waits for its section cannot fail it: the send gets past its claim and delivers (#1709)", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-wait-tick-image-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  /* Owner evidence: the tick drains this conversation, and fails an unclaimed request-local reservation it finds. */
-  (registry as unknown as { mutate(fn: (file: RegistryFile) => void): void }).mutate((file) => {
-    file.conversations[conversation.id]!.generations.at(-1)!.host = { kind: "codex-app-server", identity: "owned-image-host", epoch: 1, verifiedAt: "2026-07-10T12:01:00.000Z" };
-  });
-  const imagePath = inboxImage("waiting-owned.png");
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => { release = resolve; });
-  const holder = withConversationActuation(conversation.id, () => released);
-  const sent: string[] = [];
-  const send = deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text: "", images: [{ base64: "aW1hZ2U=", mime: "image/png" }], clientMessageId: "legacy-wait-tick-image",
-  }, {
-    recover: async () => null,
-    targetForKnownPid: async () => "%1",
-    buildImagePayload: () => ({ payload: imagePath, imagePaths: [imagePath] }),
-    sendText: async (_target, payload) => { sent.push(payload); },
-  });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  await tickWhileWaiting(registry);
-  release();
-  await holder;
-
-  const outcome = await send;
-  expect(outcome).toEqual({ ok: true, target: "%1", imagePaths: [imagePath] });
-  expect(sent).toEqual([imagePath]);
-  expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((item) => [item.clientMessageId, item.state, item.payloadKind]))
-    .toEqual([["legacy-wait-tick-image", "delivered", "ephemeral-images"]]);
-});
-
-test("a claim refused on a reservation something else already settled answers with that outcome and leaves the reservation as it is (#1709)", async () => {
-  for (const settlement of ["cancelled", "delivered"] as const) {
-    let settled: unknown = null;
-    class SettlingRegistry extends AgentRegistry {
-      /* Settled between the admission and the claim, which is what the tick did to a send waiting outside the section. */
-      override beginDeliveryAttempt(id: string): null {
-        if (settlement === "cancelled") this.terminalizeHeldDelivery(id, "cancelled before the send claimed it");
-        else this.recordDeliveryOutcome(id, "delivered", null, "delivered");
-        settled = structuredClone(this.readOnlySnapshot().heldDeliveries[id]);
-        return null;
-      }
-    }
-    const registry = new SettlingRegistry(path.join(SANDBOX, `legacy-settled-${settlement}-registry.json`));
-    setAgentRegistryForTests(registry);
-    const conversation = registry.ensureConversation("codex", "", "default");
-    let actuated = false;
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: "", conversationId: conversation.id, text: "settled elsewhere", images: [], clientMessageId: `legacy-settled-${settlement}`,
-    }, {
-      recover: async () => null,
-      targetForKnownPid: async () => "%1",
-      sendText: async () => { actuated = true; },
-    });
-
-    expect(actuated).toBe(false);
-    const rows = Object.values(registry.readOnlySnapshot().heldDeliveries);
-    expect(rows.length).toBe(1);
-    expect(structuredClone(rows[0])).toEqual(settled as never);
-    if (settlement === "cancelled") {
-      expect(outcome).toEqual({ ok: false, outcome: "failed", error: "cancelled before the send claimed it", status: 409 });
-      expect(rows[0]).toMatchObject({ state: "failed", text: "", attempts: 0 });
-    } else {
-      expect(outcome).toEqual({ ok: true, target: conversation.id });
-      expect(rows[0]).toMatchObject({ state: "delivered" });
-    }
-  }
-});
-
-test("a legacy send admitted after a message still waiting for this generation is held behind it, not actuated (#1709)", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-order-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const waiting = registry.holdDelivery(conversation.id, "admitted first, still waiting", "legacy-waiting");
-  expect(waiting.state).toBe("assigned");
-  let actuated = false;
-  const outcome = await deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text: "admitted second", images: [], clientMessageId: "legacy-second",
-  }, {
-    targetForKnownPid: async () => "%1",
-    sendText: async () => { actuated = true; },
-  });
-  expect(outcome).toMatchObject({ ok: true, outcome: "held" });
-  expect(actuated).toBe(false);
-  expect(registry.pendingDeliveries(conversation.id).map((item) => [item.clientMessageId, item.state, item.attempts]))
-    .toEqual([["legacy-waiting", "assigned", 0], ["legacy-second", "assigned", 0]]);
-});
-
-test("an over-32k agent-origin delivery keeps the digest of the delivered text, so it still projects as internal on both engines (#1117)", async () => {
-  type Overrides = NonNullable<Parameters<typeof deliverConversationMessage>[1]>;
-  for (const engine of ["claude", "codex"] as const) {
-    const registry = new AgentRegistry(path.join(SANDBOX, `${engine}-large-relay-registry.json`));
-    setAgentRegistryForTests(registry);
-    const pathname = path.join(SANDBOX, `${engine}-large-relay-fixture.jsonl`);
-    fs.writeFileSync(pathname, "");
-    const conversation = registry.ensureConversation(engine, pathname, "default");
-    /* Over the 32,000-byte envelope bound: the held record blanks this text
-       and keeps only a digest, which must be the digest of what was sent. */
-    const text = `Findings for the ${engine} worker, in full:\n${"x".repeat(32_000)}`;
-    const clientMessageId = `${engine}-large-relay`;
-    let delivered = "";
-
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: pathname, conversationId: conversation.id, text, images: [], clientMessageId,
-      origin: { kind: "agent", role: "orchestrator" },
-    }, {
-      recover: async () => null,
-      pathAllowed: () => true,
-      listFiles: async () => [{ root: `${engine}-sessions`, path: pathname, project: "p", mtime: 0, size: 0 } as unknown as FileEntry],
-      resumeSpecFor: (() => ({ command: "resume", transcript: pathname, launchProfile: emptyLaunchProfile() })) as unknown as Overrides["resumeSpecFor"],
-      deliver: async ({ payload }: { payload: string }) => {
-        delivered = payload;
-        return { ok: true as const, outcome: "resumed" as const, target: "%7" };
-      },
-    });
-
-    expect(outcome).toMatchObject({ ok: true });
-    /* Engine input is untouched: the full text went to the host. */
-    expect(delivered).toBe(text);
-    const snapshot = registry.readOnlySnapshot();
-    const record = Object.values(snapshot.heldDeliveries).find((item) => item.clientMessageId === clientMessageId);
-    expect(record).toMatchObject({
-      state: "delivered",
-      payloadKind: "ephemeral-text",
-      text: "",
-      contentDigest: messageTextDigest(text),
-      command: { origin: { kind: "agent", role: "orchestrator" } },
-    });
-    expect(heldDeliveryOccurrences(pathname, snapshot)).toEqual([{
-      textDigest: messageTextDigest(text),
-      deliveredAt: record!.deliveredAt!,
-      origin: "agent",
-      senderRole: "orchestrator",
-      clientMessageId,
-    }]);
-  }
-});
-
-test("ordinary delivery on the active account skips the lazy-migration registry write", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "active-account-registry.json"));
-  setAgentRegistryForTests(registry);
-  registry.setEngineRouting("codex", "default");
-  const conversation = registry.ensureConversation("codex", "", "default");
-  registry.requestConversationMigrationToActiveAccount = (() => {
-    throw new Error("active account should skip migration mutation");
-  }) as typeof registry.requestConversationMigrationToActiveAccount;
-
-  const outcome = await deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text: "fast path", images: [], clientMessageId: "fast-path",
-  }, {
-    targetForKnownPid: async () => "%1",
-    sendText: async () => {},
-  });
-
-  expect(outcome.ok).toBe(true);
-});
 
 test("delivered reservations retain only a bounded idempotency window", () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "delivery-tombstones-registry.json"));
@@ -1190,163 +892,6 @@ test("an image-only migration race stays recoverable without an orphan reservati
   expect(outcome).toMatchObject({ ok: false, status: 409 });
   expect(Object.values(registry.snapshot().heldDeliveries)).toHaveLength(0);
   expect(fs.readdirSync(SANDBOX).some((name) => name.endsWith(".png"))).toBe(false);
-});
-
-test("pre-actuation payload failure discards the reservation for retry", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "pre-actuation-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const outcome = await deliverConversationMessage({
-    pid: 1, path: "", conversationId: conversation.id, text: "", images: [{ base64: "aW1hZ2U=", mime: "image/png" }], clientMessageId: "pre-actuation",
-  }, {
-    targetForKnownPid: async () => "%1",
-    buildImagePayload: () => { throw new Error("payload failed"); },
-  });
-
-  expect(outcome).toMatchObject({ ok: false, error: "payload failed" });
-  expect(Object.values(registry.snapshot().heldDeliveries)).toHaveLength(0);
-});
-
-test("ambiguous actuation is absorbing: the same client request is answered, never typed a second time", async () => {
-  /* #1131: the legacy path has no delivery journal, so the reservation left by
-     an actuation nobody heard back from is the ONLY record that the message may
-     already be in the pane. This request used to be re-delivered here — one
-     client retry putting the same instruction in front of an agent twice, on
-     the channel that carries deployment control. It is answered from the
-     uncertainty instead: one host write, an operation id to ask about, and
-     `verify-first`. */
-  const registry = new AgentRegistry(path.join(SANDBOX, "ambiguous-actuation-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const imagePath = inboxImage("ambiguous.png");
-  let sends = 0;
-  const message = {
-    pid: 1, path: "", conversationId: conversation.id, text: "", images: [{ base64: "aW1hZ2U=", mime: "image/png" }], clientMessageId: "ambiguous-actuation",
-  };
-  const outcome = await deliverConversationMessage(message, {
-    targetForKnownPid: async () => "%1",
-    buildImagePayload: () => ({ payload: imagePath, imagePaths: [imagePath] }),
-    sendText: async () => { sends += 1; throw new TmuxDeliveryUncertainError(new Error("transport lost")); },
-  });
-
-  /* Captured off the FIRST answer, which is all a caller ever holds: reading it
-     out of registry state is something no caller can do, and an id it cannot
-     see is an id it cannot ask `message_receipt` about. */
-  const operationId = (outcome as { operationId?: string }).operationId ?? "";
-  expect(outcome).toMatchObject({
-    ok: false,
-    error: "transport lost",
-    actuation: "started",
-    resend: "verify-first",
-  });
-  expect(operationId).not.toBe("");
-  /* The bytes stay: a message that may have been delivered keeps the paths it
-     named, so the agent can still open what it was handed. */
-  expect(fs.existsSync(imagePath)).toBe(true);
-  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);
-  expect(() => registry.requeueHeldDelivery(registry.pendingDeliveries(conversation.id)[0]!.id)).toThrow("explicit client retry");
-  /* And that id answers: no journal ever held this send, so past the deadline
-     the receipt ends it unverified rather than leaving the caller at "failed,
-     and now what". */
-  expect(await resolveSendReceipt(operationId, {
-    registry,
-    client: null,
-    now: () => Date.now() + 11 * 60_000,
-  })).toMatchObject({ operationId, state: "failed", duplicateRisk: true, resend: "verify-first" });
-  for (let replayed = 0; replayed < 2; replayed += 1) {
-    const replay = await deliverConversationMessage(message, {
-      targetForKnownPid: async () => "%1",
-      buildImagePayload: () => ({ payload: imagePath, imagePaths: [imagePath] }),
-      sendText: async () => { sends += 1; },
-    });
-    expect(replay).toMatchObject({
-      ok: false,
-      status: 409,
-      actuation: "started",
-      operationId,
-      resend: "verify-first",
-    });
-    /* Absorbing: the answer does not change however often the client asks, and
-       nothing was typed on either replay. */
-    expect(sends).toBe(1);
-  }
-  /* And the send is still queryable rather than discarded — the settled record
-     is what a receipt reads to say the fate is unknown, and what keeps every
-     later replay of this request absorbing rather than reviving it. */
-  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "failed" }]);
-  expect(sendReceiptFor(registry.readOnlySnapshot(), operationId)).toMatchObject({
-    state: "failed",
-    resend: "verify-first",
-  });
-});
-
-test("reserved delivery reports uncertainty when direct tmux send fails after actuation starts", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "reserved-actuation-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const reserved = registry.holdDelivery(conversation.id, "migration payload", "reserved-actuation");
-
-  const outcome = await deliverConversationMessage({
-    pid: 1,
-    path: "",
-    conversationId: conversation.id,
-    reservedDeliveryId: reserved.id,
-    text: reserved.text,
-    images: [],
-  }, {
-    targetForKnownPid: async () => "%1",
-    sendText: async () => { throw new TmuxDeliveryUncertainError(new Error("post-paste transport lost")); },
-  });
-
-  expect(outcome).toMatchObject({ ok: false, error: "post-paste transport lost", actuation: "started" });
-  expect(migrationDeliveryOutcome(outcome)).toBe("delivery-uncertain");
-});
-
-test("reserved delivery reports a definite failure when tmux rejects before paste", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "reserved-pre-paste-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const reserved = registry.holdDelivery(conversation.id, "migration payload", "reserved-pre-paste");
-
-  const outcome = await deliverConversationMessage({
-    pid: 1,
-    path: "",
-    conversationId: conversation.id,
-    reservedDeliveryId: reserved.id,
-    text: reserved.text,
-    images: [],
-  }, {
-    targetForKnownPid: async () => "%1",
-    sendText: async () => { throw new Error("pane rejected before paste"); },
-  });
-
-  expect(outcome).toMatchObject({ ok: false, error: "pane rejected before paste" });
-  expect(outcome).not.toHaveProperty("actuation");
-  expect(migrationDeliveryOutcome(outcome)).toBe("failed");
-});
-
-test("successful actuation retains images when settlement persistence fails", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "settlement-failure-registry.json"));
-  setAgentRegistryForTests(registry);
-  const conversation = registry.ensureConversation("codex", "", "default");
-  const imagePath = inboxImage("settled-before-write.png");
-  const originalRecord = registry.recordDeliveryOutcome.bind(registry);
-  registry.recordDeliveryOutcome = (() => { throw new Error("registry unavailable"); }) as typeof registry.recordDeliveryOutcome;
-  try {
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: "", conversationId: conversation.id, text: "", images: [{ base64: "aW1hZ2U=", mime: "image/png" }], clientMessageId: "settlement-failure",
-    }, {
-      targetForKnownPid: async () => "%1",
-      buildImagePayload: () => ({ payload: imagePath, imagePaths: [imagePath] }),
-      sendText: async () => {},
-    });
-    expect(outcome).toMatchObject({ ok: false, error: "registry unavailable", actuation: "started" });
-    expect(migrationDeliveryOutcome(outcome)).toBe("delivery-uncertain");
-    expect(fs.existsSync(imagePath)).toBe(true);
-    expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);
-  } finally {
-    registry.recordDeliveryOutcome = originalRecord;
-  }
 });
 
 test("switching engine routing leaves deferred transcript ownership unchanged", async () => {
@@ -1718,71 +1263,6 @@ test("a resume whose recorded account this machine no longer has asks the rule i
   expect(await resumeSpecAccountFor("account-that-was-retired", "retired-account-fixture.jsonl")).toBeNull();
 });
 
-test("message-triggered relaunches carry the stored MCP grant on both the direct and root-relay paths", async () => {
-  /* Real session ids: this path goes through the process-wide registry, which
-     keys entries by session key rather than by the override object. */
-  const branchId = "019f4e76-66b4-\x37f87-94b2-cfa9bf746661";
-  const rootId = "019f4e76-66b4-\x37f87-94b2-cfa9bf746662";
-  const branchPath = path.join(SANDBOX, `${branchId}.jsonl`);
-  const rootPath = path.join(SANDBOX, `${rootId}.jsonl`);
-  fs.writeFileSync(branchPath, "");
-  fs.writeFileSync(rootPath, "");
-  const registry = new AgentRegistry(path.join(SANDBOX, "message-grant-registry.json"), undefined, undefined, { sqliteMode: "off" });
-  setAgentRegistryForTests(registry);
-  for (const [sessionId, pathname] of [[branchId, branchPath], [rootId, rootPath]] as const) {
-    registry.upsert({
-      key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: SANDBOX, accountId: "account",
-      launchProfile: emptyLaunchProfile({ cwd: SANDBOX, mcpServers: ["viewer"], permissionMode: sessionId === branchId ? "never" : "on-request", readOnly: true, sandbox: sessionId === branchId ? "full" : "restricted" }), status: "dead",
-      host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
-    });
-    /* The durable profile a relaunch reads hangs off the conversation, so the
-       session needs one — an entry row alone is not what it looks up. */
-    registry.ensureConversation("codex", pathname, "account");
-    registry.reconcileConversations([{ engine: "codex", path: pathname, accountId: "account",
-      launchProfile: emptyLaunchProfile({ cwd: SANDBOX, model: "gpt-5.6-sol", effort: "high", fast: false,
-        permissionMode: sessionId === branchId ? "never" : "on-request", readOnly: true, sandbox: sessionId === branchId ? "full" : "restricted" }),
-      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-21T00:00:00.000Z" }]);
-  }
-  const fileEntry = (pathname: string, parent: string | null): FileEntry => ({
-    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer",
-    title: "grant", engine: "codex", kind: "session", fmt: "codex", parent, mtime: 1, size: 0,
-    activity: "idle", proc: null, pid: null, model: "gpt-5.6-sol", effort: "high", fast: false,
-    pendingQuestion: null, waitingInput: null,
-  });
-  const seen: ({ path: string } & ResumeSpecOptions)[] = [];
-  const overrides = (resumable: (pathname: string) => boolean) => ({
-    pathAllowed: () => true,
-    listFiles: async () => [fileEntry(branchPath, rootPath), fileEntry(rootPath, null)],
-    livePaneHost: async () => null,
-    resumeSpecFor: (_root: string, pathname: string, given: ResumeSpecOptions) => {
-      seen.push({ path: pathname, mcpServers: given.mcpServers, permissionMode: given.permissionMode, readOnly: given.readOnly, sandbox: given.sandbox });
-      return resumable(pathname)
-        ? { command: "codex resume", cwd: SANDBOX, windowName: "codex-resume", engine: "codex" }
-        : null;
-    },
-    deliver: async () => ({ ok: true, outcome: "resumed", target: "%4" }),
-  });
-
-  /* The dead session reopens as its own window: its own grant travels with it,
-     rather than the command falling back to the baseline (#739). */
-  const direct = await deliverConversationMessage({ path: branchPath, text: "reopen", images: [] } as never, overrides(() => true) as never);
-  expect(direct).toMatchObject({ ok: true });
-  expect(seen).toEqual([{ path: branchPath, mcpServers: ["viewer"], permissionMode: "never", readOnly: true, sandbox: "full" }]);
-
-  /* A branch that cannot be resumed relays through its root, whose own grant
-     must reach the root's command on the same terms. */
-  seen.length = 0;
-  const relayed = await deliverConversationMessage(
-    { path: branchPath, text: "relay", images: [] } as never,
-    overrides((pathname) => pathname === rootPath) as never,
-  );
-  expect(relayed).toMatchObject({ ok: true });
-  expect(seen).toEqual([
-    { path: branchPath, mcpServers: ["viewer"], permissionMode: "never", readOnly: true, sandbox: "full" },
-    { path: rootPath, mcpServers: ["viewer"], permissionMode: "on-request", readOnly: true, sandbox: "restricted" },
-  ]);
-});
-
 test("conversation stop refuses a pane claimed by another registry session", async () => {
   const pathname = "/transcripts/ambiguous.jsonl";
   const snapshot = killSnapshot(pathname, KILL_HOST);
@@ -1866,26 +1346,6 @@ test("tmux Resume carries the stored ultrafast tier into the command", async () 
   expect(command).not.toContain("service_tier=priority");
 });
 
-for (const resumeFast of [undefined, true, false]) {
-  test(`tmux message reopen resolves ultrafast with resumeFast=${resumeFast}`, async () => {
-    const { entry, resumeSpecFor } = tmuxTierFixture();
-    let command = "";
-    const outcome = await deliverConversationMessage({
-      pid: null, path: entry.path, text: "Continue", images: [], resumeFast,
-    }, {
-      pathAllowed: () => true, listFiles: async () => [entry], recover: async () => null, resumeSpecFor,
-      deliver: async ({ spec }) => {
-        command = spec!.command;
-        return { ok: true, outcome: "resumed", target: "%7" };
-      },
-    });
-    expect(outcome).toMatchObject({ ok: true });
-    expect(command).toContain(`-c 'service_tier=${resumeFast === false ? "standard" : "ultrafast"}'`);
-    expect(command).not.toContain("service_tier=priority");
-    if (resumeFast === false) expect(command).not.toContain("service_tier=ultrafast");
-  });
-}
-
 for (const fast of [true, false]) {
   test(`tmux reconfigure ${fast ? "effort only keeps ultrafast" : "to Standard clears the durable tier and attach"}`, async () => {
     const { registry, key, entry, conversation, resumeSpecFor } = tmuxTierFixture(true);
@@ -1923,25 +1383,6 @@ for (const fast of [true, false]) {
   });
 }
 
-test("tmux branch relay carries the root's ultrafast tier into its reopen command", async () => {
-  const { entry, resumeSpecFor } = tmuxTierFixture();
-  const branch = { ...entry, path: path.join(SANDBOX, "branch.jsonl"), parent: entry.path };
-  let command = "";
-  const outcome = await deliverConversationMessage({
-    pid: null, path: branch.path, text: "Continue branch", images: [], resumeFast: false,
-  }, {
-    pathAllowed: () => true, listFiles: async () => [branch, entry], recover: async () => null,
-    resumeSpecFor: (root, pathname, options) => pathname === entry.path ? resumeSpecFor(root, pathname, options) : null,
-    deliver: async ({ spec, payload }) => {
-      command = spec!.command;
-      expect(payload).toContain("Continue branch");
-      return { ok: true, outcome: "resumed", target: "%7" };
-    },
-  });
-  expect(outcome).toMatchObject({ ok: true });
-  expect(command).toContain("-c 'service_tier=ultrafast'");
-});
-
 /* docs/design/delivery-progress-and-drain.md, P17 (A1 legacy steps, A9, C2). */
 function legacyEntry(pathname: string, pid: number | null): FileEntry {
   return {
@@ -1952,236 +1393,61 @@ function legacyEntry(pathname: string, pid: number | null): FileEntry {
   } as FileEntry;
 }
 
-test("a legacy send whose request names only a pid reserves on its transcript's conversation, types once, and a replay of its key is answered from the reservation", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-pid-only-registry.json"));
+/* No structured host holds the conversation and recovery raises none: the send
+   is refused before anything is reserved, and no terminal transport is tried. */
+test("a send to a conversation with no host is refused before anything is reserved", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "no-host-registry.json"));
   setAgentRegistryForTests(registry);
-  const transcript = path.join(SANDBOX, "pid-only.jsonl");
-  const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
-  const progress = new DeliveryProgressStore(null);
-  const typed: string[] = [];
-  const send = () => deliverConversationMessage({
-    pid: 4242, path: "", text: "type me once", images: [], clientMessageId: "pid-only-key",
-  }, {
-    listFiles: async () => [legacyEntry(transcript, 4242)],
-    targetForKnownPid: async () => "%42",
-    sendText: async (_target: string, payload: string) => { typed.push(payload); },
-    progress,
-  } as never);
-  expect(await send()).toMatchObject({ ok: true });
-  expect(await send()).toMatchObject({ ok: true });
-  expect(typed).toEqual(["type me once"]);
-  const conversation = registry.conversationForPath(transcript);
-  expect(conversation).not.toBeNull();
-  const [reservation] = Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "pid-only-key");
-  expect(reservation).toMatchObject({ state: "delivered", conversationId: conversation!.id });
-  expect(progress.get(reservation!.command.operationId)).toMatchObject({ originalKey: "pid-only-key", terminal: { state: "delivered" } });
+  const conversation = registry.ensureConversation("codex", path.join(SANDBOX, "no-host.jsonl"), "default");
+  let recoveries = 0;
+
+  const outcome = await deliverConversationMessage({
+    pid: null, path: "", conversationId: conversation.id, clientMessageId: "no-host-send", text: "continue", images: [],
+  }, { recover: async () => { recoveries += 1; return null; } });
+
+  expect(outcome).toEqual({
+    ok: false, outcome: "failed", status: 409, admission: "refused",
+    code: "no_delivery_host", error: "this conversation has no host to deliver to",
+  });
+  expect(recoveries).toBe(1);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
 });
 
-test("a live Copilot pid remains messageable: its send reserves on the transcript's conversation, types once, and a replay of its key is answered from the reservation", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-copilot-pid-registry.json"));
+test("a send that names only a pid is refused the same way once its transcript's conversation has no host", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "no-host-pid-registry.json"));
   setAgentRegistryForTests(registry);
-  const transcript = path.join(SANDBOX, "copilot-session.jsonl");
-  const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
-  const progress = new DeliveryProgressStore(null);
-  const typed: string[] = [];
-  const copilot = { ...legacyEntry(transcript, 4242), root: "copilot-sessions", engine: "copilot", fmt: "copilot" } as FileEntry;
-  const send = () => deliverConversationMessage({
-    pid: 4242, path: "", text: "copilot, once", images: [], clientMessageId: "copilot-key",
-  }, {
-    listFiles: async () => [copilot],
-    targetForKnownPid: async () => "%4",
+  const pathname = path.join(SANDBOX, "rollout-019f4e76-66b4-7f87-94b2-cfa9bf745555.jsonl");
+  const entry = { path: pathname, engine: "codex", pid: 4242, proc: "running" } as FileEntry;
+
+  const outcome = await deliverConversationMessage({ pid: 4242, path: "", text: "continue", images: [] }, {
+    listFiles: async () => [entry],
     recover: async () => null,
-    sendText: async (_target: string, payload: string) => { typed.push(payload); },
-    progress,
-  } as never);
-  expect(await send()).toMatchObject({ ok: true });
-  expect(await send()).toMatchObject({ ok: true });
-  expect(typed).toEqual(["copilot, once"]);
-  const conversation = registry.conversationForPath(transcript);
-  expect(conversation).toMatchObject({ engine: "copilot" });
-  const reservations = Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "copilot-key");
-  expect(reservations).toHaveLength(1);
-  expect(reservations[0]).toMatchObject({ state: "delivered", conversationId: conversation!.id });
-  expect(progress.get(reservations[0]!.command.operationId)).toMatchObject({ originalKey: "copilot-key", terminal: { state: "delivered" } });
-
-  /* A pid whose transcript is no agent's is still refused before actuation. */
-  const shell = await deliverConversationMessage({ pid: 5151, path: "", text: "nobody", images: [], clientMessageId: "shell-key" }, {
-    listFiles: async () => [{ ...legacyEntry(path.join(SANDBOX, "shell.log"), 5151), engine: "shell", fmt: "plain" } as FileEntry],
-    targetForKnownPid: async () => "%5",
-    sendText: async (_target: string, payload: string) => { typed.push(payload); },
-  } as never);
-  expect(shell).toMatchObject({ ok: false, status: 404 });
-  expect(typed).toEqual(["copilot, once"]);
-});
-
-test("a legacy send to an unregistered transcript path reserves the same way, and an unknown pid is refused before anything is reserved or typed", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-unregistered-registry.json"));
-  setAgentRegistryForTests(registry);
-  const transcript = path.join(SANDBOX, "unregistered.jsonl");
-  let typed = 0;
-  const overrides = {
-    listFiles: async () => [legacyEntry(transcript, null)],
-    pathAllowed: () => true,
-    resumeSpecFor: () => ({ command: "codex resume", cwd: SANDBOX, windowName: "codex-resume", engine: "codex" }),
-    deliver: async () => { typed += 1; return { ok: true, outcome: "resumed", target: "%5" }; },
-  };
-  const byPath = () => deliverConversationMessage({ pid: null, path: transcript, text: "by path", images: [], clientMessageId: "path-key" }, overrides as never);
-  expect(await byPath()).toMatchObject({ ok: true });
-  expect(await byPath()).toMatchObject({ ok: true });
-  expect(typed).toBe(1);
-  expect(registry.conversationForPath(transcript)).not.toBeNull();
-
-  const unknown = await deliverConversationMessage({ pid: 9999, path: "", text: "nobody", images: [], clientMessageId: "unknown-pid" }, {
-    listFiles: async () => [],
-    targetForKnownPid: async () => "unknown",
-    sendText: async () => { typed += 1; },
-  } as never);
-  expect(unknown).toMatchObject({ ok: false, status: 403, error: "process is unknown to the viewer" });
-  expect(typed).toBe(1);
-  expect(Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "unknown-pid")).toEqual([]);
-});
-
-test("a legacy send naming a conversation id the registry does not hold reserves on its pid's transcript and types once per key, and with nothing addressed it is refused untyped", async () => {
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-missing-id-registry.json"));
-  setAgentRegistryForTests(registry);
-  const transcript = path.join(SANDBOX, "missing-id.jsonl");
-  const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
-  const progress = new DeliveryProgressStore(null);
-  const typed: string[] = [];
-  const overrides = {
-    listFiles: async () => [legacyEntry(transcript, 4242)],
-    targetForKnownPid: async () => "%42",
-    sendText: async (_target: string, payload: string) => { typed.push(payload); },
-    progress,
-  };
-  const send = () => deliverConversationMessage({
-    pid: 4242, path: "", conversationId: "conversation_missing", text: "once", images: [], clientMessageId: "same-key",
-  }, overrides as never);
-  expect(await send()).toMatchObject({ ok: true });
-  expect(await send()).toMatchObject({ ok: true });
-  expect(typed).toEqual(["once"]);
-  const [reservation] = Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "same-key");
-  expect(reservation).toMatchObject({ state: "delivered", conversationId: registry.conversationForPath(transcript)!.id });
-  expect(progress.get(reservation!.command.operationId)).toMatchObject({ originalKey: "same-key", terminal: { state: "delivered" } });
-
-  const nothing = await deliverConversationMessage({
-    pid: null, path: "", conversationId: "conversation_missing", text: "nowhere", images: [], clientMessageId: "nowhere-key",
-  }, overrides as never);
-  expect(nothing).toMatchObject({ ok: false, status: 404, error: "conversation is unknown to the viewer" });
-  expect(typed).toEqual(["once"]);
-  expect(Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "nowhere-key")).toEqual([]);
-});
-
-test("a legacy send is recorded from its reservation, dispatching while the pane actuation hangs, and its hold, claim and settle wait off the loop", async () => {
-  const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, whileRegistryWriterHeld } = await import("./agent/registryLockHolderFixture");
-  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("./blockingWaits");
-  const made = sqliteRegistryFixture("llv-legacy-offloop");
-  const holder = registryLockHolder(made.sqliteFilename);
-  const registry = made.registry;
-  setAgentRegistryForTests(registry);
-  try {
-    const conversation = registry.ensureConversation("codex", "", "default");
-    const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
-    const progress = new DeliveryProgressStore(null);
-    let release!: () => void;
-    let during: ReturnType<typeof progress.get> = null;
-    resetBlockingWaitsForTests(() => {});
-    const hook = holdBeforeEachWrite(registry, holder, 120, /lib\/delivery\.ts/);
-    const sending = whileRegistryWriterHeld(holder, () => deliverConversationMessage({
-      pid: 1, path: "", conversationId: conversation.id, text: "hang in the pane", images: [], clientMessageId: "legacy-record",
-    }, {
-      recover: async () => null,
-      targetForKnownPid: async () => "%1",
-      sendText: async () => {
-        const [reserved] = registry.pendingDeliveries(conversation.id);
-        during = { ...progress.get(reserved!.command.operationId)! };
-        await new Promise<void>((resolve) => { release = resolve; });
-      },
-      progress,
-    } as never), { alreadyHeld: false });
-    for (let attempt = 0; attempt < 400 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(during).toMatchObject({ waitReason: "dispatching", originalKey: "legacy-record", nextWakeAt: null });
-    release();
-    const { value: outcome } = await sending;
-    hook.restore();
-    expect(outcome).toMatchObject({ ok: true });
-    expect(hook.unwrapped).toEqual([]);
-
-    const operationId = Object.values(registry.snapshot().deliveryOperationOwners).find((owner) => owner.clientMessageId === "legacy-record")!.command.operationId;
-    for (const label of ["delivery.admit", "delivery.claim", "delivery.settle"]) {
-      expect(blockingWaitDiagnostics().longest.some((sample) => sample.label === label && sample.operationId === operationId)).toBe(true);
-    }
-    expect(progress.get(operationId)).toMatchObject({ terminal: { state: "delivered" } });
-  } finally {
-    await holder.close();
-    registry.close();
-    made.cleanup();
-  }
-});
-
-/* docs/design/delivery-progress-and-drain.md, P17 and A1: a request-local
-   reservation a switch overtook between the preflight fence and the hold is
-   recorded from the moment it exists. Its own discard waits for the writer
-   named on that record; done, the record ends with the answer; refused, the
-   reservation stays and the record shows the switch it waits behind. */
-describe.each([
-  ["oversized text", { text: "x".repeat(33_000), images: 0 }],
-  ["images", { text: "", images: 1 }],
-] as const)("a migration-raced request-local reservation (%s)", (_label, payload) => {
-  async function raced(name: string, holdMs: number, deadlineMs?: number) {
-    const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
-    const { Database } = await import("bun:sqlite");
-    const sqlitePath = path.join(SANDBOX, `${name}.sqlite`);
-    const registry = new AgentRegistry(path.join(SANDBOX, `${name}.json`), undefined, undefined, {
-      sqliteMode: "sqlite", sqliteFilename: sqlitePath, ...(deadlineMs !== undefined ? { sqliteWriterDeadlineMs: deadlineMs } : {}),
-    });
-    setAgentRegistryForTests(registry);
-    const conversation = registry.ensureConversation("codex", "", "default");
-    const progress = new DeliveryProgressStore(null);
-    let holder: InstanceType<typeof Database> | null = null;
-    let operationId: string | null = null;
-    const hold = registry.holdDeliveryOffLoop.bind(registry);
-    registry.holdDeliveryOffLoop = (async (...args: Parameters<typeof registry.holdDeliveryOffLoop>) => {
-      registry.setConversationMigration(conversation.id, {
-        intentId: `${name}-intent`, phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
-      });
-      const held = await hold(...args);
-      operationId = held?.command.operationId ?? null;
-      holder = new Database(sqlitePath);
-      holder.exec("PRAGMA busy_timeout = 5000");
-      holder.exec("BEGIN IMMEDIATE");
-      return held;
-    }) as typeof registry.holdDeliveryOffLoop;
-    const seen: unknown[] = [];
-    const sending = deliverConversationMessage({
-      pid: 1, path: "", conversationId: conversation.id, text: payload.text,
-      images: payload.images ? [{ base64: "aW1hZ2U=", mime: "image/png" }] : [], clientMessageId: `${name}-key`,
-    }, { progress, targetForKnownPid: async () => "%1", sendText: async () => { throw new Error("nothing may be typed"); } });
-    for (let attempt = 0; attempt < 200 && !holder; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    seen.push(structuredClone(progress.get(operationId!)));
-    await new Promise((resolve) => setTimeout(resolve, holdMs));
-    (holder as InstanceType<typeof Database> | null)?.exec("ROLLBACK");
-    const outcome = await sending;
-    (holder as InstanceType<typeof Database> | null)?.close();
-    return { registry, progress, operationId: operationId!, outcome, during: seen[0] };
-  }
-
-  test("names its discard while the writer is held, and ends its record with the 409 once the discard is written", async () => {
-    const { registry, progress, operationId, outcome, during } = await raced(`discarded-${payload.images}`, 400);
-    expect(during).toMatchObject({ waitReason: "checking", detail: "discarding the request-local payload", terminal: null });
-    expect(outcome).toMatchObject({ ok: false, status: 409, error: "request-local delivery waits for migration completion" });
-    expect(progress.get(operationId)!.terminal).toMatchObject({ state: "failed" });
-    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
-    registry.close();
   });
 
-  test("keeps the reservation and its open record when the discard's writer wait is refused", async () => {
-    const { registry, progress, operationId, outcome, during } = await raced(`refused-${payload.images}`, 300, 150);
-    expect(during).toMatchObject({ waitReason: "checking", detail: "discarding the request-local payload", terminal: null });
-    expect(outcome).toMatchObject({ ok: false, status: 409 });
-    expect(progress.get(operationId)).toMatchObject({ waitReason: "switching-accounts", terminal: null });
-    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toMatchObject([{ state: "held", command: { operationId } }]);
-    registry.close();
+  expect(outcome).toMatchObject({ ok: false, status: 409, admission: "refused", code: "no_delivery_host" });
+  expect(registry.conversationForPath(pathname)).not.toBeNull();
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
+  expect(await deliverConversationMessage({ pid: 9999, path: "", text: "continue", images: [] }, {
+    listFiles: async () => [entry], recover: async () => null,
+  })).toMatchObject({ ok: false, status: 403, error: "process is unknown to the viewer" });
+});
+
+test("a reservation the drain claimed for a conversation with no host fails and ends its progress record", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "no-host-drain-registry.json"));
+  setAgentRegistryForTests(registry);
+  const conversation = registry.ensureConversation("codex", path.join(SANDBOX, "no-host-drain.jsonl"), "default");
+  const held = registry.holdDelivery(conversation.id, "continue", "drained-send");
+  const settled: unknown[] = [];
+
+  const outcome = await deliverConversationMessage({
+    pid: null, path: "", conversationId: conversation.id, clientMessageId: "drained-send", text: "continue", images: [],
+    reservedDeliveryId: held.id,
+  }, {
+    recover: async () => null,
+    progress: { settle: (...args: unknown[]) => { settled.push(args); } } as never,
   });
+
+  expect(outcome).toEqual({ ok: false, outcome: "failed", status: 409, error: "this conversation has no host to deliver to" });
+  expect(migrationDeliveryOutcome(outcome)).toBe("failed");
+  expect(settled).toEqual([[held.command.operationId, "failed", "this conversation has no host to deliver to"]]);
 });

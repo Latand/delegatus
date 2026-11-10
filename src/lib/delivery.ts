@@ -1,12 +1,10 @@
 import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
-import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
-import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
-import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -15,7 +13,6 @@ import {
   type AccountChoiceActor,
   type AccountOverrideNotice,
 } from "@/lib/accounts/accountOverrides";
-import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { deliverToTranscriptHost, readTranscriptHosts, type HostDeliveryOutcome, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import { admitTranscriptConversationOffLoop } from "@/lib/conversation/transcriptAdmission";
@@ -25,16 +22,14 @@ import { transcriptLiveOwnership, type TranscriptLiveOwnership } from "@/lib/sca
 import { procBackend } from "@/lib/proc";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "@/lib/runtime/structuredRecovery";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
-import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import type { ActuationLease } from "@/lib/deliveryActuation";
 import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
-import { recordWait, type DeliveryProgressPort } from "@/lib/runtime/recordWait";
-import { structuredContent } from "@/lib/runtime/structuredContent";
-import { SEND_UNVERIFIED_REASON, type SendResendGuidance } from "@/lib/runtime/sendSettlement";
+import type { DeliveryProgressPort } from "@/lib/runtime/recordWait";
+import type { SendResendGuidance } from "@/lib/runtime/sendSettlement";
 import type { RuntimeOperationReceipt } from "@/lib/runtime/contracts";
 import { detectBlockingGate, parseScreenMenu, screenAtIdleComposer, screenWaitsForInput } from "@/lib/status";
 import type { FileEntry } from "@/lib/types";
 import {
-  buildImagePayload,
   deleteInboxImages,
   forgetResumePane,
   killTmuxHostIfMatches,
@@ -42,11 +37,9 @@ import {
   knownLivePids,
   paneScreen,
   resolveTarget,
-  sendInterrupt,
   sendKeys,
   sendText,
   operatorSafeTmuxDeliveryError,
-  TmuxDeliveryUncertainError,
   withPaneLock,
   type InboxImagePayload,
 } from "@/lib/tmux";
@@ -753,27 +746,25 @@ export interface ConversationMessage {
 }
 
 export interface DeliveryOverrides {
-  targetForKnownPid?: typeof targetForKnownPid;
-  buildImagePayload?: typeof buildImagePayload;
-  sendText?: typeof sendText;
   recover?: typeof recoverDeadStructuredConversation;
   enqueueStructured?: typeof import("@/lib/runtime/structuredMessageDelivery")["enqueueStructuredMessage"];
   /** The actuation section the migration drain holds for this conversation, when it delivers a reservation it claimed. */
   actuationLease?: ActuationLease;
-  pathAllowed?: typeof pathAllowed;
   listFiles?: typeof listFiles;
-  resumeSpecFor?: typeof resumeSpecFor;
-  deliver?: typeof deliverToTranscriptHost;
-  /** Where the send's waits are recorded; the Viewer's own store by default. */
+  /** Where a drained reservation's ending is recorded; the Viewer's own store by default. */
   progress?: DeliveryProgressPort | null;
 }
 
+/** The answer a send gets when no structured host holds the conversation and
+    recovery could not raise one. */
+export const NO_DELIVERY_HOST_REASON = "this conversation has no host to deliver to";
+export const NO_DELIVERY_HOST_CODE = "no_delivery_host";
+
 /**
- * The transcript a legacy request addresses when the registry knows no
- * conversation for it (docs/design/delivery-progress-and-drain.md, A9): its
- * path, else the scanner entry of its pid. A pid or path that names no agent
- * transcript the ladder can type into (Claude, Codex or Copilot) is refused with
- * the answers the ladder gives today, before anything is reserved or typed.
+ * The transcript a request addresses when the registry knows no conversation
+ * for it (docs/design/delivery-progress-and-drain.md, A9): its path, else the
+ * scanner entry of its pid. A pid or path that names no agent transcript
+ * (Claude, Codex or Copilot) is refused before anything is reserved or sent.
  */
 async function addressedTranscript(
   message: ConversationMessage,
@@ -798,19 +789,13 @@ function agentTranscript(entry: FileEntry): entry is AgentTranscript {
 }
 
 /**
- * Structured sends resolve or recover their engine host first. The legacy send
- * ladder delivers a known live pid into its pane, reopens a root conversation
- * through its resume spec, and relays child records through that root.
+ * A send resolves or recovers the conversation's structured host and enqueues
+ * the message there. A conversation with no such host, and none that recovery
+ * can raise, is refused with {@link NO_DELIVERY_HOST_REASON}.
  */
 export async function deliverConversationMessage(message: ConversationMessage, overrides: DeliveryOverrides = {}): Promise<DeliveryOutcome> {
   const { images } = message;
   const text = message.text.trim();
-  /* Byte-measured to match the registry's UTF-8 envelope bound: a multibyte
-     text over the byte bound rides the request-local (ephemeral) path instead
-     of tripping the reservation gate. */
-  const textBytes = Buffer.byteLength(text, "utf8");
-  const requestLocalPayload = images.length > 0 || textBytes > 32_000;
-
   const registry = agentRegistry();
   let conversation = message.conversationId?.startsWith("conversation_")
     ? registry.conversation(message.conversationId as `conversation_${string}`)
@@ -818,9 +803,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
   /* A9: a request the registry knows no conversation for (a pid only, a
      transcript nothing registered, or a conversation id the registry does not
      hold) resolves the transcript it addresses and registers its conversation
-     the way a resume of it would, so the send takes the reserved branch below
-     like every other. The pid keeps its own pane as the target. */
-  let pidAddressed = false;
+     the way a resume of it would, so recovery below can raise its host. */
   if (!conversation && !message.reservedDeliveryId) {
     const addressed = await addressedTranscript(message, overrides);
     if (addressed && "refused" in addressed) return addressed.refused;
@@ -835,11 +818,9 @@ export async function deliverConversationMessage(message: ConversationMessage, o
         if (!ensured.acquired) return { ...failure(REGISTRY_WRITER_BUSY, 503), admission: "refused" };
         conversation = ensured.value;
       }
-      pidAddressed = !message.path;
     }
-    /* Only a drain that already claimed its reservation actuates without one
-       here; a request that addresses nothing the send could reserve on is
-       refused before anything is typed. */
+    /* A request that addresses nothing the registry can hold a conversation
+       for is refused before anything is sent. */
     if (!conversation) return failure(message.conversationId ? "conversation is unknown to the viewer" : "delivery target is unavailable", 404);
   }
   const seatRefusal = await legacySeatRefusal(registry, conversation);
@@ -928,432 +909,16 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       return failure(error);
     }
   }
-  const filePath = pidAddressed ? null : conversation?.generations.at(-1)?.path ?? message.path;
-  const deliveryMessage = conversation && !message.conversationId ? { ...message, conversationId: conversation.id } : message;
-  const progress = overrides.progress === undefined ? ownedDeliveryProgressStore() : overrides.progress;
-  if (conversation && !message.reservedDeliveryId) {
-    const reservedConversation = conversation;
-    /* #1709: the reservation, its claim and the claim's actuation run in the conversation's actuation section.
-       Recovery above runs outside it, so nothing nests, and a send claimed after another is actuated after it.
-       The reservation is admitted only once the section is this send's, so nothing acts on it before its claim:
-       the migration tick cancels an unclaimed reservation with no owner evidence and fails a request-local one. */
-    return withConversationActuation<DeliveryOutcome>(reservedConversation.id, async (lease) => {
-      const conversation = reservedConversation;
-      const current = registry.conversation(conversation.id) ?? conversation;
-      if (deliveryFence(current) === "held" && requestLocalPayload) return failure("request-local delivery waits for migration completion", 409);
-      let queued;
-      try {
-        const heldText = textBytes > 32_000 ? "" : text;
-        /* #1117: the digest is the only content evidence a delivered record
-           keeps (its text is blanked at settlement), and it is what joins a
-           legacy paste to its transcript row. Stamped at admission from the
-           text actually delivered — before an oversized payload is blanked
-           from the record — so an over-bound agent relay still projects; the
-           plaintext itself stays request-local. */
-        let contentDigest: string | null = null;
-        try {
-          contentDigest = structuredContent(text, []).contentDigest;
-        } catch {
-          contentDigest = null;
-        }
-        /* Waited for off the loop (rule c); refused, nothing is reserved. */
-        queued = await registry.holdDeliveryOffLoop(
-          conversation.id,
-          heldText,
-          message.clientMessageId ?? null,
-          images.length ? "ephemeral-images" : textBytes > 32_000 ? "ephemeral-text" : "text",
-          [],
-          contentDigest,
-          message.origin ? { origin: message.origin } : {},
-          { admissionGuard },
-        );
-      } catch (error) {
-        return failure(error, 409);
-      }
-      if (!queued) return { ...failure(REGISTRY_WRITER_BUSY, 503), admission: "refused" };
-      const reservation = queued;
-      lease.act(reservation.command.operationId);
-      /* #1131: an earlier attempt under this same request began typing into the
-         pane and nothing came back. The legacy path has no journal that could
-         say whether the recipient got it, and this reservation is the only
-         record of the attempt — so the same request is answered with that
-         uncertainty rather than actuating a second time. It used to be
-         reassigned and re-delivered here, which is how one client retry could
-         put the same instruction in front of an agent twice on a channel that
-         carries deployment control.
-         Asked of the record rather than of one state name: a receipt query past
-         the settlement deadline ENDS this reservation, and the `failed` it
-         leaves behind means the same thing `delivery-uncertain` did. Reviving
-         that one would have made the settlement itself the thing that
-         re-delivered the message. The images the first attempt saved stay on
-         disk either way, because a message that may have been delivered must
-         keep the paths it named. */
-      if (queued.state === "delivered" || deliveryMayHaveArrived(registry.readOnlySnapshot(), queued)) {
-        return settledReservationAnswer(registry, queued.id, conversation.id);
-      }
-      /* Rule (a): the record exists from the reservation on, before any
-         branch below waits on anything. A held one shows its switch; one
-         that already ended has its ending, and no open record is made. */
-      if (queued.state === "held" || queued.state === "assigned") {
-        recordWait(progress, registry, reservation, { reason: "checking", detail: "claiming the delivery record", nextWakeMs: null });
-      }
-      /* A request-local payload's own discard, off the loop, named on the
-         record while it waits. Done, the send ends with the answer it gets;
-         refused, it stays and the drain fails it as request-local. */
-      const discardOwn = async (answer: string) => {
-        const operationId = reservation.command.operationId;
-        const open = reservation.state === "held" || reservation.state === "assigned";
-        if (open) recordWait(progress, registry, reservation, { reason: "checking", detail: "discarding the request-local payload", nextWakeMs: null, ownStep: true });
-        const discarded = await registry.deliveryWrite({ label: "delivery.discard", operationId },
-          () => registry.discardDelivery(reservation.id));
-        if (discarded.acquired) {
-          try { progress?.settle?.(operationId, "failed", answer); }
-          catch { /* A progress record never fails an answer. */ }
-        } else if (open) {
-          recordWait(progress, registry, reservation, { reason: "checking", detail: "the discard waited past its lock deadline" });
-        }
-      };
-      if (queued.state === "held") {
-        if (requestLocalPayload) {
-          await discardOwn("request-local delivery waits for migration completion");
-          return failure("request-local delivery waits for migration completion", 409);
-        }
-        requestAccountMigrationTick();
-        return { ok: true, target: conversation.id, outcome: "held", operationId: queued.command.operationId };
-      }
-      if (queued.state !== "assigned" || !queued.generationId) {
-        if (requestLocalPayload) await discardOwn("delivery target is unavailable");
-        return failure("delivery target is unavailable", 409);
-      }
-      const generationId = queued.generationId;
-      const claim = await registry.beginDeliveryAttemptOffLoop(reservation.command.operationId, reservation.id, generationId);
-      if (!claim.acquired) {
-        /* Nothing was claimed: it stays assigned, the drain delivers a text
-           payload and fails a request-local one. */
-        recordWait(progress, registry, reservation, { reason: "checking", detail: "the writer claim waited past its lock deadline" });
-        requestAccountMigrationTick();
-        return { ok: true, target: conversation.id, outcome: "held", operationId: reservation.command.operationId };
-      }
-      const claimed = claim.value;
-      if (claimed) {
-        const claimedConversation = registry.conversation(conversation.id);
-        return actuateConversationMessage(deliveryMessage, overrides, {
-          filePath: pidAddressed ? null : claimedConversation?.generations.find((generation) => generation.id === claimed.generationId)?.path ?? filePath,
-          deliveryId: claimed.id,
-          acceptedOperationId: claimed.command.operationId,
-        });
-      }
-      /* A refused claim puts back only a reservation that is still waiting. One something else already settled
-         answers as it settled, and is never re-armed: a cancelled reservation has lost its text. */
-      const refused = registry.readOnlySnapshot().heldDeliveries[queued.id];
-      if (refused?.state !== "held" && refused?.state !== "assigned") return settledReservationAnswer(registry, queued.id, conversation.id);
-      if (requestLocalPayload) {
-        await discardOwn("request-local delivery waits for migration completion");
-        return failure("request-local delivery waits for migration completion", 409);
-      }
-      /* Off the loop; refused, it stays as it was. */
-      await registry.deliveryWrite({ label: "delivery.requeue", operationId: reservation.command.operationId },
-        () => registry.requeueHeldDelivery(reservation.id));
-      recordWait(progress, registry, reservation, { reason: "conversation-busy", detail: "an earlier delivery on this conversation is still being claimed" });
-      requestAccountMigrationTick();
-      return { ok: true, target: conversation.id, outcome: "held", operationId: queued.command.operationId };
-    });
-  }
-  /* Reached only with a reservation the drain already claimed and settles
-     itself: the actuation owns that reservation's record while it types. */
+  /* No structured host holds this conversation and recovery could not raise
+     one, so there is nothing to deliver to. Nothing was reserved by this call.
+     A reservation the migration drain already claimed keeps its registry
+     ending with the drain; its progress record ends here. */
   const drained = message.reservedDeliveryId ? registry.readOnlySnapshot().heldDeliveries[message.reservedDeliveryId] ?? null : null;
-  return actuateConversationMessage(deliveryMessage, overrides, { filePath, deliveryId: null, acceptedOperationId: null, drained });
-}
-
-/** What a settled reservation answers a send under its request: delivered, possibly delivered (#1131), or failed. */
-function settledReservationAnswer(registry: AgentRegistry, deliveryId: string, target: string): DeliveryOutcome {
-  const snapshot = registry.readOnlySnapshot();
-  const delivery = snapshot.heldDeliveries[deliveryId];
-  if (delivery?.state === "delivered") return { ok: true, target };
-  if (delivery && deliveryMayHaveArrived(snapshot, delivery)) {
-    return {
-      ok: false,
-      outcome: "failed",
-      error: delivery.error || SEND_UNVERIFIED_REASON,
-      status: 409,
-      actuation: "started",
-      operationId: delivery.command.operationId,
-      resend: "verify-first",
-    };
+  if (drained) {
+    const progress = overrides.progress === undefined ? ownedDeliveryProgressStore() : overrides.progress;
+    try { progress?.settle?.(drained.command.operationId, "failed", NO_DELIVERY_HOST_REASON); }
+    catch { /* A progress record never fails an answer. */ }
+    return failure(NO_DELIVERY_HOST_REASON, 409);
   }
-  return failure(delivery?.error || "delivery target is unavailable", 409);
-}
-
-/** The legacy ladder's actuation: a known live pane, a resumed root, or a relay through the root. It runs inside
-    the section of the claim it actuates, or with no claim at all for a reservation the caller already claimed. */
-async function actuateConversationMessage(
-  message: ConversationMessage,
-  overrides: DeliveryOverrides,
-  claim: {
-    filePath: string | null;
-    deliveryId: string | null;
-    acceptedOperationId: string | null;
-    /** The drain's claimed reservation: its record is written here, its registry ending by the drain. */
-    drained?: HeldDelivery | null;
-  },
-): Promise<DeliveryOutcome> {
-  const { pid, images } = message;
-  const text = message.text.trim();
-  const registry = agentRegistry();
-  const { filePath, deliveryId, acceptedOperationId } = claim;
-  const progress = overrides.progress === undefined ? ownedDeliveryProgressStore() : overrides.progress;
-  /* The claimed reservation this actuation answers for, read once by its key. */
-  const reserved = deliveryId ? registry.readOnlySnapshot().heldDeliveries[deliveryId] ?? null : claim.drained ?? null;
-  const recordOperationId = acceptedOperationId ?? reserved?.command.operationId ?? null;
-  let actuation: "none" | "started" | "completed" = "none";
-  /**
-   * The answer an ambiguous legacy send must give (#1131).
-   *
-   * Actuation began and nothing came back, so the send is exactly as uncertain
-   * as one the structured path could not confirm — and the caller needs the
-   * same two things it gets there: the id its send was accepted under, so
-   * `message_receipt` can be asked what became of it, and the fact that
-   * repeating the instruction may deliver it twice. Without them a caller held
-   * a prose message and no way to ask anything, which is how the reasonable
-   * next move became "send it again".
-   */
-  const absorbing = (outcome: DeliveryOutcome): DeliveryOutcome =>
-    !outcome.ok && outcome.actuation === "started" && acceptedOperationId
-      ? { ...outcome, operationId: acceptedOperationId, resend: "verify-first" as const }
-      : outcome;
-  const terminalIds: string[] = [];
-  const discardTerminal = () => {
-    for (const id of terminalIds) try { memoryIndex().forgetTerminalDelivery(id); } catch { /* Optional bookkeeping cannot block delivery. */ }
-  };
-  /** The send's record, ended the way this actuation ended it. */
-  const settleRecord = (state: "delivered" | "failed" | "uncertain", reason: string | null) => {
-    if (!progress || !recordOperationId) return;
-    try { progress.settle?.(recordOperationId, state, reason); }
-    catch { /* A progress record never fails delivery. */ }
-  };
-  const settle = async (outcome: DeliveryOutcome): Promise<DeliveryOutcome> => {
-    if (!outcome.ok && outcome.actuation !== "started") discardTerminal();
-    try {
-      if (deliveryId) {
-        /* An actuated write stays `delivery-uncertain` on purpose, and stays
-           there: the legacy path has no journal operation that could ever prove
-           the message did not arrive, so the record has to keep saying that a
-           send under this request may already be in the pane. It is absorbing —
-           a replay of the same request is answered from it rather than typed
-           again — and a receipt query past the settlement window ends it as an
-           unverified failure (#1131).
-
-           Both writes wait for the lock off the loop (rule c). A refused
-           `delivered` leaves it absorbing and the sweep ends it unverified at
-           its deadline (Note 3); a refused discard leaves it for the drain or
-           the sweep. */
-        if (outcome.ok) {
-          await registry.deliveryWrite({ label: "delivery.settle", operationId: acceptedOperationId },
-            () => registry.recordDeliveryOutcome(deliveryId, "delivered", null, "delivered"));
-        } else if (outcome.actuation !== "started") {
-          await registry.deliveryWrite({ label: "delivery.discard", operationId: acceptedOperationId },
-            () => registry.discardDelivery(deliveryId));
-        }
-      }
-      /* A drained send the host only held is requeued by the drain, which
-         delivers it on a later pass: its record waits, it has not ended. */
-      if (outcome.ok && outcome.outcome === "held" && claim.drained) {
-        if (reserved) recordWait(progress, registry, reserved, { reason: "awaiting-host", detail: "the conversation's host has not taken it yet" });
-      } else if (outcome.ok) settleRecord("delivered", null);
-      else settleRecord(outcome.actuation === "started" ? "uncertain" : "failed", outcome.error);
-      return absorbing(outcome);
-    } catch (error) {
-      return absorbing(failure(error, 500, actuation === "none" ? undefined : "started"));
-    }
-  };
-  /* Rule (a): the send is being typed now, an in-request wait with no next wake. */
-  const dispatching = () => {
-    if (reserved) recordWait(progress, registry, reserved, { reason: "dispatching", detail: "typing into the conversation's pane", nextWakeMs: null });
-  };
-
-  /* Saved paths stay visible to the catch-all: a delivery that fails after
-     the images hit disk deletes them so a retry cannot duplicate files. */
-  let imagePaths: string[] = [];
-  const materializePayload = () => (overrides.buildImagePayload ?? buildImagePayload)(text, images);
-  const recordTerminal = (payload: string, targetPath = filePath, relay = false) => {
-    const targetConversation = targetPath ? registry.conversationForPath(targetPath) : conversationForTerminal;
-    if (!targetConversation) return;
-    const delivery = deliveryId ? registry.readOnlySnapshot().heldDeliveries[deliveryId] : null;
-    // Persist the actual payload and receiving conversation before transport
-    // can invoke the native hook; a relay is always machine-authored.
-    const id = delivery?.command.operationId ?? crypto.randomUUID();
-    terminalIds.push(id);
-    try {
-      memoryIndex().recordTerminalDelivery(id, targetConversation.id,
-        payload, relay ? "agent" : delivery?.command.origin?.kind ?? message.origin?.kind ?? "unknown", targetPath);
-    } catch { /* The hook also fails open if its derivative is unavailable. */ }
-  };
-  const conversationForTerminal = message.conversationId ? registry.conversation(message.conversationId as `conversation_${string}`) : null;
-  const currentSeatRefusal = async (target: Pick<RegistryConversation, "id"> | null) => {
-    const refusal = await legacySeatRefusal(registry, target);
-    return refusal ? seatRefusalFailure(refusal) : null;
-  };
-  const currentSeatAuthorityGuard = (target: Pick<RegistryConversation, "id"> | null): DeliveryAdmissionGuard => () => {
-    const refusal = legacySeatRefusalSync(target);
-    if (refusal) throw new DeliveryAdmissionRefusedError(refusal.error, refusal);
-  };
-  /* The paths are recorded before anything is typed, off the loop. Refused,
-     nothing is typed: the send fails before actuation, its images are deleted
-     and its reservation discarded the way a failure there always is. */
-  const recordArtifacts = async () => {
-    if (!deliveryId || imagePaths.length === 0) return;
-    const paths = imagePaths;
-    const recorded = await registry.deliveryWrite({ label: "delivery.artifacts", operationId: acceptedOperationId },
-      () => registry.recordDeliveryArtifacts(deliveryId, paths));
-    if (!recorded.acquired) throw new Error(REGISTRY_WRITER_BUSY);
-  };
-  try {
-    let target: string | null = null;
-    if (!filePath && pid !== null) {
-      const resolved = await (overrides.targetForKnownPid ?? targetForKnownPid)(pid);
-      if (resolved === "unknown" && !filePath) return await settle(failure("process is unknown to the viewer", 403));
-      target = resolved === "unknown" ? null : resolved;
-    }
-    /* Images are only saved to the inbox once a deliverable destination is
-       confirmed below — every early 409/403 return above and below happens
-       before any file touches disk, so a rejected request never orphans one. */
-    if (target !== null) {
-      const refusal = await currentSeatRefusal(conversationForTerminal);
-      if (refusal) return await settle(refusal);
-      const bundle = materializePayload();
-      imagePaths = bundle.imagePaths;
-      await recordArtifacts();
-      const finalRefusal = await currentSeatRefusal(conversationForTerminal);
-      if (finalRefusal) return await settle(finalRefusal);
-      recordTerminal(bundle.payload);
-      dispatching();
-      await (overrides.sendText ?? sendText)(target, bundle.payload, currentSeatAuthorityGuard(conversationForTerminal));
-      actuation = "completed";
-      return await settle({ ok: true, target, ...(imagePaths.length ? { imagePaths } : {}) });
-    }
-
-    /* No live pane: reopen the conversation as a fresh agent window in the
-       user's current tmux session and type the prompt there. */
-    if (!filePath || !(overrides.pathAllowed ?? pathAllowed)(filePath)) {
-      return await settle(failure("process is not in a tmux session", 409));
-    }
-    /* Pinned: the reopenable transcript may have aged past the scan's recency
-       cap — a conversation the operator can still message must stay openable. */
-    const all = await (overrides.listFiles ?? listFiles)({ pin: filePath });
-    const entry = all.find((item) => item.path === filePath);
-    if (!entry) {
-      return await settle(failure("file is unknown to the viewer", 403));
-    }
-    const entryProfile = registry.launchProfileForPath(entry.path);
-    /* Resolved before any image is materialized, like every other precondition
-       on this ladder: a fenced pool refuses without orphaning an inbox file. */
-    let entryAccount: string | null;
-    try {
-      entryAccount = resumeAccountId(registry, entry);
-    } catch (error) {
-      return await settle(accountFenceFailure(error));
-    }
-    const spec = (overrides.resumeSpecFor ?? resumeSpecFor)(entry.root, entry.path, {
-      model: message.resumeModel ?? entry.launchModel ?? entry.model,
-      effort: message.resumeEffort ?? entry.effort,
-      fast: message.resumeFast ?? entryProfile?.fast,
-      serviceTier: typeof message.resumeFast === "boolean"
-        ? serviceTierForSpeed(entryProfile?.serviceTier, message.resumeFast) : entryProfile?.serviceTier,
-      accountId: entryAccount,
-      readOnly: entryProfile?.readOnly,
-      permissionMode: entryProfile?.permissionMode,
-      sandbox: entryProfile?.sandbox,
-      allowSubagents: entryProfile?.allowSubagents,
-      plugins: entryProfile?.plugins,
-      mcpServers: entryProfile?.mcpServers,
-    });
-    if (spec) {
-      const refusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
-      if (refusal) return await settle(refusal);
-      const bundle = materializePayload();
-      imagePaths = bundle.imagePaths;
-      await recordArtifacts();
-      const finalRefusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
-      if (finalRefusal) return await settle(finalRefusal);
-      recordTerminal(bundle.payload);
-      dispatching();
-      const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: bundle.payload,
-        authorityGuard: currentSeatAuthorityGuard(registry.conversationForPath(entry.path) ?? conversationForTerminal) }));
-      if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
-      actuation = "completed";
-      return await settle({ ...outcome, ...(imagePaths.length ? { imagePaths } : {}) });
-    }
-
-    const byPath = new Map(all.map((item) => [item.path, item]));
-    const seen = new Set<string>();
-    let root = entry;
-    while (root.parent && byPath.has(root.parent) && !seen.has(root.path)) {
-      seen.add(root.path);
-      root = byPath.get(root.parent)!;
-    }
-    if (root.path === entry.path) {
-      return await settle(failure("this conversation cannot be resumed", 409));
-    }
-    /* Resolved before saving anything: the root's live pane or resume spec
-       must exist, or the request is rejected without ever writing an image. */
-    const rootProfile = registry.launchProfileForPath(root.path);
-    let rootAccount: string | null;
-    try {
-      rootAccount = resumeAccountId(registry, root);
-    } catch (error) {
-      return await settle(accountFenceFailure(error));
-    }
-    const rootSpec = (overrides.resumeSpecFor ?? resumeSpecFor)(root.root, root.path, {
-      model: root.launchModel ?? root.model,
-      effort: root.effort,
-      fast: rootProfile?.fast,
-      serviceTier: rootProfile?.serviceTier,
-      accountId: rootAccount,
-      readOnly: rootProfile?.readOnly,
-      permissionMode: rootProfile?.permissionMode,
-      sandbox: rootProfile?.sandbox,
-      allowSubagents: rootProfile?.allowSubagents,
-      plugins: rootProfile?.plugins,
-      mcpServers: rootProfile?.mcpServers,
-    });
-    if (!rootSpec) {
-      return await settle(failure("root session is unavailable for messaging", 409));
-    }
-    const sourceRefusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
-    if (sourceRefusal) return await settle(sourceRefusal);
-    const rootRefusal = await currentSeatRefusal(registry.conversationForPath(root.path));
-    if (rootRefusal) return await settle(rootRefusal);
-    const bundle = materializePayload();
-    imagePaths = bundle.imagePaths;
-    await recordArtifacts();
-    const finalSourceRefusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
-    if (finalSourceRefusal) return await settle(finalSourceRefusal);
-    const finalRootRefusal = await currentSeatRefusal(registry.conversationForPath(root.path));
-    if (finalRootRefusal) return await settle(finalRootRefusal);
-    const relayText = `User message for your branch «${entry.title.slice(0, 100)}» — forward it or handle it yourself:\n${bundle.payload}`;
-    const imageField = imagePaths.length ? { imagePaths } : {};
-    recordTerminal(relayText, root.path, true);
-    dispatching();
-    const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry: root, spec: rootSpec, payload: relayText,
-      authorityGuard: currentSeatAuthorityGuard(registry.conversationForPath(root.path)) }));
-    if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
-    actuation = "completed";
-    return await settle({ ...outcome, ...imageField });
-  } catch (error) {
-    const uncertain = actuation === "completed" || error instanceof TmuxDeliveryUncertainError;
-    if (!uncertain) {
-      discardTerminal();
-      if (deliveryId) {
-        try {
-          await registry.deliveryWrite({ label: "delivery.discard", operationId: acceptedOperationId }, () => registry.discardDelivery(deliveryId));
-        } catch { /* the original registry failure remains actionable */ }
-      }
-      deleteInboxImages(imagePaths);
-    }
-    settleRecord(uncertain ? "uncertain" : "failed", error instanceof Error ? error.message : String(error));
-    if (error instanceof DeliveryAdmissionRefusedError && error.details?.status === 409) {
-      return await settle(seatRefusalFailure(error.details));
-    }
-    return absorbing(failure(error, error instanceof DeliveryAdmissionRefusedError ? 409 : 500, uncertain ? "started" : undefined));
-  }
+  return { ...failure(NO_DELIVERY_HOST_REASON, 409), code: NO_DELIVERY_HOST_CODE, admission: "refused" };
 }

@@ -5,20 +5,16 @@ import path from "node:path";
 import type { RuntimeSnapshot } from "@/components/runtime/runtimeModel";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
-import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
 import type { RuntimeHostClient } from "../client";
 import { bindStructuredDeliveryQueue } from "../structuredDeliveryController";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fakeEngineHost";
 
-export const FAILED_LEGACY_BUFFER_IDENTIFIER = "legacy-buffer-fixture-identifier";
-
 export interface FailedLegacyBufferProjectionFixture {
   snapshot: RuntimeSnapshot;
   key: { engine: "codex"; sessionId: string };
   conversationId: string;
-  failedDelivery: DeliveryOutcome;
   rawIdentifiers: readonly string[];
   dispose(): Promise<void>;
 }
@@ -37,14 +33,10 @@ function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
 }
 
 /**
- * Reproduce the production ordering behind a failed legacy paste without
- * granting the stale structured adapter any liveness authority:
- *
- * 1. the legacy delivery path receives tmux's internal buffer failure from its
- *    injected transport seam;
- * 2. the same conversation records a live tmux host and an open durable turn;
- * 3. the structured delivery publisher projects that registry row to the
- *    runtime journal while the stale adapter remains dead.
+ * A registry row written while agents ran in terminal panes, projected by a
+ * release that no longer hosts any: the conversation records a pane host and
+ * an open durable turn, and the structured delivery publisher projects that
+ * row to the runtime journal while its stale structured adapter stays dead.
  */
 export async function createFailedLegacyBufferProjection(): Promise<FailedLegacyBufferProjectionFixture> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-buffer-projection-"));
@@ -54,20 +46,6 @@ export async function createFailedLegacyBufferProjection(): Promise<FailedLegacy
   try {
     const conversation = registry.ensureConversation("codex", "", "default");
     const sessionId = conversation.generations.at(-1)!.id;
-    const failedDelivery = await deliverConversationMessage({
-      pid: 203,
-      path: "",
-      conversationId: conversation.id,
-      text: "continue the live turn",
-      images: [],
-      clientMessageId: "pane-buffer-failure",
-    }, {
-      targetForKnownPid: async () => "%20",
-      sendText: async () => {
-        throw new Error(`no buffer ${FAILED_LEGACY_BUFFER_IDENTIFIER}`);
-      },
-    });
-
     const artifactPath = path.join(directory, `${sessionId}.jsonl`);
     const profile = emptyLaunchProfile({ cwd: directory });
     registry.recordConversationContinuityPath(conversation.id, artifactPath);
@@ -139,8 +117,7 @@ export async function createFailedLegacyBufferProjection(): Promise<FailedLegacy
       snapshot,
       key,
       conversationId: conversation.id,
-      failedDelivery,
-      rawIdentifiers: [FAILED_LEGACY_BUFFER_IDENTIFIER, sessionId, conversation.id, "fake:stale-adapter"],
+      rawIdentifiers: [sessionId, conversation.id, "fake:stale-adapter"],
       async dispose() {
         if (disposed) return;
         disposed = true;

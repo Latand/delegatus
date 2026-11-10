@@ -403,17 +403,9 @@ function deadProjectionSnapshot(conversationId: string): RuntimeSnapshot {
   };
 }
 
-test("a failed legacy pane-buffer probe reaches BranchPane as one live running verdict", async () => {
+test("a stored pane-host row reaches BranchPane as one live running verdict", async () => {
   const fixture = await createFailedLegacyBufferProjection();
   try {
-    expect(fixture.failedDelivery).toMatchObject({
-      ok: false,
-      outcome: "failed",
-      error: "Pane buffer unreadable — message was not sent.",
-    });
-    for (const rawIdentifier of fixture.rawIdentifiers) {
-      expect(JSON.stringify(fixture.failedDelivery)).not.toContain(rawIdentifier);
-    }
     expect(fixture.snapshot.sessions.filter((session) => session.conversationId === fixture.conversationId)).toHaveLength(1);
     expect(fixture.snapshot.sessions.find((session) => session.conversationId === fixture.conversationId)).toMatchObject({
       hostKind: "tmux-legacy",
