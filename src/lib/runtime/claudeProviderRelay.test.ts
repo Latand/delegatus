@@ -17,47 +17,95 @@ const events = (output: string) => output.split("\n\n").flatMap(value => {
 });
 const content = (output: string, field = "text") => events(output).map(item => item.delta?.[field] ?? "").join("");
 
-test("a paused downstream bounds upstream consumption and resumes on drain", async () => {
-  const count = 512, size = 64 * 1024;
-  let sent = 0;
+test("downstream acknowledgements advance upstream windows across write(false) and drain", async () => {
+  const windows = 8, perWindow = 64, size = 64 * 1024;
+  let sent = 0, acknowledged = 0, upstreamEnded = false;
+  let sendWindow!: () => void;
+  let rejectRun!: (error: Error) => void;
+  const failure = new Promise<never>((_, reject) => { rejectRun = reject; });
+  let blocked!: () => void;
+  const backpressured = new Promise<void>(resolve => { blocked = resolve; });
+  let awaitingDrain = false, falseWrites = 0, drains = 0;
+  let alias = "";
+  const originalWrite = http.ServerResponse.prototype.write;
+  // Observe the real relay response only; leave the producer's writes unchanged.
+  const writes = spyOn(http.ServerResponse.prototype, "write").mockImplementation(function (this: http.ServerResponse, ...args: Parameters<typeof originalWrite>) {
+    const downstream = this.req.headers.authorization === `Bearer ${alias}`;
+    if (downstream && awaitingDrain) rejectRun(new Error("relay wrote again before downstream drain"));
+    const accepted = originalWrite.apply(this, args);
+    if (downstream && !accepted) {
+      awaitingDrain = true; falseWrites++;
+      this.once("drain", () => { awaitingDrain = false; drains++; });
+      blocked();
+    }
+    return accepted;
+  });
   const upstream = http.createServer((request, response) => {
     request.resume(); response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(start + blockStart());
-    const pump = () => {
-      while (!response.destroyed && sent < count) {
-        sent++;
-        if (!response.write(delta("z".repeat(size)))) { response.once("drain", pump); return; }
-      }
-      if (!response.destroyed) response.end(blockStop + stop);
+    sendWindow = () => {
+      // Only receipt of the previous window lets the producer advance, including EOF.
+      if (sent !== acknowledged * perWindow) { rejectRun(new Error("upstream advanced without acknowledgement")); return; }
+      if (acknowledged === windows) { upstreamEnded = true; response.end(blockStop + stop); return; }
+      const end = sent + perWindow;
+      const pump = () => {
+        while (!response.destroyed && sent < end) {
+          sent++;
+          if (!response.write(delta("z".repeat(size)))) { response.once("drain", pump); return; }
+        }
+      };
+      pump();
     };
-    pump();
+    sendWindow();
   });
-  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
-  const address = upstream.address();
-  if (!address || typeof address === "string") throw new Error("No fixture port");
-  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "abcdefgh", headers: {}, sessionId: "fixture" });
-  let client: http.IncomingMessage | undefined;
+  let relay: Awaited<ReturnType<typeof startClaudeProviderRelay>> | undefined;
+  let client: http.IncomingMessage | undefined, request: http.ClientRequest | undefined;
+  const watchdog = setTimeout(() => rejectRun(new Error(`downstream acknowledgement stalled at window ${acknowledged}/${windows} (sent ${sent} frames)`)), 20000);
   try {
-    client = await new Promise<http.IncomingMessage>((resolve, reject) => {
-      const request = http.request(relay.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } }, resolve);
+    await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("No fixture port");
+    relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${address.port}`, token: "abcdefgh", headers: {}, sessionId: "fixture" });
+    alias = relay.alias;
+    client = await Promise.race([failure, new Promise<http.IncomingMessage>((resolve, reject) => {
+      request = http.request(relay!.baseUrl + "/v1/messages", { method: "POST", headers: { authorization: `Bearer ${alias}` } }, resolve);
       request.once("error", reject); request.end();
-    });
+    })]);
     client.pause();
-    let held = sent, stable = 0;
-    for (let observation = 0; observation < 50 && stable < 3; observation++) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-      stable = sent === held ? stable + 1 : 0;
-      held = sent;
-    }
-    expect(stable).toBe(3);
-    expect(held).toBeGreaterThan(0); expect(held).toBeLessThan(count);
-    let received = 0;
-    client.on("data", chunk => { received += chunk.length; });
+    await Promise.race([backpressured, failure]);
+    expect(upstreamEnded).toBe(false);
+    let pending = "", received = 0, terminal = false;
+    client.setEncoding("utf8");
+    client.on("data", (chunk: string) => {
+      pending += chunk;
+      let boundary;
+      while ((boundary = pending.indexOf("\n\n")) !== -1) {
+        const [event] = events(pending.slice(0, boundary));
+        pending = pending.slice(boundary + 2);
+        if (event?.delta?.type === "text_delta") {
+          if (!/^z+$/.test(event.delta.text)) { rejectRun(new Error("downstream content changed")); return; }
+          received += event.delta.text.length;
+          if (received === (acknowledged + 1) * perWindow * size) {
+            if (upstreamEnded) { rejectRun(new Error("upstream ended before acknowledgement")); return; }
+            acknowledged++;
+            sendWindow();
+          }
+        }
+        if (event?.type === "message_stop") terminal = true;
+      }
+    });
     const finished = new Promise<void>((resolve, reject) => { client!.once("end", resolve); client!.once("error", reject); });
-    client.resume(); await finished;
-    expect(sent).toBe(count); expect(received).toBeGreaterThan(count * size);
-    console.info(JSON.stringify({ workloadBytes: count * size, heldUpstreamFrames: held, completedFrames: sent, peakProcessRssKiB: process.resourceUsage().maxRSS }));
-  } finally { client?.destroy(); relay.close(); upstream.closeAllConnections(); upstream.close(); }
+    client.resume();
+    await Promise.race([finished, failure]);
+    expect(acknowledged).toBe(windows);
+    expect(sent).toBe(windows * perWindow);
+    expect(received).toBe(windows * perWindow * size);
+    expect(terminal).toBe(true); expect(pending).toBe("");
+    expect(falseWrites).toBeGreaterThan(0); expect(drains).toBe(falseWrites);
+  } finally {
+    clearTimeout(watchdog); client?.destroy(); request?.destroy(); relay?.close();
+    upstream.closeAllConnections(); upstream.close(); writes.mockRestore();
+  }
 });
 
 test("UTF-8 network boundaries and multi-line SSE preserve content and metadata", async () => {
@@ -489,7 +537,7 @@ test("provider relay checks initial block text together with later deltas", asyn
   } finally { relay.close(); upstream.stop(); }
 });
 
-test("provider relay preserves thinking and signature deltas in one block", async () => {
+for (const aliasByte of [0x11, 0xee]) test(`provider relay preserves thinking and signature deltas in one block (alias ${aliasByte.toString(16)})`, async () => {
   const token = "opaque-provider-token-8427";
   const frame = (type: string, body: unknown) => `event: ${type}\ndata: ${JSON.stringify(body)}\n\n`;
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response([
@@ -499,14 +547,23 @@ test("provider relay preserves thinking and signature deltas in one block", asyn
     frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "safe-signature" } }),
     frame("content_block_stop", { type: "content_block_stop", index: 0 }),
   ].join(""), { headers: { "content-type": "text/event-stream" } }) });
-  const relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers: {}, sessionId: "fixture" });
+  const random = spyOn(crypto, "randomBytes").mockImplementation(((size: number) => Buffer.alloc(size, aliasByte)) as typeof crypto.randomBytes);
+  let relay: Awaited<ReturnType<typeof startClaudeProviderRelay>>;
+  try { relay = await startClaudeProviderRelay({ baseUrl: `http://127.0.0.1:${upstream.port}`, token, headers: {}, sessionId: "fixture" }); }
+  catch (error) { upstream.stop(); throw error; }
+  finally { random.mockRestore(); }
   try {
     const response = await fetch(`${relay.baseUrl}/v1/events`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
     const frames = (await response.text()).trim().split("\n\n");
     const events = frames.map((value) => JSON.parse(value.split("\n").find((line) => line.startsWith("data: "))!.slice(6)));
-    expect(events.map((item) => item.type)).toEqual(["content_block_start", "content_block_delta", "content_block_delta", "content_block_stop"]);
-    expect(events[1].delta).toEqual({ type: "thinking_delta", thinking: "[redacted]" });
-    expect(events[2].delta).toEqual({ type: "signature_delta", signature: "safe-signature" });
+    expect(events.filter(item => item.type !== "content_block_delta").map(item => item.type)).toEqual(["content_block_start", "content_block_stop"]);
+    const deltas = events.filter(item => item.type === "content_block_delta").map(item => item.delta);
+    expect(deltas.map(item => item.type).filter((type, index) => index === 0 || type !== deltas[index - 1].type)).toEqual(["thinking_delta", "signature_delta"]);
+    expect(deltas.map(item => item.thinking ?? "").join("")).toBe("[redacted]");
+    expect(deltas.map(item => item.signature ?? "").join("")).toBe("safe-signature");
+    expect(events.every(item => item.index === 0)).toBe(true);
+    expect(events[0].type).toBe("content_block_start");
+    expect(events.at(-1).type).toBe("content_block_stop");
   } finally { relay.close(); upstream.stop(); }
 });
 
