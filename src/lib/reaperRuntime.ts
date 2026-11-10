@@ -793,7 +793,9 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
  * pane as its host. The pane census that used to clear such rows is gone, so
  * the recorded agent process decides: a row whose agent no longer runs under
  * its recorded start identity becomes unhosted. No terminal multiplexer is
- * asked; a row whose process is still alive is left as it is.
+ * asked; a row whose process is still alive is left as it is. A live process
+ * whose identity cannot be read (no platform reader, hidden /proc) proves
+ * nothing either way, so its row keeps its host.
  */
 export async function retireDeadPaneHostRows(
   registry: Pick<AgentRegistry, "transcriptHostReconciliationRows" | "deliveryWrite" | "markUnhosted">,
@@ -803,7 +805,9 @@ export async function retireDeadPaneHostRows(
   const agentGone = (entry: { host: { agent: { pid: number; startIdentity: string | null } } | null }) => {
     const agent = entry.host?.agent;
     if (!agent) return false;
-    return agent.startIdentity === null ? !pidAlive(agent.pid) : processIdentity(agent.pid) !== agent.startIdentity;
+    if (agent.startIdentity === null) return !pidAlive(agent.pid);
+    const identity = processIdentity(agent.pid);
+    return identity === null ? !pidAlive(agent.pid) : identity !== agent.startIdentity;
   };
   const dead = registry.transcriptHostReconciliationRows([], []).hostedEntries.filter(([, entry]) => agentGone(entry));
   if (dead.length === 0) return 0;
