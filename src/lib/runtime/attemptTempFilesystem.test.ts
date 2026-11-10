@@ -7,7 +7,8 @@ import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+  RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -334,6 +335,89 @@ test("one tick shares checkout walks and invalidates a negative result after a l
   expect(inventory.walks.length).toBe(69);
   now += 20_000;
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
+});
+
+test("a looping checkout link fails no reference check, and a link into the root beside it still holds the root", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-beside-loop"); fs.mkdirSync(directory);
+  const processes = repositoryProcesses(parent, 1), work = path.join(parent, "repository-0/work");
+  const clear = () => attemptReferencesClear(directory, directory, { ownNamespace: null, processes }, async () => true);
+  // A link to itself, and a link whose path runs through that loop.
+  fs.symlinkSync(path.join(work, "loop"), path.join(work, "loop"));
+  fs.symlinkSync(path.join(work, "loop/inner"), path.join(work, "through-loop"));
+  expect(await clear()).toBeTrue();
+  // A loop inside the attempt root is still named by its lexical target.
+  fs.symlinkSync(path.join(directory, "self"), path.join(directory, "self"));
+  const intoLoop = path.join(work, "into-root-loop"); fs.symlinkSync(path.join(directory, "self"), intoLoop);
+  expect(await clear()).toBeFalse();
+  fs.unlinkSync(intoLoop);
+  expect(await clear()).toBeTrue();
+  fs.symlinkSync(directory, path.join(work, "dependency"), "dir");
+  expect(await clear()).toBeFalse();
+});
+
+test("reads kept across ticks serve unchanged checkouts; a changed or aged checkout is read again", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-kept-reads"); fs.mkdirSync(directory);
+  const processes = repositoryProcesses(parent, 3);
+  const retained: RetainedCheckoutReads = new Map();
+  let now = 1_000;
+  const tick = () => new RepositoryLinkInventory({ now: () => now, retained });
+  const clear = (inventory: RepositoryLinkInventory) =>
+    attemptReferencesClear(directory, directory, { ownNamespace: null, processes }, async () => true, inventory);
+  const first = tick();
+  expect(await clear(first)).toBeTrue();
+  expect(first.walks).toHaveLength(3);
+  now += 60_000;
+  const second = tick();
+  expect(await clear(second)).toBeTrue();
+  expect(second.walks).toHaveLength(0);
+  const link = path.join(parent, "repository-1/work/late-link");
+  fs.symlinkSync(directory, link, "dir");
+  now += 60_000;
+  const third = tick();
+  expect(await clear(third)).toBeFalse();
+  expect(third.walks).toEqual([path.join(parent, "repository-1")]);
+  fs.unlinkSync(link);
+  now += RETAINED_CHECKOUT_READ_MAX_AGE_MS + 1;
+  const fourth = tick();
+  expect(await clear(fourth)).toBeTrue();
+  expect(fourth.walks).toHaveLength(3);
+});
+
+test("a reused validation never answers the fence that precedes a destructive step", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-reused-validation"); fs.mkdirSync(directory);
+  const processes = repositoryProcesses(parent, 2);
+  const inventory = new RepositoryLinkInventory({ validationReuseMs: 60_000 });
+  const clear = () => attemptReferencesClear(directory, directory, { ownNamespace: null, processes }, async () => true, inventory);
+  expect(await clear()).toBeTrue();
+  expect(inventory.unchangedAll()).toBeTrue();
+  fs.symlinkSync(directory, path.join(parent, "repository-1/work/late-link"), "dir");
+  // Inside the reuse window an observation answers from its last validation.
+  expect(await clear()).toBeTrue();
+  expect(inventory.walks).toHaveLength(2);
+  // The fence reads every directory again, and its refusal ends the reuse.
+  expect(inventory.unchangedAll()).toBeFalse();
+  expect(await clear()).toBeFalse();
+  expect(inventory.walks).toHaveLength(3);
+});
+
+test("a directory changed inside the timestamp granule is listed only after the granule has passed", async () => {
+  const parent = root(), repository = path.join(parent, "repository"), work = path.join(repository, "work");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  const directoryReads = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = directoryReads.readdir.bind(directoryReads);
+  const listedAt: number[] = [];
+  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+    if (String(target) === work) listedAt.push(Date.now());
+    return readdir(target, options);
+  });
+  try {
+    fs.mkdirSync(work);
+    await new RepositoryLinkInventory().targets(repository);
+    expect(listedAt).toHaveLength(1);
+    expect(listedAt[0]! - fs.lstatSync(work).ctimeMs).toBeGreaterThanOrEqual(20);
+  } finally { observed.mockRestore(); }
 });
 
 test("a link created between directory enumeration and metadata capture cannot become a cached negative", async () => {
