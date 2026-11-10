@@ -6276,6 +6276,19 @@ export class AgentRegistry {
     })));
   }
 
+  /** One entry by its session key. A caller inside an admitted writer checks
+      custody of a single host; SQLite reads that row alone, through the
+      writer's own transaction, where the complete view walked every retained
+      row under the write lock. */
+  hostEntry(key: SessionKey): AgentRegistryEntry | null {
+    const id = sessionKeyId(key);
+    if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) return this.readOnlySnapshot().entries[id] ?? null;
+    return this.readKeyed(file => {
+      const entry = file.entries[id];
+      return entry ? detachedRow(entry) : null;
+    });
+  }
+
   /** The rows a tmux census reads: the entries and launches it names, the hot
       entries a pane still hosts and the hot launches still starting. An
       archived entry has no host and a starting launch is never archived, so
@@ -8827,7 +8840,7 @@ export class AgentRegistry {
    * resumes the reviewer's session like any other finished agent's.
    */
   endHostlessSpawn(launchId: string): boolean {
-    if (!this.hostlessSpawnMarker(this.readOnlySnapshot(), launchId)) return false;
+    if (!this.readKeyed((file) => this.hostlessSpawnMarker(file, launchId) !== null)) return false;
     return this.mutate((file) => {
       const entry = this.hostlessSpawnMarker(file, launchId);
       if (!entry) return false;
@@ -10008,9 +10021,10 @@ export class AgentRegistry {
 
   /** The failed account switch holding this conversation's messages, or null (#1846). */
   switchHold(id: ViewerConversationId): ConversationSwitchHold | null {
-    const snapshot = this.readOnlySnapshot();
-    const hold = snapshot.conversations[resolveConversationAlias(snapshot, id)]?.switchHold;
-    return hold ? clone(hold) : null;
+    return this.readKeyed((file) => {
+      const hold = file.conversations[resolveConversationAlias(file, id)]?.switchHold;
+      return hold ? clone(hold) : null;
+    });
   }
 
   /** The operator sends the held messages on the account the conversation runs on (#1846). */
@@ -10029,11 +10043,12 @@ export class AgentRegistry {
 
   /** Whether a reconfigure operation was cancelled: withdrawn before its claim, or claimed and then cancelled. */
   reconfigureCancelled(id: ViewerConversationId, operationId: string): boolean {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    if (!conversation) return false;
-    if (conversation.reconfigure?.operationId === operationId && conversation.reconfigure.status === "cancelled") return true;
-    return Boolean(conversation.reconfigureWithdrawals?.some((withdrawal) => withdrawal.operationId === operationId));
+    return this.readKeyed((file) => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      if (!conversation) return false;
+      if (conversation.reconfigure?.operationId === operationId && conversation.reconfigure.status === "cancelled") return true;
+      return Boolean(conversation.reconfigureWithdrawals?.some((withdrawal) => withdrawal.operationId === operationId));
+    });
   }
 
   /**

@@ -12,6 +12,24 @@ const shared = global.__delegatusSqliteReaders ??= { next: 0, connections: new W
 const collections = new Set(["pipelines", "pipelines_archive", "deliveryOperationOwners", "tasks", "flows", "workflows",
   "entries", "receipts", "conversations", "deliveries", "launches", "memberships", "attention", "board", "accounts"]);
 
+/** On an observed statement's iterator: the next rows, at most `limit`, read
+ * under one measurement. Fewer rows than the limit means the read is done. */
+export const SQLITE_ROW_BATCH = Symbol("sqliteRowBatch");
+
+/** The next rows of an iterator, at most `limit`. An observed iterator reads
+ * them under one measurement; any other is read a row at a time. */
+export function nextSqliteRows<Row>(rows: Iterator<Row>, limit: number): Row[] {
+  const batch = (rows as { [SQLITE_ROW_BATCH]?: (limit: number) => Row[] })[SQLITE_ROW_BATCH];
+  if (batch) return batch(limit);
+  const read: Row[] = [];
+  while (read.length < limit) {
+    const next = rows.next();
+    if (next.done) break;
+    read.push(next.value);
+  }
+  return read;
+}
+
 export function bindSqliteReadIdentity(handle: object, current: () => object): void {
   shared.connections.set(handle, () => shared.connections.get(current())?.());
 }
@@ -55,6 +73,17 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
       const label = `${name(args)}.iterate`;
       return new Proxy(iterator, { get(target, property) {
         if (property === Symbol.iterator) return function (this: unknown) { return this; };
+        // One measurement for a run of rows: a row measured alone costs more
+        // in its measurement than in SQLite.
+        if (property === SQLITE_ROW_BATCH) return (limit: number) => measure(label, () => {
+          const rows: unknown[] = [];
+          while (rows.length < limit) {
+            const next = target.next();
+            if (next.done) break;
+            rows.push(next.value);
+          }
+          return rows;
+        });
         const value = Reflect.get(target, property, target);
         return typeof value === "function" ? (...values: unknown[]) => measure(label, () => value.apply(target, values)) : value;
       } });

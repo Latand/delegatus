@@ -1539,3 +1539,116 @@ test.each([256, 257, 512])("a %i row hot journal batch retains the validated col
   expect((reader.readOnlySnapshot()).file.receipts["cold-batch"]!.error).toBe("archive changed");
   expect(held.file.receipts["cold-batch"]!.error).toBe("retained history");
 });
+
+test("a complete header read measures its rows in batches", async () => {
+  const { open, kept } = fixture();
+  const writer = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 600; index++) {
+      const id = `batched-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const reader = open();
+  const started = performance.now();
+  const view = await reader.prepareReadOnlySnapshot();
+  const measurements = performanceSpans.snapshot(started).records
+    .filter(record => record.kind === "sync" && performanceSites[record.site] === "registry.headers")
+    .reduce((total, record) => total + record.count, 0);
+  expect(Object.keys(view.file.receipts).filter(id => id.startsWith("batched-receipt-")))
+    .toEqual(Array.from({ length: 600 }, (_, index) => `batched-receipt-${index}`));
+  // 600 archived headers and the keys of their collection, a row at a time,
+  // are more than 1,200 measurements.
+  expect(measurements).toBeGreaterThan(0);
+  expect(measurements).toBeLessThan(60);
+}, 30_000);
+
+test("a peer's appended and removed rows keep the kept collection order", () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    file.receipts["cold-order"] = { ...template, launchId: "cold-order", state: "failed",
+      createdAt: "2020-01-01T00:00:00Z", error: "retained history" };
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const before = Object.keys(reader.readOnlySnapshot().file.receipts);
+  const headerReads = (started: number) => performanceSpans.snapshot(started).records
+    .filter(record => performanceSites[record.site] === "registry.headers").length;
+
+  writer.mutate(file => {
+    file.receipts["appended-one"] = { ...template, launchId: "appended-one" };
+    file.receipts["appended-two"] = { ...template, launchId: "appended-two" };
+  }, false);
+  let started = performance.now();
+  const appended = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+
+  writer.mutate(file => { delete file.receipts[removed]; }, false);
+  started = performance.now();
+  const shortened = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(shortened.receipts)).toEqual([...before, "appended-one", "appended-two"].filter(key => key !== removed));
+  // The view the reader held keeps the order it was built with.
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+  // A store that reads the order whole agrees.
+  expect(Object.keys(open().readOnlySnapshot().file.receipts)).toEqual(Object.keys(shortened.receipts));
+});
+
+test("a peer's archive changes refresh the view from the journal", () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  const retained = (id: string) => ({ ...template, launchId: id, state: "failed" as const,
+    createdAt: "2020-01-01T00:00:00Z", error: "retained history" });
+  writer.mutate(file => {
+    for (let index = 0; index < 40; index++) file.receipts[`cold-${index}`] = retained(`cold-${index}`);
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const held = reader.readOnlySnapshot().file;
+  const heldKeys = Object.keys(held.receipts);
+  const collections = ["entries", "receipts", "conversations", "conversationAliases", "heldDeliveries", "deliveryOperationOwners", "lineageEdges", "memberships"] as const;
+  const refreshed = () => {
+    const started = performance.now();
+    const view = reader.readOnlySnapshot().file;
+    const headerReads = performanceSpans.snapshot(started).records
+      .filter(record => performanceSites[record.site] === "registry.headers").length;
+    const complete = open().readOnlySnapshot().file;
+    for (const collection of collections) {
+      expect(Object.keys(view[collection])).toEqual(Object.keys(complete[collection]));
+      expect(view[collection]).toEqual(complete[collection]);
+    }
+    return { view, headerReads };
+  };
+
+  // A rewritten archived row leaves the archive.
+  writer.mutate(file => { file.receipts["cold-3"]!.error = "rewritten"; }, false);
+  const rewritten = refreshed();
+  expect(rewritten.view.receipts["cold-3"]!.error).toBe("rewritten");
+  expect(rewritten.headerReads).toBe(0);
+
+  // A peer's archive pass takes it back, with rows the view never held.
+  writer.mutate(file => {
+    for (let index = 40; index < 48; index++) file.receipts[`cold-${index}`] = retained(`cold-${index}`);
+  }, false);
+  reader.readOnlySnapshot();
+  while (writer.archiveInactive(1024) > 0) { /* archive the new rows */ }
+  const archived = refreshed();
+  expect(archived.view.receipts["cold-47"]!.error).toBe("retained history");
+  expect(archived.view.receipts["cold-3"]!.error).toBe("rewritten");
+  expect(archived.headerReads).toBe(0);
+
+  // An archived row is removed.
+  writer.mutate(file => { delete file.receipts["cold-5"]; }, false);
+  const removed = refreshed();
+  expect(removed.view.receipts["cold-5"]).toBeUndefined();
+  expect(removed.headerReads).toBe(0);
+
+  // The view held from before every change still reads its own versions.
+  expect(Object.keys(held.receipts)).toEqual(heldKeys);
+  expect(held.receipts["cold-3"]!.error).toBe("retained history");
+  expect(held.receipts["cold-5"]!.error).toBe("retained history");
+});
