@@ -1539,3 +1539,28 @@ test.each([256, 257, 512])("a %i row hot journal batch retains the validated col
   expect((reader.readOnlySnapshot()).file.receipts["cold-batch"]!.error).toBe("archive changed");
   expect(held.file.receipts["cold-batch"]!.error).toBe("retained history");
 });
+
+test("a complete header read measures its rows in batches", async () => {
+  const { open, kept } = fixture();
+  const writer = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 600; index++) {
+      const id = `batched-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const reader = open();
+  const started = performance.now();
+  const view = await reader.prepareReadOnlySnapshot();
+  const measurements = performanceSpans.snapshot(started).records
+    .filter(record => record.kind === "sync" && performanceSites[record.site] === "registry.headers")
+    .reduce((total, record) => total + record.count, 0);
+  expect(Object.keys(view.file.receipts).filter(id => id.startsWith("batched-receipt-")))
+    .toEqual(Array.from({ length: 600 }, (_, index) => `batched-receipt-${index}`));
+  // 600 archived headers and the keys of their collection, a row at a time,
+  // are more than 1,200 measurements.
+  expect(measurements).toBeGreaterThan(0);
+  expect(measurements).toBeLessThan(60);
+}, 30_000);

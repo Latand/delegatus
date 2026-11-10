@@ -2,7 +2,7 @@ import { seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
-import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
+import { nextSqliteRows, observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
@@ -231,6 +231,25 @@ function finishSteps<T>(steps: Generator<void, T>): T {
   let next = steps.next();
   while (!next.done) next = steps.next();
   return next.value;
+}
+
+/** Rows one measured header read returns. A header measured alone spent more
+ * in its two measurements than in SQLite: the keys of 20,000 rows took 91 ms
+ * a row at a time. */
+const HEADER_BATCH_ROWS = 1024;
+
+/** Every row of one open statement, a measured batch for each step. The
+ * statement is finished when the read ends, is refused or is abandoned. */
+function* headerRowSteps<Row>(rows: IterableIterator<Row>): Generator<void, Row[]> {
+  const read: Row[] = [];
+  try {
+    for (;;) {
+      const batch = performanceSpans.sync("registry.headers", () => nextSqliteRows(rows, HEADER_BATCH_ROWS), HEADER_BATCH_ROWS);
+      for (const row of batch) read.push(row);
+      yield;
+      if (batch.length < HEADER_BATCH_ROWS) return read;
+    }
+  } finally { rows.return?.(); }
 }
 
 /** Native sorts see at most 128 headers. Merge copying also yields every 128
@@ -2079,10 +2098,8 @@ export class SqliteAgentRegistryStore {
       } finally { changed.return?.(); }
     } else {
       this.coldKeys = new Set();
-      const keys = this.db.query<{ collection: string; row_key: string }, []>("SELECT collection,row_key FROM registry_cold").iterate();
-      try {
-        for (const row of keys) { this.coldKeys.add(grantDecisionKey(row.collection,row.row_key)); yield; }
-      } finally { keys.return?.(); }
+      for (const row of yield* headerRowSteps(this.db.query<{ collection: string; row_key: string }, []>(
+        "SELECT collection,row_key FROM registry_cold").iterate())) this.coldKeys.add(grantDecisionKey(row.collection,row.row_key));
       for (const [collection,rows] of this.rowCache) {
         for (const key of rows.keys()) {
           if (this.coldKeys.has(grantDecisionKey(collection,key))) rows.delete(key);
@@ -2243,18 +2260,14 @@ export class SqliteAgentRegistryStore {
   private *orderedKeysSteps(collection: RowCollection): Generator<void, string[]> {
     let order = this.collectionOrders.get(collection);
     if (!order) {
-      const rows = this.db.query<{ row_key: string; row_order: number }, [string]>(
-        "SELECT row_key,row_order FROM registry_rows WHERE collection=? ORDER BY row_order").iterate(collection);
+      const rows = yield* headerRowSteps(this.db.query<{ row_key: string; row_order: number }, [string]>(
+        "SELECT row_key,row_order FROM registry_rows WHERE collection=? ORDER BY row_order").iterate(collection));
       const keys: string[] = [], orders = new Map<string, number>();
-      try {
-        for (;;) {
-          const next = performanceSpans.sync("registry.headers", () => rows.next());
-          if (next.done) break;
-          keys.push(next.value.row_key);
-          orders.set(next.value.row_key,next.value.row_order);
-          yield;
-        }
-      } finally { rows.return?.(); }
+      for (const row of rows) {
+        keys.push(row.row_key);
+        orders.set(row.row_key,row.row_order);
+      }
+      yield;
       order = { keys, orders };
       this.collectionOrders.set(collection,order);
     }
@@ -3014,19 +3027,10 @@ export class SqliteAgentRegistryStore {
     const signature = prior && journal.archiveUnchanged ? prior.signature
       : this.changesReady ? snapshot.stamp : "";
     const cache = prior?.signature === signature ? prior : null;
-    const readHeaders: Array<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }> = [];
-    let headers = cache?.headers ?? readHeaders;
+    let headers: readonly { collection: RowCollection; row_key: string; archive_id: number }[] = cache?.headers ?? [];
     if (!cache && this.changesReady) {
-      const rows = this.db.query<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }, []>(
-        "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate();
-      try {
-        for (;;) {
-          const next = performanceSpans.sync("registry.headers", () => rows.next());
-          if (next.done) break;
-          readHeaders.push(next.value);
-          yield;
-        }
-      } finally { rows.return?.(); }
+      const readHeaders = yield* headerRowSteps(this.db.query<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }, []>(
+        "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate());
       headers = yield* orderedHeaderSteps(readHeaders, (a, b) => a.row_order - b.row_order);
     }
     yield;
@@ -3051,16 +3055,8 @@ export class SqliteAgentRegistryStore {
     const archivedDeliveries = keptOwners ? undefined : grouped.get("heldDeliveries");
     if (archivedDeliveries) {
       const storedOwners = new Set<string>();
-      const ownerRows = this.db.query<{ row_key: string }, []>(
-        "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners'").iterate();
-      try {
-        for (;;) {
-          const next = ownerRows.next();
-          if (next.done) break;
-          storedOwners.add(next.value.row_key);
-          yield;
-        }
-      } finally { ownerRows.return?.(); }
+      for (const row of yield* headerRowSteps(this.db.query<{ row_key: string }, []>(
+        "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners'").iterate())) storedOwners.add(row.row_key);
       for (const header of archivedDeliveries) {
         const operationId = this.coldRowProjections.get(header.archive_id)?.operationId;
         if (operationId && !storedOwners.has(operationId) && !syntheticOwners.has(operationId)) syntheticOwners.set(operationId,header.row_key);
