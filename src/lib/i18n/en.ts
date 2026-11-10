@@ -1071,11 +1071,15 @@ export const en = {
   "switch.hide": "hide",
   "switch.restore": "restore",
   "accounts.spendCredits": "Spend paid credits",
-  "accounts.spendCreditsOn": "On: past its limit this account keeps working on paid credits until they run out.",
-  "accounts.paidBalance": "Paid balance: {balance}",
-  "accounts.paidBalanceRead": "Paid balance: {balance} · read {at}",
   "accounts.pastLimitOnPaid": "Past its plan limit",
   "accounts.paidNone": "No paid credits read for this account",
+  "accounts.limitsCaption": "% left · reset",
+  "accounts.credits": "Credits",
+  "accounts.defaultMark": "default",
+  "accounts.makeDefault": "Make default",
+  "accounts.makeDefaultAria": "Make {label} the default account",
+  "accounts.paidRead": "read {at}",
+  "accounts.spendCreditsOnShort": "Past its limit it keeps working on credits until they run out.",
   "accounts.spendCreditsFailed": "Could not save paid spending. Try the switch again.",
   "accounts.activeAria": "Active Codex account",
   "accounts.placeholder": "Codex account",
@@ -1122,8 +1126,6 @@ export const en = {
   "accounts.trigger": "Accounts",
   "accounts.active": "active",
   "accounts.nextForUnpinned": "Next for unpinned work",
-  "accounts.nextForUnpinnedShort": "Next pick",
-  "accounts.needsLogin": "needs sign-in",
   "accounts.pendingLogin": "signing in…",
   "accounts.auth.authenticated": "Authenticated",
   "accounts.auth.signedOut": "Signed out",
@@ -1268,13 +1270,10 @@ export const en = {
   // Account switching (#40)
   "accounts.titleFor": "{engine} accounts",
   "accounts.triggerAria": "{engine} accounts — switch or add",
-  "accounts.effective": "{pct}%",
-  "accounts.effectiveTip": "{window} binds",
-  "accounts.effectiveStale": "{window} binds · stale",
   "accounts.limitsAria": "Quota windows for {label}",
   "accounts.limitsChecked": "Checked",
+  "accounts.noDataYet": "No data yet",
   "accounts.limitsStale": "Last known values",
-  "accounts.limitsStaleTip": "Last known values — not a live read",
   // Claude sign-in slice (#61)
   "accounts.claudeLoginStarted": "Sign-in started for {label}",
   "accounts.claudeLogin.starting": "Starting sign-in…",
@@ -1344,7 +1343,6 @@ export const en = {
   "limits.windowWeekly": "weekly window",
   // One model tier's own weekly window (#1358, #1796), named by the tier the
   // provider reported it under — Fable, Opus, Sonnet, or one nobody has seen yet.
-  "limits.windowTier": "{tier} weekly window",
   "limits.tierWeek": "{tier} · Week",
 
   // SwitchCard
@@ -5011,21 +5009,13 @@ export const en = {
      active account as a card with its windows and actions, the other accounts
      as quiet rows, sign-in rows, and the add row. Append-only, keys prefixed
      mobile2.accounts.* */
-  "mobile2.accounts.ready": "ready",
-  "mobile2.accounts.pending": "signing in",
   "mobile2.accounts.plan": "{plan} plan",
-  "mobile2.accounts.checked": "checked {time}",
-  "mobile2.accounts.noReading": "no reading yet",
   "mobile2.accounts.noAccounts": "No {engine} accounts yet",
   "mobile2.accounts.cornerAria": "{left}% left of the {window} window",
-  "mobile2.accounts.windowAria": "{window} window for {label}",
-  "mobile2.accounts.signIn": "sign in",
   "mobile2.accounts.signInAria": "Sign in to {label}",
   "mobile2.accounts.signInStarted": "Device sign-in opened for {label} — it becomes active once signed in",
   "mobile2.accounts.signInFailed": "Could not open the device sign-in for {label}",
-  "mobile2.accounts.openSignIn": "Open the device sign-in",
   "mobile2.accounts.cancelSignIn": "Cancel",
-  "mobile2.accounts.switchAria": "Use {label} for future launches",
   "mobile2.accounts.switched": "Future launches use {label}",
   "mobile2.accounts.refreshed": "Limits re-read for {label}",
   "mobile2.accounts.resetUsed": "Reset used on {label}",

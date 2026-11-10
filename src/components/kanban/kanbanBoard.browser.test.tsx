@@ -204,8 +204,9 @@ describe("per-account paid spending", () => {
           const toggle = row.getByRole("switch");
           await toggle.waitFor();
           expect(await toggle.isChecked()).toBe(false);
-          expect(await row.innerText()).toMatch(/12[.,]50/);
-          expect(await row.innerText()).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
+          // Whole credits: 12.50 reads as 13, with no fraction.
+          expect(await row.innerText()).toMatch(/\b13\b/);
+          expect(await row.innerText()).not.toMatch(/12[.,]50|\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
           await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
           await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
           refuse = true;
@@ -214,7 +215,7 @@ describe("per-account paid spending", () => {
           expect(await toggle.isChecked()).toBe(true);
           const geometry = await row.evaluate(element => {
             const outer = element.getBoundingClientRect();
-            const rects = [...element.querySelectorAll("p, label")].flatMap(child => {
+            const rects = [...element.querySelectorAll("p, span")].flatMap(child => {
               const range = document.createRange(); range.selectNodeContents(child);
               return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
             });
@@ -241,7 +242,7 @@ describe("per-account paid spending", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 
-  browserTest("an exhausted account on paid credits names the reading day, says the limit once and keeps an amber corner", async () => {
+  browserTest("an exhausted account on paid credits names the reading day, says the limit once and reads red from its number", async () => {
     const out = path.resolve(".artifacts/account-spend-credits-exhausted"); fs.mkdirSync(out, { recursive: true });
     // Thirty hours back is an earlier calendar day in any time zone the browser runs in.
     const lastNight = new Date(Date.now() - 30 * 3_600_000);
@@ -266,11 +267,12 @@ describe("per-account paid spending", () => {
           const facts = await row.evaluate((element, [iso, bcp47]) => {
             const read = new Date(iso!).toLocaleDateString(bcp47, { day: "numeric", month: "short" });
             const text = element.textContent ?? "";
-            const chip = [...element.querySelectorAll<HTMLElement>("button span")].find(node => /^\d+%$/.test(node.textContent ?? ""));
-            return { text, read, chip: chip?.style.color ?? "" };
+            const number = element.querySelector<HTMLElement>("[data-limit-number]");
+            return { text, read, chip: number?.style.color ?? "" };
           }, [lastNight.toISOString(), locale === "uk" ? "uk-UA" : "en-US"]);
           expect(facts.text).toContain(`${facts.read}`);
-          expect(facts.chip).toBe(switchOn ? "var(--color-warning)" : "var(--color-danger)");
+          // One colour rule, read from the number: a spent window is red whether or not credits carry the account.
+          expect(facts.chip).toBe("var(--color-danger)");
           if (switchOn) {
             const limitLine = locale === "uk" ? "Ліміт плану вичерпано" : "Past its plan limit";
             expect(facts.text.split(limitLine)).toHaveLength(2);
@@ -287,6 +289,35 @@ describe("per-account paid spending", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 240_000);
+});
+
+describe("account row", () => {
+  /* The accounts dialog: every state of the chosen row at 640, 900, 1170 and 1440 px, in both languages and both
+     schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the frames and `readings.json`;
+     `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
+  browserTest("the dialog's rows hold every state at every width, language and scheme, with the keyboard and reduced motion", async () => {
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "dialog"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const server = await serveEvidenceFixture(out, undefined, rows.routes);
+    // The desktop's scrollbars are part of the width a row has.
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+        return;
+      }
+      const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
+      const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [640, 900, 1170, 1440], height: 900, only });
+      expect(failures).toEqual([]);
+      expect(frames).toBeGreaterThan(0);
+      if (!only) {
+        expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 900 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 7_200_000);
 });
 
 describe("GitHub App connection forms", () => {

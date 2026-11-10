@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { translate } from "@/lib/i18n";
 
-import { formatResetEta, windowLabel } from "./rateLimit";
+import { formatQuotaAsOf, formatResetClock, formatResetEta, windowLabel } from "./rateLimit";
 
 const en = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
 const uk = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("uk", key, params);
@@ -51,4 +51,25 @@ test("reset ETAs round upward at minute, hour, and day scales", () => {
   expect(formatResetEta(now + 5_401, now)).toBe("in 2h");
   expect(formatResetEta(now + 4 * 86_400 + 4 * 3_600, now)).toBe("in 5d");
   expect(formatResetEta(now + 4 * 86_400 + 20 * 3_600, now)).toBe("in 5d");
+});
+
+const seconds = (date: Date) => date.getTime() / 1000;
+
+test("a reset on a later calendar day names its date even when it is under 24 hours away", () => {
+  const now = seconds(new Date(2026, 10, 9, 16, 13));
+  const today = formatResetClock(seconds(new Date(2026, 10, 9, 17, 13)), now);
+  const tomorrow = formatResetClock(seconds(new Date(2026, 10, 10, 10, 0)), now);
+  expect(today).toMatch(/^\d{2}:\d{2}$/);
+  expect(tomorrow).not.toMatch(/^\d{2}:\d{2}$/);
+  expect(tomorrow).toContain("10");
+});
+
+test("a reading from an earlier calendar day names its date, a reading from today shows only the hour", () => {
+  const now = new Date(2026, 10, 9, 16, 13).getTime();
+  const sameDay = formatQuotaAsOf(seconds(new Date(2026, 10, 9, 10, 0)), "en", now)!;
+  const earlier = formatQuotaAsOf(seconds(new Date(2026, 10, 6, 16, 14)), "en", now)!;
+  expect(sameDay).toMatch(/^as of \d{2}:\d{2}$/);
+  expect(earlier).not.toMatch(/^as of \d{2}:\d{2}$/);
+  expect(earlier).toContain("6");
+  expect(formatQuotaAsOf(seconds(new Date(2026, 10, 6, 16, 14)), "uk", now)).toMatch(/^станом на .*6.* \d{2}:\d{2}$/);
 });
