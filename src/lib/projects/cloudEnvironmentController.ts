@@ -47,11 +47,13 @@ export function cloudEnvironmentGate(saved: readonly SavedBinding[], defaultRef:
  * or a changed choice (which reads as `discovering`) is due at once. A
  * terminal unavailable binding waits for `trigger` (a stage or an operator
  * asked for the pair, or this release has yet to look at it), and its
- * recorded cooldown bounds every trigger. */
-export function cloudEnvironmentPreparationDue(gate: ReturnType<typeof cloudEnvironmentGate>, accountVersion: string, now: number, trigger: boolean): boolean {
+ * recorded cooldown bounds every trigger. `followUp` is false for a pair whose
+ * last attempt was a release's first look: that look is a single attempt, so
+ * its failure is left without the retries of a reconciliation window. */
+export function cloudEnvironmentPreparationDue(gate: ReturnType<typeof cloudEnvironmentGate>, accountVersion: string, now: number, trigger: boolean, followUp = true): boolean {
   if (typeof gate === "string") return true;
   if (gate.accountVersion !== accountVersion || gate.state === "discovering") return true;
-  return gate.retryAt <= now && (gate.state !== "unavailable" || trigger || reconciling(gate, now));
+  return gate.retryAt <= now && (gate.state !== "unavailable" || trigger || (followUp && reconciling(gate, now)));
 }
 
 const WALK_MS = 2000;
@@ -85,6 +87,12 @@ export class CloudEnvironmentController {
    * has served it once, and a demand removes it again; a trigger that meets a
    * cooldown stays outstanding until the cooldown ends. */
   private readonly served = new Set<string>();
+  /** Pairs a stage or an operator asked for and that are yet to be attempted. */
+  private readonly demanded = new Set<string>();
+  /** Pairs whose last attempt was this release's first look at a terminal
+   * binding. Releases start several times a day, so that look spends one
+   * attempt; the full failure budget is kept for the other triggers. */
+  private readonly single = new Set<string>();
   private walkSignature: string | null = null;
   private walked = 0;
   private walkRevision: number | null = null;
@@ -142,7 +150,7 @@ export class CloudEnvironmentController {
         if (this.projects.includes(project) && this.accounts.some(account => account.id === demand.accountId)) {
           this.guard();
           const pair = `${project}\0${demand.accountId}`;
-          this.served.delete(pair);
+          this.served.delete(pair); this.demanded.add(pair);
           if (await this.visit(project, demand.accountId, pair, attempt)) this.restartWalk();
         }
         return;
@@ -209,12 +217,13 @@ export class CloudEnvironmentController {
     const version = cloudAccountVersion({ home: this.accounts.find(account => account.id === accountId)!.home });
     const now = Date.now(), trigger = !this.served.has(pair);
     const gate = cloudEnvironmentGate(saved, this.defaultRefs.get(pair));
-    if (!cloudEnvironmentPreparationDue(gate, version, now, trigger)) {
+    const followUp = !this.single.has(pair);
+    if (!cloudEnvironmentPreparationDue(gate, version, now, trigger, followUp)) {
       // Not due means a binding whose timer lies ahead. A terminal one wakes
       // the walk only for an outstanding trigger, which is served when its
       // cooldown ends; every other binding wakes it at its own timer.
       if (typeof gate !== "string") {
-        const terminal = gate.state === "unavailable" && !reconciling(gate, now);
+        const terminal = gate.state === "unavailable" && !(followUp && reconciling(gate, now));
         if (!terminal || trigger) this.wakeAt(gate.retryAt);
         if (!terminal) this.served.add(pair);
       }
@@ -224,6 +233,11 @@ export class CloudEnvironmentController {
     const chosen = resolve();
     if (chosen.kind !== "available") return false;
     this.served.add(pair);
+    // Due only because this release had yet to look at a terminal binding.
+    const firstLook = typeof gate !== "string" && gate.accountVersion === version && gate.state === "unavailable"
+      && !(followUp && reconciling(gate, now)) && !this.demanded.has(pair);
+    if (firstLook) this.single.add(pair); else this.single.delete(pair);
+    this.demanded.delete(pair);
     const assertCurrent = () => {
       this.guard(); const current = resolve();
       if (!this.ports.allowed(project, "codex", accountId) || current.kind !== "available" || current.account.home !== chosen.account.home
@@ -239,7 +253,7 @@ export class CloudEnvironmentController {
       this.defaultRefs.set(pair, ref);
       await this.ports.prepare({ project, account: chosen.account, repository, ref, signal: this.abort.signal, assertCurrent });
       await clearCloudEnvironmentPrerequisite(project, accountId, repository, assertCurrent);
-    }); } catch (error) { assertCurrent(); await recordCloudEnvironmentPrerequisite(project, accountId, repository, error, assertCurrent, version); }
+    }); } catch (error) { assertCurrent(); await recordCloudEnvironmentPrerequisite(project, accountId, repository, error, assertCurrent, version, firstLook); }
     return true;
   }
 }

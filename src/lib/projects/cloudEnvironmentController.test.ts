@@ -128,16 +128,33 @@ test("an unavailable binding is retried when a pipeline stage needs its environm
 });
 
 test("a new release looks once at a binding the previous one had stopped retrying", async () => {
-  const { f, sessions, at } = await unavailablePairs();
-  at(HOUR); f.recover();
+  const { f, controller, sessions, at } = await unavailablePairs();
+  controller.stop(); at(HOUR); f.recover();
   const next = f.controller(); await passes(next, 2); next.stop();
   expect(sessions).toEqual(["account-a", "account-b"]);
   expect(bindings()).toEqual([["account-a", "main", "ready", 0], ["account-b", "main", "ready", 0]]);
 });
 
+test("a new release spends one attempt on a terminal binding, and a stage's demand keeps the full budget", async () => {
+  const { f, controller, sessions, at } = await unavailablePairs();
+  controller.stop();
+  const next = f.controller();
+  for (let seconds = 0; seconds <= 30; seconds += 2) { at(HOUR + seconds * 1000); await passes(next, 2); }
+  expect(sessions.toSorted()).toEqual(["account-a", "account-b"]);
+  for (const minutes of [70, 80, 120, 600]) { at(minutes * MINUTE); await passes(next, 6); }
+  expect(sessions).toHaveLength(2);
+  expect(bindings()).toEqual([["account-a", "", "unavailable", 3], ["account-b", "", "unavailable", 3]]);
+  sessions.length = 0;
+  demandCloudEnvironment("repo-fixture", "account-b");
+  for (let seconds = 0; seconds <= 30; seconds += 2) { at(11 * HOUR + seconds * 1000); await passes(next, 2); }
+  expect(sessions).toEqual(["account-b", "account-b", "account-b"]);
+});
+
 test("a trigger that arrives inside the cooldown is served once when the cooldown ends", async () => {
   const { f, controller, sessions, at } = await unavailablePairs();
-  f.recover();
+  /* The replaced release stops: a pass re-arms its own timer, and a second
+     live worker would look at the pair on its own. */
+  controller.stop(); f.recover();
   /* Five minutes after the last failure: a new release's first look at
      account-a, and a stage's demand for account-b on the running one. */
   at(5 * MINUTE);
@@ -150,7 +167,6 @@ test("a trigger that arrives inside the cooldown is served once when the cooldow
   expect(bindings()).toEqual([["account-a", "main", "ready", 0], ["account-b", "main", "ready", 0]]);
   for (const minutes of [40, 120, 600]) { at(minutes * MINUTE); await passes(next, 6); }
   expect(sessions).toHaveLength(2);
-  void controller;
 });
 
 test("a sign-in change retries an unavailable binding within a fresh failure budget", async () => {

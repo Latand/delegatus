@@ -178,17 +178,18 @@ export async function setCloudEnvironmentOverride(input: { project: string; acco
  * The lookup has the budget a preparation has: a ten-minute window of three
  * failures with two and four seconds between them, then a 15-minute cooldown.
  * A new window opens for the first failure, for a changed sign-in or choice,
- * and for a retry of a row whose earlier window had closed. */
+ * and for a retry of a row whose earlier window had closed. A `single` attempt
+ * opens no window: its failure returns the row to the cooldown at once. */
 export async function recordCloudEnvironmentPrerequisite(project: string, accountId: string, repository: string,
-  error: unknown, assertCurrent: () => void, accountVersion: string | null = null): Promise<void> {
+  error: unknown, assertCurrent: () => void, accountVersion: string | null = null, single = false): Promise<void> {
   const now = Date.now(), selection = JSON.stringify(cloudEnvironmentSelection(project, accountId));
   const saved = read(key(project, accountId, repository, "", "automatic"));
   const old = saved ?? initial(project, accountId, repository, "", "automatic", now);
   const code = error instanceof CloudEnvironmentError ? error.code : "catalog_incomplete";
-  const opens = !saved || old.accountVersion !== accountVersion || old.selection !== selection || old.retries >= 3 || old.deadlineAt <= now;
-  const retries = opens ? 1 : old.retries + 1;
+  const opens = !single && (!saved || old.accountVersion !== accountVersion || old.selection !== selection || old.retries >= 3 || old.deadlineAt <= now);
+  const retries = opens ? 1 : Math.min(3, old.retries + 1);
   await update({ ...old, accountVersion, selection, state: "unavailable", code, retries, deadlineAt: opens ? now + 10 * 60_000 : old.deadlineAt,
-    retryAt: now + (retries >= 3 ? 15 * 60_000 : 2000 * 2 ** (retries - 1)) }, old.revision, assertCurrent);
+    retryAt: now + (single || retries >= 3 ? 15 * 60_000 : 2000 * 2 ** (retries - 1)) }, old.revision, assertCurrent);
 }
 export async function clearCloudEnvironmentPrerequisite(project: string, accountId: string, repository: string, assertCurrent: () => void): Promise<void> {
   const unresolvedKey = key(project, accountId, repository, "", "automatic"), store = readStore();

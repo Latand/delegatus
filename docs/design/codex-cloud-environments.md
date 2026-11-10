@@ -92,7 +92,9 @@ that reuses all setup receipts and the original creation intent. The triggers
 are a pipeline stage that asks for that project/account environment, an
 operator's environment choice, changed account credential metadata, and the
 first look of a newly started release. A trigger that arrives inside the
-cooldown stays outstanding and is served once when the cooldown ends. Stage
+cooldown stays outstanding and is served once when the cooldown ends. The
+first look of a new release spends a single attempt, since releases start
+several times a day; the other triggers open a full window. Stage
 admission itself still prepares its binding under the same cooldown.
 
 The worker prepares only the repository's default branch, so one binding
