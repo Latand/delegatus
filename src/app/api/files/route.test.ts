@@ -1853,7 +1853,6 @@ test("a warm snapshot returns the completed projection while an independent refr
     body: JSON.stringify({ schemaVersion: 1, text: { include: false } }),
   }) as never, {
     completedFileScan,
-    resolveSiblings: async () => ({ selfResolution: "omitted", agents: [] }),
     registrySnapshot: () => ({ conversations: {}, entries: {}, lineageEdges: {}, memberships: {}, conversationAliases: {}, receipts: {} }) as never,
     snapshotDeadlineMs: 1_000,
     scheduler: { setTimeout: () => { deadlinesArmed += 1; return deadlinesArmed; }, clearTimeout: () => {} },

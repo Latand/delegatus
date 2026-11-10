@@ -276,7 +276,6 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { TASK_PRIORITIES, taskPriority, type BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
-import { resolveSiblings } from "@/lib/view/siblings";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { searchMemoryTool } from "@/lib/memory/mcp";
 import { validateSnapshotRequest } from "@/lib/view/validation";
@@ -6591,7 +6590,6 @@ async function operatorSnapshot(args: McpToolArgs, dependencies: ViewerMcpDomain
   return redactPayload({
     ...await dependencies.collectSnapshot(request, {
       completedFileScan: dependencies.completedFileScan,
-      resolveSiblings,
       registrySnapshot: dependencies.registrySnapshot,
     }),
   });

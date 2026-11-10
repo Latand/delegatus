@@ -5,8 +5,8 @@ import path from "node:path";
 
 /* The periodic and per-view work of a running installation must start no
    `tmux` process. A recording stand-in is the only `tmux` on PATH here, so any
-   call from the scanner, the resources snapshot, the headless process reaper
-   or the agent snapshot leaves a line in its log. */
+   call from the scanner, the resources snapshot or the headless process
+   reaper leaves a line in its log. */
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tmux-free-"));
 const bin = path.join(sandbox, "bin");
 const calls = path.join(sandbox, "tmux-calls.log");
@@ -35,7 +35,6 @@ fs.writeFileSync(path.join(sessions, "session-one.jsonl"), JSON.stringify({ type
 const { listFiles } = await import("@/lib/scanner");
 const { buildResourceSnapshot } = await import("@/lib/resources");
 const { runHeadlessProcessReaper } = await import("@/lib/headlessProcessReaper");
-const { resolveSiblings } = await import("@/lib/view/siblings");
 
 function tmuxCalls(): string[] {
   return fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").split("\n").filter(Boolean) : [];
@@ -73,11 +72,5 @@ test("the headless process reaper starts no tmux process", async () => {
     dependencies: { listProcesses: () => [], ppidMap: () => new Map(), loadFlows: () => [] },
   });
   expect(report).toEqual({ candidates: 0, signaled: 0 });
-  expect(tmuxCalls()).toEqual([]);
-});
-
-test("an agent snapshot's sibling lookup starts no tmux process", async () => {
-  const siblings = await resolveSiblings({ pid: process.pid });
-  expect(siblings).toEqual({ selfResolution: "unmatched", agents: [] });
   expect(tmuxCalls()).toEqual([]);
 });
