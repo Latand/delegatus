@@ -556,7 +556,8 @@ systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
 refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted. Linux commands run in a transient service with
 `KillMode=control-group`, a two-second TERM-to-KILL bound and a finite execution deadline
-(`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
+(`LLV_OWNED_RUN_TIMEOUT_MS`; a command sent through `gate-slot.sh` without one gets an hour, a
+runner started any other way fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
 When no user systemd manager is reachable (including a container with a
