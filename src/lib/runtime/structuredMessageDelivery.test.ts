@@ -5328,6 +5328,26 @@ test.each(["id", "path", "runtime-read", "reservation-wait"])("D4 rotated seat r
 });
 
 
+test("a send whose reservation write found the delivery record busy is refused before anything is reserved (#3782)", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let commands = 0;
+  const busy = spyOn(registry, "holdDeliveryOffLoop").mockImplementation(async () => null);
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      text: "words that met a busy writer", images: [], clientMessageId: "busy-writer-message",
+    }, { enabled: () => true, registry: () => registry, progress: null,
+      client: () => ({ readSession: async () => snapshot(conversation.id).sessions[0],
+        command: async () => { commands += 1; throw new Error("a refused send reached the host"); } }) as unknown as RuntimeHostClient,
+    });
+    expect(busy).toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, status: 503, admission: "refused" });
+    expect(registry.readOnlySnapshot().heldDeliveries).toEqual({});
+    expect(commands).toBe(0);
+  } finally { busy.mockRestore(); }
+});
+
+
 test("a message bound to a rotated seat is never re-commanded to it", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);

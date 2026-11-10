@@ -5701,7 +5701,7 @@ test("the real turn boundary drains its queued message even when status publicat
 
 /** Real queue, recovery admission, spawn publication and broker. Only the
  * provider executable/auth and runtime transport are local fixture ports. */
-async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "background" | "lost-echo" | "late-result" | "unqueued", fixtureName: string = mode) {
+async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "background" | "lost-echo" | "late-echo" | "late-result" | "unqueued", fixtureName: string = mode) {
   const directory = path.join(sandbox, `claude-terminal-${fixtureName}`);
   fs.mkdirSync(directory, { recursive: true });
   const sessionId = "00000000-0000-0000-0000-000000000077";
@@ -5720,9 +5720,16 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
   };
   registry.upsert({ ...entry, structuredHost: null });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-  const client = runtimeJournalClient(journal);
+  /* The production client forwards transition options; the late echo needs
+     its `confirmedDelivery` to reach the journal, as it does in production. */
+  const client: RuntimeHostClient = mode === "late-echo"
+    ? { ...runtimeJournalClient(journal), transitionOperation: async (operationId, status, details, options) =>
+      journal.transitionOperation(operationId, status as Parameters<RuntimeJournal["transitionOperation"]>[1], details, options) }
+    : runtimeJournalClient(journal);
   const events = new FileRuntimeEventStore(path.join(directory, "events"));
-  const deliveries = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
+  /* The late echo is settled by the production evidence reader, which reads
+     the default ledger; that mode keeps the pairing production has. */
+  const deliveries = mode === "late-echo" ? new FileClaudeDeliveryLedger() : new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
   const inputFile = path.join(directory, "inputs.jsonl");
   fs.writeFileSync(inputFile, "");
   const children: ChildProcessWithoutNullStreams[] = [];
@@ -5742,7 +5749,7 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
     createInterface({input: process.stdin}).on('line', line => {
       const frame = JSON.parse(line);
       fs.appendFileSync(file, line + '\\n');
-      if (mode === 'unqueued' && frame.type === 'fixture_response') { emit(frame.payload); emit({ type: 'fixture_receipt' }); }
+      if ((mode === 'unqueued' || mode === 'late-echo') && frame.type === 'fixture_response') { emit(frame.payload); emit({ type: 'fixture_receipt' }); }
       if (frame.type === 'control_request') emit({type: 'control_response', response: {
         subtype: 'success', request_id: frame.request_id,
         response: frame.request?.subtype === 'mcp_status'
@@ -5750,7 +5757,7 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
       }});
       if (frame.type === 'user') {
         const previous = JSON.stringify(frame).includes('previous instruction');
-        if (mode !== 'lost-echo' || previous) emit({...frame, uuid: previous ? 'previous-input' : 'accepted-input'});
+        if ((mode !== 'lost-echo' && mode !== 'late-echo') || previous) emit({...frame, uuid: previous ? 'previous-input' : 'accepted-input'});
         if (previous && mode === 'background') emit({type: 'system', subtype: 'task_started', task_id: 'fixture-task'});
         if (!previous) emit({type: 'result', subtype: 'success', session_id: session});
       }
@@ -5768,8 +5775,12 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
       } satisfies StructuredSpawnInput["spec"],
       account,
     }, { env: { ...process.env }, host: {} });
+    // Only missing-echo cases need a short confirmation deadline. Successful
+    // exchanges include child scheduling and durable ledger writes; one second
+    // can expire before their echo is processed on a busy runner.
+    const requestTimeoutMs = mode === "lost-echo" || mode === "late-echo" ? 1_000 : 10_000;
     const hostOptions = {
-      ...options, sessionId, eventStore: events, deliveryLedger: deliveries, requestTimeoutMs: 1_000,
+      ...options, sessionId, eventStore: events, deliveryLedger: deliveries, requestTimeoutMs,
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
       readTranscript: () => [],
       spawnProcess: ((_command, _args, options) => {
@@ -5833,7 +5844,7 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
     } });
     return {
       registry, journal, client, key, request, dependencies, events, sessionId, oldTurn, handshakes,
-      launches: () => launches, host: () => successor!, close, directory,
+      launches: () => launches, host: () => successor!, close, directory, artifactPath,
       emit: async (payload: unknown) => {
         const child = children.at(-1)!;
         let buffer = "";
@@ -5934,6 +5945,47 @@ for (const mode of ["idle", "active", "background", "lost-echo", "late-result"] 
     } finally { try { await f.close(); } finally { setSystemTime(); } }
   }, 20_000);
 }
+
+/* 2026-11-09: a Claude builder absorbed an operator message into its running
+   turn about a minute after the write. The host's 30-second confirmation
+   budget had already ended the send unverified, and the echo that proved the
+   engine took it changed nothing: the operator saw "not delivered" while the
+   agent worked on the message. The late echo now settles the original
+   operation from Claude's own record of it, and nothing is written twice. */
+test("a Claude send absorbed mid-turn after its confirmation budget settles from the late echo, written once", async () => {
+  setSystemTime(new Date("2026-11-09T15:24:13Z"));
+  const f = await claudeTerminalRecoveryFixture("late-echo").catch(error => { setSystemTime(); throw error; });
+  try {
+    await enqueueStructuredMessage(f.request, f.dependencies);
+    await f.drain();
+    await kickStructuredDeliveryQueue();
+    const accepted = () => f.users().filter(frame => frame.message?.content.some(part => part.text.includes(f.request.text)));
+    expect(accepted()).toHaveLength(1);
+    expect(await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client }))
+      .toMatchObject({ state: "failed", resend: "verify-first", duplicateRisk: true });
+    const written = accepted()[0]!;
+    /* Claude's record of an input taken mid-turn, in the shape it journals:
+       the queue removal, then an attachment naming the id it echoed. */
+    const at = new Date().toISOString();
+    fs.appendFileSync(f.artifactPath, [
+      { type: "queue-operation", operation: "remove", timestamp: at, sessionId: f.sessionId, reason: "absorbed_mid_turn", commandUuid: "late-absorbed-input" },
+      { type: "attachment", uuid: "late-attachment-record", timestamp: at, entrypoint: "sdk-cli", sessionId: f.sessionId,
+        attachment: { type: "queued_command", commandMode: "prompt", prompt: written.message!.content, source_uuid: "late-absorbed-input" } },
+    ].map(record => JSON.stringify(record)).join("\n") + "\n");
+    await f.emit({ ...written, uuid: "late-absorbed-input" });
+    await waitForCondition(() => sendReceiptFor(f.registry.readOnlySnapshot(), f.request.operationId)?.state === "delivered", 3_000);
+    expect(await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client }))
+      .toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+    expect((await f.client.operationStatus(f.request.operationId))?.receipt.status).toBe("delivered");
+    expect(new FileClaudeDeliveryLedger().load(f.sessionId).filter(state => state.entry.id === f.request.operationId))
+      .toMatchObject([{ delivered: true, engineMessageId: "late-absorbed-input" }]);
+    /* The settlement wrote nothing to the engine and armed nothing. */
+    await f.drain();
+    await kickStructuredDeliveryQueue();
+    expect(accepted()).toHaveLength(1);
+    expect(f.journal.effectBatch(100).filter(effect => effect.id === `effect:${f.request.operationId}`)).toEqual([]);
+  } finally { try { await f.close(); } finally { setSystemTime(); } }
+}, 20_000);
 
 for (const mutation of ["owner", "epoch", "permission"] as const) {
   test(`Claude terminal recovery rechecks dispatch authority after an awaited read: ${mutation}`, async () => {

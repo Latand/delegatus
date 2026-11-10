@@ -10,7 +10,7 @@ import {
   type ReportSectionId,
   type SeatSectionId,
 } from "./reportWords";
-import { completeFits } from "./reportComplete";
+import { completeBytes, completeFits } from "./reportComplete";
 import type { BridgeReportClass, BridgeReportCompleteV1 } from "./types";
 
 /*
@@ -105,6 +105,8 @@ export interface RenderReportResult {
   complete: BridgeReportCompleteV1 | null;
   /** The whole report passes its byte bound: it cannot be relayed whole and is refused. */
   tooLarge: boolean;
+  /** Measured whole report length, including the refused complete copy. */
+  completeByteLength: number;
 }
 
 function oneLine(text: string): string {
@@ -234,7 +236,7 @@ export function renderReport(input: RenderReportInput): RenderReportResult {
     warnings.push("A blocked or question report puts the ask in the decision section.");
   }
   if (machineIds > 0) warnings.push(`${machineIds} item(s) carry machine ids; name work by its title and #PR, a deploy by its 8-character sha.`);
-  return { cut, warnings, empty, dropped, complete, tooLarge };
+  return { cut, warnings, empty, dropped, complete, tooLarge, completeByteLength: filed ? completeBytes(filed) : 0 };
 }
 
 /** The report as filed, every item in display order. */

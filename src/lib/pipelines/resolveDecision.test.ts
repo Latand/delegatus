@@ -337,7 +337,7 @@ test.each([
   const h = await interruptedAnswer("before-admission", patch);
   const before = current();
   const result = await h.reopen().callTool("pipeline_action", h.args);
-  expect(result).toMatchObject({ ok: false, code: "tool_failed" });
+  expect(result).toMatchObject({ ok: false, code: "STAGE_CHANGED", retryable: false });
   expect(current()).toEqual(before);
 });
 

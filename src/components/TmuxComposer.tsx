@@ -13,7 +13,8 @@ import { isSettledLaunchPlaceholder } from "./launchHistoryModel";
 import { turnReading, useContextMode } from "./composerContextMode";
 import { CircleAlert, RotateCcw } from "lucide-react";
 
-import type { TFunction } from "@/lib/i18n";
+import type { MessageKey, TFunction } from "@/lib/i18n";
+import type { IngressStopReason } from "@/lib/runtime/ingressStop";
 
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { composerSubmissionPayloads, composerSubmissionSaving, presentedPayloadReceipt, withComposerSubmission, type ComposerPayloadReceipt, type RestoredComposerSubmission } from "@/lib/composerSubmissionPayloads";
@@ -75,6 +76,7 @@ import {
   markOutboxResponded,
   outboxHistory,
   outboxCanAdmit,
+  outboxStored,
   OPERATION_RECONCILE_GRACE_MS,
   operationReadDue,
   operationsToReconcile,
@@ -420,6 +422,30 @@ export function mergeRuntimeReceipts(
 }
 
 const NO_DISMISSED: ReadonlySet<string> = new Set();
+
+const INGRESS_STOP_COPY: Record<IngressStopReason, MessageKey> = {
+  "command-invalid": "composer.ingressStop.command-invalid",
+  "image-refused": "composer.ingressStop.image-refused",
+  "file-refused": "composer.ingressStop.file-refused",
+  "inbox-unavailable": "composer.ingressStop.inbox-unavailable",
+  "authority-unrecorded": "composer.ingressStop.authority-unrecorded",
+  "bookkeeping-failed": "composer.ingressStop.bookkeeping-failed",
+  "refused-before-reservation": "composer.ingressStop.refused-before-reservation",
+  "failed-after-reservation": "composer.ingressStop.failed-after-reservation",
+  "ownership-unavailable": "composer.ingressStop.ownership-unavailable",
+  "host-unavailable": "composer.ingressStop.host-unavailable",
+  "outcome-unknown": "composer.ingressStop.outcome-unknown",
+  "idempotency-conflict": "composer.ingressStop.idempotency-conflict",
+};
+
+/** A `not-executed` lookup that found the route's recorded stop names why the
+    message was stopped; without one, the request never reached the route
+    (2026-11-09). Both keep the words for Retry. */
+function notExecutedText(t: TFunction, answer: RuntimeAdmissionLookup): string {
+  return answer.stop
+    ? t("composer.admissionLookupStopped", { reason: t(INGRESS_STOP_COPY[answer.stop.reason]) })
+    : t("composer.admissionLookupNotExecuted");
+}
 
 export function RuntimeComposerReceipts({
   receipts,
@@ -2916,7 +2942,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const row = admissionRows.current.find(candidate => candidate.ref.key === key);
       if (entry?.state === "delivered" || row?.operationId
         || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))) return { outcome: "unknown" } as const;
-      if (row && !await composerSubmissionPayloads.refuse(row.ref, { status: 404, reason: "the delivery record holds nothing under this key" })) {
+      const refusal = answer.stop
+        ? { status: answer.stop.status, reason: t(INGRESS_STOP_COPY[answer.stop.reason]) }
+        : { status: 404, reason: "the delivery record holds nothing under this key" };
+      if (row && !await composerSubmissionPayloads.refuse(row.ref, refusal)) {
         // A previous observer may have saved this proof as the view hid.
         // Re-read the latest attempt so a newer wire claim stays protected.
         const recorded = await composerSubmissionPayloads.restore(row.ref);
@@ -2928,13 +2957,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setReconcilingSend(receiptReconciliations.current.size > 0);
       unconfirmedKeys.current.delete(key);
       updateOutbox(cardId, key, { state: "failed", deliveryReceipt: undefined, deliveryUncertain: undefined,
-        settledAt: nowMs(), error: t("composer.admissionLookupNotExecuted") });
+        settledAt: nowMs(), error: notExecutedText(t, answer) });
       persistPendingDeliveries(pendingDeliveries.current.map(pending => pending.key === key ? releasePendingReconciliation(pending) : pending));
       setImmediateRuntimeReceipts(receipts => receipts.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(key)));
       if (deliveryNoticeKey.current === key) {
         deliveryNoticeKey.current = null;
         setStatus(status => status && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(status.text)
-          ? { kind: "err", text: t("composer.admissionLookupNotExecuted") } : status);
+          ? { kind: "err", text: notExecutedText(t, answer) } : status);
       }
       await refreshPayloads();
       return answer;
@@ -3759,10 +3788,18 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     };
     if (!options?.idleParallelFallback && !requestedImages.length && !requestedFiles.length
       && !pendingDeliveries.current.some(entry => entry.payloadComplete === false)) {
-      if (reserveSubmission(false)) releaseComposer();
-      return;
-    }
-    if (!reserveSubmission(true)) return;
+      /* A plain message is durable once its row is stored, so it is released
+         at once. Reserved `preparing` first: if the row reached only this
+         page's memory (storage full or refused, 2026-11-09), the dispatcher
+         must not take it, and the words stay here until the durable copy
+         below exists, or come back with the reason if it cannot be made. */
+      if (!reserveSubmission(true)) return;
+      if (outboxStored(cardId)) {
+        updateOutbox(cardId, clientMessageId, { preparing: undefined });
+        releaseComposer();
+        return;
+      }
+    } else if (!reserveSubmission(true)) return;
     // Keep the complete authored generation until both durable phases commit.
     const selectedContext = submittedContext;
     const submittedFile = { path: file.path, project: file.project, pid: file.pid };
@@ -4695,10 +4732,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         releaseInjectionFence(owner, entry.id, false);
         updateOutbox(owner, entry.id, {
           state: "failed", deliveryUncertain: undefined,
-          settledAt: nowMs(), error: t("composer.admissionLookupNotExecuted"),
+          settledAt: nowMs(), error: notExecutedText(t, answer),
         });
         if (!editFailedContext(owner, entry.id)) return;
-        if (payloadOwner.current === owner) setStatus({ kind: "err", text: t("composer.admissionLookupNotExecuted") });
+        if (payloadOwner.current === owner) setStatus({ kind: "err", text: notExecutedText(t, answer) });
       } else if (payloadOwner.current === owner) {
         setStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
       }
@@ -4748,7 +4785,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         return;
       }
       if (answer.outcome === "not-executed") {
-        finishStatus({ kind: "err", text: t("composer.admissionLookupNotExecuted") });
+        finishStatus({ kind: "err", text: notExecutedText(t, answer) });
         return;
       }
       // Another observer may have bound this attempt while the read waited.
