@@ -23,7 +23,12 @@ function updateTelemetry() {
   const archive = host.__llvArchiveReadCacheV1?.slot;
   telemetry.archive.set(archive?.value != null ? 1 : 0, archive?.bytes ?? 0);
 }
-const MAX_SLOTS = 8;
+// Every document collection, the task and pipeline lists and each controller
+// row cache take one slot. Eight slots rotated about thirty live collections,
+// so the task and pipeline lists were read and decoded whole again on the
+// serving loop every few seconds (#3809). The byte budget is the memory bound.
+export const READ_CACHE_MAX_SLOTS = 64;
+const MAX_SLOTS = READ_CACHE_MAX_SLOTS;
 const MAX_BYTES = 256 * 1024 * 1024;
 // The retained archive can exceed 512 MiB in UTF-16 input bytes. Evicting it
 // after every read made each seat decode it again and multiplied live heaps.
