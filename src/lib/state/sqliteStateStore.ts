@@ -1268,45 +1268,84 @@ export function pipelineEvidenceRevision(filename: string): string | null {
 }
 
 type TaskPipelineKey = { collection: string; row_key: string };
-let taskPipelineSelection: { filename: string; version: string; links: Map<string, TaskPipelineKey[]> | null } | undefined;
+type TaskPipelineMembership = TaskPipelineKey & { row_order: number; taskIds: string[] };
+/** `clock` names the evidence index the membership rows were read under: its
+    file and schema, and the clock revision they are complete through. */
+let taskPipelineSelection: { filename: string; version: string; links: Map<string, TaskPipelineKey[]> | null;
+  rows: Map<string, TaskPipelineMembership> | null; clock: { scope: string; revision: number } | null } | undefined;
 const MAX_TASK_PIPELINE_LINKS = 20_000;
+
+function taskPipelineMembership(db: BunDatabase, row: TaskPipelineKey & { row_order: number; task_ids: string | null }): TaskPipelineMembership {
+  const ids: unknown = typeof row.task_ids === "string" && row.task_ids.startsWith("[") ? parseSqliteJson(row.task_ids, db) : [];
+  return { collection: row.collection, row_key: row.row_key, row_order: row.row_order,
+    taskIds: Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [] };
+}
 
 /** Read an album's active and archived lanes without opening a writer or
     decoding unrelated history. One scalar membership pass serves the whole
     board summary, even when it asks for hundreds of tasks. The evidence clock
-    observes raw peer writes as well as store mutations. */
+    observes raw peer writes as well as store mutations.
+
+    The complete pass parses every stored lane, active and archived, on the
+    serving loop: about a gigabyte of reads and half a second on a long-lived
+    installation, and the clock moves with every lane write. After the first
+    pass the evidence index names the lanes written since, so a refresh reads
+    those lanes only. */
 export function readPipelineRowsForTask(filename: string, taskId: string): unknown[] | null {
   const revisions = readStateCollectionRevisions(filename, ["pipelines", "pipelines_archive"]);
   if (revisions.get("pipelines") == null || revisions.get("pipelines_archive") == null) return null;
-  const version = pipelineEvidenceRevision(filename) ?? stateEvidenceVersion(filename);
+  const indexed = pipelineEvidenceRevision(filename);
+  const version = indexed ?? stateEvidenceVersion(filename);
   const db = sharedStateReadonlyDatabase(filename);
   if (taskPipelineSelection?.filename !== filename || taskPipelineSelection.version !== version) {
-    const rows = db.query<TaskPipelineKey & { row_order: number; task_ids: string | null }, [number]>(`
-      SELECT collection, row_key, row_order,
-        CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.taskIds') END AS task_ids
-      FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')
-      LIMIT ?
-    `).all(MAX_TASK_PIPELINE_LINKS + 1);
+    const split = indexed === null ? -1 : indexed.lastIndexOf(":");
+    const clock = split < 0 ? null : { scope: indexed!.slice(0, split), revision: Number(indexed!.slice(split + 1)) };
+    const prior = taskPipelineSelection?.filename === filename ? taskPipelineSelection : undefined;
+    let rows: Map<string, TaskPipelineMembership> | null = null;
+    if (clock && prior?.rows && prior.clock?.scope === clock.scope && prior.clock.revision <= clock.revision) {
+      // A deleted lane keeps its evidence row, so it is named here as absent.
+      const changed = db.query<TaskPipelineKey & { row_order: number | null; task_ids: string | null }, [number]>(`
+        SELECT e.collection, e.row_key, r.row_order,
+          CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json, '$.taskIds') END AS task_ids
+        FROM pipeline_evidence_rows e INDEXED BY pipeline_evidence_changed LEFT JOIN state_rows r
+          ON r.collection=e.collection AND r.row_key=e.row_key
+        WHERE e.revision>? AND e.collection IN ('pipelines', 'pipelines_archive')
+      `).all(prior.clock.revision);
+      rows = prior.rows;
+      for (const row of changed) {
+        const key = JSON.stringify([row.collection, row.row_key]);
+        if (row.row_order === null) rows.delete(key);
+        else rows.set(key, taskPipelineMembership(db, { ...row, row_order: row.row_order }));
+      }
+    } else {
+      const scanned = db.query<TaskPipelineKey & { row_order: number; task_ids: string | null }, [number]>(`
+        SELECT collection, row_key, row_order,
+          CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.taskIds') END AS task_ids
+        FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')
+        LIMIT ?
+      `).all(MAX_TASK_PIPELINE_LINKS + 1);
+      if (scanned.length <= MAX_TASK_PIPELINE_LINKS) {
+        rows = new Map();
+        for (const row of scanned) rows.set(JSON.stringify([row.collection, row.row_key]), taskPipelineMembership(db, row));
+      }
+    }
     // Ordering the large source collection made SQLite walk its history-order
     // index and fetch payloads scattered across the database. Sort the compact
-    // membership projection after its sequential read instead.
-    rows.sort((a, b) => a.collection.localeCompare(b.collection) || a.row_order - b.row_order
-      || Buffer.compare(Buffer.from(a.row_key), Buffer.from(b.row_key)));
-    let links = rows.length > MAX_TASK_PIPELINE_LINKS ? null : new Map<string, TaskPipelineKey[]>();
+    // membership projection after its read instead.
+    const ordered = rows ? [...rows.values()].sort((a, b) => a.collection.localeCompare(b.collection) || a.row_order - b.row_order
+      || Buffer.compare(Buffer.from(a.row_key), Buffer.from(b.row_key))) : [];
+    let links = rows ? new Map<string, TaskPipelineKey[]>() : null;
     let count = 0;
-    if (links) for (const { task_ids, collection, row_key } of rows) {
-      const ids: unknown = typeof task_ids === "string" && task_ids.startsWith("[") ? parseSqliteJson(task_ids, db) : [];
-      if (!Array.isArray(ids)) continue;
-      for (const id of ids) {
-        if (typeof id !== "string") continue;
+    if (links) for (const { taskIds, collection, row_key } of ordered) {
+      for (const id of taskIds) {
         const keys = links.get(id) ?? [];
         keys.push({ collection, row_key });
         links.set(id, keys);
         count++;
       }
-      if (count > MAX_TASK_PIPELINE_LINKS) { links = null; break; }
+      if (count > MAX_TASK_PIPELINE_LINKS) { links = null; rows = null; break; }
     }
-    taskPipelineSelection = { filename, version, links };
+    taskPipelineSelection = { filename, version, links, rows, clock: rows ? clock : null };
   }
   // An installation above the cache bound remains readable through a targeted
   // query, without retaining an unbounded membership graph.
