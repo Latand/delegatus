@@ -15196,7 +15196,7 @@ function replaceStartedStages(
  * or stated on an action it does not guard, is refused with 400, so a caller
  * never believes a write was guarded when it was not.
  */
-function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
+export function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
   const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId") => Object.hasOwn(req, field) && req[field] !== undefined;
   /* A runtime choice for a running attempt names the attempt and the conversation it was made on. */
   const runningAttemptBound = req.action === "override-stage" && req.applyNow === true;

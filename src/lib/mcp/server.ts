@@ -301,6 +301,24 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
   "github_app_connect",
 ]);
 
+/**
+ * Tools whose Viewer route keeps its own claim under the caller's
+ * clientRequestId and answers a repeat from that claim. A cached answer that
+ * says the outcome is unknown is asked again there: the route replays the
+ * finished operation, reports its own uncertainty, or runs the request it
+ * never received once (#3786). The cached unknown used to answer every
+ * repeat, so the caller never learned what the route already knew.
+ *
+ * Seat rotation stays out: its project is named by a display name that can
+ * come to mean another project between the two calls, so a second dispatch
+ * could rotate a seat the first call never addressed.
+ */
+const VIEWER_CLAIMED_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolName>([
+  "telegram_bot_send",
+  "telegram_bot_send_media",
+  "telegram_bot_send_document",
+]);
+
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
   if (INTERRUPTED_RECOVERABLE_TOOLS.has(toolName)) return true;
   if (toolName === "pipeline_action") return ["resolve-decision", "continue-review", "accept-head", "convert-legacy-review", "revert-legacy-review"].includes(String(args.action));
@@ -3608,14 +3626,18 @@ export function createMcpToolService(
               && claim.result.error.startsWith("Viewer control")
             || claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
           );
-        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment) {
+        const retryViewerClaim = VIEWER_CLAIMED_TOOLS.has(typedTool) && claim.kind === "replay" && !claim.result.ok
+          && (claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
+            || claim.result.code === "send_uncertain");
+        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment && !retryViewerClaim) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
           phaseDurations.replay = performance.now() - replayStartedAt;
           outcome = "replay";
           return replayed;
         }
-        if (localStore) {
+        // A settled row asked again holds no claim to mark; completion replaces it.
+        if (localStore && claim.kind !== "replay") {
           let dispatchMarked: boolean;
           try {
             dispatchMarked = await localStore.markDispatching(key, digest);
@@ -5394,6 +5416,14 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
       if (TASK_EXECUTOR_TOOLS.has(name) && currentMcpHttpCaller()) {
         try { return await viewerTaskExecutor().callTool(name, args, context); }
         catch (error) {
+          /* The executor stopped before its reply, so a committed write had no
+             answer. The receipt under the caller's own key holds that answer:
+             ask once more through a fresh executor, which replays it or says
+             what the receipt knows, and never runs a settled write again (#3757). */
+          if (taskExecutorReplyLost(error) && isMutatingMcpTool(name as McpToolName) && typeof clientRequestId(args) === "string" && !context?.signal?.aborted) {
+            try { return await viewerTaskExecutor().callTool(name, args, context); }
+            catch (again) { return taskExecutorFailure(name, args, again); }
+          }
           return taskExecutorFailure(name, args, error);
         }
       }
@@ -5419,6 +5449,11 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
   return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
+}
+
+/** The executor took the call and stopped before answering it. */
+export function taskExecutorReplyLost(error: unknown): boolean {
+  return error instanceof Error && /^task executor .* before its reply; look up the original request key$/.test(error.message);
 }
 
 export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
