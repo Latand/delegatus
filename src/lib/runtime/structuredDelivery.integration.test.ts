@@ -5775,8 +5775,12 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
       } satisfies StructuredSpawnInput["spec"],
       account,
     }, { env: { ...process.env }, host: {} });
+    // Only missing-echo cases need a short confirmation deadline. Successful
+    // exchanges include child scheduling and durable ledger writes; one second
+    // can expire before their echo is processed on a busy runner.
+    const requestTimeoutMs = mode === "lost-echo" || mode === "late-echo" ? 1_000 : 10_000;
     const hostOptions = {
-      ...options, sessionId, eventStore: events, deliveryLedger: deliveries, requestTimeoutMs: 1_000,
+      ...options, sessionId, eventStore: events, deliveryLedger: deliveries, requestTimeoutMs,
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
       readTranscript: () => [],
       spawnProcess: ((_command, _args, options) => {
