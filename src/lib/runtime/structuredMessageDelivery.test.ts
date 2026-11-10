@@ -2612,7 +2612,7 @@ test.each([false, true])("a completed pipeline-stage send replaces dead host own
       return recoverDeadStructuredConversation(request, {
         registry,
         client,
-        transport: () => "structured",
+        transportAvailable: () => true,
         resolveAccount: () => ({
           engine: "codex",
           accountId: "pipeline-account",
@@ -3166,7 +3166,7 @@ test("a terminal resume failure fences its reservation before a competing resend
   } as unknown as RuntimeHostClient;
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
     ...dependencies,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } }),
     spawn: async (input) => ({
       ok: true, target: null, path: null, launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
@@ -3323,7 +3323,7 @@ test("the first send to a reclaimed conversation waits for the resume it raised 
   } as unknown as RuntimeHostClient;
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
     ...dependencies,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } }),
     spawn: async (input) => ({
       ok: true, target: null, path: null, launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
@@ -4317,7 +4317,7 @@ test("a message to a seat's deputy is refused before anything is reserved or res
     expect(await send(deputyMessageKey(askId))).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
     endDeputy(askId, { outcome: "done" });
     expect(await send("mcp_send_worker")).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
-    /* Addressed by transcript alone, as `/api/tmux` may be. */
+    /* Addressed by transcript alone, as `/api/conversation-host` may be. */
     expect(await send("mcp_send_worker", { path: artifactPath })).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
     expect(touched).toBe(0);
   } finally {
@@ -5190,7 +5190,7 @@ test.each([
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => {
     recoveries++;
     return recoverDeadStructuredConversation(request, {
-      ...dependencies, transport: () => "structured", park: () => null,
+      ...dependencies, transportAvailable: () => true, park: () => null,
       spawn: async () => { spawns++; throw new Error("a live owner must not spawn a successor"); },
     });
   };

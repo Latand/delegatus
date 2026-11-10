@@ -751,7 +751,7 @@ async function sendToGoneHost(engine: "claude" | "codex", target: { conversation
       try {
         return await recoverDeadStructuredConversation(request, {
           ...recoveryDependencies,
-          transport: () => "structured",
+          transportAvailable: () => true,
           resolveAccount: () => launchAccount(engine),
           requestDeliveryDrain: () => {},
           spawn: (input) => spawnStructuredConversation(input, { startHost: probe.startHost }),

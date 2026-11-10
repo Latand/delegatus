@@ -1208,7 +1208,7 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
     const resumeAdmissionEvidence: { hostState: string | null } = { hostState: null };
     const dependencies = { enabled: () => true, registry: () => registry, client: () => client,
       recover: (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(input, {
-        registry, client, transport: () => "structured", resolveAccount: () => account, park: () => null,
+        registry, client, transportAvailable: () => true, resolveAccount: () => account, park: () => null,
         spawn: async (input) => {
           const activeSnapshot = registry.readOnlySnapshot();
           resumeAdmissionDelivery = await conversationDeliverabilityFromRecord(activeSnapshot, { conversationId: response.conversationId });
@@ -1578,7 +1578,7 @@ test.each(["codex", "claude"] as const)("%s stale-live recovery converges regist
   }, {
     registry,
     client,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({
       engine,
       accountId,
@@ -5822,7 +5822,7 @@ test("a partial structured kill retains child identity across a root-dead retry"
     const recovered = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
       registry: reopenedRegistry,
       client,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => ({
         engine: "codex",
         accountId: "codex-subscription",
@@ -6400,7 +6400,7 @@ test("issue 367: a post-kill relaunch that exhausts admission never leaves a liv
   const client = runtimeClient(journal);
 
   /* Production 2026-07-18: completed structured Fable #156 was killed through
-     /api/tmux and its OS PID exited; the delivered kill must leave a dead/idle
+     /api/conversation-host and its OS PID exited; the delivered kill must leave a dead/idle
      projection behind. */
   const killedConversation = registry.ensureConversation("claude", killedPath, "default");
   await client.append({
@@ -7304,7 +7304,7 @@ test("a relay that meets a parked resume's fence settles it and resumes the conv
   const recover = (now: number) => recoverDeadStructuredConversation({ path: parked.artifactPath, conversationId: parked.conversation.id }, {
     registry: parked.registry,
     client: parked.client,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine: "codex", accountId: "codex-subscription", kind: "managed", home: parked.cwd, transcriptRoot: parked.cwd, env: { NODE_ENV: "test" } }),
     spawn: async (input) => {
       spawned.push(input.receipt.launchId);
@@ -7494,7 +7494,7 @@ async function fencedResumeRecovery(
   const recover = () => recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
     registry,
     client,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine, accountId, kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
     ownership: {
       operationId: `pswitch-${sessionId}`,

@@ -287,7 +287,7 @@ test.each([
           return {};
         }, append: async () => ({}), transitionOperation: async () => ({}),
       } as unknown as RuntimeHostClient,
-        transport: () => "structured", park: () => null,
+        transportAvailable: () => true, park: () => null,
         resolveAccount: () => {
           if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
           if (scenario === "rotation after cleanup") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };

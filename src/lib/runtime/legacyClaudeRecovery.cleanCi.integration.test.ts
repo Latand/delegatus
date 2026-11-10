@@ -311,7 +311,7 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
       recoverDeadStructuredConversation(request, {
         registry,
         client,
-        transport: () => "structured",
+        transportAvailable: () => true,
         resolveAccount: (engine, accountId) => {
           expect({ engine, accountId }).toEqual({ engine: "claude", accountId: "fixture-account-after-switch" });
           return {
@@ -359,7 +359,7 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
     const mcpBodies: Record<string, unknown>[] = [];
     const bindings = viewerMcpBindings(undefined, {
       post: async (pathname, body) => {
-        expect(pathname).toBe("/api/tmux");
+        expect(pathname).toBe("/api/conversation-host");
         mcpBodies.push(structuredClone(body));
         const outcome = await enqueueStructuredMessage({
           path: typeof body.path === "string" ? body.path : "",

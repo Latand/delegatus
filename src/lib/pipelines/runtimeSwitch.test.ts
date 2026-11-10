@@ -570,7 +570,7 @@ test("durable retry revokes reconfigure and host recovery across a registry reop
   const held = new Promise<void>(resolve => { release = resolve; });
   let spawns = 0;
   const recovering = recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
-    registry, client: {} as never, transport: () => "structured", park: () => null,
+    registry, client: {} as never, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: path.dirname(transcript),
       transcriptRoot: path.dirname(transcript), env: { NODE_ENV: "test" } }),
     ownership: { operationId, revision: 1, owns: async () => true, releaseHost: async () => true,
@@ -596,7 +596,7 @@ test("durable retry revokes reconfigure and host recovery across a registry reop
     expect(runtimeSwitchRetirementReason(conversation.id, registry)).toContain("withdrew");
     expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("withdrew");
     await expect(recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
-      registry, transport: () => "structured", client: null, park: () => null,
+      registry, transportAvailable: () => true, client: null, park: () => null,
       spawn: async () => { spawns++; throw new Error("unexpected spawn"); },
     })).rejects.toThrow("withdrew");
     expect(spawns).toBe(0);

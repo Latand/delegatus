@@ -31,8 +31,8 @@ import {
   spawnStructuredConversation,
   structuredHostCell,
 } from "./structuredSpawn";
-import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
+import { structuredTransportAvailable } from "./spawnTransport";
 import { statePath } from "@/lib/configDir";
 import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
 import { loadPipelineOwnershipForStartupAsync, pipelineStartupAttemptMatches, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
@@ -124,9 +124,11 @@ const defaultParkResolver: StructuredHostParkResolver = (engine, accountId, snap
 });
 
 export interface StructuredRecoveryDependencies {
+  /** Whether this deployment can host the recovered conversation. Without a
+      structured transport there is nothing to start, and recovery answers null. */
+  transportAvailable?: () => boolean;
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
-  transport?: () => "tmux" | "structured";
   resolveAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
   processIdentity?: () => ProcessIdentity;
@@ -774,7 +776,7 @@ export async function recoverDeadStructuredConversation(
   request: StructuredRecoveryRequest,
   dependencies: StructuredRecoveryDependencies = {},
 ): Promise<StructuredRecoveryResult | null> {
-  if ((dependencies.transport ?? spawnTransport)() !== "structured") return null;
+  if (!(dependencies.transportAvailable ?? structuredTransportAvailable)()) return null;
   const registry = dependencies.registry ?? agentRegistry();
   if (dependencies.ownership && !await dependencies.ownership.owns()) {
     throw new StructuredRecoverySupersededError();

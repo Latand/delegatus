@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { structuredSpawnGap, spawnTransport } from "./spawnTransport";
+import { structuredSpawnGap, structuredTransportAvailable, spawnTransport } from "./spawnTransport";
 
 describe("spawnTransport", () => {
   test("is structured whether or not a runtime host is configured", () => {
@@ -70,5 +70,26 @@ describe("structuredSpawnGap", () => {
 
   test("admits Codex launches with service-tier support on the structured transport", () => {
     expect(structuredSpawnGap({ engine: "codex", model: "gpt-5.6-sol", hasImages: false }, enabled)).toBeNull();
+  });
+});
+
+describe("structuredTransportAvailable", () => {
+  const hosted = { LLV_RUNTIME_HOST_SOCKET: "/run/llv/runtime.sock" };
+
+  test("a deployment that carries a runtime host can host a recovered conversation", () => {
+    expect(structuredTransportAvailable(hosted)).toBe(structuredSpawnGap({ engine: "claude", model: "fable", hasImages: false }, hosted) === null);
+    expect(structuredTransportAvailable(hosted)).toBe(true);
+  });
+
+  test.each([
+    { ...hosted, LLV_STRUCTURED_HOSTS: "0" },
+    { ...hosted, LLV_RUNTIME_EVENTS: "0" },
+    { ...hosted, NEXT_PUBLIC_RUNTIME_UI: "0" },
+  ])("a rollback switch leaves nothing to host a recovered conversation", (env) => {
+    expect(structuredTransportAvailable(env)).toBe(false);
+  });
+
+  test("an explicit structured transport is taken at its word", () => {
+    expect(structuredTransportAvailable({ LLV_SPAWN_TRANSPORT: "structured" })).toBe(true);
   });
 });

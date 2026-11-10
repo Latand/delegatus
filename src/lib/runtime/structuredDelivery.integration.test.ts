@@ -5187,7 +5187,7 @@ async function drainRecoveryFixture(name: string) {
     turn: "unknown", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
   } });
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
-    ...dependencies, registry, client, transport: () => "structured",
+    ...dependencies, registry, client, transportAvailable: () => true,
     resolveAccount: () => {
       beforeReservation();
       return { engine: "codex", accountId: "default", kind: "managed",
@@ -5797,7 +5797,7 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
   let launches = 0;
   const handshakes: string[] = [];
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
-    ...dependencies, registry, client, transport: () => "structured", resolveAccount: () => account,
+    ...dependencies, registry, client, transportAvailable: () => true, resolveAccount: () => account,
     spawn: async input => {
       launches++;
       expect(input.prompt).toBe("");

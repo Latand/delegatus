@@ -1564,7 +1564,7 @@ test("ordinary structured recovery cannot continue a curator pass after its seat
   patchPass(p.id, { state: "running", launchedAt: at(), conversationId, launchId: begun.receipt.launchId });
   let spawns = 0;
   await expect(recoverDeadStructuredConversation({ path: artifactPath, conversationId }, {
-    registry: registry as never, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    registry: registry as never, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "codex", accountId: "codex-test", kind: "managed", home: dir, transcriptRoot: dir, env: { NODE_ENV: "test" } }),
     spawn: async () => { spawns++; throw new Error("ineligible curator recovery spawned"); },
   })).rejects.toThrow(/curation pass abandoned/);

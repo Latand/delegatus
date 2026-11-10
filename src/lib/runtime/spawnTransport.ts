@@ -1,6 +1,7 @@
 import type { AgentEngine } from "@/lib/agent/cli";
 import { codexModelSupportsImages } from "@/lib/agent/models";
 import {
+  runtimeEventsEnabled,
   runtimeEventsRolledBack,
   runtimeHostSocket,
   runtimeUiEnabled,
@@ -20,6 +21,15 @@ export function spawnTransport(env: Readonly<Record<string, string | undefined>>
     throw new Error("LLV_SPAWN_TRANSPORT must be structured; the terminal transport was removed");
   }
   return "structured";
+}
+
+/** Whether a dead conversation can be given a new structured host here. A
+    deployment with a rollback switch thrown, or with no runtime events plane,
+    has nothing to host it; an explicit `LLV_SPAWN_TRANSPORT=structured`
+    states that the deployment hosts agents and is taken at its word. */
+export function structuredTransportAvailable(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  if (env.LLV_SPAWN_TRANSPORT?.trim() === "structured") return true;
+  return structuredHostsEnabled(env) && runtimeEventsEnabled(env) && runtimeUiEnabled(env);
 }
 
 export function structuredSpawnGap(

@@ -139,7 +139,7 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
     }
     const pending = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
       ...(mode === "startup" ? { reconnectLiveHost: true } : {}),
-      admissionGuard: () => { if (!authorized) throw new Error("reconnect authority revoked"); } }, { registry, client, transport: () => "structured", park: () => null,
+      admissionGuard: () => { if (!authorized) throw new Error("reconnect authority revoked"); } }, { registry, client, transportAvailable: () => true, park: () => null,
       resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
       spawn: async () => { spawned += 1; throw new Error("a live reconnect must not spawn"); } });
     if (scenario === "pipeline-busy") {
@@ -217,7 +217,7 @@ test("recovery authorization waits outside admission and a racing revocation res
   const leases = trackAccountLeases();
   const recovery = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
     authorityGuard: () => { if (revoked) throw new Error("authority changed"); },
-  }, { registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+  }, { registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
     ownership: { operationId: "authorization-race", revision: 1, owns: async () => true, releaseHost: async () => true,
       authorizeAccount: async () => {
@@ -256,7 +256,7 @@ test.each(["settled", "unsettled", "retained host", "authority refusal"] as cons
     : new Error("No conversation found with session ID");
   let attempts = 0;
   const error = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
-    registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
     spawn: async input => {
       attempts += 1;
@@ -296,7 +296,7 @@ test.each(["account resolution", "spawn reservation"] as const)("a seat admissio
   const guard = () => { if (!admitted) throw new DeliveryAdmissionRefusedError("seat-rotated"); };
   const recovery = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
     admissionGuard: guard, authorityGuard: guard,
-  }, { registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+  }, { registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
     resolveAccount: () => { if (phase === "account resolution") admitted = false;
       return { engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }; },
     spawn: async input => { spawns += 1; return { ok: true, target: null, path: artifactPath,
@@ -515,7 +515,7 @@ test("the recovery reservation converges repeated calls onto one successor spawn
   const recover = () => recoverDeadStructuredConversation({ path: artifactPath, conversationId }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (engine, accountId) => {
       expect({ engine, accountId }).toEqual({ engine: "claude", accountId: "default" });
       return {
@@ -673,7 +673,7 @@ test("ordinary recovery prefers the durable generation title over stale entry ti
     }, {
       registry,
       client: {} as RuntimeHostClient,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => ({
         engine: "codex",
         accountId: "default",
@@ -875,7 +875,7 @@ test("dead Codex structured recovery retains ownership and starts a pane-less re
   }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (engine, accountId) => {
       expect(engine).toBe("codex");
       expect(accountId).toBe("retained-account");
@@ -1022,7 +1022,7 @@ test("dead Claude structured recovery retains ownership and starts a pane-less r
   }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (engine, accountId) => {
       expect(engine).toBe("claude");
       expect(accountId).toBe("retained-claude-account");
@@ -1148,7 +1148,7 @@ test("Codex and Claude worker and root recovery retain their original lineage sh
       await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
         registry,
         client: {} as RuntimeHostClient,
-        transport: () => "structured",
+        transportAvailable: () => true,
         resolveAccount: () => account,
         spawn: async (input) => ({
           ok: true,
@@ -1217,7 +1217,7 @@ test("live structured ownership prevents a duplicate recovery host", async () =>
     conversationId: conversation.id,
   }, {
     registry,
-    transport: () => "structured",
+    transportAvailable: () => true,
     spawn: async () => {
       spawnCalls += 1;
       throw new Error("duplicate structured host");
@@ -1251,7 +1251,7 @@ test("recovery never clears a host after its ownership is revoked during writer 
   try {
     await holder.hold(150);
     await expect(recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
-      registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+      registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
       ownership: {
         operationId: "recovery-revocation", revision: 1,
         owns: async () => current,
@@ -1290,7 +1290,7 @@ test("recovery cleanup preserves its successor when ownership is revoked during 
   let revoke: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
-      registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+      registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
       resolveAccount: () => account,
       ownership: {
         operationId: "recovery-cleanup-revocation", revision: 1,
@@ -1373,7 +1373,7 @@ test("a live owner with a pending action stays synchronizing and never spawns a 
     await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
       registry,
       client: {} as RuntimeHostClient,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => ({
         engine: "codex",
         accountId: "pending-account",
@@ -1438,7 +1438,7 @@ test("a terminal row with a live or unverifiable process still takes the success
   const recovered = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({
       engine: "codex",
       accountId: "terminal-account",
@@ -1532,7 +1532,7 @@ test("issue 611: a live host parked behind a provider limit is held, not publish
     conversationId: conversation.id,
   }, {
     registry,
-    transport: () => "structured",
+    transportAvailable: () => true,
     spawn: async () => {
       spawnCalls += 1;
       throw new Error("a parked host must not be replaced");
@@ -1624,7 +1624,7 @@ test("issue 611: a live host whose account is spent with no reset is held on a b
     conversationId: conversation.id,
   }, {
     registry,
-    transport: () => "structured",
+    transportAvailable: () => true,
     spawn: async () => {
       spawnCalls += 1;
       throw new Error("a host held on an unknown reset must not be replaced");
@@ -1707,7 +1707,7 @@ test("a dead structured process cannot masquerade as publish-ready ownership", a
   }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({
       engine: "codex",
       accountId: "retained-account",
@@ -1745,7 +1745,7 @@ test.each(["codex", "claude"] as const)("current verified %s tmux ownership outr
     conversationId: state.conversationId,
   }, {
     registry: state.registry,
-    transport: () => "structured",
+    transportAvailable: () => true,
     spawn: async () => {
       spawnCalls += 1;
       throw new Error("verified tmux ownership entered structured recovery");
@@ -1811,7 +1811,7 @@ test.each(["codex", "claude"] as const)("duplicate %s recovery clicks reuse one 
     const recovered = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
       registry,
       client: {} as RuntimeHostClient,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => account,
       spawn: async (input) => {
         spawnCalls += 1;
@@ -1920,7 +1920,7 @@ test("a registered legacy Claude transcript bridges into the structured broker",
   }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (engine, accountId) => {
       expect({ engine, accountId }).toEqual({ engine: "claude", accountId: "default" });
       return {
@@ -2015,7 +2015,7 @@ test("a registered legacy Codex transcript bridges into the structured app serve
   }, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (engine, accountId) => {
       expect({ engine, accountId }).toEqual({ engine: "codex", accountId: "legacy-account" });
       return {
@@ -2083,7 +2083,7 @@ test("resume waits for a short account mutation and starts one successor", async
   await ready;
   let spawns = 0;
   const recovery = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
-    registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
     spawn: async (input) => {
       spawns += 1;
@@ -2135,7 +2135,7 @@ test.each(["current", "owner", "epoch", "writer", "operation"] as const)("resume
           handoffs.push(sessionKeyId(key));
         },
       }, {
-        registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+        registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
         resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
         spawn: async (input) => {
           // The production spawn's resume claim, under the same writer admission.
@@ -2214,7 +2214,7 @@ test("an account authorization lost after the recovery's admission ends its laun
       const { value: outcome } = await whileRegistryWriterHeld(holder, () => recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
         registry,
         client: {} as RuntimeHostClient,
-        transport: () => "structured",
+        transportAvailable: () => true,
         resolveAccount: () => ({ engine: "codex", accountId: "recovery-account", kind: "managed", home: path.join(cwd, "account"), transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
         ownership: {
           operationId: "recovery-authorization", revision: 1,

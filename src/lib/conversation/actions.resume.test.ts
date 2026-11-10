@@ -47,7 +47,7 @@ for (const engine of ["claude", "codex"] as const) {
      return resumeConversation(transcript, { registry: f.registry, pathAllowed: () => true,
       recover: async request => {
        const recovered = await recoverDeadStructuredConversation(request, {
-        registry: f.registry, client: null, transport: () => "structured",
+        registry: f.registry, client: null, transportAvailable: () => true,
         park: () => ({ reason: "quota_exhausted", accountId: "fixture-account", until: new Date(Date.now() + 60000).toISOString(), resetKnown: true }) });
        expect(recovered?.hold).toMatchObject({ reason: "quota_exhausted" }); return recovered;
       } });
@@ -103,7 +103,7 @@ for (const engine of ["claude", "codex"] as const) test("structured " + engine +
    registry: f.registry, enabled: () => true, client: null, hostProcessAlive: () => false,
    onResumed: id => { f.wakes.push(id); },
    recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: null,
-    transport: () => "structured", park: () => ({ reason: "quota_exhausted", accountId: "fixture-account",
+    transportAvailable: () => true, park: () => ({ reason: "quota_exhausted", accountId: "fixture-account",
      until: new Date(Date.now() + 60000).toISOString(), resetKnown: true }) }),
   });
   await new Promise<void>(resolve => setImmediate(resolve));

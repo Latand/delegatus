@@ -241,7 +241,7 @@ test.each(["codex", "claude"] as const)("%s send creates one structured successo
   const recover = (request: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(request, {
     registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (resolvedEngine, resolvedAccountId) => {
       expect(resolvedEngine).toBe(engine);
       expect(resolvedAccountId).toBe(accountId);
