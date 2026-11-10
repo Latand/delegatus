@@ -1,5 +1,5 @@
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import { stopFixtureProcess, signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
@@ -7,27 +7,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { procBackend } from "@/lib/proc";
 import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 
-/* The state dir must point at a sandbox before store.ts computes its
-   module-level constants, so exec/store load dynamically after the env set. */
+/* The state dir must point at a sandbox before the executor loads. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-exec-test-"));
 const managedCodexHome = path.join(process.env.LLV_STATE_DIR, "managed-codex");
 const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
 const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
-const { forgetHeadlessReview, headlessReviewStatus, reviewerCommand, scanEventStream, startHeadlessReview, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./exec");
-const { prepareHeadlessPublication, runHeadlessCodexOnce, reviewerEnvironment } = await import("@/lib/agent/headless");
-const { reviewerPrompt } = await import("./prompts");
-const { outputPathFor, stdoutPathFor } = await import("./store");
-const { registerPipelineTick } = await import("../pipelines/controllerSignal");
-
-// Detached fixture exits wake a local stub throughout this isolated test file.
-registerPipelineTick(async () => {});
+const { prepareHeadlessPublication, runHeadlessCodexOnce, reviewerCommand, reviewerEnvironment, scanEventStream, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./headless");
 
 afterAll(async () => {
-  for (const child of sleepers) await stopFixtureProcess(child);
   restorePolicyReader();
   restoreFeatures();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
@@ -253,22 +243,6 @@ test("reviewer group cleanup kills a real descendant after its detached leader e
   }
 });
 
-function writeArtifacts(flowId: string, round: number, stdout: string, lastMessage?: string): void {
-  const stdoutPath = stdoutPathFor(flowId, round);
-  fs.mkdirSync(path.dirname(stdoutPath), { recursive: true });
-  fs.writeFileSync(stdoutPath, stdout);
-  if (lastMessage !== undefined) fs.writeFileSync(outputPathFor(flowId, round), lastMessage);
-}
-
-/** A real detached process, as startHeadlessReview would leave behind. */
-const sleepers: ReturnType<typeof spawn>[] = [];
-function spawnSleeper(): ReturnType<typeof spawn> {
-  const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
-  sleepers.push(child);
-  child.unref();
-  return child;
-}
-
 async function waitForDeath(pid: number): Promise<void> {
   for (let i = 0; i < 50; i++) {
     try {
@@ -309,85 +283,6 @@ test("headless codex reviewer launches without CLI sandbox blocking", () => {
   expect(built.args).toContain("multi_agent");
   expect(built.stdin).toContain("review prompt");
   expect(built.stdin).toContain("Viewer spawn policy:");
-});
-
-test("a headless review exit schedules one flow and pipeline reconciliation", async () => {
-  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-completing-codex");
-  fs.writeFileSync(
-    executablePath,
-    `#!${process.execPath}\nawait Bun.stdin.text();\n`,
-    { mode: 0o700 },
-  );
-  let ticks = 0;
-  let markTicked = () => {};
-  const ticked = new Promise<void>((resolve) => { markTicked = resolve; });
-  const unregister = registerPipelineTick(async () => {
-    ticks += 1;
-    markTicked();
-  });
-
-  try {
-    await startHeadlessReview(
-      "flow-completion-signal",
-      1,
-      { engine: "codex", model: null, effort: null },
-      process.cwd(),
-      "review prompt",
-      5_000,
-      null,
-      null,
-      { command: executablePath },
-    );
-    await ticked;
-    await Promise.resolve();
-    expect(ticks).toBe(1);
-  } finally {
-    unregister();
-    forgetHeadlessReview("flow-completion-signal", 1);
-  }
-});
-
-test("an owned reviewer stays running when process identity is briefly unavailable at spawn", async () => {
-  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-long-codex");
-  fs.writeFileSync(
-    executablePath,
-    `#!${process.execPath}\nawait Bun.stdin.text();\nconsole.log(JSON.stringify({ type: "thread.started", thread_id: "11111111-2222-3333-4444-555555555556" }));\nsetInterval(() => {}, 1_000);\n`,
-    { mode: 0o700 },
-  );
-  let identityReads = 0;
-  const launched = await startHeadlessReview(
-    "flow-delayed-identity",
-    1,
-    { engine: "codex", model: null, effort: null },
-    process.cwd(),
-    "review prompt",
-    5_000,
-    null,
-    null,
-    {
-      command: executablePath,
-      processIdentity: (pid) => {
-        identityReads += 1;
-        return identityReads === 1 ? null : procBackend.processIdentity(pid);
-      },
-    },
-  );
-
-  try {
-    expect(launched.identity).toBeNull();
-    const status = headlessReviewStatus("flow-delayed-identity", 1, {
-      reviewerPid: launched.pid,
-      reviewerIdentity: launched.identity,
-      spawnStartedAt: new Date().toISOString(),
-    }, "codex");
-    expect(status?.status).toBe("running");
-    expect(status?.processIdentity).toBeString();
-  } finally {
-    forgetHeadlessReview("flow-delayed-identity", 1, {
-      reviewerPid: launched.pid,
-      reviewerIdentity: launched.identity,
-    });
-  }
 });
 
 test("headless managed Codex reviewer fixes its account home and file credential store at launch", () => {
@@ -477,109 +372,6 @@ test("headless managed Claude reviewer installs the native sub-agent deny profil
   expect(settings.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
   expect(built.env.LLV_TOKEN).toBeUndefined();
   delete process.env.LLV_TOKEN;
-});
-
-test("status is null when the round never left a trace", () => {
-  expect(headlessReviewStatus("flow-a", 1, { reviewerPid: null, spawnStartedAt: null }, "codex")).toBeNull();
-});
-
-test("a persisted launch marker without a process or artifacts reports lost tracking", () => {
-  expect(headlessReviewStatus("flow-lost", 1, {
-    reviewerPid: null,
-    reviewerIdentity: null,
-    spawnStartedAt: "2026-07-12T08:35:59.000Z",
-  }, "codex")?.status).toBe("lost");
-});
-
-test("restart reconstruction: alive pid reports running, dead pid yields the artifact verdict", async () => {
-  const sleeper = spawnSleeper();
-  const pid = sleeper.pid!;
-  writeArtifacts("flow-b", 1, EVENTS);
-  const round = { reviewerPid: pid, reviewerIdentity: procBackend.processIdentity(pid), spawnStartedAt: new Date().toISOString() };
-
-  const running = headlessReviewStatus("flow-b", 1, round, "codex");
-  expect(running?.status).toBe("running");
-  expect(running?.sessionId).toBe("11111111-2222-3333-4444-555555555555");
-
-  sleeper.kill("SIGKILL");
-  await waitForDeath(pid);
-  fs.writeFileSync(outputPathFor("flow-b", 1), "VERDICT: APPROVE\n\nShip it.");
-  const done = headlessReviewStatus("flow-b", 1, round, "codex");
-  expect(done?.status).toBe("done");
-  expect(done?.finalOutput).toBe("VERDICT: APPROVE\n\nShip it.");
-});
-
-test("restart reconstruction parks a live persisted pid whose identity was never checkpointed", () => {
-  const sleeper = spawnSleeper();
-  const pid = sleeper.pid!;
-  try {
-    writeArtifacts("flow-restart-missing-identity", 1, JSON.stringify({
-      type: "item.completed",
-      item: { type: "agent_message", text: "Reviewer is still investigating." },
-    }));
-    const status = headlessReviewStatus("flow-restart-missing-identity", 1, {
-      reviewerPid: pid,
-      reviewerIdentity: null,
-      spawnStartedAt: new Date().toISOString(),
-    }, "codex");
-
-    expect(status?.status).toBe("lost");
-    expect(status?.finalOutput).toBe("Reviewer is still investigating.");
-    expect(() => process.kill(pid, 0)).not.toThrow();
-  } finally {
-    sleeper.kill("SIGKILL");
-  }
-});
-
-test("restart reconstruction rejects a live pid whose process identity changed", () => {
-  const sleeper = spawnSleeper();
-  const pid = sleeper.pid!;
-  try {
-    const status = headlessReviewStatus("flow-reused", 1, {
-      reviewerPid: pid,
-      reviewerIdentity: `${pid}:stale`,
-      spawnStartedAt: new Date().toISOString(),
-    }, "codex");
-    expect(status?.status).not.toBe("running");
-  } finally {
-    sleeper.kill("SIGKILL");
-  }
-});
-
-test("cancel leaves a reused persisted reviewer pid untouched", () => {
-  const sleeper = spawnSleeper();
-  const pid = sleeper.pid!;
-  try {
-    forgetHeadlessReview("flow-cancel-reused", 1, { reviewerPid: pid, reviewerIdentity: `${pid}:stale` });
-    expect(() => process.kill(pid, 0)).not.toThrow();
-  } finally {
-    sleeper.kill("SIGKILL");
-  }
-});
-
-test("restart reconstruction: dead codex run without artifact falls back to the event-stream message", async () => {
-  const sleeper = spawnSleeper();
-  const pid = sleeper.pid!;
-  writeArtifacts("flow-c", 2, EVENTS);
-  sleeper.kill("SIGKILL");
-  await waitForDeath(pid);
-  const status = headlessReviewStatus("flow-c", 2, { reviewerPid: pid, reviewerIdentity: procBackend.processIdentity(pid), spawnStartedAt: new Date().toISOString() }, "codex");
-  expect(status?.status).toBe("done");
-  expect(status?.finalOutput).toContain("VERDICT: APPROVE");
-});
-
-test("restart reconstruction: claude reviewer's verdict is its captured stdout", () => {
-  writeArtifacts("flow-d", 1, "VERDICT: REQUEST_CHANGES\n\n- fix the thing\n");
-  const status = headlessReviewStatus("flow-d", 1, { reviewerPid: 999_999_999, reviewerIdentity: "999999999:gone", spawnStartedAt: new Date().toISOString() }, "claude");
-  expect(status?.status).toBe("done");
-  expect(status?.finalOutput).toBe("VERDICT: REQUEST_CHANGES\n\n- fix the thing");
-});
-
-test("restart reconstruction: dead run with no output at all times out past the budget", () => {
-  writeArtifacts("flow-e", 1, "");
-  const started = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const status = headlessReviewStatus("flow-e", 1, { reviewerPid: 999_999_999, reviewerIdentity: "999999999:gone", spawnStartedAt: started }, "codex");
-  expect(status?.status).toBe("timeout");
 });
 
 /* Issue #1067: the one-shot summarizer the orchestrator rotation runs shares

@@ -1,7 +1,5 @@
-// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
-// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { startAutoAndSettle } from "./engineEnvironment.fixture";
-import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, loadTasks, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
+import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, loadTasks, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts, BoardTask, Pipeline } from "./engine.fixture";
 
 test("internal conversation source is copied onto an operator draft and retained by Start with null creator", async () => {
@@ -368,20 +366,6 @@ test("declared outputs reject traversal, Git metadata, and duplicate normalized 
   }));
 });
 
-test.skip("review-loop sandbox restriction reaches its reviewer flow", async () => {
-  const h = harness();
-  await create(h.ports, [
-    { id: "build", kind: "run", access: "read-write", prompt: "Build", next: "review" },
-    { id: "review", kind: "review-loop", access: "read-only", sandbox: "restricted", prompt: "Review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  await tickPipelines([], h.ports);
-
-  expect(h.flowRequests[0]).toMatchObject({ reviewerSandbox: "restricted" });
-});
-
 test("pause and resume state details name the operator or calling agent (#1121)", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
@@ -542,28 +526,6 @@ test("an invalid create answers with every violated constraint at once", async (
   expect(rejected.error).toContain("place runtime overrides on the stage");
   expect(rejected.error).not.toContain("baseRef");
   expect(loadPipelines()).toEqual([]);
-});
-
-/* #1026 ask 3 — "review-loop stage requires a preceding run stage" read as an
-   ordering rule and sent the caller reordering an array that was already in the
-   right order. The defect is the missing pass edge. */
-test.skip("an unreachable review-loop names the stage and the next edge that would reach it", async () => {
-  const h = harness();
-  savePipelines([]);
-  const rejected = await createPipelineFromRequest({
-    task: "Unwired review loop",
-    repoDir: "/repo",
-    autoStart: false,
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: null },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-    ],
-  }, h.ports);
-
-  expect(rejected.pipeline).toBeUndefined();
-  expect(rejected.error).toBe('review-loop stage review is unreachable: no run stage\'s next chain reaches it — set next: "review" on run stage build');
-  expect(rejected.violations).toEqual([expect.objectContaining({ field: "stages[].next" })]);
-  expect(rejected.error).not.toContain("requires a preceding run stage");
 });
 
 test("set-src repairs closed history and requires overwrite for existing lineage", async () => {
@@ -1394,54 +1356,6 @@ test("a visual-critic stage refuses Codex and read-write on create and override"
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
-});
-
-test.skip("review-loop onFail edges are rejected during creation and graph editing", async () => {
-  const h = harness();
-  savePipelines([]);
-  const invalid = await createPipelineFromRequest({
-    task: "Unreachable review fix edge",
-    repoDir: "/repo",
-    autoStart: false,
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null, onFail: { to: "build", maxRounds: 3 } },
-    ],
-  }, h.ports);
-
-  expect(invalid).toMatchObject({
-    error: "review-loop stage review does not support onFail",
-    status: 400,
-    violations: [{ field: "stages[].next", message: "review-loop stage review does not support onFail" }],
-  });
-  expect(loadPipelines()).toEqual([]);
-
-  const valid = await createPipelineFromRequest({
-    task: "Editable review graph",
-    repoDir: "/repo",
-    autoStart: false,
-    stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-    ],
-  }, h.ports);
-  if (!valid.pipeline) throw new Error(valid.error);
-  /* A new review-loop is converted at creation (#2187); the edit is refused
-     on a stored legacy draft, which still carries one. */
-  savePipelines([asStoredLegacyReviewLane(valid.pipeline, valid.convertedStages)]);
-
-  const edited = await patchPipeline(valid.pipeline.id, {
-    action: "set-edge",
-    stageId: "review",
-    edge: "fail",
-    to: "build",
-    maxRounds: 3,
-  }, h.ports);
-  expect(edited).toMatchObject({
-    error: "review-loop stage review does not support onFail",
-    status: 400,
-  });
-  expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "review")!.onFail).toBeNull();
 });
 
 test("auto-start creation admits the record with its base unresolved and the controller fetches it (#1799)", async () => {
