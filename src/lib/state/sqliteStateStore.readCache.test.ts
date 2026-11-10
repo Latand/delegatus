@@ -251,3 +251,22 @@ test("a peer write during asynchronous cold preparation refuses publication and 
   await expect(store.loadReadonlyAsync()).rejects.toThrow("snapshot changed");
   expect((await store.loadReadonlyAsync())[0]).toEqual(row("row-0", "peer"));
 }));
+
+test("a patch reads only the rows it names and appends after the last stored row (#3809)", () => fixture(filename => {
+  const store = new SqliteStateCollection(filename, options(v => v as Row));
+  const statements: string[] = [];
+  const query = Database.prototype.query;
+  Database.prototype.query = function (this: Database, sql: string) {
+    statements.push(sql);
+    return query.call(this, sql);
+  } as typeof query;
+  try {
+    store.patchSync(() => ({ records: [row("b", "edited"), row("c")] }));
+  } finally { Database.prototype.query = query; }
+  const payloadReads = statements.filter(sql => /SELECT[^;]*value_json[^;]*FROM state_rows/i.test(sql));
+  expect(payloadReads.length).toBeGreaterThan(0);
+  for (const sql of payloadReads) expect(sql).toMatch(/row_key\s*(=|IN)/i);
+  expect(store.snapshot()).toEqual([row("a"), row("b", "edited"), row("c")]);
+  store.patchSync(() => ({ records: [], deleteKeys: ["a", "missing"] }));
+  expect(store.snapshot()).toEqual([row("b", "edited"), row("c")]);
+}));
