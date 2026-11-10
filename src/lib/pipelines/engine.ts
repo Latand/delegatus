@@ -10400,9 +10400,19 @@ async function tickRunStage(
   }
 
   updateAttemptIdentity(pipeline, attempt, entries, ports);
-  const structuredActive = !attempt.paneId && attempt.conversationId
+  const reportedStructuredActive = !attempt.paneId && attempt.conversationId
     ? await ports.conversationAgentActive(attempt.conversationId)
     : null;
+  /* Startup holds a row whose restart cut evidence is undecided or keeps
+     moving, and an agent that kept working through the restart moves it with
+     every record it writes (#3811). The held row reads unhosted for as long
+     as that lasts, while its engine process is alive. That is no host death:
+     nothing below may read it as one, fail the attempt over it or stop the
+     process. A held row whose process is gone keeps the ordinary reading. */
+  const restartCutLiveHost = !attempt.paneId && !!attempt.conversationId
+    && ports.conversationRestartCutHeld?.(attempt.conversationId) === true
+    && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive";
+  const structuredActive = restartCutLiveHost && reportedStructuredActive === false ? null : reportedStructuredActive;
   const paneActive = attempt.paneId ? await ports.paneAgentAlive(attempt.paneId) : null;
   const spawnReceipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const terminalSpawnFailure = spawnReceipt
@@ -10488,7 +10498,7 @@ async function tickRunStage(
     ? Math.max(reportedUnavailableAt, unixMs(deployCut.resolvedAt))
     : reportedUnavailableAt;
   const hostUnavailablePastGrace = !heldForDeployCut
-    && (Boolean(oomDeath) || (unavailableAt > 0
+    && (Boolean(oomDeath) || (!restartCutLiveHost && unavailableAt > 0
     && unixMs(ports.now()) - unavailableAt >= DEAD_RUNNING_ATTEMPT_GRACE_MS));
   if (heldForDeployCut && pipeline.stateDetail !== DEPLOY_CUT_HOLD_DETAIL) {
     pipeline.stateDetail = DEPLOY_CUT_HOLD_DETAIL;
@@ -10510,7 +10520,7 @@ async function tickRunStage(
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attemptEvidenceFloor(attempt), undefined,
     attempt.providerWait?.turnTs ?? attempt.controllerWait?.providerCutAt);
-  const unregisteredHostDeath = structuredActive === true
+  const unregisteredHostDeath = structuredActive === true || restartCutLiveHost
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
       stageId: stage.id,
