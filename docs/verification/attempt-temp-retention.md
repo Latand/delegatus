@@ -86,9 +86,17 @@ retired, are eligible after their last live process leaves. Checkout symlinks
 into an attempt root keep it through lane completion or explicit close,
 including idle intervals between stages. Every checkout that holds a live
 process is read for links into the root, however many there are; one tick
-shares one link inventory across the roots it examines, rereads a checkout
-whose read is more than 10 seconds old, and holds the remaining roots until
-the next tick once 30 seconds of reading are spent.
+shares one link inventory across the roots it examines and holds the remaining
+roots until the next tick once 30 seconds of reading are spent. The sweep
+helper keeps each completed checkout read for later ticks: a kept read serves
+again while every directory it lists still carries the identity and timestamps
+of that read, and it is repeated in full after 10 minutes, so a pass over many
+checkouts finishes across ticks. A directory changed within the last 20 ms is
+listed only after that interval, because the kernel's coarse clock would give
+a later link the same timestamps. A link that loops is treated as a dangling
+one: its lexical target is still compared with the root. Inside one reference
+observation the helper reuses a directory validation of the last 5 seconds;
+the fence before each destructive step reads every listed directory again.
 Explicitly retired startup launches are matched in the attempt's retained
 launch history. Declared stage outputs retain their scratch until lane
 completion or explicit close. Both completed and explicitly closed lanes use
