@@ -2,12 +2,11 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
-import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
-import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -25,7 +24,6 @@ import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
-import { paneInfo } from "@/lib/tmux";
 import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
@@ -104,17 +102,11 @@ export async function reconcileAccountLogins(): Promise<void> {
   const mutationLocked = codexAccountsMutationLocked();
   const runtime = managedCodexRuntime();
   await Promise.all(listCodexAccounts().map(async (account) => {
-    if (account.kind === "managed") {
-      if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
-      if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-      return;
-    }
-    /* Main's own device login (#2166) settles the way a managed one does. */
+    /* A login pane recorded by an older release names a terminal window that
+       no release opens any more; the record is dropped. Main's own device
+       login (#2166) settles the way a managed one does. */
+    if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
     if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-    if (!account.loginPane) return;
-    const pane = await paneInfo(account.loginPane.paneId);
-    const status = codexLoginPaneStatus(account.authPresent, account.loginPane, pane);
-    if (status.clear && !mutationLocked) setCodexAccountLoginPane(account.id, null);
   }));
 }
 
@@ -152,14 +144,13 @@ export interface AccountMigrationControllerCyclePorts {
 
 async function reconcileControllerRuntime(registry: AgentRegistry, files: ControllerScan["files"]): Promise<void> {
   await reconcileAccountLogins();
-  const transcriptHosts = await readTranscriptHosts(true, files);
   try {
-    await runReaperCycle({ registry, hosts: transcriptHosts.hosts, files });
+    await runReaperCycle({ registry, files });
   } catch (error) {
     console.error("[agent reaper] lifecycle reconciliation failed", error);
   }
   try {
-    const report = await runHeadlessProcessReaper({ hosts: transcriptHosts.hosts, flows: loadFlows() });
+    const report = await runHeadlessProcessReaper({ flows: loadFlows() });
     if (report.signaled > 0) console.warn(`[headless process reaper] terminated ${report.signaled} stale process group(s)`);
   } catch (error) {
     console.error("[headless process reaper] reconciliation failed", error);

@@ -15,6 +15,7 @@ import { loadTasks } from "@/lib/tasks/store";
 import { checkStateDatabasesBeforeStores } from "@/lib/viewerInstrumentation";
 
 import {
+  backupsDue,
   backupDatabase,
   SchemaRecoveryError,
   checkStateDatabasesAtActivation,
@@ -104,14 +105,14 @@ test("a corrupted state database is restored from the newest good backup and rai
   const first = backupDatabase(database, { backupDirectory: backupDirectory(directory), now: new Date("2026-09-19T10:00:00Z") });
   expect(first.state).toBe("taken");
   seedTasks(directory, ["older", "newer"]);
-  const second = backupDatabase(database, { backupDirectory: backupDirectory(directory), now: new Date("2026-09-19T10:10:00Z") });
+  const second = backupDatabase(database, { backupDirectory: backupDirectory(directory), now: new Date("2026-09-19T11:00:00Z") });
   expect(second.state).toBe("taken");
   seedTasks(directory, ["older", "newer", "lost"]);
   checkpoint(database.filename);
   /* The newest backup is itself damaged: the fallback skips it. */
   if (second.state !== "taken") throw new Error("unreachable");
   overwrite(second.file, 0, Buffer.alloc(100, 0x41));
-  const third = backupDatabase(database, { backupDirectory: backupDirectory(directory), now: new Date("2026-09-19T10:20:00Z") });
+  const third = backupDatabase(database, { backupDirectory: backupDirectory(directory), now: new Date("2026-09-19T12:00:00Z") });
   expect(third.state).toBe("taken");
   if (third.state !== "taken") throw new Error("unreachable");
   overwrite(third.file, 0, Buffer.alloc(100, 0x41));
@@ -119,7 +120,7 @@ test("a corrupted state database is restored from the newest good backup and rai
   const size = fs.statSync(database.filename).size;
   overwrite(database.filename, 4096, Buffer.alloc(Math.min(8192, size - 4096), 0xff));
 
-  const incidents = checkStateDatabasesAtActivation(directory, { now: new Date("2026-09-19T10:30:00Z") });
+  const incidents = checkStateDatabasesAtActivation(directory, { now: new Date("2026-09-19T12:30:00Z") });
 
   expect(incidents).toHaveLength(1);
   const [incident] = incidents;
@@ -136,7 +137,7 @@ test("a corrupted state database is restored from the newest good backup and rai
   /* The store serves the backup's rows. */
   expect(readTaskIds(directory)).toEqual(["older"]);
   /* The incident is durable, for the files route in another process. */
-  expect(readStorageIncidents(directory, { now: new Date("2026-09-19T10:31:00Z") })).toEqual([incident!]);
+  expect(readStorageIncidents(directory, { now: new Date("2026-09-19T12:31:00Z") })).toEqual([incident!]);
 });
 
 test("a database whose header is not SQLite and has no readable backup starts fresh and serves an empty store", () => {
@@ -180,10 +181,15 @@ test("a backup is skipped when nothing changed or it is not due, and taken after
   const copy = new Database(taken.file, { readonly: true });
   try { expect(copy.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" }); } finally { copy.close(); }
 
-  expect(backupDatabase(database, { backupDirectory: backups, now: new Date("2026-09-19T10:05:00Z"), lastRevision: taken.revision }).state).toBe("not-due");
-  expect(backupDatabase(database, { backupDirectory: backups, now: new Date("2026-09-19T10:20:00Z"), lastRevision: taken.revision }).state).toBe("unchanged");
+  /* Twenty minutes after the last copy the database is not due, changed or not. */
+  expect(backupDatabase(database, { backupDirectory: backups, now: new Date("2026-09-19T10:20:00Z"), lastRevision: taken.revision }).state).toBe("not-due");
+  expect(backupDatabase(database, { backupDirectory: backups, now: new Date("2026-09-19T11:00:00Z"), lastRevision: taken.revision }).state).toBe("unchanged");
   seedTasks(directory, ["a", "b"]);
-  const next = backupDatabase(database, { backupDirectory: backups, now: new Date("2026-09-19T10:20:00Z"), lastRevision: taken.revision });
+  const revisions = new Map([["state.sqlite", taken.revision]]);
+  expect(backupDatabase(database, { backupDirectory: backups, now: new Date("2026-09-19T10:20:00Z"), lastRevision: taken.revision }).state).toBe("not-due");
+  expect(backupsDue(directory, revisions, new Date("2026-09-19T10:20:00Z"))).toEqual([]);
+  expect(backupsDue(directory, revisions, new Date("2026-09-19T11:00:00Z"))).toEqual(["state.sqlite"]);
+  const next = backupDatabase(database, { backupDirectory: backups, now: new Date("2026-09-19T11:00:00Z"), lastRevision: taken.revision });
   expect(next.state).toBe("taken");
   expect(fs.readdirSync(backups).filter((name) => name.endsWith(".sqlite"))).toHaveLength(2);
 });
@@ -211,20 +217,27 @@ function fakeBackup(directory: string, database: string, at: Date, bytes: number
   return path.basename(file);
 }
 
-test("retention keeps the newest six, one per four hours for a day and one per day for three days", () => {
+test("retention keeps the newest three, one per four hours for a day and one per day for three days", () => {
   const directory = sandbox();
   const backups = backupDirectory(directory);
   const now = new Date("2026-09-19T12:00:00Z");
   const names: string[] = [];
-  /* A generation every 10 minutes for five days. */
-  for (let minutes = 0; minutes <= 5 * 24 * 60; minutes += 10) {
-    names.push(fakeBackup(backups, "state.sqlite", new Date(now.getTime() - minutes * 60_000), 10));
+  /* A generation every hour for five days. */
+  for (let hours = 0; hours <= 5 * 24; hours += 1) {
+    names.push(fakeBackup(backups, "state.sqlite", new Date(now.getTime() - hours * HOUR), 10));
   }
   const databases = stateDatabases(directory);
   pruneBackups(backups, databases, { now, budgetBytes: 2 * 1024 ** 3 });
   const kept = fs.readdirSync(backups).sort().reverse();
-  expect(kept).toHaveLength(15);
-  expect(kept.slice(0, 6)).toEqual(names.slice(0, 6));
+  /* Three newest, five four-hour windows the newest three leave open, three days. */
+  expect(kept).toHaveLength(11);
+  expect(kept.slice(0, 3)).toEqual(names.slice(0, 3));
+  /* The four-hour tier starts outside the hours the newest three cover:
+     12:00, 11:00 and 10:00 are kept, so the next kept copy is 07:00. */
+  expect(kept[3]).toBe(names[5]!);
+  /* The eight copies of the last day span seven four-hour windows: only 11:00 and 10:00 share one. */
+  const windows = kept.slice(0, 8).map((name) => Math.floor((now.getTime() - names.indexOf(name) * HOUR) / (4 * HOUR)));
+  expect(new Set(windows).size).toBe(7);
 });
 
 test("the size budget evicts the oldest generations first and never the newest three", () => {

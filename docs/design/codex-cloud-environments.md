@@ -78,15 +78,36 @@ or creating a replacement. An explicit manual mismatch remains authoritative.
 
 The serving release starts one background preparation worker after controller
 admission and stops it on demotion. It consumes the completed project catalog,
-uses a persisted project/account cursor and dispatches one account at a time.
+walks a project/account cursor and dispatches one account at a time. The cursor
+is persisted after a pass that reached the provider, so a restarted release
+continues from there; a pass that had nothing due writes nothing.
 Catalog sorting is refreshed when that catalog changes; account membership is
 sampled every 30 seconds. Each scheduling pass considers at most eight project
 positions. Preparation failures retry after two and four seconds; three failures
 or a setup deadline enter a persisted 15-minute cooldown. Each reconciliation
-window has a ten-minute deadline and a three-failure budget. After cooldown,
-another bounded window reuses all setup receipts and the original creation
-intent. Account credential metadata or manual-selection changes permit earlier
-revalidation. Pending approval is
+window has a ten-minute deadline and a three-failure budget. A binding that
+ended a window unavailable is terminal for the background worker: time alone
+never retries it. After its cooldown, a trigger opens another bounded window
+that reuses all setup receipts and the original creation intent. The triggers
+are a pipeline stage that asks for that project/account environment, an
+operator's environment choice, changed account credential metadata, and the
+first look of a newly started release. A trigger that arrives inside the
+cooldown stays outstanding and is served once when the cooldown ends. The
+first look of a new release spends a single attempt, since releases start
+several times a day; the other triggers open a full window. Stage
+admission itself still prepares its binding under the same cooldown.
+
+The worker prepares only the repository's default branch, so one binding
+decides whether a pair is due: the unresolved-ref binding while the
+default-branch lookup is failing, otherwise the default branch's own binding.
+Bindings of other refs belong to the stages that prepared them and never make
+the pair due. The default branch of each pair is remembered from the last
+successful lookup and stored beside the cursor; a pair with no remembered
+branch and no recorded failure owes one lookup. A failed lookup has the same
+budget as a preparation: a ten-minute window of three failures, two and four
+seconds apart, then the cooldown. A changed sign-in or choice opens a new
+window, so the pair stays due until its binding is revalidated or that budget
+is spent. Pending approval is
 scheduled two seconds later. A confirmed terminal FAILED approval clears its
 active operation receipt and advances a persisted approval-attempt counter. The
 next permitted attempt uses a fresh idempotency key with the same configuration
@@ -98,6 +119,13 @@ missing, malformed or unavailable. Available matching runtime diagnostics can
 refine the failure reason; operation identity and caller authority remain required.
 Ready bindings are due for background validation
 after 24 hours. Stage admission validates its selected binding again.
+
+When a whole walk finds nothing due the worker goes quiet. Every 30 seconds it
+compares the project list, the accounts' credential metadata and the bindings
+revision with what the walk saw (a change of project or account during a walk
+starts that walk's count again), and it walks again when one of them changed,
+when the earliest binding timer arrives, when a trigger names a pair, or after
+ten minutes (for a changed remote, account pool or legacy project choice).
 
 Network work runs outside storage leases. Every effect rechecks the caller's
 selection, account credential-file version, project remote and account eligibility.

@@ -50,6 +50,7 @@ import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
+import { ArtifactPreviewHost } from "@/components/preview/ArtifactPreviewHost";
 import { ImagePane } from "@/components/preview/ImagePane";
 import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
@@ -119,6 +120,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "document-links"
   | "project-setup"
   | "retired-orchestrator"
   | "file-confirmation"
@@ -2333,6 +2335,27 @@ else if (root && requested === "project-setup") {
     {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.now() / 1000} onOpenConversation={() => {}} />
       : <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>}
   </main>);
+}
+else if (root && requested === "document-links") {
+  setRuntimeUiEnabledForTests(false);
+  const cwd = params.get("cwd")!;
+  const lines = [JSON.stringify({ type: "response_item", timestamp: "2026-10-20T10:00:00.000Z", payload: {
+    type: "message", role: "assistant", content: [{ type: "output_text", text:
+      `[Source report](docs/report.md:102:7) · [Heading](docs/report.md#source-version) · [Invisible](\u200B${cwd}/docs/report.md:102) · [Missing](docs/missing.md) · [Changed](docs/changed.md) · [Denied](${params.get("denied")}) · [External](https://example.com/guide)` }],
+  } })];
+  setLogFeedDependenciesForTests({ useLogTail: () => ({
+    lines, linesStart: 0, size: lines.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
+  }) });
+  const file = { ...CODEX_FILE, cwd, projectRoot: params.get("parent")!, project: "selected-later-project", conversationId: "conversation_document_source" };
+  function DocumentLinksFixture() {
+    const mobile = useIsMobile();
+    return <main className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+      <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} />
+      <ArtifactPreviewHost mobile={mobile} />
+    </main>;
+  }
+  createRoot(root).render(<DocumentLinksFixture />);
 }
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);

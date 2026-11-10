@@ -30,8 +30,7 @@ import {
 import { resourceWorkerRequestProblem } from "@/lib/resourceWorkerRequest";
 import { readViewerTree } from "@/lib/resourceViewerTree";
 import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
-import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
-import { captureTmuxAttachReferences, type TmuxAttachReference } from "@/lib/tmux";
+import type { TmuxAttachReference } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
 import { recordHelperGroup } from "@/lib/helperLease";
 import { fsyncPath } from "@/lib/state/durableJson";
@@ -345,38 +344,14 @@ export function allowedStructuredHostTarget(target: string): StructuredHostKillR
   return ref !== null && isStructuredHostKillRef(ref) ? ref : null;
 }
 
-/** The resources rail may list duplicate panes for cleanup. Only the host
-    elected by the shared resolver receives the transcript path and its UI
-    metadata, keeping observation aligned with path-addressed delivery. */
-export function canonicalResourceEntry(
-  snapshot: TranscriptHostSnapshot,
-  paneHosts: TranscriptHost[],
-  entriesByPath: Map<string, ResourceFileObservation>,
-): ResourceFileObservation | null {
-  for (const candidate of paneHosts) {
-    if (!candidate.primaryPath) continue;
-    const canonical = snapshot.canonicalFor(candidate.primaryPath);
-    if (canonical?.paneId === candidate.paneId && canonical.agentPid === candidate.agentPid) {
-      return entriesByPath.get(candidate.primaryPath) ?? null;
-    }
-  }
-  return null;
-}
-
-export function conflictingResourceHost(snapshot: TranscriptHostSnapshot, host: TranscriptHost): boolean {
-  return snapshot.conflicts?.some((conflict) => conflict.paneIds.includes(host.paneId)) ?? false;
-}
-
 function isoFromUnix(seconds: number): string {
   return new Date(seconds * 1000).toISOString();
 }
 
 export interface ResourceSnapshotDependencies {
   readFiles(fresh: boolean): Promise<ResourceFileObservation[]>;
-  readHosts(fresh: boolean, entries: ResourceFileObservation[], ppids: Map<number, number>): Promise<TranscriptHostSnapshot>;
   proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory">;
   bootEpoch?(): string | null;
-  captureAttachReferences(refs: ReadonlyArray<Pick<TmuxAttachReference, "tmuxServerPid" | "paneId" | "panePid">>): Map<string, TmuxAttachReference>;
   /** Structured-host records the registry holds. The viewer reads them and
       hands them to the collector; nothing here ever opens the registry. */
   readStructuredHosts?(fresh: boolean): Promise<StructuredHostRecord[]>;
@@ -401,9 +376,7 @@ async function readStructuredHostRecordsForCollection(): Promise<StructuredHostR
 
 const resourceSnapshotDependencies: ResourceSnapshotDependencies = {
   readFiles: readResourceFileSnapshot,
-  readHosts: (fresh, entries, ppids) => readTranscriptHosts(fresh, entries as FileEntry[], ppids),
   proc: procBackend,
-  captureAttachReferences: captureTmuxAttachReferences,
   readStructuredHosts: readStructuredHostRecordsForCollection,
   listAgentProcesses: agentProcesses,
   directoryExists: (directory) => existsSync(directory),
@@ -570,28 +543,13 @@ export async function buildResourceSnapshot(
     const system = measureResourcePhase(phases, "systemMemory", () => captureSystemMemory(dependencies.proc));
     const files = await measureResourcePhaseAsync(phases, "readFiles", () => dependencies.readFiles(fresh));
     const ppids = measureResourcePhase(phases, "ppidMap", () => dependencies.proc.ppidMap());
-    const hosts = await measureResourcePhaseAsync(phases, "readHosts", () => dependencies.readHosts(fresh, files, ppids));
     const structured = await measureResourcePhaseAsync(phases, "readHosts", () => structuredHostTrees(fresh, ppids, dependencies));
     const sessions: ResourceSession[] = [];
     const byPath = new Map(files.map((entry) => [entry.path, entry]));
-    const byPane = new Map<string, TranscriptHost[]>();
-    for (const host of hosts.hosts) {
-      const paneHosts = byPane.get(host.paneId);
-      if (paneHosts) paneHosts.push(host);
-      else byPane.set(host.paneId, [host]);
-    }
 
     /* Trees first, memory second: one processMemory() batch over the union
-       keeps the portable backend at a single `ps` spawn for every pane and
-       every structured host together. */
-    const paneTrees: Array<{ host: TranscriptHost; tree: number[]; paneHosts: TranscriptHost[] }> = [];
+       keeps the portable backend at a single `ps` spawn for every host. */
     const treePids = new Set<number>();
-    for (const paneHosts of byPane.values()) {
-      const host = paneHosts[0]!;
-      const tree = descendantPids(host.panePid, ppids);
-      paneTrees.push({ host, tree, paneHosts });
-      for (const pid of tree) treePids.add(pid);
-    }
     /* A host already counted inside another row's tree is that row's memory;
        listing it twice would double the total the footer shows. Registry
        records come first, so a recorded host always outranks a process the
@@ -616,36 +574,6 @@ export async function buildResourceSnapshot(
     };
 
     const killRefs: Array<{ target: string; ref: KillTargetRef }> = [];
-    measureResourcePhase(phases, "attach", () => {
-      const attachRefs = dependencies.captureAttachReferences(paneTrees.map(({ host }) => ({
-        tmuxServerPid: host.tmuxServerPid,
-        panePid: host.panePid,
-        paneId: host.paneId,
-      })));
-      for (const { host, tree, paneHosts } of paneTrees) {
-        /* The resolver elects one canonical host for every transcript. A
-           duplicate pane stays visible for cleanup, though it carries no path
-           and cannot disagree with path-addressed delivery. */
-        const entry = canonicalResourceEntry(hosts, paneHosts, byPath);
-        sessions.push({
-          target: host.display,
-          panePid: host.panePid,
-          path: entry?.path ?? null,
-          engine: host.engine,
-          hostConflict: conflictingResourceHost(hosts, host),
-          title: entry?.title ?? null,
-          project: entry?.project || null,
-          activity: entry?.activity ?? null,
-          lastActiveAt: entry ? isoFromUnix(entry.mtime) : null,
-          cwd: host.cwd,
-          ...treeMemory(tree),
-          procCount: tree.length,
-        });
-        const ref = attachRefs.get(host.paneId);
-        if (ref) killRefs.push({ target: host.display, ref });
-      }
-    });
-
     for (const { record, tree } of structuredTrees) {
       const entry = record.path ? byPath.get(record.path) ?? null : null;
       const lastActiveAt = entry ? isoFromUnix(entry.mtime) : null;

@@ -799,7 +799,7 @@ async function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, a
   if (!fence) return false;
   await registry.deliveryWriteOrBusy({ label: "registry.flow-settlement", operationId: launchId }, () => {
     if (!flowRoundFenceCurrent(flow, round, fence) || round.launchId !== launchId) return;
-    const receipt = registry.readOnlySnapshot().receipts[launchId];
+    const receipt = registry.spawnReceipt(launchId);
     if (!receipt) return;
     if (receipt?.state === "completed") {
       round.reviewerConversationId = receipt.conversationId;

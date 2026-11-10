@@ -17,7 +17,6 @@ import { loadTasksForList } from "../tasks/store";
 import { waitForStateLock } from "../state/lockWait";
 import { admitScannedConversations, planAdmissions } from "../tasks/membership";
 import { loadPipelinesForProjection } from "../pipelines/store";
-import { panePidMap, resolveTarget } from "../tmux";
 import { activityVerdict, transcriptTurnResult } from "./activity";
 import type { ConversationCatalogEntry } from "./conversationCatalog";
 import { ctxFor } from "./context";
@@ -34,7 +33,6 @@ import { pendingWakeupFor } from "./wakeup";
 import { assignTranscriptPids } from "./transcripts";
 import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
-import { waitingInputProbe } from "./waitingInput";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
 import { machineCpuPressurePollMs } from "../runtime/cpuPressure";
 
@@ -88,8 +86,7 @@ async function forEachEntryBatchYielding(
 
 export interface FileScanOptions {
   persist?: boolean;
-  /** Refresh process and tmux pane observations before hydrating FileEntry
-      ownership and pane-derived state. */
+  /** Refresh the process observation before hydrating FileEntry ownership. */
   fresh?: boolean;
   /** Persist parsed per-file summaries while keeping controller mutations out
       of request-owned scans. */
@@ -358,11 +355,7 @@ async function listFilesInternal(
     : { files: await discoverFiles(undefined, demote ?? archivedTranscriptPaths(), pin, hosted), projectCatalog: [], complete: true };
   if (options.signal?.aborted) throw new DOMException("file scan cancelled", "AbortError");
   const entries = scan.files;
-  if (options.fresh) {
-    const panes = panePidMap(true);
-    agentProcesses(true);
-    await panes;
-  }
+  if (options.fresh) agentProcesses(true);
   // The /proc fd scan is only needed to attribute background-task outputs to a
   // live pid. When the shortlist has no such entries, skip the scan entirely;
   // activity() only consults holders on the same claude-tasks/.output path.
@@ -443,20 +436,9 @@ async function listFilesInternal(
       entry.agentActivity.backgroundVerified = ledger !== null;
       if (ledger) entry.agentActivity.background = pendingBackgroundTasks(ledger, Date.now()).filter(task => task.kind !== "wakeup").map(task => ({ id: task.id, description: entry.agentActivity?.background?.find(item => item.id === task.id)?.description ?? null }));
     }
-    const pending = pendingQuestionFor(entry);
-    entry.pendingQuestion = pending && entry.pid !== null
-      ? { ...pending, paneTarget: await resolveTarget(entry.pid) }
-      : pending;
-    const probe = await waitingInputProbe(entry);
-    entry.waitingInput = probe.waiting;
-    entry.rateLimit = probe.rateLimit;
-    /* A stalled transcript whose pane sits at a plain composer was interrupted
-       mid-turn (Esc leaves the turn open in the jsonl): the agent is idle, not
-       blocked, so it must not wear the «interrupted or waiting for permission» state. */
-    if (probe.atComposer && entry.activity === "stalled") {
-      entry.activity = Date.now() / 1000 - entry.mtime < 900 ? "recent" : "idle";
-      entry.activityReason = "pane_at_composer";
-    }
+    entry.pendingQuestion = pendingQuestionFor(entry);
+    entry.waitingInput = null;
+    entry.rateLimit = null;
   });
   await linkEntries(entries, { persist });
   if (options.signal?.aborted) throw new DOMException("file scan cancelled", "AbortError");

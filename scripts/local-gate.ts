@@ -645,9 +645,15 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
 
 /** Independent passes keep their existing exact fingerprints. Privacy,
  * install and supply-chain observations are never cached across operations. */
+/** Every lane of the repository records its passed steps here, about five per
+ * push. The default 256 records covered one day of pushes on the work server,
+ * while a pass stays valid for seven: hold the week for all lanes together. A
+ * record is under 200 bytes. */
+const PASS_LIMITS = { entries: 8192 };
+export const passStore = (root: string) => new GateCache<PassRecord>(cacheDirectory(root, "passes"), (value): value is PassRecord =>
+  !!value && typeof value === "object" && "at" in value && typeof value.at === "string" && Number.isFinite(Date.parse(value.at)), undefined, PASS_LIMITS);
 export function stepPasses(root: string, base: string, steps: readonly Step[], say: (line: string) => void, env: NodeJS.ProcessEnv = process.env): StepPasses {
-  const store = new GateCache<PassRecord>(cacheDirectory(root, "passes"), (value): value is PassRecord =>
-    !!value && typeof value === "object" && "at" in value && typeof value.at === "string" && Number.isFinite(Date.parse(value.at)));
+  const store = passStore(root);
   const reusable = (step: Step) => !["privacy", "frozen install", "supply chain", "staged whitespace"].includes(step.name);
   const { snapshot, reason } = gateInputSnapshot(root, base, steps, env);
   const initial = snapshot();

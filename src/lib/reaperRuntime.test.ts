@@ -7,9 +7,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
-import type { TranscriptHost, TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
-import { mutateBoard, setBoardFileForTests } from "@/lib/board/store";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { setBoardFileForTests } from "@/lib/board/store";
 import type { Flow } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
@@ -40,7 +39,7 @@ test("runtime cycle persists an API report in dry-run mode by default", async ()
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
 
   try {
-    const report = await runReaperCycle({ registry, hosts: [], files: [], now: Date.parse("2026-07-12T12:00:00.000Z") });
+    const report = await runReaperCycle({ registry, files: [], now: Date.parse("2026-07-12T12:00:00.000Z") });
 
     expect(report).toMatchObject({ mode: "dry-run", configFlag: "LLV_REAPER_ENABLED", eligibleCount: 0, agents: [] });
     expect(readReaperReport()).toEqual(report);
@@ -56,9 +55,9 @@ test("runtime cycle enters active mode only for the exact opt-in flag", async ()
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
 
   try {
-    expect((await runReaperCycle({ registry, hosts: [], files: [] })).mode).toBe("dry-run");
+    expect((await runReaperCycle({ registry, files: [] })).mode).toBe("dry-run");
     process.env.LLV_REAPER_ENABLED = "1";
-    expect((await runReaperCycle({ registry, hosts: [], files: [] })).mode).toBe("active");
+    expect((await runReaperCycle({ registry, files: [] })).mode).toBe("active");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -108,7 +107,6 @@ test("the periodic reaper releases a completed conversation's dead structured-ho
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [],
       actuation: { runtimeClient: () => null },
     });
@@ -489,36 +487,37 @@ test("a live structured source with no migration progress reaches terminal accou
   }
 });
 
-test("a source host on another engine cannot prove current migration ownership", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-wrong-engine-source-"));
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const pathname = "/wrong-engine-source.jsonl";
-  const conversation = registry.ensureConversation("codex", pathname, "source");
-  const intent = registry.commitMigrationIntent({
-    engine: "codex",
-    targetId: "target",
-    origin: "manual",
-    requestId: "wrong-engine-source",
-    expectedRevision: registry.engineRouting("codex").revision,
+function liveStructuredOwner(registry: AgentRegistry, conversation: ReturnType<AgentRegistry["ensureConversation"]>): void {
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({
+    key: { engine: conversation.engine, sessionId: generation.id },
+    artifactPath: generation.path,
+    cwd: generation.launchProfile.cwd,
+    accountId: generation.accountId,
+    launchProfile: generation.launchProfile,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "stdio:live-member",
+      process: { pid: 4343, startIdentity: "4343:live-member" },
+      eventCursor: 0,
+      protocolVersion: "v2",
+      writerClaimEpoch: 1,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 1,
+    claimOwner: "structured-host:live-member",
+    pendingAction: null,
   });
-  const held = registry.holdDelivery(conversation.id, "fixture", "wrong-engine-held");
+}
 
-  try {
-    const wrongEngineHost = { ...runtimeHost(pathname), engine: "claude" as const };
-    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
-      registry,
-      Date.now(),
-      {},
-      [wrongEngineHost],
-    );
-
-    expect(terminalized).toEqual([held.id]);
-    expect(registry.snapshot().migrationIntents[intent.id]).toMatchObject({ state: "draining" });
-    expect(registry.conversation(conversation.id)?.migration).toMatchObject({ phase: "rolled-back" });
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
+const LIVE_MEMBER_PROBE = {
+  pidAlive: (pid: number) => pid === 4343,
+  processIdentity: (pid: number) => pid === 4343 ? "4343:live-member" : null,
+};
 
 test("a dead requested member without its own held input cannot cancel a live-owned member", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-member-delivery-owner-"));
@@ -533,14 +532,14 @@ test("a dead requested member without its own held input cannot cancel a live-ow
     expectedRevision: registry.engineRouting("codex").revision,
   });
   const held = registry.holdDelivery(live.id, "fixture", "live-member-held");
+  liveStructuredOwner(registry, live);
 
   try {
     expect(registry.conversation(dead.id)?.migration?.phase).toBe("requested");
     const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
       registry,
       Date.now(),
-      {},
-      [runtimeHost("/live-member.jsonl")],
+      LIVE_MEMBER_PROBE,
     );
 
     expect(terminalized).toEqual([]);
@@ -565,13 +564,13 @@ test("a dead requested member settles only its own delivery while a live member 
   });
   const deadHeld = registry.holdDelivery(dead.id, "fixture", "dead-member-delivery");
   const liveHeld = registry.holdDelivery(live.id, "fixture", "live-member-delivery");
+  liveStructuredOwner(registry, live);
 
   try {
     const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
       registry,
       Date.now(),
-      {},
-      [runtimeHost("/live-owned-member.jsonl")],
+      LIVE_MEMBER_PROBE,
     );
 
     expect(terminalized).toEqual([deadHeld.id]);
@@ -591,37 +590,6 @@ test("a dead requested member settles only its own delivery while a live member 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
-
-function runtimeHost(pathname: string): TranscriptHost {
-  return {
-    tmuxServerPid: 900,
-    paneId: "%41",
-    panePid: 1041,
-    agentPid: 2041,
-    display: "agents:41.0",
-    windowName: "worker-41",
-    engine: "codex",
-    cwd: "/repo",
-    agentArgv: ["codex", "resume", pathname],
-    agentIdentity: "2041:one",
-    launchId: null,
-    claimedPaths: [pathname],
-    primaryPath: pathname,
-  };
-}
-
-function runtimeEvidence(host: TranscriptHost, suffix = "original"): TmuxHostEvidence {
-  return {
-    kind: "tmux",
-    endpoint: "/tmp/llv-test-tmux.sock",
-    server: { pid: host.tmuxServerPid, startIdentity: `${host.tmuxServerPid}:${suffix}` },
-    paneId: host.paneId,
-    panePid: { pid: host.panePid, startIdentity: `${host.panePid}:${suffix}` },
-    windowName: host.windowName ?? "",
-    agent: { pid: host.agentPid, startIdentity: host.agentIdentity },
-    argv: host.agentArgv,
-  };
-}
 
 function runtimeFile(pathname: string, mtime: number): FileEntry {
   return {
@@ -668,15 +636,18 @@ test("an external one-message session keeps the user-authored exemption", async 
   }]);
 
   try {
-    const report = await runReaperCycle({
+    await runReaperCycle({
       registry,
-      hosts: [runtimeHost(pathname)],
       files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
       now,
     });
 
-    expect(report.agents[0]).toMatchObject({ class: null, eligible: false });
-    expect(report.agents[0]?.protectedReasons).toContain("user-authored-message");
+    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
+      scannedAt?: Record<string, number>;
+      userAuthoredPaths?: Record<string, true>;
+    };
+    expect(state.userAuthoredPaths?.[pathname]).toBe(true);
+    expect(state.scannedAt?.[pathname]).toBeUndefined();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -719,199 +690,18 @@ test("a completed Viewer worker spawn discounts its single launch prompt", async
   }]);
 
   try {
-    const report = await runReaperCycle({
+    await runReaperCycle({
       registry,
-      hosts: [runtimeHost(pathname)],
       files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
       now,
     });
 
-    expect(report.agents[0]).toMatchObject({ class: "probe", eligible: true, protectedReasons: [] });
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("a dashboard-reconciled root remains eligible while an explicit standalone placement is protected", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-board-placement-"));
-  const reconciledSessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1360";
-  const explicitSessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1361";
-  const reconciledPath = path.join(directory, `rollout-${reconciledSessionId}.jsonl`);
-  const explicitPath = path.join(directory, `rollout-${explicitSessionId}.jsonl`);
-  const boardFile = path.join(directory, "board.json");
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  for (const pathname of [reconciledPath, explicitPath]) {
-    fs.writeFileSync(pathname, JSON.stringify({
-      type: "event_msg",
-      timestamp: new Date(now - 2 * 60 * 60_000).toISOString(),
-      payload: { type: "user_message", message: "launch prompt" },
-    }) + "\n");
-  }
-  process.env.LLV_STATE_DIR = directory;
-  delete process.env.LLV_REAPER_ENABLED;
-  setBoardFileForTests(boardFile);
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "probe" });
-  for (const [sessionId, pathname] of [[reconciledSessionId, reconciledPath], [explicitSessionId, explicitPath]]) {
-    const receipt = registry.beginSpawn("codex", "/repo", profile);
-    registry.completeSpawn(receipt.launchId, {
-      key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: "/repo", accountId: "default",
-      launchProfile: profile, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
-    });
-    registry.reconcileConversations([{
-      engine: "codex", path: pathname, accountId: "default", launchProfile: profile,
-      turn: { state: "idle", source: "assistant", terminalAt: new Date(now - 2 * 60 * 60_000).toISOString() },
-      observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-    }]);
-  }
-  expect(mutateBoard("repo", 0, [{ kind: "reconcile-roots", roots: [reconciledPath], removeManual: [] }], boardFile).ok).toBe(true);
-  expect(mutateBoard("repo", 1, [{ kind: "restore", path: explicitPath, placement: "manual" }], boardFile).ok).toBe(true);
-  const reconciledFile = runtimeFile(reconciledPath, now / 1000 - 2 * 60 * 60);
-  const explicitFile = runtimeFile(explicitPath, now / 1000 - 2 * 60 * 60);
-
-  try {
-    const report = await runReaperCycle({
-      registry,
-      hosts: [runtimeHost(reconciledPath), { ...runtimeHost(explicitPath), paneId: "%42", panePid: 1042, agentPid: 2042 }],
-      files: [reconciledFile, explicitFile],
-      now,
-    });
-
-    expect(report.agents[0]).toMatchObject({ class: "probe", eligible: true, protectedReasons: [] });
-    expect(report.agents[1]).toMatchObject({ class: "probe", eligible: false });
-    expect(report.agents[1]?.protectedReasons).toContain("manual-board-placement");
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("a running manual root from a legacy persisted board remains protected", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-legacy-board-placement-"));
-  const sessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1362";
-  const pathname = path.join(directory, `rollout-${sessionId}.jsonl`);
-  const boardFile = path.join(directory, "board.json");
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  fs.writeFileSync(pathname, JSON.stringify({
-    type: "event_msg",
-    timestamp: new Date(now - 2 * 60 * 60_000).toISOString(),
-    payload: { type: "user_message", message: "launch prompt" },
-  }) + "\n");
-  fs.writeFileSync(boardFile, JSON.stringify({
-    projects: {
-      repo: {
-        schemaVersion: 1,
-        revision: 7,
-        updatedAt: new Date(now - 3 * 60 * 60_000).toISOString(),
-        pathAliases: {},
-        prefs: { manual: [pathname], hidden: [], expanded: [], viewMode: null, taskPanelOpen: false },
-      },
-    },
-  }));
-  process.env.LLV_STATE_DIR = directory;
-  delete process.env.LLV_REAPER_ENABLED;
-  setBoardFileForTests(boardFile);
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "probe" });
-  const receipt = registry.beginSpawn("codex", "/repo", profile);
-  registry.completeSpawn(receipt.launchId, {
-    key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: "/repo", accountId: "default",
-    launchProfile: profile, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
-  });
-  registry.reconcileConversations([{
-    engine: "codex", path: pathname, accountId: "default", launchProfile: profile,
-    turn: { state: "idle", source: "assistant", terminalAt: new Date(now - 2 * 60 * 60_000).toISOString() },
-    observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-  }]);
-
-  try {
-    const report = await runReaperCycle({
-      registry,
-      hosts: [runtimeHost(pathname)],
-      files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-      now,
-    });
-
-    expect(report.agents[0]).toMatchObject({ class: "probe", eligible: false });
-    expect(report.agents[0]?.protectedReasons).toContain("manual-board-placement");
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("a malformed transcript protects an otherwise eligible Viewer probe", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-malformed-authorship-"));
-  const sessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1346";
-  const pathname = path.join(directory, `rollout-${sessionId}.jsonl`);
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  fs.writeFileSync(pathname, "{broken\n");
-  process.env.LLV_STATE_DIR = directory;
-  delete process.env.LLV_REAPER_ENABLED;
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "probe" });
-  const receipt = registry.beginSpawn("codex", "/repo", profile);
-  registry.completeSpawn(receipt.launchId, {
-    key: { engine: "codex", sessionId },
-    artifactPath: pathname,
-    cwd: "/repo",
-    accountId: "default",
-    launchProfile: profile,
-    status: "idle",
-    host: null,
-    claimEpoch: 0,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  registry.reconcileConversations([{
-    engine: "codex",
-    path: pathname,
-    accountId: "default",
-    launchProfile: profile,
-    turn: { state: "idle", source: "assistant", terminalAt: new Date(now - 2 * 60 * 60_000).toISOString() },
-    observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-  }]);
-
-  try {
-    const report = await runReaperCycle({
-      registry,
-      hosts: [runtimeHost(pathname)],
-      files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-      now,
-    });
-
-    expect(report.agents[0]).toMatchObject({ class: "probe", eligible: false });
-    expect(report.agents[0]?.protectedReasons).toContain("authorship-unverified");
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("an unknown missing transcript reaches the dead-transcript TTL in production input", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-missing-policy-"));
-  const sessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1353";
-  const pathname = path.join(directory, `missing-${sessionId}.jsonl`);
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  process.env.LLV_STATE_DIR = directory;
-  delete process.env.LLV_REAPER_ENABLED;
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "Missing transcript worker" });
-  const receipt = registry.beginSpawn("codex", "/repo", profile);
-  registry.completeSpawn(receipt.launchId, {
-    key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: "/repo", accountId: "default",
-    launchProfile: profile, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
-  });
-  registry.reconcileConversations([{
-    engine: "codex", path: pathname, accountId: "default", launchProfile: profile,
-    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-  }]);
-  const host = runtimeHost(pathname);
-  fs.writeFileSync(path.join(directory, "reaper-state.json"), JSON.stringify({
-    version: 1,
-    firstObservedAt: { "%41:2041:2041:one": new Date(now - 31 * 60_000).toISOString() },
-    userAuthoredPaths: {},
-  }));
-  try {
-    const report = await runReaperCycle({ registry, hosts: [host], files: [], now });
-    expect(report.agents[0]).toMatchObject({ class: "dead-transcript", eligible: true, protectedReasons: [] });
+    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
+      scannedAt?: Record<string, number>;
+      userAuthoredPaths?: Record<string, true>;
+    };
+    expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
+    expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -946,15 +736,18 @@ test("authorship at the beginning of a transcript survives a tail larger than th
   }]);
 
   try {
-    const report = await runReaperCycle({
+    await runReaperCycle({
       registry,
-      hosts: [runtimeHost(pathname)],
       files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
       now,
     });
 
-    expect(report.agents[0]).toMatchObject({ class: null, eligible: false });
-    expect(report.agents[0]?.protectedReasons).toContain("user-authored-message");
+    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
+      scannedAt?: Record<string, number>;
+      userAuthoredPaths?: Record<string, true>;
+    };
+    expect(state.userAuthoredPaths?.[pathname]).toBe(true);
+    expect(state.scannedAt?.[pathname]).toBeUndefined();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -986,7 +779,6 @@ test("a clean authorship scan persists a path-scoped scannedAt stamp (issue #112
   try {
     await runReaperCycle({
       registry,
-      hosts: [runtimeHost(pathname)],
       files: [runtimeFile(pathname, now / 1000 - 60 * 60)],
       now,
     });
@@ -1007,7 +799,7 @@ test("a clean authorship scan persists a path-scoped scannedAt stamp (issue #112
 test("a non-host worker transcript still earns a clean scannedAt stamp (issue #112 finding)", async () => {
   /* A finished headless reviewer / exited worker has no live tmux host, yet its
      transcript must be scanned so the board can clear authorshipUnverified and
-     let it collapse. It reaches the reaper only through `files`, never `hosts`. */
+     let it collapse. It reaches the reaper through `files`. */
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-nonhost-"));
   const pathname = path.join(directory, "rollout-019f4906-3f67-\x37b72-9fbc-9ec3b5ad13aa.jsonl");
   const now = Date.parse("2026-07-12T12:00:00.000Z");
@@ -1023,7 +815,6 @@ test("a non-host worker transcript still earns a clean scannedAt stamp (issue #1
   try {
     await runReaperCycle({
       registry,
-      hosts: [], // no live host for this exited worker
       files: [runtimeFile(pathname, now / 1000 - 60 * 60)],
       now,
     });
@@ -1053,7 +844,7 @@ test("a non-host worker with an owner message is recorded user-authored (issue #
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
 
   try {
-    await runReaperCycle({ registry, hosts: [], files: [runtimeFile(pathname, now / 1000 - 60 * 60)], now });
+    await runReaperCycle({ registry, files: [runtimeFile(pathname, now / 1000 - 60 * 60)], now });
     const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
       scannedAt?: Record<string, number>;
       userAuthoredPaths?: Record<string, true>;
@@ -1086,7 +877,7 @@ test("a native Claude subagent's automated assignment scans clean (issue #112 fi
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
 
   try {
-    await runReaperCycle({ registry, hosts: [], files: [claudeSubagentFile(pathname, now / 1000 - 60 * 60)], now });
+    await runReaperCycle({ registry, files: [claudeSubagentFile(pathname, now / 1000 - 60 * 60)], now });
     const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
       scannedAt?: Record<string, number>;
       userAuthoredPaths?: Record<string, true>;
@@ -1109,7 +900,7 @@ test("an owner message on a native Claude subagent still trips authorship (issue
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
 
   try {
-    await runReaperCycle({ registry, hosts: [], files: [claudeSubagentFile(pathname, now / 1000 - 30 * 60)], now });
+    await runReaperCycle({ registry, files: [claudeSubagentFile(pathname, now / 1000 - 30 * 60)], now });
     const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
       userAuthoredPaths?: Record<string, true>;
     };
@@ -1136,7 +927,7 @@ test("a native Codex subagent's automated assignment scans clean (issue #112 fin
   const codexFile = { ...runtimeFile(pathname, now / 1000 - 60 * 60), size: fs.statSync(pathname).size };
 
   try {
-    await runReaperCycle({ registry, hosts: [], files: [codexFile], now });
+    await runReaperCycle({ registry, files: [codexFile], now });
     const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
       scannedAt?: Record<string, number>;
       userAuthoredPaths?: Record<string, true>;
@@ -1174,7 +965,6 @@ test("a headless reviewer's automated startup prompt alone is not owner-authored
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [runtimeFile(pathname, now / 1000 - 20 * 60)],
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
@@ -1219,7 +1009,6 @@ test("a genuine owner message on top of a reviewer's startup prompt trips the ex
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [runtimeFile(pathname, now / 1000 - 10 * 60)],
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
@@ -1301,7 +1090,6 @@ test("a headless reviewer's automated startup prompt is not owner authorship (is
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [runtimeFile(reviewerPath, now / 1000 - 10 * 60)],
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
@@ -1332,7 +1120,6 @@ test("a genuine owner message on a headless reviewer still trips authorship (iss
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [runtimeFile(reviewerPath, now / 1000 - 10 * 60)],
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
@@ -1365,7 +1152,6 @@ test("a heuristically-claimed reviewer path gets no allowance and keeps authorsh
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [runtimeFile(ownerPath, now / 1000 - 10 * 60)],
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
@@ -1419,7 +1205,6 @@ test("a pane reviewer with an owner follow-up keeps authorship (no double allowa
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [runtimeFile(reviewerPath, now / 1000 - 10 * 60)],
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
@@ -1446,7 +1231,6 @@ test("a detached headless reviewer is observed and reaped by verified process id
   try {
     const report = await runReaperCycle({
       registry,
-      hosts: [],
       files: [],
       now,
       actuation: {
@@ -1494,57 +1278,6 @@ test("headless reviewer termination rejects pid reuse and verifies process exit"
   identity = "5051:original";
   expect(await killHeadlessReviewerIfMatches({ pid: 5051, identity: "5051:original" }, deps)).toBe(true);
   expect(signals).toBe(1);
-});
-
-test("retired flow evidence stays historical and cannot authorize fresh cleanup", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-merged-flow-"));
-  const pathname = path.join(directory, "rollout-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1345.jsonl");
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  fs.writeFileSync(pathname, "");
-  process.env.LLV_STATE_DIR = directory;
-  delete process.env.LLV_REAPER_ENABLED;
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/deleted/worktree", role: "worker" });
-  registry.reconcileConversations([{
-    engine: "codex",
-    path: pathname,
-    accountId: "default",
-    launchProfile: profile,
-    turn: { state: "idle", source: "assistant", terminalAt: new Date(now - 2 * 60 * 60_000).toISOString() },
-    observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-  }]);
-  const flow = {
-    ...headlessFlow(now),
-    id: "flow-merged",
-    cwd: "/deleted/worktree",
-    implementerPath: pathname,
-    reviewerMode: "pane",
-    rounds: [],
-    closedAt: new Date(now - 31 * 60_000).toISOString(),
-    mergeEvidence: {
-      repository: "Latand/delegatus",
-      headRef: "agent/issue-31-reaper",
-      headSha: "a".repeat(40),
-      prNumber: 125,
-      mergedAt: new Date(now - 10 * 60_000).toISOString(),
-      checkedAt: new Date(now - 10 * 60_000).toISOString(),
-      source: "github-pr",
-    },
-  } as Flow;
-
-  try {
-    const report = await runReaperCycle({
-      registry,
-      hosts: [runtimeHost(pathname)],
-      files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-      now,
-      actuation: { loadFlows: () => [flow], now: () => now },
-    });
-
-    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: false, protectedReasons: ["flow-not-merged"] });
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
 });
 
 test.skip("a squash-merged GitHub PR becomes durable evidence before checkout deletion", async () => {
@@ -1972,221 +1705,24 @@ test("Viewer flow deliveries are discounted from transcript authorship", async (
     },
   } satisfies Flow;
   try {
-    const report = await runReaperCycle({
+    await runReaperCycle({
       registry,
-      hosts: [runtimeHost(pathname)],
       files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-
-    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: false, protectedReasons: ["flow-not-merged"] });
+    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
+      scannedAt?: Record<string, number>;
+      userAuthoredPaths?: Record<string, true>;
+    };
+    expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
+    expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("actuation rejects a replacement host that reused the candidate pane", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-reused-pane-"));
-  const sessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1351";
-  const pathname = path.join(directory, `rollout-${sessionId}.jsonl`);
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  fs.writeFileSync(pathname, JSON.stringify({
-    type: "event_msg",
-    timestamp: new Date(now - 2 * 60 * 60_000).toISOString(),
-    payload: { type: "user_message", message: "launch prompt" },
-  }) + "\n");
-  process.env.LLV_STATE_DIR = directory;
-  process.env.LLV_REAPER_ENABLED = "1";
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "probe" });
-  const receipt = registry.beginSpawn("codex", "/repo", profile);
-  registry.completeSpawn(receipt.launchId, {
-    key: { engine: "codex", sessionId },
-    artifactPath: pathname,
-    cwd: "/repo",
-    accountId: "default",
-    launchProfile: profile,
-    status: "idle",
-    host: null,
-    claimEpoch: 0,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  registry.reconcileConversations([{
-    engine: "codex",
-    path: pathname,
-    accountId: "default",
-    launchProfile: profile,
-    turn: { state: "idle", source: "assistant", terminalAt: new Date(now - 2 * 60 * 60_000).toISOString() },
-    observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-  }]);
-  const original = runtimeHost(pathname);
-  const replacement = { ...original, windowName: "replacement-window", agentArgv: ["codex", "exec", "replacement"] };
-  const replacementSnapshot: TranscriptHostSnapshot = {
-    hosts: [replacement],
-    observation: "available",
-    canonicalFor: (candidate) => candidate === pathname ? replacement : null,
-  };
-  let observations = 0;
-  let kills = 0;
-  try {
-    const report = await runReaperCycle({
-      registry,
-      hosts: [original],
-      files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-      now,
-      actuation: {
-        readHosts: async () => { observations += 1; return replacementSnapshot; },
-        processIdentity: (pid) => pid === 900 ? "900:original" : pid === 1041 ? "1041:original" : null,
-        kill: async () => { kills += 1; return true; },
-        now: () => now,
-      },
-    });
-
-    expect(report.agents[0]).toMatchObject({ eligible: true, action: "kill-failed" });
-    expect(observations).toBe(1);
-    expect(kills).toBe(0);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("post-kill cleanup preserves a same-pane replacement registry host", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-registry-replacement-"));
-  const sessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1352";
-  const pathname = path.join(directory, `rollout-${sessionId}.jsonl`);
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  fs.writeFileSync(pathname, JSON.stringify({
-    type: "event_msg",
-    timestamp: new Date(now - 2 * 60 * 60_000).toISOString(),
-    payload: { type: "user_message", message: "launch prompt" },
-  }) + "\n");
-  process.env.LLV_STATE_DIR = directory;
-  process.env.LLV_REAPER_ENABLED = "1";
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "probe" });
-  const host = runtimeHost(pathname);
-  const originalEvidence = runtimeEvidence(host);
-  const replacementEvidence = {
-    ...originalEvidence,
-    server: { ...originalEvidence.server, startIdentity: "900:replacement" },
-    panePid: { ...originalEvidence.panePid, startIdentity: "1041:replacement" },
-    windowName: "replacement-window",
-    argv: ["codex", "exec", "replacement"],
-  } satisfies TmuxHostEvidence;
-  const key = { engine: "codex" as const, sessionId };
-  const receipt = registry.beginSpawn("codex", "/repo", profile);
-  registry.completeSpawn(receipt.launchId, {
-    key,
-    artifactPath: pathname,
-    cwd: "/repo",
-    accountId: "default",
-    launchProfile: profile,
-    status: "idle",
-    host: originalEvidence,
-    claimEpoch: 0,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  registry.reconcileConversations([{
-    engine: "codex",
-    path: pathname,
-    accountId: "default",
-    launchProfile: profile,
-    turn: { state: "idle", source: "assistant", terminalAt: new Date(now - 2 * 60 * 60_000).toISOString() },
-    observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-  }]);
-  const snapshot: TranscriptHostSnapshot = {
-    hosts: [host],
-    observation: "available",
-    canonicalFor: (candidate) => candidate === pathname ? host : null,
-  };
-  try {
-    const report = await runReaperCycle({
-      registry,
-      hosts: [host],
-      files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-      now,
-      actuation: {
-        readHosts: async () => snapshot,
-        refreshLifecycle: async () => [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-        processIdentity: (pid) => pid === 900 ? "900:original" : pid === 1041 ? "1041:original" : null,
-        kill: async () => {
-          const entry = registry.snapshot().entries[`codex:${sessionId}`]!;
-          registry.upsert({ ...entry, host: replacementEvidence, status: "live" });
-          return true;
-        },
-        now: () => now,
-      },
-    });
-
-    expect(report.agents[0]).toMatchObject({ eligible: true, action: "reaped" });
-    expect(registry.snapshot().entries[`codex:${sessionId}`]?.host).toEqual(replacementEvidence);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("an idle candidate that becomes busy inside the operation lock is retained", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-idle-busy-"));
-  const sessionId = "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1354";
-  const pathname = path.join(directory, `rollout-${sessionId}.jsonl`);
-  const now = Date.parse("2026-07-12T12:00:00.000Z");
-  fs.writeFileSync(pathname, JSON.stringify({
-    type: "event_msg", timestamp: new Date(now - 2 * 60 * 60_000).toISOString(),
-    payload: { type: "user_message", message: "launch prompt" },
-  }) + "\n");
-  process.env.LLV_STATE_DIR = directory;
-  process.env.LLV_REAPER_ENABLED = "1";
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "probe" });
-  const receipt = registry.beginSpawn("codex", "/repo", profile);
-  registry.completeSpawn(receipt.launchId, {
-    key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: "/repo", accountId: "default",
-    launchProfile: profile, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
-  });
-  registry.reconcileConversations([{
-    engine: "codex", path: pathname, accountId: "default", launchProfile: profile,
-    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
-  }]);
-  const host = runtimeHost(pathname);
-  const snapshot: TranscriptHostSnapshot = {
-    hosts: [host], observation: "available", canonicalFor: (candidate) => candidate === pathname ? host : null,
-  };
-  let lifecycleRefreshes = 0;
-  let kills = 0;
-  try {
-    const report = await runReaperCycle({
-      registry,
-      hosts: [host],
-      files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-      now,
-      actuation: {
-        readHosts: async () => snapshot,
-        refreshLifecycle: async () => {
-          lifecycleRefreshes += 1;
-          registry.reconcileConversations([{
-            engine: "codex", path: pathname, accountId: "default", launchProfile: profile,
-            turn: { state: "busy", source: "tool", terminalAt: null }, observedAt: new Date(now).toISOString(),
-          }]);
-          return [{ ...runtimeFile(pathname, now / 1000), activity: "live", activityReason: "jsonl_turn_open" }];
-        },
-        processIdentity: (pid) => pid === 900 ? "900:original" : pid === 1041 ? "1041:original" : null,
-        kill: async () => { kills += 1; return true; },
-        now: () => now,
-      },
-    });
-
-    expect(report.agents[0]).toMatchObject({ eligible: true, action: "kill-failed" });
-    expect(lifecycleRefreshes).toBe(1);
-    expect(kills).toBe(0);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("retirement prevents merge revalidation and flow-funded reap decisions", async () => {
+test("retirement prevents merge revalidation", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-delivery-fence-"));
   const pathname = path.join(directory, "missing-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1342.jsonl");
   const now = Date.now();
@@ -2217,12 +1753,6 @@ test("retirement prevents merge revalidation and flow-funded reap decisions", as
     turn: { state: "idle", source: "assistant", terminalAt: new Date(now - 2 * 60 * 60_000).toISOString() },
     observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
   }]);
-  const conversation = registry.conversationForPath(pathname)!;
-  const host = runtimeHost(pathname);
-  fs.writeFileSync(path.join(directory, "reaper-state.json"), JSON.stringify({
-    version: 1,
-    firstObservedAt: { "%41:2041:2041:one": new Date(now - 2 * 60 * 60_000).toISOString() },
-  }));
   const reviewedSha = "5".repeat(40);
   const flow = {
     ...headlessFlow(now),
@@ -2243,49 +1773,27 @@ test("retirement prevents merge revalidation and flow-funded reap decisions", as
     },
   } satisfies Flow;
   let probes = 0;
-  let observations = 0;
-  let kills = 0;
-  const snapshot: TranscriptHostSnapshot = {
-    hosts: [host],
-    observation: "available",
-    canonicalFor: (candidate) => candidate === pathname ? host : null,
-  };
 
   try {
     const report = await runReaperCycle({
       registry,
-      hosts: [host],
       files: [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
       now,
       actuation: {
-        readHosts: async () => {
-          observations += 1;
-          return snapshot;
-        },
         loadFlows: () => [structuredClone(flow)],
         resolveMergeIdentity: () => null,
         probePullRequest: async () => {
           probes += 1;
-          if (probes === 2) {
-            const held = registry.holdDelivery(conversation.id, "new user turn");
-            const started = registry.beginDeliveryAttempt(held.id, held.generationId!)!;
-            registry.recordDeliveryOutcome(started.id, "delivered");
-          }
           return { number: 604, mergedAt: new Date(now - 60_000).toISOString(), headRefOid: reviewedSha };
         },
         localBranchMerged: () => false,
         saveFlows: () => {},
-        refreshLifecycle: async () => [runtimeFile(pathname, now / 1000 - 2 * 60 * 60)],
-        processIdentity: (pid) => pid === 900 ? "900:original" : pid === 1041 ? "1041:original" : null,
-        kill: async () => { kills += 1; return true; },
         now: () => now,
       },
     });
 
-    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: false, protectedReasons: ["flow-not-merged"] });
+    expect(report.agents).toEqual([]);
     expect(probes).toBe(0);
-    expect(observations).toBe(0);
-    expect(kills).toBe(0);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -2303,7 +1811,6 @@ test("the reaper cycle runs launch convergence with or without a runtime client"
   try {
     await runReaperCycle({
       registry,
-      hosts: [],
       files: [],
       actuation: ({
         runtimeClient: (() => runtimeClient) as never,
@@ -2323,7 +1830,6 @@ test("the reaper cycle runs launch convergence with or without a runtime client"
     /* Tmux queues still need the pass during a structured-runtime rollback. */
     const report = await runReaperCycle({
       registry,
-      hosts: [],
       files: [],
       actuation: {
         runtimeClient: (() => null) as never,
@@ -2433,7 +1939,6 @@ test("the reaper actuates a due pinned tmux queue exactly once without a runtime
     for (let cycle = 0; cycle < 2; cycle += 1) {
       await runReaperCycle({
         registry,
-        hosts: [],
         files: [],
         actuation: {
           runtimeClient: () => null,
@@ -2541,7 +2046,7 @@ test("inventory sidecar leaves owner-only failure repair to the Viewer", async (
   registry.beginSpawnRequest({ engine: "codex", cwd: directory, accountId: "account-a", transport: "structured",
     clientAttemptId: "pending-sidecar-fixture", requestDigest: "a".repeat(64), launchProfile: emptyLaunchProfile({ cwd: directory, title: "Pending sidecar fixture" }) });
   try {
-    for (let pass = 0; pass < 2; pass++) await runReaperCycle({ registry, hosts: [], files: [],
+    for (let pass = 0; pass < 2; pass++) await runReaperCycle({ registry, files: [],
       actuation: { loadFlows: () => [], runtimeClient: () => null,
         terminalizeStaleSpawns: (async (_registry, _client, options) => {
           optionsSeen.push(options?.repairFailures);
@@ -2571,7 +2076,7 @@ test("sidecar failure-repair policy survives a real process restart without gran
       clientAttemptId: "pending-restart-fixture", requestDigest: "b".repeat(64), launchProfile: emptyLaunchProfile({cwd: process.env.LLV_STATE_DIR, title: "Pending restart fixture"}) });
     const errors = [];
     console.error = (...args) => errors.push(args.map(String).join(" "));
-    await runReaperCycle({registry, hosts: [], files: [], actuation: {loadFlows: () => [], runtimeClient: () => null}});
+    await runReaperCycle({registry, files: [], actuation: {loadFlows: () => [], runtimeClient: () => null}});
     registry.close();
     process.stdout.write(JSON.stringify(errors));
   `;
@@ -2594,7 +2099,7 @@ test("an idle inventory sidecar does not open spawn hygiene writers", async () =
   const registry = new AgentRegistry(path.join(directory, "registry.json"));
   const hygiene = spyOn(registry, "terminalizeAbandonedSpawnEntries");
   try {
-    await runReaperCycle({ registry, hosts: [], files: [], actuation: { loadFlows: () => [], runtimeClient: () => null } });
+    await runReaperCycle({ registry, files: [], actuation: { loadFlows: () => [], runtimeClient: () => null } });
     expect(hygiene).not.toHaveBeenCalled();
   } finally {
     hygiene.mockRestore(); registry.close();

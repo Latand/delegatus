@@ -6,13 +6,13 @@ import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, op
 import os from "node:os";
 import path from "node:path";
 
-import { createTranscriptHostObserver, type TranscriptHost } from "@/lib/agent/transcriptHost";
+import { createTranscriptHostObserver } from "@/lib/agent/transcriptHost";
 import { procBackend } from "@/lib/proc";
 import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
-import { allowedKillTarget, applyResourceTargets, buildResourceSnapshot, canonicalResourceEntry, conflictingResourceHost, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES } from "./resources";
+import { allowedKillTarget, allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostRecord } from "./resources";
 
 const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
 if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
@@ -87,27 +87,25 @@ const entry: FileEntry = {
   waitingInput: null,
 };
 
-const duplicate: TranscriptHost = {
-  tmuxServerPid: 900,
-  paneId: "%2",
-  panePid: 101,
-  agentPid: 201,
-  display: "agents:5.0",
-  engine: "codex",
-  cwd: "/repo",
-  agentArgv: ["codex", "resume", SESSION_ID],
-  agentIdentity: "200:one",
-  launchId: null,
-  claimedPaths: [PATHNAME],
-  primaryPath: PATHNAME,
-};
+const STRUCTURED_TARGET = `structured:codex:${SESSION_ID}`;
 
-const canonical: TranscriptHost = {
-  ...duplicate,
-  paneId: "%1",
-  panePid: 100,
-  agentPid: 200,
-  display: "agents:4.0",
+const structuredRecord: StructuredHostRecord = {
+  id: `codex:${SESSION_ID}`,
+  engine: "codex",
+  sessionId: SESSION_ID,
+  pid: 100,
+  startIdentity: "100:one",
+  bootEpoch: "boot-one",
+  cwd: "/repo",
+  path: PATHNAME,
+  conversationId: null,
+  title: null,
+  role: null,
+  model: null,
+  stage: null,
+  seat: false,
+  turnBusy: false,
+  owned: true,
 };
 
 function ref(tmuxServerPid: number, panePid: number, paneId: string) {
@@ -684,7 +682,6 @@ describe("resource observation", () => {
   test("builds host ownership and metadata from one shared transcript generation", async () => {
     let scans = 0;
     let processTableReads = 0;
-    let attachBatches = 0;
     let hostFresh: boolean | null = null;
     const files = [entry];
     const payload = await buildResourceSnapshot(true, {
@@ -692,17 +689,14 @@ describe("resource observation", () => {
         scans += 1;
         return files;
       },
-      readHosts: async (fresh, entries, ppids) => {
+      readStructuredHosts: async (fresh) => {
         hostFresh = fresh;
-        expect(entries).toBe(files);
-        expect(ppids).toEqual(new Map([[200, 100], [300, 200]]));
-        return {
-          hosts: [canonical],
-          observation: "available",
-          conflicts: [],
-          canonicalFor: (pathname: string) => pathname === PATHNAME ? canonical : null,
-        };
+        return [structuredRecord];
       },
+      processIdentity: (pid) => `${pid}:one`,
+      directoryExists: () => true,
+      bootEpoch: () => "boot-one",
+      listAgentProcesses: () => [],
       proc: {
         systemMemory: () => ({ ramTotal: 1_000, ramAvailable: 750, swapTotal: 100, swapUsed: 25 }),
         ppidMap: () => {
@@ -715,23 +709,17 @@ describe("resource observation", () => {
           [300, { rssBytes: 30, swapBytes: 3 }],
         ]),
       },
-      captureAttachReferences: (refs) => {
-        attachBatches += 1;
-        expect(refs).toEqual([{ tmuxServerPid: 900, panePid: 100, paneId: "%1" }]);
-        return new Map([["%1", ref(900, 100, "%1")]]);
-      },
     });
 
     expect(scans).toBe(1);
     expect(processTableReads).toBe(1);
-    expect(attachBatches).toBe(1);
     expect(hostFresh).toBeTrue();
-    expect(payload.sessions).toEqual([{
-      target: "agents:4.0",
+    expect(payload.sessions).toMatchObject([{
+      target: STRUCTURED_TARGET,
       panePid: 100,
+      kind: "structured",
       path: PATHNAME,
       engine: "codex",
-      hostConflict: false,
       title: "Issue 31",
       project: "live-log-viewer-next",
       activity: "live",
@@ -741,8 +729,8 @@ describe("resource observation", () => {
       swapBytes: 6,
       procCount: 3,
     }]);
-    expect(allowedKillTarget("agents:4.0")).toBeNull();
-    expect(lastResourceTargetRefs()).toEqual([{ target: "agents:4.0", ref: ref(900, 100, "%1") }]);
+    expect(allowedKillTarget(STRUCTURED_TARGET)).toBeNull();
+    expect(lastResourceTargetRefs()).toMatchObject([{ target: STRUCTURED_TARGET, ref: { kind: "structured", pid: 100, startIdentity: "100:one" } }]);
     expect(lastResourceBuildDiagnostic()).toEqual(expect.objectContaining({
       fresh: true,
       status: "complete",
@@ -888,25 +876,6 @@ describe("resource observation", () => {
       expect(readFileSync(path.join(directory, "workers"), "utf8")).toBe("x");
     });
     expect(overLimitPersistAttempts).toBe(0);
-  });
-
-  test("attributes a duplicated transcript only to the shared canonical host", () => {
-    const snapshot = { hosts: [duplicate, canonical], observation: "available" as const, canonicalFor: (pathname: string) => (pathname === PATHNAME ? canonical : null) };
-
-    expect(canonicalResourceEntry(snapshot, [duplicate], new Map([[PATHNAME, entry]]))).toBeNull();
-    expect(canonicalResourceEntry(snapshot, [canonical], new Map([[PATHNAME, entry]]))).toEqual(entry);
-  });
-
-  test("marks every pane in a stable-conversation host conflict", () => {
-    const snapshot = {
-      hosts: [duplicate, canonical],
-      observation: "available" as const,
-      conflicts: [{ conversationId: "conversation_test", paths: [PATHNAME], paneIds: ["%1", "%2"] }],
-      canonicalFor: () => null,
-    };
-
-    expect(conflictingResourceHost(snapshot, duplicate)).toBeTrue();
-    expect(conflictingResourceHost(snapshot, canonical)).toBeTrue();
   });
 
   test("two handoff paths for one stable conversation form one conflict", async () => {
@@ -1102,8 +1071,13 @@ describe("kill-target allowlist", () => {
 
   test("an in-process collection started before target consumption cannot restore it", async () => {
     resetResourcesForTests();
-    const targetRef = ref(900, 100, "%1");
-    noteSessionTargets([{ target: canonical.display, ref: targetRef }]);
+    noteSessionTargets([{
+      target: STRUCTURED_TARGET,
+      ref: {
+        kind: "structured", pid: 100, startIdentity: "100:one", bootEpoch: "boot-one", engine: "codex", sessionId: SESSION_ID,
+        conversationId: null, seat: false, turnBusy: false, owned: true, lastActiveAt: null,
+      },
+    }]);
     const started = deferred<void>();
     const release = deferred<void>();
     let builds = 0;
@@ -1116,29 +1090,27 @@ describe("kill-target allowlist", () => {
         }
         return [entry];
       },
-      readHosts: async () => ({
-        hosts: [canonical],
-        observation: "available",
-        conflicts: [],
-        canonicalFor: (pathname) => pathname === PATHNAME ? canonical : null,
-      }),
+      readStructuredHosts: async () => [structuredRecord],
+      processIdentity: (pid) => `${pid}:one`,
+      directoryExists: () => true,
+      bootEpoch: () => "boot-one",
+      listAgentProcesses: () => [],
       proc: {
         systemMemory: () => null,
         ppidMap: () => new Map([[200, 100]]),
         processMemory: () => new Map([[100, { rssBytes: 1, swapBytes: 0 }], [200, { rssBytes: 1, swapBytes: 0 }]]),
       },
-      captureAttachReferences: () => new Map([["%1", targetRef]]),
     }), () => null, Date.now, lastResourceBuildDiagnostic, { inProcess: true });
 
     const stale = reader.read(true);
     await started.promise;
-    consumeKillTarget(canonical.display);
+    consumeKillTarget(STRUCTURED_TARGET);
     release.resolve();
     await stale;
-    expect(allowedKillTarget(canonical.display)).toBeNull();
+    expect(allowedStructuredHostTarget(STRUCTURED_TARGET)).toBeNull();
 
     await reader.read(true);
-    expect(allowedKillTarget(canonical.display)).toEqual(targetRef);
+    expect(allowedStructuredHostTarget(STRUCTURED_TARGET)).toMatchObject({ kind: "structured", pid: 100, startIdentity: "100:one" });
   });
 
   test("nothing is killable before a snapshot exists", () => {
