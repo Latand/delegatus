@@ -5,7 +5,7 @@ import { ENGINE_MODELS } from "@/lib/agent/models";
 import { GLYPH_STATE, GLYPH_TURN_MS, glyphTier, modelGlyphKind, modelGlyphName } from "./modelGlyph";
 
 test("every catalogued Claude and Codex model has its glyph, by family", () => {
-  expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
+  expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "fable", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
   expect(ENGINE_MODELS.codex.map((option) => [option.id, modelGlyphKind("codex", option.id)])).toEqual([
     ["gpt-6-astra", "astra"],
     ["gpt-6.1-sol", "sol"],
@@ -21,6 +21,7 @@ test("every catalogued Claude and Codex model has its glyph, by family", () => {
 test("versioned Claude ids read as their family, as resume and migration read them", () => {
   expect(modelGlyphKind("claude", "opus-5-5")).toBe("opus");
   expect(modelGlyphKind("claude", "claude-fable-5-1")).toBe("fable");
+  expect(modelGlyphKind("claude", "claude-fable-5-2")).toBe("fable");
   expect(modelGlyphKind("claude", "claude-sonnet-5")).toBe("sonnet");
   expect(modelGlyphKind("claude", "Haiku")).toBe("haiku");
 });
@@ -41,7 +42,10 @@ test("any other model, engine or a blank record has no glyph, so the host keeps 
 test("the accessible name takes the catalogue's full label", () => {
   expect(modelGlyphName("codex", "gpt-6-astra")).toBe("GPT-6-Astra");
   expect(modelGlyphName("claude", "opus")).toBe("Opus 5.5");
+  expect(modelGlyphName("claude", "fable")).toBe("Fable");
+  expect(modelGlyphName("claude", "claude-fable-5-2")).toBe("Fable 5.2");
   expect(modelGlyphName("claude", "fable-5-1")).toBe("Fable 5.1");
+  expect(modelGlyphName("claude", "claude-fable-5-1")).toBe("Fable 5.1");
   expect(modelGlyphName("claude", "haiku")).toBe("Haiku 5.5");
   expect(modelGlyphName("claude", "claude-haiku-5-5")).toBe("Haiku 5.5");
   expect(modelGlyphName("claude", "claude-haiku-4-5")).toBe("Haiku 4.5");

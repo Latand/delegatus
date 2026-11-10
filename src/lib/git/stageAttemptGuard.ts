@@ -324,9 +324,17 @@ if [ "$hook" = pre-push ]; then
       [ "$local_ref" = "$remote_ref" ] || stage_tag_refuse 'release tag source must be the approved local tag ref'
       [ "$lane_head" = "$reviewed" ] || stage_tag_refuse 'HEAD changed after release review'
       [ "$(lane_git --no-replace-objects cat-file -t "$new")" = tag ] || stage_tag_refuse 'release tag must be annotated'
+      target=$(lane_git --no-replace-objects rev-parse "$new^{commit}") || stage_tag_refuse 'release tag commit unavailable'
       header=$(lane_git --no-replace-objects cat-file tag "$new" | sed -n '1,3p') || stage_tag_refuse 'annotated tag unavailable'
-      expected=$(printf 'object %s\\ntype commit\\ntag %s' "$reviewed" "$tag")
+      expected=$(printf 'object %s\\ntype commit\\ntag %s' "$target" "$tag")
       [ "$header" = "$expected" ] || stage_tag_refuse 'annotated tag must name the approved release and directly target the reviewed head'
+      [ "$(lane_git --no-replace-objects rev-parse "$target^{tree}")" = "$(lane_git --no-replace-objects rev-parse "$reviewed^{tree}")" ] || stage_tag_refuse 'annotated tag must directly target the reviewed head or its identical merged tree'
+      stage_release_binding_check "$@"
+      main=$(lane_git ls-remote "$remote" refs/heads/main) || stage_tag_refuse 'remote main unavailable'
+      main=$(printf '%s' "$main" | awk '$2 == "refs/heads/main" { print $1 }')
+      case "$main" in *[!0-9a-f]*|'') stage_tag_refuse 'remote main unavailable' ;; esac
+      [ "\${#main}" = 40 ] || stage_tag_refuse 'remote main unavailable'
+      lane_git --no-replace-objects merge-base --is-ancestor "$target" "$main" || stage_tag_refuse 'release tag commit is not on remote main; merge the reviewed release PR first'
       stage_release_binding_check "$@"
       continue
     fi

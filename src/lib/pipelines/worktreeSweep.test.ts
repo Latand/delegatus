@@ -845,7 +845,7 @@ test("a settled registry conversation with dead captured hosts releases its link
   const report = await sweepMergedWorktrees(ports({
     pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/finished" })],
     prs: [merged(71, "pipeline/finished", tip)],
-    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), () => true),
   }));
   expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
@@ -868,7 +868,7 @@ test("a failed migration's parked message releases its dead conversation's linke
   const report = await sweepMergedWorktrees(ports({
     pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/parked", state: "closed" })],
     prs: [merged(72, "pipeline/parked", tip)],
-    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), () => true),
   }));
   expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
@@ -886,7 +886,7 @@ for (const owner of ["structured", "survivor", "claimant", "tmux-agent", "tmux-p
         agent: identity(61003), panePid: identity(61004), argv: [] } });
     const livePid = { structured: 61001, survivor: 61002, claimant: 61005, "tmux-agent": 61003, "tmux-pane": 61004 }[owner];
     const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
-    const cwds = liveOrWaitingConversationCwds(reopened.readOnlySnapshot(), Date.parse("2026-10-21T00:00:00Z"),
+    const cwds = liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(), Date.parse("2026-10-21T00:00:00Z"),
       current => processIdentityProvenDead(current, {
         pidAlive: pid => pid === livePid,
         processIdentity: () => verdict === "unverified" ? null : (livePid === 61001 ? "finished-host"
@@ -928,7 +928,7 @@ test.each(["requested", "waiting-turn", "preparing", "successor-starting", "veri
     const conversation = registry.conversationForPath(artifactPath)!;
     registry.setConversationMigration(conversation.id, { intentId: "active-switch", phase,
       targetId: "target", revision: 1, error: null, updatedAt: "2026-10-01T00:00:00Z" });
-    expect(liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+    expect(liveOrWaitingConversationCwds(registry.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
   });
 
@@ -1190,7 +1190,7 @@ test.each(["process", "conversation", "delivery"] as const)("a late %s still pre
   const report = await sweepMergedWorktrees(ports({
     pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/late-holder" })],
     prs: [merged(73, "pipeline/late-holder", tip)],
-    conversationCwds: () => liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+    conversationCwds: () => liveOrWaitingConversationCwds(registry.worktreeProtectionSnapshot(),
       Date.parse("2026-10-21T00:00:00Z"), identity => identity.pid !== 61008),
     scan: () => measured && kind === "process"
       ? { ownNamespace: null, processes: [{ pid: 61007, paths: [dir], namespace: null, stamped: false }] } : NO_PROCESSES,

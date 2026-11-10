@@ -508,3 +508,41 @@ test("cooperative reuse refuses a destination changed while hashing its source",
     expect(changed).toBe(true);
   } finally { readSpy.mockRestore(); openSpy.mockRestore(); }
 });
+
+
+test("missing-ancestor diagnostics retain only an exact digest, including hostile metadata", async () => {
+  const { MissingSourceAncestorError, sanitizeProviderError } = await import("./safeHistoryCopy");
+  const { createHash } = await import("node:crypto");
+  for (const nativeId of ["ancestor-one", "ancestor-two", "../private/path\n" + "credential-material".repeat(4)]) {
+    const error = new MissingSourceAncestorError(nativeId);
+    const reference = `sha256:${createHash("sha256").update(nativeId).digest("hex")}`;
+    error.message = "untrusted replacement message";
+    expect(sanitizeProviderError(error)).toEqual({ code: "source-ancestor-missing", message: `source ancestor ${reference} is missing` });
+    expect(JSON.stringify(sanitizeProviderError(error))).not.toContain(nativeId);
+  }
+});
+
+
+test("copy publication rechecks authority after staging bytes and preserves an existing receipt", async () => {
+  const input = fixture();
+  const request = { ...input, destinationRelative: "rollout.jsonl", operationId: "owned-copy" };
+  const previous = await safeCopyHistoryAsync(request);
+  const receiptPath = previous.path + ".llv-receipt.json";
+  const receipt = fs.readFileSync(receiptPath, "utf8");
+  fs.appendFileSync(input.sourcePath, "new turn\n");
+  let allowed = true;
+  const realpath = fs.realpathSync;
+  const read = spyOn(fs, "realpathSync").mockImplementation(((...args: Parameters<typeof realpath>) => {
+    const resolved = realpath(...args);
+    if (String(args[0]) === input.targetRoot && fs.readdirSync(input.targetRoot).some(name => name.endsWith(".tmp"))) allowed = false;
+    return resolved;
+  }) as typeof realpath);
+  try {
+    await expect(safeCopyHistoryAsync({ ...request, replaceOwnedDestination: true,
+      assertCurrent() { if (!allowed) throw new Error("copy owner changed"); },
+    })).rejects.toThrow("copy owner changed");
+    expect(allowed).toBe(false);
+    expect(fs.readFileSync(previous.path, "utf8")).toBe("one\ntwo\n");
+    expect(fs.readFileSync(receiptPath, "utf8")).toBe(receipt);
+  } finally { read.mockRestore(); }
+});

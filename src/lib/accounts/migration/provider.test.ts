@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { emptyLaunchProfile, migrationSuccessorLaunchProfile, sameProviderReceiptOutcome, type NativeGeneration, type ProviderReceipt, type SuccessorProviderPort } from "./contracts";
 import {
+  preflightCodexSource,
   authorizeCodexForkRetry,
   persistedCodexOperationJournal,
   codexForkArtifacts,
@@ -210,6 +211,50 @@ test("provider receipt identity ignores timestamp and object key order", () => {
   };
 
   expect(sameProviderReceiptOutcome(left, right)).toBeTrue();
+});
+
+test.each(["allowed", "revoked", "ownership-error", "cleanup-error"] as const)("publication retains exact cleanup across final authority: %s", async mode => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "publication-custody-"));
+  const target = accountRoot("codex", base, "target");
+  const registry = new AgentRegistry(path.join(base, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  let owned = true, checks = 0, publications = 0, cleanups = 0;
+  const refusal = new Error("source custody revoked"), cleanupFailure = new Error("owned cleanup refused");
+  const provider = new RegisteredSuccessorProvider({ registry,
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target },
+    startCodex: async () => { throw new Error("unexpected client"); }, claudeStatus: async () => ({ loggedIn: false }),
+    publishCodexHost: async () => { publications++; return async () => {
+      cleanups++;
+      if (mode === "cleanup-error" && cleanups === 1) throw cleanupFailure;
+    }; }, now: () => "2026-11-07T10:00:00.000Z",
+  });
+  const receipt: ProviderReceipt = { operationId: "publication-custody", nativeId: "successor", path: path.join(target.transcriptRoot, "successor.jsonl"),
+    continuityPaths: [], historyHash: "fixture", host: { kind: "codex-app-server", identity: "successor", epoch: 1, verifiedAt: "2026-11-07T10:00:00.000Z" } };
+  const input = { engine: "codex" as const, conversationId: "conversation_publication" as const, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base }),
+    ownsOperation: async () => {
+      const answer = owned;
+      if (++checks === 2 && mode !== "allowed") {
+        owned = false;
+        if (mode === "ownership-error") throw refusal;
+      }
+      return answer;
+    }, assertCurrent: () => { if (!owned) throw refusal; },
+  };
+  try {
+    let error: unknown;
+    try { await provider.publishHost(receipt, input); } catch (caught) { error = caught; }
+    expect(publications).toBe(1);
+    if (mode === "allowed") expect(error).toBeUndefined();
+    else if (mode === "cleanup-error") {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([refusal, cleanupFailure]);
+      expect((error as Error).cause).toBe(refusal);
+      owned = true;
+      await expect(provider.publishHost(receipt, input)).rejects.toThrow("cleanup is pending");
+    } else expect(error).toBe(refusal);
+    await provider.cleanup(receipt);
+    expect(cleanups).toBe(mode === "cleanup-error" ? 2 : 1);
+    expect(publications).toBe(1);
+  } finally { registry.close(); fs.rmSync(base, { recursive: true, force: true }); }
 });
 
 test("Codex successor host publication is single-owner and cleanup releases that owner", async () => {
@@ -1496,7 +1541,7 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
   expect(calls).toContain("target:name");
   expect(calls).toContain("target:goal");
   expect(threadName as string | null).toBe("migration successor · Ship");
-  expect(resumeOptions).toEqual({ path: receipt.path, cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" });
+  expect(resumeOptions).toEqual({ assertCurrent: expect.any(Function), path: receipt.path, cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" });
   expect(goalOptions).toEqual({ objective: "Ship", status: "active" });
   await provider.verify(receipt, { engine: "codex", targetAccountId: "target", launchProfile: profile });
   expect(calls.filter((call) => call === "target:read").length).toBeGreaterThanOrEqual(2);
@@ -2496,3 +2541,56 @@ test("an indeterminate Claude auth probe defers migration and can retry the same
   pending = false;
   await expect(provider.verify(receipt, { engine: "claude", targetAccountId: "target", launchProfile: fixture.sourceGeneration.launchProfile })).resolves.toBeUndefined();
 });
+
+
+test.each([0, 1, 127, 128])("read-only source preflight bounds %i older ancestors", async (older) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ancestor-bound-"));
+  roots.push(base);
+  const source = accountRoot("codex", base, "source");
+  for (let index = 0; index <= older; index++) {
+    fs.writeFileSync(path.join(source.transcriptRoot, `rollout-hop-${index}.jsonl`),
+      codexSessionMeta(`hop-${index}`, index < older ? `hop-${index + 1}` : undefined), { mode: 0o600 });
+  }
+  const check = preflightCodexSource({ id: "hop-0", path: path.join(source.transcriptRoot, "rollout-hop-0.jsonl"), accountId: "source" },
+    { resolveTranscriptOwner: () => source });
+  if (older === 128) await expect(check).rejects.toMatchObject({ code: "unsafe-source" });
+  else await expect(check).resolves.toBeUndefined();
+});
+
+test.each(["missing", "cycle", "identity", "malformed", "depth", "symlink", "unreadable", "entries", "owner"] as const)(
+  "read-only source preflight classifies %s without writes", async (mode) => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ancestor-check-"));
+    roots.push(base);
+    const source = accountRoot("codex", base, "source");
+    const sourcePath = path.join(source.transcriptRoot, "rollout-source.jsonl");
+    const parentPath = path.join(source.transcriptRoot, "rollout-parent.jsonl");
+    fs.writeFileSync(sourcePath, codexSessionMeta("source", "parent"), { mode: 0o600 });
+    if (mode === "cycle" || mode === "identity") fs.writeFileSync(parentPath,
+      codexSessionMeta(mode === "identity" ? "different" : "parent", "source"), { mode: 0o600 });
+    if (mode === "malformed") fs.writeFileSync(sourcePath,
+      JSON.stringify({ type: "session_meta", payload: { id: "source", forked_from_id: { untrusted: true } } }) + "\n");
+    if (mode === "depth") fs.mkdirSync(path.join(source.transcriptRoot, ...Array(7).fill("nested")), { recursive: true, mode: 0o700 });
+    if (mode === "symlink") fs.symlinkSync(sourcePath, parentPath);
+    let displaced = false;
+    const original = fs.promises.opendir;
+    const open = spyOn(fs.promises, "opendir").mockImplementation(async (...args: Parameters<typeof original>) => {
+      if (mode === "unreadable") throw new Error("fixture filesystem detail must stay private");
+      if (mode === "entries") return {
+        async *[Symbol.asyncIterator]() {
+          for (let index = 0; index <= 20_000; index++) yield {
+            name: `entry-${index}`, isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true,
+          };
+        },
+      } as unknown as fs.Dir;
+      const directory = await original(...args);
+      if (mode === "owner") displaced = true;
+      return directory;
+    });
+    try {
+      await expect(preflightCodexSource({ id: "source", path: sourcePath, accountId: "source" },
+        { resolveTranscriptOwner: () => displaced ? null : source })).rejects.toMatchObject({
+        code: mode === "missing" ? "source-ancestor-missing" : mode === "entries" ? "history-too-large" : "unsafe-source",
+      });
+      expect(fs.readdirSync(base).sort()).toEqual(["source"]);
+    } finally { open.mockRestore(); }
+  });

@@ -74,12 +74,20 @@ notifications on. The event carries `{conversationId, turnId, outcome}`, where
 (`src/lib/runtime/engineHostEvents.ts:334-335`). All three structured engines
 emit it:
 
-- Claude: `src/lib/runtime/claudeStreamBrokerHost.ts:1413-1416`, including
-  the crash path at `:1182`;
+- Claude: `src/lib/runtime/claudeStreamBrokerHost.ts`, `acceptResult` for a
+  native result and `endActiveTurn` for host failure or verified release.
+  The latter closes only the existing started turn with an error, before the
+  terminal host status. Adoption repairs the latest retained unmatched start,
+  including older journals that recorded only dead/unhosted status;
 - Copilot: `src/lib/runtime/copilotAcpHost.ts:704-707,989`;
 - Codex: `src/lib/runtime/codex.ts:29-34`.
 
-It covers every settled turn, whoever started it.
+This requires a known turn identity. Unqueued engine-started work remains
+subject to the separate background-turn diagnosis. A queued input without
+confirmation keeps its delivery uncertainty. A failed event-store write
+logs its sanitized cause and creates no durable completion obligation;
+adoption can repair an unmatched start only while that start remains in
+retained history.
 
 A turn cannot end with an engine question pending: the broker retires every
 open attention at `result` (`claudeStreamBrokerHost.ts:1417-1432`). The

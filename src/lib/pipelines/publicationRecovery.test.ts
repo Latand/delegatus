@@ -1,4 +1,4 @@
-import { expect, test, fs, os, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
+import { expect, test, fs, os, path, tickPipelines, createPipelineFromRequest, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
 import { realExec } from "@/lib/workflows/provision";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -13,6 +13,133 @@ import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import { current, fixture, stages, isolatePublicationGit } from "./publicationRecovery.fixture";
 
 isolatePublicationGit();
+
+test.each(["takeover", "explicit publish"])("%s records an unconsumed native remote refusal and reopens its history", async consumer => {
+  const f = await fixture();
+  try {
+    const { publishPipelineBranch } = await import("./git");
+    const { buildPipeline, createPipelineWithDelivery, takeoverPipelineDelivery, findPipelineRecord } = await import("./store");
+    const accepted = await f.commit("accepted implementation");
+    const owner = current();
+    owner.lastPassedCommit = accepted;
+    savePipelines([owner]);
+    fs.writeFileSync(path.join(f.hooks, "pre-push"), "#!/bin/sh\necho 'pre-push: privacy' >&2\necho 'PRIVACY GATE: PASS' >&2\necho 'pre-push: verified completed checks for this publication; transport admitted' >&2\n", { mode: 0o700 });
+    fs.writeFileSync(path.join(f.remote, "hooks", "pre-receive"), `#!/bin/sh\necho '${"diagnostic ".repeat(500)}' >&2\necho 'fatal error in commit_refs_rules' >&2\nexit 1\n`, { mode: 0o700 });
+    const result = await publishPipelineBranch(owner, f.h.ports.exec, { acceptedSha: accepted });
+    expect(result.ok).toBe(false);
+    expect(current().publicationRecovery).toBeUndefined();
+    let recordId = owner.id;
+    if (consumer === "takeover") {
+      const successor = await createPipelineWithDelivery(buildPipeline({ id: "refusal-successor", task: "Continue publication",
+        project: owner.project, repoDir: f.repo, stages: owner.stages, srcPath: null, srcConversationId: null,
+        now: "2026-11-06T10:00:00.000Z", state: "draft" }), owner.delivery!.target);
+      const taken = await takeoverPipelineDelivery(successor.id, owner.id, owner.delivery!.epoch, "continue publication", null);
+      expect(taken.error).toBeUndefined();
+      recordId = successor.id;
+    } else {
+      // Explicit recovery records the old refusal before reserving another
+      // operation. Do not execute that new reservation in this probe.
+      const reserved = await rawPatchPipeline(owner.id, { action: "publish" }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+      expect(reserved.error).toBeUndefined();
+      expect(findPipelineRecord(owner.id)!.delivery!.operation!.state).toBe("pending");
+    }
+    const recovery = findPipelineRecord(recordId)!.publicationRecovery![accepted]!;
+    expect(recovery).toMatchObject({ failures: 0, totalAttempts: 1, history: [{ cause: "remote-refusal", retryAt: null }] });
+    expect(recovery.history[0]!.detail).toContain("remote: fatal error in commit_refs_rules");
+    expect(findPipelineRecord(owner.id)!.publicationRecovery?.[accepted]).toEqual(recovery);
+    const reopened = await realExec(process.execPath, ["-e", `
+      const { findPipelineRecord } = await import("./src/lib/pipelines/store.ts");
+      console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(recordId)}).publicationRecovery));
+    `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+    expect(reopened.code, reopened.stderr).toBe(0);
+    expect(JSON.parse(reopened.stdout)).toEqual({ [accepted]: recovery });
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(accepted);
+  } finally { f.close(); }
+});
+
+test.each(["remote-ref", "remote-unchanged", "remote-long", "privacy-fail", "check-fail", "success"] as const)(
+  "remote-after-PASS consumer seam: %s", async shape => {
+    const f = await fixture();
+    try {
+      f.h.ports.now = () => "2026-11-06T10:00:00.000Z";
+      let repairs = 0, pushes = 0;
+      f.h.ports.resumeSeveredTurn = async () => { repairs++; return true; };
+      const execute = f.h.ports.exec;
+      f.h.ports.exec = async (command, args, ...rest) => {
+        if (command === "git" && args[0] === "push") pushes++;
+        return execute(command, args, ...rest);
+      };
+      const accepted = shape === "remote-unchanged" ? await f.git(f.lane(), "rev-parse", "HEAD") : await f.commit("accepted implementation");
+      const localOutput = shape === "privacy-fail"
+        ? "pre-push: privacy\nPRIVACY GATE: FAIL\npre-push: privacy: failed (1)"
+        : shape === "check-fail"
+          ? "pre-push: privacy\nPRIVACY GATE: PASS\npre-push: types\npre-push: types: failed (1)"
+          : "pre-push: privacy\nPRIVACY GATE: PASS\npre-push: verified completed checks for this publication; transport admitted";
+      const localFailure = shape === "privacy-fail" || shape === "check-fail";
+      fs.writeFileSync(path.join(f.hooks, "pre-push"), `#!/bin/sh\ncat >&2 <<'OUTPUT'\n${localOutput}\nOUTPUT\nexit ${localFailure ? 1 : 0}\n`, { mode: 0o700 });
+      if (shape.startsWith("remote-")) fs.writeFileSync(path.join(f.remote, "hooks", "pre-receive"),
+        `#!/bin/sh\n${shape === "remote-long" ? `echo '${"diagnostic ".repeat(500)}' >&2\n` : ""}echo 'fatal error in commit_refs_rules' >&2\nexit 1\n`, { mode: 0o700 });
+      await f.finish();
+      const lane = current();
+      const { publicationFailurePhase, publicationFailureCause } = await import("./git");
+      const failure = lane.delivery?.operation?.result?.failure;
+      const history = lane.publicationRecovery?.[accepted]?.history ?? [];
+      expect(lane.lastPassedCommit).toBe(accepted);
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(accepted);
+      expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
+      expect(pushes).toBe(1);
+      if (shape === "success") {
+        expect(lane.cursor?.stageId).toBe("review");
+        expect(repairs).toBe(0);
+        expect(history).toHaveLength(0);
+        expect(await f.git(f.remote, "rev-parse", lane.delivery!.target.branch)).toBe(accepted);
+      } else if (localFailure) {
+        expect(publicationFailurePhase(failure!)).toBe(shape === "privacy-fail" ? "privacy" : "types");
+        expect(lane.runs[0]!.attempts[0]!.publicationRepair).toBeDefined();
+        expect(repairs).toBe(1);
+        expect(history[0]!.cause).toBe("check-failure");
+      } else {
+        expect(publicationFailurePhase(failure!)).toBeNull();
+        expect(publicationFailureCause(failure!)).toContain("remote: fatal error in commit_refs_rules");
+        expect(failure!.outputTail.length).toBeLessThanOrEqual(4000);
+        expect(history).toHaveLength(1);
+        expect(history[0]).toMatchObject({ cause: "remote-refusal", retryAt: null });
+        expect(lane.state).toBe("needs_decision");
+        expect(lane.stateDetail).toContain("remote cause is unknown");
+        expect(lane.runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
+        expect(repairs).toBe(0);
+        await tickPipelines([], f.h.ports);
+        expect(current().publicationRecovery?.[accepted]?.history).toEqual(history);
+        // A fresh controller reopens the persisted record beyond every retry
+        // delay. Its effect ports count any unintended retry or repair.
+        const reopened = await realExec(process.execPath, ["-e", `
+          const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+          const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+          const ports = defaultPipelinePorts();
+          let pushes = 0, repairs = 0;
+          ports.now = () => "2026-11-07T10:00:00.000Z";
+          ports.cpuAdmissionReconcile = async () => {};
+          ports.drainHold = () => null;
+          ports.scheduleTick = () => {};
+          ports.conversationAgentActive = async () => false;
+          ports.resumeSeveredTurn = async () => { repairs++; return false; };
+          const exec = ports.exec;
+          ports.exec = async (command, args, ...rest) => {
+            if (command === "git" && args[0] === "push") { pushes++; return { code: 1, stdout: "", stderr: "unexpected push" }; }
+            return exec(command, args, ...rest);
+          };
+          await tickPipelines([], ports);
+          const lane = loadPipelines()[0];
+          console.log(JSON.stringify({ pushes, repairs, accepted: lane.lastPassedCommit,
+            state: lane.state, history: lane.publicationRecovery[lane.lastPassedCommit].history }));
+        `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+        expect(reopened.code, reopened.stderr).toBe(0);
+        expect(JSON.parse(reopened.stdout)).toEqual({ pushes: 0, repairs: 0, accepted, state: "needs_decision", history });
+        expect(pushes).toBe(1);
+        expect(repairs).toBe(0);
+      }
+    } finally { f.close(); }
+  }, 60_000);
 
 async function restartedAppController(clock: string, mode: "tick" | "reserve" | "expire after read" = "tick") {
   return realExec("bun", ["-e", `
@@ -252,10 +379,11 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
     expect((await act()).status).toBe(409);
     clock++;
     const result = await act();
-    if (shape === "running" || shape === "fresh-busy") {
+    if (shape === "running" || shape === "fresh-busy" || shape === "queued") {
       expect(result.status).toBe(409);
       expect(result.error).toContain("turn build/1");
       expect(result.error).toContain("age 1200s");
+      if (shape === "queued") expect(result.error).toContain("delivery in-flight");
       expect(current().runs[0]!.attempts[0]!.publicationRepairAbandonment).toBeUndefined();
     } else {
       expect(result.error).toBeUndefined();
@@ -485,8 +613,14 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
       ...(action === "resolve-decision" ? { clientRequestId: `terminal-${kind}`, answer: "Continue after the terminal repair.",
         expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) } : {}),
     }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-    expect(result.error).toBeUndefined();
-    expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+    if (kind === "stale-turn") {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("may still be running or queued");
+      expect(current().runs[0]!.attempts).toHaveLength(1);
+    } else {
+      expect(result.error).toBeUndefined();
+      expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+    }
   } finally { f.close(); }
 });
 
@@ -733,7 +867,7 @@ test.each(["failed", "unreserved", "live", "uncertain", "background", "outstandi
       const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `delivery-${kind}`,
         answer: "Continue after the repair settled.", expectedStageId: "build", expectedAttempt: 1,
         expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
-      if (kind === "failed" || kind === "unreserved" || kind === "uncertain" || kind === "outstanding") expect(result.error).toBeUndefined();
+      if (kind === "failed" || kind === "unreserved" || kind === "uncertain") expect(result.error).toBeUndefined();
       else {
         expect(result.status).toBe(409);
         expect(result.error).toContain("repair-delivery");

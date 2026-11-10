@@ -50,8 +50,40 @@ export const TASKS_FILE = statePath("tasks.json");
 // Keep untouched legacy rows exactly as stored, including extension fields and
 // omitted placement/revision. Response coercion must not migrate other rows.
 const persistedRows = new WeakMap<BoardTask, unknown>();
-function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
+/** For a draft array, the baseline task of a slot its callback never read. */
+const unreadDrafts = new WeakMap<BoardTask[], (index: number) => BoardTask | undefined>();
+
+const sameStoredCompletion = (stored: BoardTask, task: BoardTask) =>
+  stored.doneAt === task.doneAt && JSON.stringify(stored.doneAdmissions) === JSON.stringify(task.doneAdmissions)
+  && stored.findingKey === task.findingKey && JSON.stringify(stored.finding) === JSON.stringify(task.finding);
+
+/** The stored row a never-read draft commits as, when every step below would
+    leave it alone. Anything else returns undefined and takes the full path. A
+    write cloned and normalized every task on the board to change one (#3809). */
+function settledRow(pristine: BoardTask, before: ReturnType<typeof snapshotTasks>, canonical: (project: string) => string): unknown {
+  const stored = persistedRows.get(pristine) as BoardTask | undefined;
+  if (!stored || before.get(pristine.id)?.pristine !== pristine) return undefined;
+  if (canonical(pristine.project) !== pristine.project) return undefined;
+  if (stored.proactive !== undefined || pristine.proactive !== undefined) return undefined;
+  if (withTaskCompletion(pristine, pristine) !== pristine) return undefined;
+  return sameStoredCompletion(stored, pristine) ? stored : undefined;
+}
+
+function committedRows(drafts: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
   const canonical = projectAliasResolver();
+  const unread = sync ? undefined : unreadDrafts.get(drafts);
+  const settled = new Map<number, unknown>();
+  const settledIds = new Set<string>();
+  if (unread) for (let index = 0; index < drafts.length; index++) {
+    const pristine = unread(index);
+    const row = pristine && settledRow(pristine, before, canonical);
+    if (row === undefined) continue;
+    settled.set(index, row);
+    settledIds.add(pristine!.id);
+  }
+  const tasks: BoardTask[] = [];
+  if (settled.size) { for (let index = 0; index < drafts.length; index++) if (!settled.has(index)) tasks.push(drafts[index]!); }
+  else for (const task of drafts) tasks.push(task);
   for (const task of tasks) {
     task.project = canonical(task.project);
     const prior = before.get(task.id);
@@ -68,22 +100,25 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
   }
   /* A lazy legacy backfill is a real row change and gets a new fence. */
   for (const [id, prior] of before) {
+    if (settledIds.has(id)) continue;
     const stored = persistedRows.get(prior.ref) as BoardTask | undefined;
-    if (stored && (stored.doneAt !== prior.ref.doneAt || JSON.stringify(stored.doneAdmissions) !== JSON.stringify(prior.ref.doneAdmissions)
-      || stored.findingKey !== prior.ref.findingKey || JSON.stringify(stored.finding) !== JSON.stringify(prior.ref.finding))) {
-      before.set(id, { ...prior, fingerprint: taskFingerprint(stored) });
+    if (stored && !sameStoredCompletion(stored, prior.ref)) {
+      before.set(id, { ...prior, fingerprint: taskFingerprint(stored), pristine: undefined });
     }
   }
   if (sync) stampLinkedRows(tasks, sync.groups, sync.write, taskFingerprint);
   stampTaskRevisions(tasks, before, replacements);
-  return tasks.map(task => {
+  const rows = tasks.map(task => {
     const prior = before.get(task.id);
     const stored = prior ? persistedRows.get(prior.ref) as BoardTask | undefined : undefined;
-    return prior && taskRevision(task) === prior.revision && stored
-      && stored.doneAt === task.doneAt && JSON.stringify(stored.doneAdmissions) === JSON.stringify(task.doneAdmissions)
-      && stored.findingKey === task.findingKey && JSON.stringify(stored.finding) === JSON.stringify(task.finding)
+    return prior && taskRevision(task) === prior.revision && stored && sameStoredCompletion(stored, task)
       ? persistedRows.get(prior.ref) : task;
   });
+  if (!settled.size) return rows;
+  // Index access only: iterating the draft array would read every slot.
+  const merged: unknown[] = new Array(drafts.length);
+  for (let index = 0, next = 0; index < drafts.length; index++) merged[index] = settled.has(index) ? settled.get(index) : rows[next++];
+  return merged;
 }
 
 type TasksFile = { tasks?: unknown; recentCreates?: unknown; migrations?: unknown };
@@ -818,6 +853,7 @@ function taskDrafts(pristine: readonly BoardTask[]) {
       set: (value: BoardTask) => { Object.defineProperty(tasks, index, { configurable: true, enumerable: true, writable: true, value }); },
     });
   });
+  unreadDrafts.set(tasks, index => !copies.has(index) && Object.getOwnPropertyDescriptor(tasks, index)?.get ? pristine[index] : undefined);
   return { tasks, original };
 }
 

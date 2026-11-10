@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { releaseStages } from "./stages";
+import { releasePublishStages, releaseStages } from "./stages";
 import { normalizeStages } from "@/lib/pipelines/engine";
 import { pipelineRoleLookup, resolvePipelineRole } from "@/lib/pipelines/roles";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -7,14 +7,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_STAGE_PROMPT_LENGTH } from "@/lib/pipelines/limits";
-test.each([true, false])("release template validates with askBeforePublish=%s; reviews precede publishing", askBeforePublish => {
+test.each([true, false])("release template validates with askBeforePublish=%s; review completes the lane", askBeforePublish => {
   const stages = releaseStages({ cut: "one", lastTag: "v1.0.0", changes: [], askBeforePublish, approval: "recorded approval" });
   const normalized = normalizeStages(stages, pipelineRoleLookup);
   expect(normalized.error).toBeUndefined();
-  expect(stages.map(s => s.id)).toEqual(["prepare", "capture", "shots", "shots-fix", "review", "fix", "publish"]);
-  expect(stages.find(s => s.id === "shots")?.onFail).toEqual({ to: "shots-fix", maxRounds: 1, onExhausted: "advance" });
-  expect(stages.find(s => s.id === "review")?.onFail).toEqual({ to: "fix", maxRounds: 1, onExhausted: "advance" });
-  expect(stages.at(-1)?.role?.roleId).toBe("deployer");
+  expect(stages.map(s => s.id)).toEqual(["prepare", "capture", "shots", "shots-fix", "review", "fix"]);
+  expect(stages.find(s => s.id === "shots")?.onFail).toEqual({ to: "shots-fix", maxRounds: 1, onExhausted: "park" });
+  expect(stages.find(s => s.id === "review")?.onFail).toEqual({ to: "fix", maxRounds: 1, onExhausted: "park" });
+  expect(stages.at(-1)?.role?.roleId).toBe("builder");
   expect(resolvePipelineRole({ role: { roleId: "deployer" } }, "run").error).toContain("not allowed");
 });
 test("a large release validates and its structured Git reference retains every PR and changed path at the exact cut", () => {
@@ -59,4 +59,13 @@ test("a large release validates and its structured Git reference retains every P
     git("tag", "-d", "v1.16.0");
     expect(spawnSync(command, args, { cwd: directory, encoding: "utf8" }).status).not.toBe(0);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test.each([true, false])("publish lane validates at the merged main commit (ask=%s)", askBeforePublish => {
+  const stages = releasePublishStages({ cut: "a".repeat(40), commit: "b".repeat(40), pr: 7, lastTag: "v1.0.0", changes: [], askBeforePublish });
+  expect(normalizeStages(stages, pipelineRoleLookup).error).toBeUndefined();
+  expect(stages.map(stage => stage.id)).toEqual(["review", "publish"]);
+  expect(stages[0].next).toBe("publish");
+  expect(stages[1].role).toEqual({ roleId: "deployer", params: { sha: "b".repeat(40), mode: "release" } });
 });

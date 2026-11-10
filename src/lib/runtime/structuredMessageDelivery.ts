@@ -92,7 +92,7 @@ export interface StructuredMessageRequest {
   clientMessageId?: string | null;
   operationId?: string;
   kind?: "send" | "steer" | "inject";
-  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  policy?: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   text: string;
@@ -472,7 +472,16 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
       || command.turnId !== undefined);
 }
 
+/** The reservation write never got the delivery record's lock, so nothing
+    exists under the send's key (#3782). The message stays the shared one. */
+class ReservationWriterBusyError extends Error {
+  constructor() { super(REGISTRY_WRITER_BUSY); this.name = "ReservationWriterBusyError"; }
+}
+
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
+  if (error instanceof ReservationWriterBusyError) return refusedBeforeReservation({
+    ok: false, structured: true, outcome: "failed", error: error.message, status: 503,
+  });
   if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
     ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: "status" in error && error.status === 503 ? 503 : 409,
     ...("successorConversationId" in error && typeof error.successorConversationId === "string"
@@ -747,7 +756,7 @@ async function holdDuringRuntimeSynchronization(
           ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
       );
-      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      if (!held) throw new ReservationWriterBusyError();
       return held;
     };
     /* Publication and reservation are one section per key, as on the live
@@ -1756,7 +1765,7 @@ export async function enqueueStructuredMessage(
           ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
       );
-      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      if (!held) throw new ReservationWriterBusyError();
       return held;
     };
     return rawImages.length && dependencies.withImageAdmissionLock ? dependencies.withImageAdmissionLock(admit) : admit();

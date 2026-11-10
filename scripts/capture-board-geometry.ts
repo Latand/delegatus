@@ -1416,12 +1416,14 @@ async function captureOnboarding(): Promise<void> {
               await page.click('[data-mobile2-open="menu"]');
               /* The roles table is on the menu's Settings page. */
               await page.click('[data-mobile2-menu-row="settings"]');
+              await page.click('[data-settings-section-row="roles"]');
               await page.waitForSelector('[data-testid="menu-agent-mapping"]');
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click('[data-testid="menu-agent-mapping"]');
             } else {
               await page.click("[data-rail-menu]");
               await page.click("[data-rail-menu-settings]");
+              await page.click('[data-settings-section-row="roles"]');
               await page.waitForSelector("[data-rail-menu-agent-mapping]");
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click("[data-rail-menu-agent-mapping]");
@@ -7703,7 +7705,8 @@ async function memorySourceMain(): Promise<void> {
             await page.addStyleTag({ content: "[data-telemetry-notice] { display: none !important; }" });
             await page.locator("[data-rail-menu]").first().click({ timeout: 60_000 });
             await page.locator("[data-rail-menu-settings]").click();
-            const row = page.locator("[data-rail-menu-panel] [data-header-menu-memory-source]");
+            await page.locator("[data-rail-menu-memory]").click();
+            const row = page.locator("[data-settings-window] [data-header-menu-memory-source]");
             await row.waitFor();
             const first = state === "pressed" ? "unchosen" : state === "refused" ? "active" : MEMORY_SOURCE_FRAME_ROW[state];
             await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, first, { timeout: 30_000 });
@@ -7719,7 +7722,7 @@ async function memorySourceMain(): Promise<void> {
             await page.mouse.move(1, 890);
             await page.waitForTimeout(150);
             const geometry = await page.evaluate(() => {
-              const panel = document.querySelector<HTMLElement>("[data-rail-menu-panel]")!;
+              const panel = document.querySelector<HTMLElement>("[data-settings-window]")!;
               const host = panel.querySelector<HTMLElement>("[data-header-menu-memory-source]")!;
               const line = host.querySelector<HTMLElement>("[data-memory-source-line]")!;
               const title = host.querySelector<HTMLElement>("[data-memory-source-title]")!;
@@ -7742,7 +7745,7 @@ async function memorySourceMain(): Promise<void> {
               const overlaps = [...lineRects, ...titleRects].filter((rect) => rect.left < s.right && rect.right > s.left && rect.top < s.bottom && rect.bottom > s.top).length;
               /* A neighbouring row's text under this row's box would be drawn over. */
               const r = host.getBoundingClientRect();
-              const neighbours = [...panel.querySelectorAll<HTMLElement>("[data-header-menu-page='settings'] > *")].filter((node) => node !== host)
+              const neighbours = [...panel.querySelectorAll<HTMLElement>("[data-header-menu-page='memory'] > *")].filter((node) => !node.contains(host))
                 .flatMap((node) => rects(node)).filter((rect) => rect.top < r.bottom - 0.5 && rect.bottom > r.top + 0.5 && rect.left < r.right && rect.right > r.left).length;
               return {
                 rowState: host.getAttribute("data-memory-source-state"), checked: control.getAttribute("aria-checked"),
@@ -7825,14 +7828,17 @@ async function installPingMain(): Promise<void> {
       const noticeBackground = await notice.evaluate(node => getComputedStyle(node).backgroundColor);
       if (noticeBackground === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent notice`);
       await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-notice.png`) });
-      await notice.getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+      await notice.getByRole("button", { name: translate(lang, "settings.section.privacy"), exact: true }).click();
       const dialog = page.locator("[data-telemetry-settings]");
       await dialog.waitFor({ state: "visible" });
-      const toggle = dialog.getByRole("switch");
+      const toggle = dialog.locator("[data-telemetry-ping]");
+      await dialog.locator("[data-settings-details-toggle]").click();
       if (!await toggle.isChecked() || !await toggle.isEnabled()) report.failures.push(`${lang}-${width}: default switch unavailable`);
+      /* The window owns the surface and the scroll; this section's rows run on inside it. */
       const geometry = await dialog.evaluate(node => {
-        const box = node.getBoundingClientRect();
-        return { background: getComputedStyle(node).backgroundColor, overflow: node.scrollWidth - node.clientWidth, left: box.left, right: box.right, bottom: box.bottom, text: node.textContent };
+        const surface = node.closest("[data-settings-window], [data-mobile2-sheet='settings']")!;
+        const box = surface.getBoundingClientRect();
+        return { background: getComputedStyle(surface).backgroundColor, overflow: node.scrollWidth - node.clientWidth, left: box.left, right: box.right, bottom: box.bottom, text: node.textContent };
       });
       report.frames[`${lang}-${width}`] = geometry;
       if (geometry.background === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent settings`);
@@ -7840,14 +7846,15 @@ async function installPingMain(): Promise<void> {
       if (!geometry.text?.includes("DO_NOT_TRACK=1") || !geometry.text?.includes(translate(lang, "telemetry.label"))) report.failures.push(`${lang}-${width}: missing localized disclosure`);
       await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-settings.png`) });
       await toggle.click();
-      await page.waitForFunction(() => !(document.querySelector("[role=switch]") as HTMLInputElement)?.checked);
+      await page.waitForFunction(() => document.querySelector("[data-telemetry-ping]")?.getAttribute("aria-checked") === "false");
       const saved = await (await fetch(`${baseUrl}/api/telemetry`)).json();
       if (saved.enabled !== false) report.failures.push(`${lang}-${width}: switch did not persist`);
       await page.reload();
-      await page.waitForSelector("[data-telemetry-notice]");
+      /* The phone brings its open sheet back, and the notice stands aside while the window is up. */
+      await page.waitForSelector("[data-telemetry-notice], [data-mobile2-sheet='settings']");
       await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
       await page.locator("[data-telemetry-settings]").waitFor();
-      if (await page.locator("[data-telemetry-settings] [role=switch]").isChecked()) report.failures.push(`${lang}-${width}: reload lost opt-out`);
+      if (await page.locator("[data-telemetry-ping]").isChecked()) report.failures.push(`${lang}-${width}: reload lost opt-out`);
       await context.close();
     }
   } finally { await browser?.close(); await stop(server); }

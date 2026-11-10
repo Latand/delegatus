@@ -52,6 +52,20 @@ jobs:
     timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 360 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require release tag on main
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          tag_commit="$(git rev-parse --verify "${RELEASE_REF}^{commit}")"
+          if ! git --no-replace-objects merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main; then
+            echo 'Release tag is not on main; merge the reviewed release PR before tagging.' >&2
+            exit 1
+          fi
       - uses: docker/setup-qemu-action@v3
         if: github.event_name != 'pull_request' || needs.scope.outputs.platforms == 'linux/amd64,linux/arm64'
       - uses: docker/setup-buildx-action@v3

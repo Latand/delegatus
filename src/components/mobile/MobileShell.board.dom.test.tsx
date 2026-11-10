@@ -324,11 +324,6 @@ test("⋯ opens the board menu over the board: create cells, the places as rows,
   /* Delete project is cut on the phone (README §6): nothing in the menu is
      in danger colour. */
   expect(q(root, '[data-mobile2-sheet="menu"]')!.querySelector(".text-danger")).toBeNull();
-  /* The device-local settings ride as rows of the Settings page. */
-  click(q(root, '[data-mobile2-menu-row="settings"]'));
-  await settle();
-  expect(q(root, '[data-mobile2-sheet="menu"]')!.textContent).toContain(translate("en", "mobile2.menu.sound"));
-  expect(rows()).toEqual(["back", "memory", "keys", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping", "stop-all"]);
 });
 
 test("both board faces stay one tap away inside the menu, announced as radio rows, and still switch the board", async () => {

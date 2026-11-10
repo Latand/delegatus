@@ -1192,7 +1192,7 @@ test("a persisted structured current generation holds the exact send while the r
   }]);
 });
 
-test("a reopened synchronization hold replays the exact steer command", async () => {
+test.each(["steer", "context"] as const)("a reopened synchronization hold replays the exact %s command", async mode => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
   const request = {
@@ -1200,9 +1200,9 @@ test("a reopened synchronization hold replays the exact steer command", async ()
     conversationId: conversation.id,
     clientMessageId: "deployment-window-steer",
     operationId: "operation-deployment-window-steer",
-    kind: "steer" as const,
-    policy: "steer-if-active" as const,
-    turnId: "turn-before-runtime-restart",
+    kind: mode === "steer" ? "steer" as const : "send" as const,
+    policy: mode === "steer" ? "steer-if-active" as const : "context-or-queue" as const,
+    ...(mode === "steer" ? { turnId: "turn-before-runtime-restart" } : {}),
     text: "amend the active turn after runtime recovery",
     hasImages: false,
   };
@@ -1221,7 +1221,7 @@ test("a reopened synchronization hold replays the exact steer command", async ()
       operationId: request.operationId,
       kind: request.kind,
       policy: request.policy,
-      turnId: request.turnId,
+      ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     },
     requestDigest: expect.any(String),
   });
@@ -1233,7 +1233,7 @@ test("a reopened synchronization hold replays the exact steer command", async ()
     conversationId: conversation.id,
     kind: request.kind,
     status: "delivered" as const,
-    turnId: request.turnId,
+    ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     at: "2026-07-13T00:00:00.000Z",
     revision: 2,
   };
@@ -1265,7 +1265,7 @@ test("a reopened synchronization hold replays the exact steer command", async ()
     idempotencyKey: request.clientMessageId,
     kind: request.kind,
     policy: request.policy,
-    turnId: request.turnId,
+    ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     text: request.text,
     contentDigest: expect.any(String),
   });
@@ -5325,6 +5325,26 @@ test.each(["id", "path", "runtime-read", "reservation-wait"])("D4 rotated seat r
     expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: conversation.id }))
       .toMatchObject({ deliverable: false, condition: "superseded" });
   } finally { blocked.mockRestore(); }
+});
+
+
+test("a send whose reservation write found the delivery record busy is refused before anything is reserved (#3782)", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let commands = 0;
+  const busy = spyOn(registry, "holdDeliveryOffLoop").mockImplementation(async () => null);
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      text: "words that met a busy writer", images: [], clientMessageId: "busy-writer-message",
+    }, { enabled: () => true, registry: () => registry, progress: null,
+      client: () => ({ readSession: async () => snapshot(conversation.id).sessions[0],
+        command: async () => { commands += 1; throw new Error("a refused send reached the host"); } }) as unknown as RuntimeHostClient,
+    });
+    expect(busy).toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, status: 503, admission: "refused" });
+    expect(registry.readOnlySnapshot().heldDeliveries).toEqual({});
+    expect(commands).toBe(0);
+  } finally { busy.mockRestore(); }
 });
 
 

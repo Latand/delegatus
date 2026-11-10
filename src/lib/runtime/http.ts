@@ -21,7 +21,7 @@ import { admitConversationMember } from "@/lib/team/authorship";
 import { agentMessageOrigin } from "./agentMessageAuthor";
 
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { parseRuntimeCommand } from "./commands";
+import { parseRuntimeCommand, parseRuntimeCommandSubject } from "./commands";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { runtimePresentationReceipt, terminalRetryOperationId, type RuntimeOperationCommand, type RuntimeOperationKind } from "./contracts";
 import { runtimeEventsEnabled, runtimeEventsRolledBack, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "./flags";
@@ -37,6 +37,7 @@ import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import type { RuntimeImageUpload } from "./runtimeImageStore";
 import type { StructuredImageRef } from "./structuredContent";
 import { prepareMessageFiles } from "@/lib/longMessageFile";
+import { forgetIngressStop, ingressStopFor, recordIngressStop, type IngressStop } from "./ingressStop";
 
 export interface RuntimeHttpDependencies {
   enabled(): boolean;
@@ -196,6 +197,11 @@ interface CommandAttachments {
   /** Releases this request's in-flight claim on its send key, so the read half
       stops answering `unknown` once this request has answered (#1932). */
   releaseAdmission: (() => void) | null;
+  /** The message this request carries, once its command is known to be well
+      formed; a stop is recorded only under a key. */
+  subject: { conversationId: string; clientMessageId: string; kind: string } | null;
+  /** Where the message stopped when it was not admitted (2026-11-09). */
+  stop: IngressStop | null;
 }
 
 async function dispatchRuntimeCommand(
@@ -222,6 +228,18 @@ async function dispatchRuntimeCommand(
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
+  const stopped = (response: NextResponse, boundary: IngressStop["boundary"], reason: IngressStop["reason"]): NextResponse => {
+    attachments.stop = { boundary, reason };
+    return response;
+  };
+  /* A refused image, file or command still names its stop under the key it
+     carried, so a lost refusal answer stays distinguishable from a request
+     that never arrived (2026-11-09). Ids only: the text and the attachments
+     never enter the stop. */
+  if (kind === "send" || kind === "steer" || kind === "inject") {
+    const keyed = parseRuntimeCommandSubject(value);
+    if (keyed) attachments.subject = { conversationId: keyed.conversationId, clientMessageId: keyed.idempotencyKey, kind };
+  }
   let command: RuntimeOperationCommand;
   let rawImages: RuntimeImageUpload[] | null = null;
   try {
@@ -236,7 +254,9 @@ async function dispatchRuntimeCommand(
       const body = value as Record<string, unknown>;
       if (kind !== "inject" && Array.isArray(body.images) && body.images.some((image) => image && typeof image === "object" && "base64" in image)) {
         const admitted = admitRuntimeImagePayload({ images: body.images });
-        if (admitted.error) return NextResponse.json({ error: admitted.error.error }, { status: admitted.error.status });
+        if (admitted.error) {
+          return stopped(NextResponse.json({ error: admitted.error.error }, { status: admitted.error.status }), "intake", "image-refused");
+        }
         rawImages = admitted.images;
         const admissionRefs: StructuredImageRef[] = rawImages.map((image) => {
           const data = Buffer.from(image.base64, "base64");
@@ -256,7 +276,7 @@ async function dispatchRuntimeCommand(
       const { admitInboxFilePayloadAsync, inboxFileBatchToken, inboxFileText, inboxFilePaths } = await import("@/lib/inboxFiles");
       const admittedFiles = await admitInboxFilePayloadAsync({ files: body.files }, person);
       if (admittedFiles.error) {
-        return NextResponse.json({ error: admittedFiles.error.error }, { status: admittedFiles.error.status });
+        return stopped(NextResponse.json({ error: admittedFiles.error.error }, { status: admittedFiles.error.status }), "intake", "file-refused");
       }
       const parsed: Record<string, unknown> = { ...(parseValue as Record<string, unknown>) };
       delete parsed.files;
@@ -273,7 +293,8 @@ async function dispatchRuntimeCommand(
     }
     command = parseRuntimeCommand(kind, parseValue);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "runtime command is invalid" }, { status: 400 });
+    return stopped(NextResponse.json({ error: error instanceof Error ? error.message : "runtime command is invalid" }, { status: 400 }),
+      "intake", "command-invalid");
   }
   /* The key is claimed the moment a message-bearing command is known to be
      well formed — before the inbox write, before admission, before anything
@@ -282,7 +303,11 @@ async function dispatchRuntimeCommand(
      caller's `finally`, whatever this request does next. */
   if (command.kind === "send" || command.kind === "steer" || command.kind === "inject") {
     attachments.releaseAdmission = claimAdmissionInFlight(command.conversationId, command.idempotencyKey);
+    attachments.subject = { conversationId: command.conversationId, clientMessageId: command.idempotencyKey, kind: command.kind };
   }
+  /* Nothing has been handed to admission or to the host until this moves:
+     an exit before it is a refusal whatever threw (2026-11-09). */
+  let handOff: "none" | "admission" | "dispatch" = "none";
   /* #1652: the batch derives from the key alone, so a queued message or a send
      of another conversation may already hold these paths. The files are
      written the way the queue writes them — once the command is valid, never
@@ -295,7 +320,8 @@ async function dispatchRuntimeCommand(
       attachments.staged = await stageInboxFilesAsync(attachments.files, attachments.batch);
     } catch (error) {
       if (error instanceof InboxFileConflictError) {
-        return NextResponse.json({ error: error.message, recovery: "query or replay the original Viewer idempotency key" }, { status: 409 });
+        return stopped(NextResponse.json({ error: error.message, recovery: "query or replay the original Viewer idempotency key" }, { status: 409 }),
+          "intake", "idempotency-conflict");
       }
       /* The sixth exit of the same shape: the inbox write failed for something
          that is not a batch conflict, so nothing was journaled, no operation
@@ -303,7 +329,8 @@ async function dispatchRuntimeCommand(
          — a client that reads this as possibly sent parks a bubble no receipt
          can ever settle — and it keeps `retryable`, which says the operator
          may try again, not that anything went out. */
-      return refusedBeforeDispatch("the attachments could not be saved to the inbox", { retryable: true });
+      return stopped(refusedBeforeDispatch("the attachments could not be saved to the inbox", { retryable: true }),
+        "intake", "inbox-unavailable");
     }
   }
   const client = dependencies.client();
@@ -313,7 +340,7 @@ async function dispatchRuntimeCommand(
     }
   } catch {
     attachments.outcome = "refused";
-    return refusedBeforeDispatch("conversation authority could not be recorded");
+    return stopped(refusedBeforeDispatch("conversation authority could not be recorded"), "authority", "authority-unrecorded");
   }
   try {
     const byOperator = operatorBrowserRequest(request);
@@ -366,6 +393,7 @@ async function dispatchRuntimeCommand(
       /* In flight ⇒ the Viewer cannot say. Set BEFORE the call so an enqueue
          that throws mid-delivery keeps the attachments too (#1224). */
       attachments.outcome = "uncertain";
+      handOff = "admission";
       const admitted = await dependencies.enqueue({
         path: "",
         conversationId: command.conversationId,
@@ -393,16 +421,19 @@ async function dispatchRuntimeCommand(
         recordDeliveryIngress(admitted.operationId, ingressAt);
         attachments.outcome = structuredAttachmentOutcome(admitted);
         if (!admitted.ok) {
-          return NextResponse.json({
+          /* #2020 marks the refusals given before anything was reserved. A send
+             or a steer is the same proof of absence an injection is, so the
+             composer gets its words back instead of parking an unknown. */
+          const refusedBeforeReservation = admitted.admission === "refused";
+          return stopped(NextResponse.json({
             error: admitted.error,
-            ...(command.kind === "inject" && admitted.admission === "refused"
-              ? { delivery: "refused" satisfies AttachmentDeliveryOutcome } : {}),
+            ...(refusedBeforeReservation ? { delivery: "refused" satisfies AttachmentDeliveryOutcome } : {}),
             ...(admitted.code ? { code: admitted.code } : {}),
             ...(admitted.seatConversationId ? { seatConversationId: admitted.seatConversationId } : {}),
             ...(admitted.successorConversationId ? { successorConversationId: admitted.successorConversationId } : {}),
             ...(admitted.operationId ? { operationId: admitted.operationId } : {}),
             ...(admitted.receipt ? { receipt: admitted.receipt } : {}),
-          }, { status: admitted.status });
+          }, { status: admitted.status }), "admission", refusedBeforeReservation ? "refused-before-reservation" : "failed-after-reservation");
         }
         settleMessageAuthor(authorClaim);
         /* #1131: a hold is an ACCEPTED send with a durable reservation behind
@@ -436,14 +467,16 @@ async function dispatchRuntimeCommand(
          holding an id that never becomes an answer. Controls are untouched:
          they carry no message and reserve nothing. */
       attachments.outcome = "refused";
-      return refusedBeforeDispatch("structured delivery ownership is unavailable for this conversation");
+      return stopped(refusedBeforeDispatch("structured delivery ownership is unavailable for this conversation"),
+        "admission", "ownership-unavailable");
     }
-    if (!client) return refusedBeforeDispatch("runtime host socket is unavailable");
+    if (!client) return stopped(refusedBeforeDispatch("runtime host socket is unavailable"), "dispatch", "host-unavailable");
     /* Same fence as the queue above: the command is on the wire, so its fate is
        unknown until it answers. A transport failure or an idempotency conflict
        lands in the catch below with the attachments intact — a conflict in
        particular means an earlier attempt under this key already holds them. */
     attachments.outcome = "uncertain";
+    handOff = "dispatch";
     const result = await client.command(command);
     /* The host answered, so the command was handed over: the receipt's own
        status is the composer's business, not the inbox's. Bytes stay. */
@@ -457,14 +490,24 @@ async function dispatchRuntimeCommand(
     const status = result.receipt.status === "pending" || result.receipt.status === "queued" ? 202 : 200;
     return NextResponse.json({ operationId: result.operationId, receipt: result.receipt }, { status });
   } catch (error) {
-    const status = error instanceof RuntimeHostUnavailableError && error.code === "idempotency-conflict" ? 409 : 503;
+    /* A ledger, an author claim or an origin read failed before anything was
+       handed over: nothing was reserved or sent, so it is a refusal with a
+       fixed reason, never an unknown fate the composer must park
+       (2026-11-09). */
+    if (handOff === "none") {
+      attachments.outcome = "refused";
+      return stopped(refusedBeforeDispatch("the send could not be recorded before delivery", { retryable: true }),
+        "bookkeeping", "bookkeeping-failed");
+    }
+    const conflict = error instanceof RuntimeHostUnavailableError && error.code === "idempotency-conflict";
+    const status = conflict ? 409 : 503;
     /* The other half of the classification (#1593): the command was on the
        wire when this threw, so the Viewer cannot say whether the host took it.
        Published as what it is, and the caller keeps every caution it has. */
-    return NextResponse.json({
+    return stopped(NextResponse.json({
       error: error instanceof Error ? error.message : "runtime command failed",
       delivery: "uncertain" satisfies AttachmentDeliveryOutcome,
-    }, { status });
+    }, { status }), handOff, conflict ? "idempotency-conflict" : "outcome-unknown");
   }
 }
 
@@ -491,12 +534,29 @@ export async function handleRuntimeCommand(
   dependencies: RuntimeHttpDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<NextResponse> {
   const ingressAt = new Date().toISOString();
-  const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused", releaseAdmission: null };
+  const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused", releaseAdmission: null,
+    subject: null, stop: null };
   try {
     const response = await dispatchRuntimeCommand(request, kind, dependencies, attachments, ingressAt);
-    if (attachments.textAttachment && attachments.outcome !== "refused") {
+    const textAttachment = attachments.textAttachment && attachments.outcome !== "refused" ? attachments.textAttachment : undefined;
+    const subject = attachments.subject;
+    const stop = subject && response.status >= 300 ? attachments.stop : null;
+    /* Recorded before the in-flight claim is released below, so a lookup that
+       follows this answer finds the reason with the absence. */
+    if (subject && stop) {
+      const body = await response.clone().json().catch(() => ({})) as Record<string, unknown>;
+      recordIngressStop({
+        ...subject, ...stop, status: response.status,
+        delivery: body.delivery === "refused" || body.delivery === "uncertain" ? body.delivery : null,
+        ingressAt, at: new Date().toISOString(),
+      });
+    } else if (subject && response.status < 300) {
+      forgetIngressStop(subject.conversationId, subject.clientMessageId);
+    }
+    if (textAttachment || stop) {
       const body = await response.json();
-      return NextResponse.json({ ...body, textAttachment: attachments.textAttachment }, { status: response.status, headers: response.headers });
+      return NextResponse.json({ ...body, ...(textAttachment ? { textAttachment } : {}), ...(stop ? { stop } : {}) },
+        { status: response.status, headers: response.headers });
     }
     return response;
   } finally {
@@ -1330,7 +1390,13 @@ export async function handleRuntimeAdmissionQuery(
     return NextResponse.json({ outcome: "unknown", reason: admission.reason }, { status: 200 });
   }
   if (admission.outcome === "not-executed") {
-    return NextResponse.json({ outcome: "not-executed", conversationId, clientMessageId }, { status: 200 });
+    /* The registry holds nothing under the key. A stop this process recorded
+       says the route turned the message away and why; no stop means it never
+       finished reaching the route, which is the transport-loss case. */
+    const stop = ingressStopFor(conversationId, clientMessageId.trim());
+    return NextResponse.json({ outcome: "not-executed", conversationId, clientMessageId,
+      ...(stop ? { stop: { boundary: stop.boundary, reason: stop.reason, status: stop.status, at: stop.at } } : {}),
+    }, { status: 200 });
   }
   const answer = await dependencies.query(admission.operationId);
   const body = (await answer.json().catch(() => ({}))) as Record<string, unknown>;

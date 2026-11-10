@@ -39,9 +39,10 @@ function closedCustody(row: CheckRow): RecordedCheckExclusion["custody"] | null 
 export const recordedReportReceipts = (launch: string) => readRecorded(store => store.forLaunch(launch).map(row => {
   const result = row.result;
   const custody = closedCustody(row);
-  const exclusion: RecordedCheckExclusion | null = result && !result.complete && result.visited === 0 && result.completed === 0 && custody
+  const exclusion: RecordedCheckExclusion | null = result && !result.complete && custody
+    && (row.admission === "refused" || result.visited === 0 && result.completed === 0)
     ? { id: row.id, resultRevision: result.revision, custody,
-      reason: `${row.reason}; ${result.reason}; ${custody === "not-started" ? "command never started" : "own producer cleanup confirmed"}` }
+      reason: `${row.reason}; ${result.reason}; ${custody === "not-started" ? "command never started" : "own producer cleanup confirmed"}; visited ${result.visited}/${row.descriptor.manifest.selection.length}, completed ${result.completed}, failed ${result.failed}` }
     : null;
   return { id: row.id, pending: !result?.terminal || !custody, complete: result?.complete === true, exclusion };
 }), []);

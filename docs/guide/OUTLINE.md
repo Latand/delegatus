@@ -587,7 +587,7 @@ and the reviewer's spot-checks (the acceptance asks for at least twenty).
 | G7 | Busy port message suggests the next port | `bin/cli.mjs:106` |
 | G8 | Two processes; Ctrl+C stops both | `README.md:861-862`; `bin/cli.mjs:114` |
 | G9 | Reads `~/.claude/projects`, `~/.codex/sessions`, `~/.copilot/session-state` | `bin/cli.mjs:110` |
-| G10 | Install ping notice; Settings → **Install ping**; `DELEGATUS_TELEMETRY=0`, `DO_NOT_TRACK=1` | `README.md:1098-1104`; `src/lib/i18n/en.ts:72` |
+| G10 | Install ping notice; Settings → **Privacy**; `DELEGATUS_TELEMETRY=0`, `DO_NOT_TRACK=1` | `README.md:1098-1104`; `src/lib/i18n/en.ts:72` |
 | G11 | Setup guide steps and "Later" steps; reopened from **Help and learning** → **Setup guide** | `src/lib/onboarding/steps.ts:15-17`; `src/lib/i18n/en.ts:65,5427,5436-5443,5464,5489,5582-5583`; `src/components/headerMenu/HeaderMenu.tsx:381` |
 | G12 | Engine states and **Check again** | `src/lib/i18n/en.ts:5506-5520` |
 | G13 | Project step choices | `src/lib/i18n/en.ts:5467-5471` |
