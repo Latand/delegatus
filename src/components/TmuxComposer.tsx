@@ -6355,7 +6355,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           )
         : composerBar}
       {isMobile ? null : <AgentControlStatus status={agentActions.status} />}
-      {agentActions.attachOpen ? <AttachTerminalDialog file={file} mode={agentActions.attachMode} onClose={agentActions.closeAttach} /> : null}
+      {agentActions.attachOpen ? <AttachTerminalDialog file={file} onClose={agentActions.closeAttach} /> : null}
     </form>
   );
 

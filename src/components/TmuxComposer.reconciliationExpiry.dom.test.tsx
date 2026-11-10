@@ -60,7 +60,7 @@ import { TmuxComposer } from "./TmuxComposer";
 import { readOutbox, resetOutboxForTests, retryOutbox, useOutbox } from "./conversation/outbox";
 import { OutboxBubbles } from "./conversation/OutboxBubbles";
 import { resetManagerIdentityForTest } from "./voice/managerIdentity";
-import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
+import { capabilitiesFor } from "./agentCapabilities";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
 /** A timeout is never replay authority. Prove no local effect, then deliver an
@@ -1170,7 +1170,6 @@ test("a stranded uncertain structured send releases the queue, keeps its payload
         runtime: structuredView,
         structuredSession: structuredView,
         runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, structuredView, options),
       };
     },
     sendRuntimeMessage: async (options) => {
@@ -1378,7 +1377,7 @@ test.each([
     useAgentCapabilities: candidate => {
       const options = { runtimeEnabled: true };
       return { caps: capabilitiesFor(candidate, view, options), runtime: view,
-        structuredSession: view, runtimeEnabled: true, attachMode: attachModeFor(candidate, view, options) };
+        structuredSession: view, runtimeEnabled: true };
     },
   });
   const originalFetch = globalThis.fetch;
@@ -1486,7 +1485,7 @@ test.each([
     useAgentCapabilities: candidate => {
       const options = { runtimeEnabled: true };
       return { caps: capabilitiesFor(candidate, structuredView, options), runtime: structuredView,
-        structuredSession: structuredView, runtimeEnabled: true, attachMode: attachModeFor(candidate, structuredView, options) };
+        structuredSession: structuredView, runtimeEnabled: true };
     },
   });
   const originalFetch = globalThis.fetch;
@@ -1705,7 +1704,7 @@ test.each(([["en", "switching-accounts", "receipt.human.switchingAccounts"], ["u
     useAgentCapabilities: (candidate) => {
       const options = { runtimeEnabled: true };
       return { caps: capabilitiesFor(candidate, view, options), runtime: view,
-        structuredSession: view, runtimeEnabled: true, attachMode: attachModeFor(candidate, view, options) };
+        structuredSession: view, runtimeEnabled: true };
     },
     sendRuntimeMessage: (options) => {
       sends.push(options.idempotencyKey);

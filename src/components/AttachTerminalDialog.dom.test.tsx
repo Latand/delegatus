@@ -20,7 +20,7 @@ const command: AttachCommand = {
 
 function view(over: Partial<Parameters<typeof AttachTerminalDialogView>[0]> = {}) {
   return renderToStaticMarkup(
-    <AttachTerminalDialogView t={t} loading={false} error={null} command={command} onClose={() => {}} onSecondary={() => {}} {...over} />,
+    <AttachTerminalDialogView t={t} loading={false} error={null} command={command} onClose={() => {}} {...over} />,
   );
 }
 
@@ -33,7 +33,6 @@ test("the dialog is a labelled modal that shows the account and both copy blocks
   expect(html).toContain("cd &#x27;/home/latand/Projects/atlas&#x27;");
   expect(html).toContain("claude --resume 22222222");
   expect(html).toContain(translate("en", "attach.copyFull"));
-  expect(html).toContain(translate("en", "attach.secondaryViewer"));
 });
 
 test("the take-over warning is shown", () => {
@@ -56,21 +55,4 @@ test("an error is surfaced as an alert", () => {
   const html = view({ loading: false, error: "this conversation cannot be attached", command: null });
   expect(html).toContain('role="alert"');
   expect(html).toContain("this conversation cannot be attached");
-});
-
-/* ------------------------- live tmux attach (§6, finding 3) ------------------------- */
-
-const live = { command: "tmux -L default attach -t %12", readOnlyCommand: "tmux -L default attach -r -t %12" };
-
-test("live mode shows the attach + read-only commands, a read-only note, and NO resume/takeover", () => {
-  const html = renderToStaticMarkup(
-    <AttachTerminalDialogView t={t} loading={false} error={null} command={null} live={live} onClose={() => {}} onSecondary={() => {}} />,
-  );
-  // both the attach command and the read-only variant are copyable
-  expect(html).toContain("tmux -L default attach -t %12");
-  expect(html).toContain("tmux -L default attach -r -t %12");
-  expect(html).toContain(translate("en", "attach.readonlyHint"));
-  // a running pane is attached, not resumed — no take-over warning, no --resume
-  expect(html).not.toContain(translate("en", "attach.takeoverWarning"));
-  expect(html).not.toContain("--resume");
 });

@@ -22,7 +22,6 @@ test("a finished child kill settles as a typed branch result without entering ei
   const root = conversation("conversation_root", ["/sessions/root.jsonl"]);
   const child = conversation("conversation_child", ["/sessions/child.jsonl"], root.id);
   let structuredDispatches = 0;
-  let legacyKills = 0;
 
   const result = await applyConversationAction({
     operationId: "child-kill",
@@ -53,15 +52,8 @@ test("a finished child kill settles as a typed branch result without entering ei
           receipt: { operationId: "child-kill", status: "queued" },
         },
       };
-    },
-    interruptConversation: async () => ({ ok: true, target: "%1" }),
-    killConversation: async () => {
-      legacyKills += 1;
-      return { ok: true, target: "%1" };
-    },
-    resumeConversation: async () => ({ ok: true, target: "%1" }),
-    compactConversation: async () => ({ ok: true, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    }, 
+    resumeConversation: async () => ({ ok: true, target: "%1" }),  
   });
 
   expect(result).toEqual({
@@ -74,7 +66,6 @@ test("a finished child kill settles as a typed branch result without entering ei
     },
   });
   expect(structuredDispatches).toBe(0);
-  expect(legacyKills).toBe(0);
 });
 
 test("a viewer-spawned child with its own host remains explicitly terminable", async () => {
@@ -111,12 +102,8 @@ test("a viewer-spawned child with its own host remains explicitly terminable", a
           receipt: { operationId: "child-owned-kill", status: "queued" },
         },
       };
-    },
-    interruptConversation: async () => ({ ok: true, target: "%1" }),
-    killConversation: async () => ({ ok: true, target: "%1" }),
-    resumeConversation: async () => ({ ok: true, target: "%1" }),
-    compactConversation: async () => ({ ok: true, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    },  
+    resumeConversation: async () => ({ ok: true, target: "%1" }),  
   });
 
   expect(result).toMatchObject({
@@ -151,12 +138,8 @@ test("conversation actions reject a transcript path owned by another durable con
       conversationForPath: (pathname: string) => pathname === "/sessions/second.jsonl" ? second : first,
     } as never),
     structuredEnabled: () => true,
-    dispatchStructuredControl: async () => { dispatched = true; return null; },
-    interruptConversation: async () => ({ ok: true, target: "%1" }),
-    killConversation: async () => ({ ok: true, target: "%1" }),
-    resumeConversation: async () => ({ ok: true, target: "%1" }),
-    compactConversation: async () => ({ ok: true, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    dispatchStructuredControl: async () => { dispatched = true; return null; },  
+    resumeConversation: async () => ({ ok: true, target: "%1" }),  
   });
 
   expect(result).toEqual({ status: 409, body: { error: "conversation identity does not own transcript path" } });
@@ -177,12 +160,8 @@ test("conversation actions reject a supplied path that has no durable owner", as
       conversationForPath: () => null,
     } as never),
     structuredEnabled: () => true,
-    dispatchStructuredControl: async () => { dispatched = true; return null; },
-    interruptConversation: async () => ({ ok: true, target: "%1" }),
-    killConversation: async () => ({ ok: true, target: "%1" }),
-    resumeConversation: async () => ({ ok: true, target: "%1" }),
-    compactConversation: async () => ({ ok: true, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    dispatchStructuredControl: async () => { dispatched = true; return null; },  
+    resumeConversation: async () => ({ ok: true, target: "%1" }),  
   });
 
   expect(result).toEqual({ status: 409, body: { error: "conversation identity does not own transcript path" } });
@@ -212,11 +191,7 @@ test("structured conversation actions reject an unknown supplied id before path-
       dispatches += 1;
       return { status: 200, body: { ok: true, structured: true, target: owner.id, outcome: "delivered" } };
     },
-    interruptConversation: delivered,
-    killConversation: delivered,
     resumeConversation: delivered,
-    compactConversation: delivered,
-    answerDialogKey: delivered,
   });
 
   expect(result).toEqual({ status: 404, body: { error: "viewer conversation is unknown" } });
@@ -246,11 +221,7 @@ test("legacy conversation actions reject an unknown supplied id before delivery"
       dispatches += 1;
       return null;
     },
-    interruptConversation: delivered,
-    killConversation: delivered,
     resumeConversation: delivered,
-    compactConversation: delivered,
-    answerDialogKey: delivered,
   });
 
   expect(result).toEqual({ status: 404, body: { error: "viewer conversation is unknown" } });
@@ -258,13 +229,12 @@ test("legacy conversation actions reject an unknown supplied id before delivery"
   expect(deliveries).toBe(0);
 });
 
-test("current and continuity selectors remain valid in structured and legacy routing", async () => {
+test("current and continuity selectors remain valid, and a control with no structured host is refused", async () => {
   const owner = conversation("conversation_owner", ["/sessions/old.jsonl", "/sessions/current.jsonl"]);
   owner.continuityPaths.push("/sessions/continuity.jsonl");
   for (const structured of [true, false]) {
     for (const conversationId of [owner.id, ""]) for (const transcriptPath of ["/sessions/current.jsonl", "/sessions/continuity.jsonl"]) {
       let dispatches = 0;
-      let deliveries = 0;
       const result = await applyConversationAction({
         operationId: `valid-${structured}-${transcriptPath}`,
         conversationId,
@@ -284,20 +254,12 @@ test("current and continuity selectors remain valid in structured and legacy rou
           dispatches += 1;
           return { status: 200, body: { ok: true, structured: true, target: owner.id, outcome: "delivered" } };
         },
-        interruptConversation: async (target) => {
-          deliveries += 1;
-          expect(target).toBe("/sessions/current.jsonl");
-          return { ok: true, target };
-        },
-        killConversation: async () => ({ ok: true, target: "%1" }),
-        resumeConversation: async () => ({ ok: true, target: "%1" }),
-        compactConversation: async () => ({ ok: true, target: "%1" }),
-        answerDialogKey: async () => ({ ok: true, target: "%1" }),
+        resumeConversation: async () => ({ ok: true, target: "%1" }),  
       });
 
-      expect(result.status).toBe(200);
+      /* With the structured channel off no host can take the control. */
+      expect(result.status).toBe(structured ? 200 : 409);
       expect(dispatches).toBe(structured ? 1 : 0);
-      expect(deliveries).toBe(structured ? 0 : 1);
     }
   }
 });
@@ -319,12 +281,8 @@ test("an explicit root kill carries the stable operation id through the structur
     dispatchStructuredControl: async (request) => {
       controls.push(request);
       return { status: 202, body: { ok: true, structured: true, target: owner.id, operationId: request.operationId!, receipt: { operationId: request.operationId!, status: "queued" } } };
-    },
-    interruptConversation: async () => ({ ok: true, target: "%1" }),
-    killConversation: async () => ({ ok: true, target: "%1" }),
-    resumeConversation: async () => ({ ok: true, target: "%1" }),
-    compactConversation: async () => ({ ok: true, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    },  
+    resumeConversation: async () => ({ ok: true, target: "%1" }),  
   });
 
   expect(controls).toEqual([{
@@ -364,12 +322,8 @@ test("a seat deputy is never resumed or compacted, and can still be interrupted"
       dispatchStructuredControl: async (input) => {
         dispatched.push(input.action);
         return { status: 202, body: { ok: true, structured: true, target: ghost.id, operationId: "op", receipt: { operationId: "op", status: "queued" } } };
-      },
-      interruptConversation: async () => ({ ok: true, target: "%1" }),
-      killConversation: async () => ({ ok: true, target: "%1" }),
-      resumeConversation: async () => ({ ok: true, target: "%1" }),
-      compactConversation: async () => ({ ok: true, target: "%1" }),
-      answerDialogKey: async () => ({ ok: true, target: "%1" }),
+      },  
+      resumeConversation: async () => ({ ok: true, target: "%1" }),  
     });
 
     expect(await act("resume")).toMatchObject({ status: 409, body: { code: "deputy_conversation_closed", seatConversationId: "conversation_seat" } });
@@ -397,11 +351,7 @@ test("provider recovery authority reaches the conversation structured control", 
       controls.push(request);
       return { status: 202, body: { ok: true, structured: true, target: owner.id, operationId: "provider-retire", receipt: { operationId: "provider-retire", status: "queued" } } };
     },
-    killConversation: async () => { throw new Error("legacy kill forbidden"); },
-    interruptConversation: async () => { throw new Error("unexpected interrupt"); },
     resumeConversation: async () => { throw new Error("unexpected resume"); },
-    compactConversation: async () => { throw new Error("unexpected compact"); },
-    answerDialogKey: async () => { throw new Error("unexpected dialog key"); },
   });
   expect(result.status).toBe(202);
   expect(controls).toEqual([expect.objectContaining({ onlyIfIdle, providerRecovery })]);
@@ -438,12 +388,8 @@ test("answer reaches the asking conversation's pending question as its chosen la
     dispatchStructuredControl: async (request: Record<string, unknown>) => {
       controls.push(request);
       return { status: 200 as const, body: { ok: true as const, structured: true as const, target: worker.id, operationId: "op-1", receipt: { operationId: "op-1", status: "answered" } } };
-    },
-    interruptConversation: async () => ({ ok: true as const, target: "%1" }),
-    killConversation: async () => ({ ok: true as const, target: "%1" }),
-    resumeConversation: async () => ({ ok: true as const, target: "%1" }),
-    compactConversation: async () => ({ ok: true as const, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true as const, target: "%1" }),
+    },  
+    resumeConversation: async () => ({ ok: true as const, target: "%1" }),  
     pendingQuestion: async () => pending,
   });
   const answer = (extra: Record<string, unknown>, structured = true) => applyConversationAction({
@@ -472,11 +418,7 @@ for (const engine of ["claude", "codex"] as const) test(`canonical ${engine} res
     registry: () => ({ conversation: () => value, conversationForPath: () => value } as never),
     structuredEnabled: () => true, dispatchStructuredControl: async () => null,
     resumeConversation: async () => ({ ok: true, structured: true, target: value.id, outcome: "resumed", spawned: true }),
-    onResumed: id => { wakes.push(id); },
-    interruptConversation: async () => ({ ok: true, target: "%1" }),
-    killConversation: async () => ({ ok: true, target: "%1" }),
-    compactConversation: async () => ({ ok: true, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    onResumed: id => { wakes.push(id); },    
   });
   expect(result).toMatchObject({ status: 200, body: { outcome: "resumed" } });
   expect(wakes).toEqual([value.id]);
@@ -491,11 +433,7 @@ for (const outcome of ["held", "failed"] as const) test(`canonical ${outcome} re
     resumeConversation: async () => outcome === "failed"
       ? { ok: false, outcome: "failed", status: 503, error: "recovery unavailable" }
       : { ok: true, structured: true, target: value.id, outcome: "held", spawned: false },
-    onResumed: id => { wakes.push(id); },
-    interruptConversation: async () => ({ ok: true, target: "%1" }),
-    killConversation: async () => ({ ok: true, target: "%1" }),
-    compactConversation: async () => ({ ok: true, target: "%1" }),
-    answerDialogKey: async () => ({ ok: true, target: "%1" }),
+    onResumed: id => { wakes.push(id); },    
   });
   expect(wakes).toEqual([]);
 });

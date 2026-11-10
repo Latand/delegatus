@@ -45,7 +45,7 @@ import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/componen
 import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
 import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
+import { capabilitiesFor } from "@/components/agentCapabilities";
 
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
@@ -1184,7 +1184,6 @@ function installFakeComposerHost(): void {
         runtime: view,
         structuredSession: view,
         runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, view, options),
       };
     },
     useRuntimeReceiptsForArtifact: () => {

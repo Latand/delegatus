@@ -1,25 +1,13 @@
 import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
-import { registeredHostForPath } from "@/lib/conversation/registeredHost";
-import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
-import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
-import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import type { AgentEngine } from "@/lib/agent/cli";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, REGISTRY_WRITER_BUSY, type AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
-import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
-import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
-import { conversationProjectKey } from "@/lib/accounts/conversationProject";
-import {
-  attributeNamedAccountChoice,
-  type AccountChoiceActor,
-  type AccountOverrideNotice,
-} from "@/lib/accounts/accountOverrides";
-import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import { deliverToTranscriptHost, readTranscriptHosts, type HostDeliveryOutcome, type TranscriptHost } from "@/lib/agent/transcriptHost";
+import type { AccountOverrideNotice } from "@/lib/accounts/accountOverrides";
 import { admitTranscriptConversationOffLoop } from "@/lib/conversation/transcriptAdmission";
 import { listFiles } from "@/lib/scanner";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { transcriptLiveOwnership, type TranscriptLiveOwnership } from "@/lib/scanner/transcripts";
-import { procBackend } from "@/lib/proc";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "@/lib/runtime/structuredRecovery";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { ActuationLease } from "@/lib/deliveryActuation";
@@ -27,28 +15,13 @@ import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
 import type { DeliveryProgressPort } from "@/lib/runtime/recordWait";
 import type { SendResendGuidance } from "@/lib/runtime/sendSettlement";
 import type { RuntimeOperationReceipt } from "@/lib/runtime/contracts";
-import { detectBlockingGate, parseScreenMenu, screenAtIdleComposer, screenWaitsForInput } from "@/lib/status";
+import type { RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import type { FileEntry } from "@/lib/types";
-import {
-  deleteInboxImages,
-  forgetResumePane,
-  killTmuxHostIfMatches,
-  interruptTmuxHostIfMatches,
-  knownLivePids,
-  paneScreen,
-  resolveTarget,
-  sendKeys,
-  sendText,
-  operatorSafeTmuxDeliveryError,
-  withPaneLock,
-  type InboxImagePayload,
-} from "@/lib/tmux";
 
 /**
- * Conversation-level delivery for every action exposed by the tmux API.
- * Structured ownership resolves through its engine host. Legacy operations use
- * the live pane → resume window → root relay ladder and their per-action guards.
- * The route maps HTTP to these calls.
+ * Conversation-level sends and resumes. Both resolve or recover the
+ * conversation's structured host; a conversation with no host that recovery
+ * can raise is refused. The route maps HTTP to these calls.
  */
 
 export interface DeliveryFailure {
@@ -73,14 +46,14 @@ export interface DeliveryFailure {
   admission?: "refused";
 }
 
-async function legacySeatRefusal(registry: AgentRegistry, conversation: Pick<RegistryConversation, "id"> | null) {
+async function recipientSeatRefusal(registry: AgentRegistry, conversation: Pick<RegistryConversation, "id"> | null) {
   if (!conversation) return null;
   const snapshot = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
   return orchestratorRecipientRefusalAsync(conversationIdsResolvingTo(snapshot, conversation.id),
     id => resolveConversationAlias(snapshot, id as `conversation_${string}`));
 }
 
-function legacySeatRefusalSync(conversation: Pick<RegistryConversation, "id"> | null) {
+function seatRefusalSync(conversation: Pick<RegistryConversation, "id"> | null) {
   if (!conversation) return null;
   // This guard runs inside registry admission's synchronous transaction. The
   // identity is already resolved at the async boundary; reading a registry
@@ -88,7 +61,7 @@ function legacySeatRefusalSync(conversation: Pick<RegistryConversation, "id"> | 
   return orchestratorRecipientRefusal([conversation.id]);
 }
 
-function seatRefusalFailure(refusal: NonNullable<Awaited<ReturnType<typeof legacySeatRefusal>>>): DeliveryFailure {
+function seatRefusalFailure(refusal: NonNullable<Awaited<ReturnType<typeof recipientSeatRefusal>>>): DeliveryFailure {
   return { ok: false, outcome: "failed", admission: "refused", ...refusal };
 }
 
@@ -127,157 +100,6 @@ export interface DeliverySuccess {
   accountOverride?: AccountOverrideNotice;
 }
 
-interface ReconfigureConversationOverrides {
-  /** Who is switching, for attribution. Absent means the operator: an agent is
-      the only caller that can name itself, exactly as the operator authority
-      gate reads a request. */
-  actor?: AccountChoiceActor;
-  attributeAccountChoice?: typeof attributeNamedAccountChoice;
-  pathAllowed?: typeof pathAllowed;
-  listFiles?: typeof listFiles;
-  resumeSpecFor?: typeof resumeSpecFor;
-  livePaneHost?: typeof livePaneHost;
-  registry?: AgentRegistry;
-  paneScreen?: typeof paneScreen;
-  killHost?: typeof killTmuxHostIfMatches;
-  deliver?: typeof deliverToTranscriptHost;
-  resolveAccount?: typeof accountManager.resolveSpawn;
-  validateAccount?: (engine: "claude" | "codex", accountId: string) => Promise<void>;
-  requestMigrationTick?: typeof requestAccountMigrationTick;
-}
-
-async function validateAccountAuthentication(engine: "claude" | "codex", accountId: string): Promise<void> {
-  const account = await accountManager.status(engine, accountId, true);
-  if (account.auth.state !== "authenticated") throw new Error(`${engine} account requires authentication`);
-}
-
-export async function reconfigureConversation(
-  filePath: string,
-  config: AgentReconfiguration,
-  overrides: ReconfigureConversationOverrides = {},
-): Promise<DeliveryOutcome> {
-  if (!filePath || !(overrides.pathAllowed ?? pathAllowed)(filePath)) return failure("the conversation path is required", 400);
-  const entry = (await (overrides.listFiles ?? listFiles)({ pin: filePath })).find((item) => item.path === filePath);
-  if (!entry || (entry.engine !== "claude" && entry.engine !== "codex")) return failure("conversation is unavailable", 403);
-  const registry = overrides.registry ?? agentRegistry();
-  const registered = registeredHostForPath(registry.readOnlySnapshot(), filePath);
-  if (!registered?.host) return failure("no registered agent pane for this conversation", 404);
-  const conversation = registry.conversationForPath(filePath);
-  const generation = conversation?.generations.at(-1);
-  if (config.accountId && (!conversation || !generation)) return failure("conversation identity is unavailable for an account switch", 409);
-  if (config.accountId && conversation && generation && config.accountId !== generation.accountId) {
-    /* #1279: switching a conversation's account names an account outright, so
-       it asks the project's binding — to ATTRIBUTE the choice, not to veto it.
-       The pool is what the Viewer selects from on its own (the reseat, and any
-       account it would default to); a deliberate switch is a control, and a
-       control the operator is entitled to use onto an account outside the pool.
-       Inside the pool, and on an unbound project, nothing is recorded and the
-       switch is exactly what it always was.
-
-       Attribution follows ACCEPTANCE, below. Appended here — before
-       authentication, before the reseat is reserved — it recorded ATTEMPTS: a
-       switch onto an account that turned out to be signed out left the project
-       view showing an out-of-pool choice that never happened, and there is no
-       compensating delete for a journal that only appends. */
-    const project = conversationProjectKey(conversation.projectOwnership, generation.launchProfile, {
-      /* An adopted conversation carries no launch profile, and the scanner's
-         project for this transcript is what the board already groups it under. */
-      project: entry.project,
-    });
-    try {
-      await (overrides.validateAccount ?? validateAccountAuthentication)(entry.engine, config.accountId);
-      (overrides.resolveAccount ?? accountManager.resolveSpawn)(entry.engine, config.accountId);
-      const targetId = config.accountId;
-      const written = await registry.deliveryWrite({ label: "migration.reseat-request" },
-        () => registry.requestConversationReseat(conversation.id, targetId, undefined, {
-          model: config.model, effort: config.effort, fast: config.fast,
-        }), requested => ({ label: "migration.reseat-request", operationId: requested.migration?.operationId }));
-      if (!written.acquired) return { ...failure(REGISTRY_WRITER_BUSY, 503), code: "REGISTRY_WRITER_BUSY" };
-      if (!written.value.migration) throw new Error("account switch could not be queued");
-    } catch (error) {
-      return failure(error, 409);
-    }
-    /* Accepted: the reseat is durably queued, so the record describes a switch
-       that happened rather than one that was attempted. Attribution sits
-       OUTSIDE the try for the same reason it sits after it — nothing about
-       writing the record may turn an accepted switch back into a failure. */
-    const accountOverride = (overrides.attributeAccountChoice ?? attributeNamedAccountChoice)({
-      engine: entry.engine,
-      project,
-      accountId: config.accountId,
-      conversationId: conversation.id,
-      actor: overrides.actor ?? { kind: "operator" },
-      via: "conversation-switch",
-    }) ?? undefined;
-    (overrides.requestMigrationTick ?? requestAccountMigrationTick)();
-    return {
-      ok: true,
-      target: registered.host.paneId,
-      outcome: "pending",
-      ...(accountOverride ? { accountOverride } : {}),
-    };
-  }
-  /* Resolved before the operation lock is taken, so a fenced or unreadable
-     record refuses without ever holding it. `config.accountId` here is a switch
-     the caller NAMED — the branch above already returned for a named switch to
-     a different account — so it stands untouched. */
-  let resumeAccount: string | null;
-  try {
-    resumeAccount = config.accountId ?? resumeAccountId(registry, entry);
-  } catch (error) {
-    return accountFenceFailure(error);
-  }
-  const buildSpec = (profile: AgentRegistryEntry["launchProfile"]) => (overrides.resumeSpecFor ?? resumeSpecFor)(entry.root, entry.path, {
-    ...config,
-    serviceTier: serviceTierForSpeed(profile?.serviceTier, config.fast),
-    accountId: resumeAccount,
-    readOnly: profile?.readOnly ?? null,
-    permissionMode: profile?.permissionMode ?? null,
-    sandbox: profile?.sandbox ?? null,
-    allowSubagents: profile?.allowSubagents ?? false,
-    plugins: profile?.plugins,
-    /* Every relaunch carries the durable grant (#739); dropping it here rebuilt
-       the command on the Viewer baseline while the profile still claimed it. */
-    mcpServers: profile?.mcpServers,
-  });
-  const deliver = overrides.deliver ?? deliverToTranscriptHost;
-  const observedHost = await (overrides.livePaneHost ?? livePaneHost)(filePath);
-  const paneId = observedHost?.paneId ?? registered.host.paneId;
-  const target = observedHost?.display ?? registered.host.paneId;
-  const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  try {
-    const prepared = await registry.withOperationLock(registered.key, owner, async () => {
-      const refreshed = registeredHostForPath(registry.readOnlySnapshot(), filePath);
-      if (!refreshed?.host || refreshed.host.paneId !== paneId) {
-        return failure("the registered pane changed", 409);
-      }
-      const spec = buildSpec(refreshed.launchProfile);
-      if (!spec) return failure("this conversation cannot be resumed", 409);
-      const refreshedHost = refreshed.host;
-      return withPaneLock(paneId, async () => {
-        if (!screenAtIdleComposer(await (overrides.paneScreen ?? paneScreen)(paneId))) {
-          return "pending" as const;
-        }
-        if (!await (overrides.killHost ?? killTmuxHostIfMatches)(refreshedHost)) return failure("the registered pane changed or its process did not exit", 409);
-        await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, () => {
-          const current = registry.readOnlySnapshot().entries[`${refreshed.key.engine}:${refreshed.key.sessionId}`];
-          if (current?.artifactPath === filePath && sameRegisteredHost(current.host, refreshedHost)) registry.markUnhosted(refreshed.key);
-        });
-        forgetResumePane(filePath);
-        return { state: "prepared" as const, spec };
-      });
-    });
-    if (prepared === "pending") return { ok: true, target, outcome: "pending" };
-    if (!("state" in prepared)) return prepared;
-    /* Resume acquires the same per-session serialization lock through the
-       transcript-host adapter. The termination lock must be released first. */
-    const resumed = await hostOutcome(deliver({ entry: { ...entry, pid: null, proc: "done" }, spec: prepared.spec, payload: "" }));
-    return resumed.ok ? { ...resumed, outcome: "reconfigured" } : resumed;
-  } catch (error) {
-    return failure(error);
-  }
-}
-
 export type DeliveryOutcome = DeliverySuccess | DeliveryFailure;
 
 export function migrationDeliveryOutcome(outcome: DeliveryOutcome): "delivered" | "failed" | "delivery-uncertain" | "held" {
@@ -291,230 +113,30 @@ function failure(error: unknown, status = 500, actuation?: "started"): DeliveryF
   return {
     ok: false,
     outcome: "failed",
-    /* Transport diagnostics stay separate from liveness and internal tmux
-       correlation ids never become operator-facing receipt text. */
-    error: operatorSafeTmuxDeliveryError(error, actuation === "started"),
+    error: error instanceof Error ? error.message : String(error),
     status,
     ...(actuation ? { actuation } : {}),
   };
 }
 
-async function hostOutcome(result: Promise<HostDeliveryOutcome>): Promise<DeliveryOutcome> {
-  const outcome = await result;
-  if (!outcome.ok) return outcome;
-  return { ...outcome, spawned: outcome.outcome === "resumed" };
-}
-
-/** A host failure happens after image payload construction. Keep the cleanup
-    beside the returned outcome so direct and root-relayed delivery share the
-    same no-orphan contract. */
-export function cleanupFailedImageDelivery(outcome: DeliveryOutcome, imagePaths: string[]): DeliveryOutcome {
-  if (!outcome.ok && outcome.actuation !== "started") deleteInboxImages(imagePaths);
-  return outcome;
-}
-
-/** Resolves and revalidates a request pid against the scanner's live set. */
-export async function targetForKnownPid(pid: number): Promise<string | null | "unknown"> {
-  const live = await knownLivePids();
-  if (!live.has(pid)) return "unknown";
-  return resolveTarget(pid);
-}
-
-/**
- * Live pane of a conversation, for an interrupt or a kill. The pid comes from
- * the scanner's own entry for the path — a client-supplied pid is ignored
- * (like /api/proc), since resolving it directly would let any same-origin
- * caller reach an unrelated agent's pane. Never boots a fresh agent window:
- * both actions only make sense against a pane that already exists.
- */
-async function livePaneHost(filePath: string) {
-  if (!filePath || !pathAllowed(filePath)) return null;
-  return (await readTranscriptHosts(true)).canonicalFor(filePath);
-}
-
-/** Human-readable target of the shared canonical resolver for non-message
-    actions that only operate on a presently live pane. */
-export async function livePaneTarget(filePath: string): Promise<string | null> {
-  return (await livePaneHost(filePath))?.display ?? null;
-}
-
-interface InterruptConversationOverrides {
-  pathAllowed?: typeof pathAllowed;
-  livePaneHost?: typeof livePaneHost;
-  registry?: AgentRegistry;
-  interruptHost?: typeof interruptTmuxHostIfMatches;
-}
-
-export async function interruptConversation(filePath: string, overrides: InterruptConversationOverrides = {}): Promise<DeliveryOutcome> {
-  if (!filePath || !(overrides.pathAllowed ?? pathAllowed)(filePath)) {
-    return failure("the conversation path is required to interrupt", 400);
-  }
-  const host = await (overrides.livePaneHost ?? livePaneHost)(filePath);
-  if (host === null) {
-    return failure("no active agent pane to interrupt", 409);
-  }
-  try {
-    const registry = overrides.registry ?? agentRegistry();
-    const registered = registeredOwnerForObservedHost(registry.readOnlySnapshot(), host);
-    if (!registered?.host) {
-      return failure("conversation host identity is unavailable or ambiguous", 409);
-    }
-    return await registry.withOperationLock(registered.key,
-      { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) }, async () => {
-        const current = registeredOwnerForObservedHost(registry.readOnlySnapshot(), host);
-        if (!current?.host || current.key.engine !== registered.key.engine
-          || current.key.sessionId !== registered.key.sessionId
-          || current.artifactPath !== registered.artifactPath
-          || !sameRegisteredHost(current.host, registered.host!)) {
-          return failure("conversation host changed before interrupt", 409);
-        }
-        if (!await (overrides.interruptHost ?? interruptTmuxHostIfMatches)(current.host)) return failure("conversation host identity changed before interrupt", 409);
-        return { ok: true, target: host.display };
-      });
-  } catch (error) {
-    return failure(error);
-  }
-}
-
-/* The /compact slash command typed into the live pane: both agent CLIs
-   parse a submitted "/compact" and condense their context; the transcript
-   then grows a compaction marker the feed renders as a band. Only makes
-   sense against a pane that already exists — never boots a window. */
-export async function compactConversation(filePath: string): Promise<DeliveryOutcome> {
-  if (!filePath || !pathAllowed(filePath)) {
-    return failure("the conversation path is required to compact", 400);
-  }
-  const host = await livePaneHost(filePath);
-  if (host === null) {
-    return failure("no active agent pane to compact", 409);
-  }
-  try {
-    await sendText(host.paneId, "/compact");
-    return { ok: true, target: host.display };
-  } catch (error) {
-    return failure(error);
-  }
-}
-
-export type DialogStale = "blocked" | "closed" | "changed" | null;
-
-/**
- * Stale-menu guard for a dialog key press, pure over the captured screen: the
- * dialog that advanced or closed since the client rendered must swallow
- * nothing. A digit must still point at the same option label under the same
- * question; a bare Tab/Enter/Escape only checks the question when a menu is
- * still on screen.
- */
-export function dialogKeyStale(screen: string, key: string, label: unknown, question: unknown): DialogStale {
-  const blocking = detectBlockingGate(screen);
-  if (blocking !== null) return "blocked";
-  if (!screenWaitsForInput(screen)) return "closed";
-  const menu = parseScreenMenu(screen);
-  if (/^[1-9]$/.test(key)) {
-    const option = menu?.options.find((item) => String(item.value) === key);
-    if (
-      !option ||
-      (typeof label === "string" && label !== option.label) ||
-      (typeof question === "string" && question !== menu?.question)
-    ) {
-      return "changed";
-    }
-  } else if (menu && typeof question === "string" && question !== menu.question) {
-    return "changed";
-  }
-  return null;
-}
-
-/* A key press into a live dialog the scrape fallback surfaced: the digit of
-   a menu option, or Tab/Enter/Escape for screens the parser cannot read.
-   The pane is re-read right before sending — see dialogKeyStale. */
-export async function answerDialogKey(filePath: string, key: string, label: unknown, question: unknown): Promise<DeliveryOutcome> {
-  if (!filePath || !pathAllowed(filePath)) {
-    return failure("the conversation path is required to answer", 400);
-  }
-  if (!/^([1-9]|Tab|Enter|Escape)$/.test(key)) {
-    return failure("invalid key", 400);
-  }
-  const host = await livePaneHost(filePath);
-  if (host === null) {
-    return failure("no active agent pane", 409);
-  }
-  try {
-    const stale = await withPaneLock(host.paneId, async () => {
-      const verdict = dialogKeyStale(await paneScreen(host.paneId), key, label, question);
-      if (verdict === null) await sendKeys(host.paneId, [key]);
-      return verdict;
-    });
-    if (stale === "blocked") return failure("pane is waiting for a confirmation that requires a manual decision", 409);
-    if (stale === "closed") return failure("pane is no longer waiting for a response", 409);
-    if (stale === "changed") return failure("the on-screen menu has changed", 409);
-    return { ok: true, target: host.display };
-  } catch (error) {
-    return failure(error);
-  }
-}
-
 interface ResumeConversationOverrides {
   pathAllowed?: typeof pathAllowed;
   listFiles?: typeof listFiles;
-  resumeSpecFor?: typeof resumeSpecFor;
-  resumeEligibility?: typeof resumeEligibility;
   registry?: AgentRegistry;
   recover?: typeof recoverDeadStructuredConversation;
   admit?: (registry: Parameters<typeof admitTranscriptConversationOffLoop>[0], entry: Parameters<typeof admitTranscriptConversationOffLoop>[1], dependencies: Parameters<typeof admitTranscriptConversationOffLoop>[2]) => Awaited<ReturnType<typeof admitTranscriptConversationOffLoop>> | ReturnType<typeof admitTranscriptConversationOffLoop>;
-  livePaneHost?: typeof livePaneHost;
   liveOwnership?: (entry: FileEntry) => TranscriptLiveOwnership | null;
-  deliver?: typeof deliverToTranscriptHost;
-}
-
-/**
- * The account a legacy resume reopens under, for every seam in this file.
- *
- * Provenance first: inside the shared transcript store (#891) the path names no
- * owner, so the registry's recorded account is the only answer (#935). When
- * there is no record — an adopted conversation the Viewer never launched, or
- * one whose account has since been deleted — nobody has named an account and
- * the spec builder used to answer from the engine's ACTIVE one, which is a pick
- * made with neither the project's pool nor any quota read (#1279). That half
- * now goes through the shared automatic decision like every other pick, so this
- * function returns continuity or a fenced choice and never an unfenced one.
- */
-function resumeAccountId(registry: AgentRegistry, entry: FileEntry): string | null {
-  if (entry.engine !== "claude" && entry.engine !== "codex") return null;
-  const conversation = registry.conversationForPath(entry.path);
-  const project = conversationProjectKey(
-    conversation?.projectOwnership,
-    conversation?.generations?.at(-1)?.launchProfile,
-    /* An adopted conversation carries an empty profile, and this is exactly the
-       population whose account is unrecorded — the scanner's project for the
-       transcript, and the cwd behind it, are what the fence has to read. */
-    { project: entry.project, cwd: entry.cwd },
-  );
-  return resolveResumeAccountId(entry.engine, registry.transcriptAccountId(entry.engine, entry.path), project);
-}
-
-/**
- * A pool boundary, or a binding record nobody can read, answered as this
- * contract's own refusal rather than an unhandled failure: the resume has
- * started nothing, and 409 is the answer the reseat, the spawn route and the
- * task launch already give for the same two conditions.
- */
-function accountFenceFailure(error: unknown): DeliveryFailure {
-  if (error instanceof ProjectAccountRefusedError || error instanceof AccountProjectBindingsUnreadableError) {
-    return failure(error, 409);
-  }
-  throw error;
 }
 
 /**
  * Reopens a conversation from the viewer, whatever its first host was.
  *
- * A registered conversation reaches its pane-less structured host through the
- * transcript-host bridge. A transcript the registry never inventoried — born
- * by typing `claude` in a plain terminal, or aged past the scan's recency cap —
- * is admitted from its own provenance first (issue #935), so birth mode no
- * longer decides whether continuation exists. Only then does the legacy ladder
- * run, and a refusal there names the one condition that failed.
+ * A registered conversation reaches its structured host through recovery. A
+ * transcript the registry never inventoried — born by typing `claude` in a
+ * plain terminal, or aged past the scan's recency cap — is admitted from its
+ * own provenance first (issue #935), so birth mode does not decide whether
+ * continuation exists. A conversation recovery cannot raise is refused with
+ * the condition that failed.
  */
 export async function resumeConversation(
   filePath: string,
@@ -525,7 +147,7 @@ export async function resumeConversation(
   }
   const registry = overrides.registry ?? agentRegistry();
   const known = registry.conversationForPath(filePath);
-  const seatRefusal = await legacySeatRefusal(registry, known);
+  const seatRefusal = await recipientSeatRefusal(registry, known);
   if (seatRefusal) return { ok: false, outcome: "failed", admission: "refused", ...seatRefusal };
   const rejected = supersededRejection(registry, known);
   if (rejected) return rejected;
@@ -552,24 +174,14 @@ export async function resumeConversation(
   if (!entry) return failure("the viewer knows no transcript at this path", 403);
   /* #935: a transcript the registry never inventoried — born by typing
      `claude` in a plain terminal, or aged past the scan's recency cap — holds
-     no identity for the bridge to own, so continuation used to depend on how
-     the first host was born. Admit it from its own provenance and let the
-     bridge take it; a refusal the bridge can name does not consume the legacy
-     ladder's turn, unless something outside the viewer owns the session. */
+     no identity for recovery to own, so continuation used to depend on how
+     the first host was born. Admit it from its own provenance and let
+     recovery take it. */
   let admissionRefusal: string | null = null;
-  /* Liveness uses the uncapped destructive-operation probe the delete routes
-     use: the scanner's `entry.proc` misses an idle or aged-out
-     terminal owner, which is this population exactly. The evidence class
-     travels with it — admission refuses differently for a process that names
-     this session than for one merely sitting in its directory. */
-  const ownership = !known
-    ? entry.proc === "running" ? "session" : (overrides.liveOwnership ?? transcriptLiveOwnership)(entry)
-    : null;
-  /* A live tmux pane is a host the viewer CAN reach: the ladder below types
-     into it. Only a live process with no pane and no registry host is the
-     foreign terminal admission refuses. */
-  const paneHosted = ownership !== null && await (overrides.livePaneHost ?? livePaneHost)(filePath) !== null;
-  if (!known && !paneHosted) {
+  if (!known) {
+    /* Liveness uses the uncapped destructive-operation probe the delete routes
+       use: the scanner's `entry.proc` misses an idle or aged-out terminal
+       owner, which is this population exactly. */
     const admitted = await (overrides.admit ?? admitTranscriptConversationOffLoop)(registry, entry, {
       liveOwnership: overrides.liveOwnership ?? transcriptLiveOwnership,
     });
@@ -584,131 +196,7 @@ export async function resumeConversation(
       }
     }
   }
-  const profile = registry.launchProfileForPath(entry.path);
-  let resumeAccount: string | null;
-  try {
-    resumeAccount = resumeAccountId(registry, entry);
-  } catch (error) {
-    return accountFenceFailure(error);
-  }
-  const specOptions = {
-    model: entry.launchModel ?? entry.model,
-    effort: entry.effort,
-    fast: profile?.fast,
-    serviceTier: profile?.serviceTier,
-    accountId: resumeAccount,
-    readOnly: profile?.readOnly,
-    permissionMode: profile?.permissionMode,
-    sandbox: profile?.sandbox,
-    allowSubagents: profile?.allowSubagents,
-    plugins: profile?.plugins,
-    /* The durable grant travels with the resume (#739). Omitting it silently
-       relaunched the session on the Viewer baseline while the profile went on
-       claiming the grant — durable state and running process disagreeing. The
-       stored list is already origin-bounded when the registry reads it. */
-    mcpServers: profile?.mcpServers,
-  };
-  const spec = (overrides.resumeSpecFor ?? resumeSpecFor)(entry.root, entry.path, specOptions);
-  if (!spec) {
-    const eligibility = (overrides.resumeEligibility ?? resumeEligibility)(entry.root, entry.path, specOptions);
-    if (!eligibility.ok) return failure(eligibility.reason, 409);
-    return failure(admissionRefusal ?? "this conversation cannot be resumed", 409);
-  }
-  try {
-    return await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: "" }));
-  } catch (error) {
-    return failure(error);
-  }
-}
-
-interface KillConversationOverrides {
-  pathAllowed?: typeof pathAllowed;
-  listFiles?: typeof listFiles;
-  registrySnapshot?: () => ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>;
-  registry?: Pick<AgentRegistry, "readOnlySnapshot" | "withOperationLock" | "markUnhosted"> & Partial<Pick<AgentRegistry, "deliveryWriteOrBusy">>;
-  killHost?: typeof killTmuxHostIfMatches;
-}
-
-/** A native child can be the scanner's primary transcript while the Viewer
-    launch remains registered under its root. Resolve that owner among the
-    observed claims, retaining both the unique registry claim and host fence. */
-function registeredOwnerForObservedHost(
-  snapshot: ReturnType<AgentRegistry["snapshot"]>,
-  host: TranscriptHost,
-): AgentRegistryEntry | null {
-  const candidates = Object.values(snapshot.entries).filter((candidate) =>
-    candidate.key.engine === host.engine
-    && candidate.artifactPath !== null && host.claimedPaths.includes(candidate.artifactPath)
-    && candidate.host?.paneId === host.paneId
-    && candidate.host.server.pid === host.tmuxServerPid
-    && candidate.host.panePid.pid === host.panePid
-    && candidate.host.agent.pid === host.agentPid
-    && Boolean(host.agentIdentity) && candidate.host.agent.startIdentity === host.agentIdentity);
-  return candidates.length === 1
-    ? registeredHostForPath(snapshot, candidates[0]!.artifactPath!)
-    : null;
-}
-
-function sameRegisteredHost(left: TmuxHostEvidence | null, right: TmuxHostEvidence): boolean {
-  return Boolean(left
-    && left.kind === right.kind
-    && left.endpoint === right.endpoint
-    && left.paneId === right.paneId
-    && left.server.pid === right.server.pid
-    && left.server.startIdentity === right.server.startIdentity
-    && left.panePid.pid === right.panePid.pid
-    && left.panePid.startIdentity === right.panePid.startIdentity
-    && left.agent.pid === right.agent.pid
-    && left.agent.startIdentity === right.agent.startIdentity
-    && left.windowName === right.windowName
-    && left.argv.length === right.argv.length
-    && left.argv.every((argument, index) => argument === right.argv[index]));
-}
-
-/** Closes the registry-owned pane for one root conversation. The registry
-    supplies the stable pane id and the complete process identity fence. */
-export async function killConversation(filePath: string, overrides: KillConversationOverrides = {}): Promise<DeliveryOutcome> {
-  if (!filePath || !(overrides.pathAllowed ?? pathAllowed)(filePath)) {
-    return failure("the conversation path is required to close", 400);
-  }
-  const entry = (await (overrides.listFiles ?? listFiles)({ pin: filePath })).find((item) => item.path === filePath);
-  // A viewer-spawned child can own its own pane. Shared branches have no
-  // independent claim; the conversation action boundary also checks lineage.
-  const registry = overrides.registry ?? agentRegistry();
-  const readSnapshot = overrides.registry
-    ? () => registry.readOnlySnapshot()
-    : overrides.registrySnapshot ?? (() => registry.readOnlySnapshot());
-  const registered = registeredHostForPath(readSnapshot(), filePath);
-  if (entry?.parent && !registered?.host) {
-    return failure("a branch shares its root conversation pane and cannot be closed independently", 409);
-  }
-  if (!registered?.host) return failure("no registered agent pane for this conversation", 404);
-  const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  const runLocked = overrides.registry || !overrides.registrySnapshot
-    ? <T>(task: () => Promise<T>) => registry.withOperationLock(registered.key, owner, task)
-    : <T>(task: () => Promise<T>) => task();
-  try {
-    return await runLocked(async () => {
-      const refreshed = registeredHostForPath(readSnapshot(), filePath);
-      if (!refreshed?.host) return failure("no registered agent pane for this conversation", 404);
-      if (refreshed.key.engine !== registered.key.engine || refreshed.key.sessionId !== registered.key.sessionId
-        || !sameRegisteredHost(refreshed.host, registered.host!)) return failure("conversation host changed before stop", 409);
-      const killed = await (overrides.killHost ?? killTmuxHostIfMatches)(refreshed.host);
-      if (!killed) return failure("the registered pane changed or its process did not exit", 409);
-      if (overrides.registry || !overrides.registrySnapshot) {
-        const write = () => {
-          const current = registry.readOnlySnapshot().entries[`${refreshed.key.engine}:${refreshed.key.sessionId}`];
-          if (current?.artifactPath === filePath && sameRegisteredHost(current.host, refreshed.host!)) registry.markUnhosted(refreshed.key);
-        };
-        if (registry.deliveryWriteOrBusy) await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, write);
-        else write();
-      }
-      forgetResumePane(filePath);
-      return { ok: true, target: refreshed.host.paneId };
-    });
-  } catch (error) {
-    return failure(error);
-  }
+  return { ...failure(admissionRefusal ?? NO_DELIVERY_HOST_REASON, 409), ...(admissionRefusal ? {} : { code: NO_DELIVERY_HOST_CODE }) };
 }
 
 export interface ConversationMessage {
@@ -722,26 +210,13 @@ export interface ConversationMessage {
   /** Recheck autonomous seat authority while its replacement host is publishing. */
   recoveryAuthorityGuard?: () => void;
   text: string;
-  images: InboxImagePayload[];
-  /** The "on resume" profile chosen in the control strip (issue #241 §4): when a
-      finished conversation is reopened, boot with these instead of the last
-      generation's model/effort. Ignored on a live pane (nothing to reconfigure)
-      and on the subagent relay (the root owns its own runtime). */
-  resumeModel?: string | null;
-  resumeEffort?: string | null;
-  resumeFast?: boolean | null;
+  images: RuntimeImageUpload[];
   /** Message authorship stamped by the admitting surface (#1117). Rides the
-      structured enqueue when the conversation recovers structured, and persists
-      on the legacy hold's command so the evidence survives even when the paste
-      itself — engine input this path must not change — cannot carry it. */
+      structured enqueue. */
   origin?: MessageOrigin;
   /** How a structured host treats a turn already running. Absent keeps the
       send default, which interrupts it; `queue` waits until the host is idle,
-      and `context-or-queue` adds native context to a supported active host.
-      Only the structured transport reads it. A conversation whose current owner is a legacy pane host is
-      not recovered into a structured send, so its message takes the legacy
-      ladder, which never reads the policy and types the text into the pane
-      the way it types every other message. */
+      and `context-or-queue` adds native context to a supported active host. */
   policy?: "queue" | "context-or-queue" | "steer-or-queue";
 }
 
@@ -823,10 +298,10 @@ export async function deliverConversationMessage(message: ConversationMessage, o
        for is refused before anything is sent. */
     if (!conversation) return failure(message.conversationId ? "conversation is unknown to the viewer" : "delivery target is unavailable", 404);
   }
-  const seatRefusal = await legacySeatRefusal(registry, conversation);
+  const seatRefusal = await recipientSeatRefusal(registry, conversation);
   if (seatRefusal) return { ok: false, outcome: "failed", admission: "refused", ...seatRefusal };
   const seatAdmissionGuard: DeliveryAdmissionGuard = () => {
-    const refusal = legacySeatRefusalSync(conversation);
+    const refusal = seatRefusalSync(conversation);
     if (refusal) throw new DeliveryAdmissionRefusedError(refusal.error);
   };
   const admissionGuard: DeliveryAdmissionGuard = reconciledDeadHost => {
@@ -847,7 +322,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           authorityGuard: recoveryAuthorityGuard, origin: message.origin },
         { registry },
       );
-      const afterRecoveryRefusal = await legacySeatRefusal(registry, conversation);
+      const afterRecoveryRefusal = await recipientSeatRefusal(registry, conversation);
       if (afterRecoveryRefusal) return seatRefusalFailure(afterRecoveryRefusal);
       if (!recovered && conversationAgentRole(registry.readOnlySnapshot(), conversation.id) === "curator") {
         return failure("curator recovery is unavailable until its designated seat is admitted", 409);

@@ -5,10 +5,8 @@ import { useRuntimeEnabled, useRuntimeSession, useRuntimeSessionByArtifact, type
 import type { FileEntry } from "@/lib/types";
 
 import {
-  attachModeFor,
   capabilitiesFor,
   rootHostFrom,
-  type AttachMode,
   type HostOptions,
   type StripCapabilities,
 } from "./agentCapabilities";
@@ -33,7 +31,6 @@ export interface AgentCapabilities {
   structuredSession: RuntimeSessionView | null;
   /** Whether the runtime plane is the authority for host capability. */
   runtimeEnabled: boolean;
-  attachMode: AttachMode;
 }
 
 export function agentCapabilitiesFromViews(
@@ -72,7 +69,6 @@ export function agentCapabilitiesFromViews(
     runtime,
     structuredSession,
     runtimeEnabled,
-    attachMode: attachModeFor(file, runtime, opts),
   };
 }
 

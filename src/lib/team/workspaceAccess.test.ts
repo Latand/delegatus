@@ -39,7 +39,6 @@ import { GET as pipelineGET, PATCH as pipelinePATCH } from "@/app/api/pipelines/
 import { queuePipelineCreation, pipelineCreationQueueDir } from "@/lib/pipelines/creationQueue";
 import * as creationQueue from "@/lib/pipelines/creationQueue";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
-import { allowedKillTarget, lastResourceTargetRefs, noteSessionTargets } from "@/lib/resources";
 import { GET as settingsGET, PUT as settingsPUT } from "@/app/api/projects/settings/route";
 import { setBridgeReports, setMergeOnReview, setReportTelegram } from "@/lib/projects/settings";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -374,67 +373,6 @@ describe("workspace authority", () => {
     expect((await memberGET(request(`/api/team/workspaces/${W2}/members`, manager), { params: Promise.resolve({ id: W2 }) })).status).toBe(403);
     const response = await memberGET(request(`/api/team/workspaces/${W1}/members`, manager), { params: Promise.resolve().then(() => { store.removeWorkspaceMember(W1, manager.id); return { id: W1 }; }) });
     expect(response.status).toBe(403);
-  });
-  test("resource pane targets stay owner-only beside an authorized conversation on both mounts", async () => {
-    const registry = agentRegistry();
-    const receipt = registry.beginSpawn("codex", root, { project: "repo-alpha", title: "Own conversation" });
-    const artifactPath = path.join(root, "own.jsonl");
-    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(3) }, artifactPath, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
-    const target = "beta-agent:1.0";
-    const ref = { paneId: "%42", panePid: 4242, tmuxServerPid: 4200, tmuxServerStartIdentity: null, paneStartIdentity: null };
-    const endpoint = { kind: "tmux-tmpdir" as const, tmuxTmpdir: root, socketName: "default" as const, socketPath: path.join(root, "tmux.sock") };
-    const identities: Record<string, string>[] = [{ path: artifactPath }, { conversationId: receipt.conversationId }];
-    const previousTargets = lastResourceTargetRefs();
-    const killed: string[] = [];
-    let attaches = 0;
-    setConversationHostDependenciesForTests({
-      panePidOf: async () => ref.panePid,
-      killPane: async pane => { killed.push(pane); },
-      tmuxEndpointDescriptor: () => endpoint,
-      resolveTmuxAttach: async (reference, requestedEndpoint = endpoint) => {
-        expect(reference).toEqual(ref);
-        attaches++;
-        return { ok: true, target, endpoint: requestedEndpoint, command: "fixture attach", readOnlyCommand: "fixture read only" };
-      },
-    });
-    try {
-      for (const route of ["conversation-host", "tmux"]) {
-        const { GET, POST } = await import(`../../app/api/${route}/route.ts`);
-        noteSessionTargets([{ target, ref }]);
-        for (const actor of [member, manager, outsider]) {
-          for (const identity of identities) {
-            const calls = [
-              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", target, ...identity })),
-              () => GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&${new URLSearchParams(identity)}`, actor)),
-              () => POST(request(`/api/${route}?target=${encodeURIComponent(target)}`, actor, "POST", { action: "interrupt", ...identity })),
-              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", ...identity })),
-            ];
-            for (const call of calls) {
-              const denied = await call();
-              expect(denied.status).toBe(403);
-              expect(await denied.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
-              expect(allowedKillTarget(target)).toEqual(ref);
-              expect(killed).toEqual([]);
-              expect(attaches).toBe(0);
-            }
-          }
-        }
-        const attached = await GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&conversationId=${receipt.conversationId}`, owner));
-        expect(attached.status).toBe(200);
-        expect((await attached.json()).attach.target).toBe(target);
-        expect(attaches).toBe(1);
-        expect(allowedKillTarget(target)).toEqual(ref);
-        const killedResponse = await POST(request(`/api/${route}`, owner, "POST", { action: "kill-target", target, path: artifactPath }));
-        expect(killedResponse.status).toBe(200);
-        expect(killed).toEqual([ref.paneId]);
-        expect(allowedKillTarget(target)).toBeNull();
-        killed.length = 0;
-        attaches = 0;
-      }
-    } finally {
-      setConversationHostDependenciesForTests(null);
-      noteSessionTargets(previousTargets);
-    }
   });
 
   test("a cwd or repoDir that resolves outside the member's workspace is refused on every directory route", async () => {

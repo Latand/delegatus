@@ -11,7 +11,7 @@ import { useRuntimeReceiptsForArtifact, type RuntimeSessionView } from "@/hooks/
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
-import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
+import { capabilitiesFor } from "./agentCapabilities";
 import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
 import { useAgentCapabilities } from "./useAgentCapabilities";
 import { runtimeReceiptForSend } from "@/lib/runtime/sendSettlement";
@@ -116,7 +116,6 @@ beforeEach(() => {
         runtime: structuredView,
         structuredSession: structuredView,
         runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, structuredView, options),
       };
     },
     useRuntimeReceiptsForArtifact: (path, conversationId) => {
@@ -678,12 +677,12 @@ test.skipIf(!process.env.LLV_UNCERTAINTY_BROWSER)("390/430 mounted uncertainty h
     import {TmuxComposer} from './src/components/TmuxComposer';
     import {setLogFeedDependenciesForTests} from './src/components/logFeedDependencies';
     import {setTmuxComposerRuntimeDependenciesForTests} from './src/components/tmuxComposerRuntime';
-    import {capabilitiesFor,attachModeFor} from './src/components/agentCapabilities';
+    import {capabilitiesFor} from './src/components/agentCapabilities';
     import {setRuntimeUiEnabledForTests} from './src/hooks/runtimeBus';
     import {enqueueOutbox,updateOutbox} from './src/components/conversation/outbox';
     const file=${JSON.stringify(file)}, receipt=${JSON.stringify(captured)}, view=${JSON.stringify(structuredView)};
     setRuntimeUiEnabledForTests(false);
-    setTmuxComposerRuntimeDependenciesForTests({useAgentCapabilities:()=>({caps:capabilitiesFor(file,view,{runtimeEnabled:true}),runtime:view,structuredSession:view,runtimeEnabled:true,attachMode:attachModeFor(file,view,{runtimeEnabled:true})}),useRuntimeReceiptsForArtifact:()=>[
+    setTmuxComposerRuntimeDependenciesForTests({useAgentCapabilities:()=>({caps:capabilitiesFor(file,view,{runtimeEnabled:true}),runtime:view,structuredSession:view,runtimeEnabled:true}),useRuntimeReceiptsForArtifact:()=>[
       {...receipt,text:undefined},
       {...receipt,operationId:'same-text-a',idempotencyKey:'same-key-a'},
       {...receipt,operationId:'same-text-b',idempotencyKey:'same-key-b'},

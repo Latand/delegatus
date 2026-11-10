@@ -504,19 +504,3 @@ const STRIP_OWN_CONTROLS: ControlName[] = ["stop", "compact", "terminal"];
 export function stripHasVisibleControls(caps: StripCapabilities): boolean {
   return STRIP_OWN_CONTROLS.some((name) => caps.controls[name].state !== "hidden");
 }
-
-/** How the Terminal dialog should build its command (design §6). */
-export type AttachMode = "live" | "resume";
-
-/**
- * A live tmux pane attaches to the *running* pane — its ESC-and-type command,
- * plus a read-only variant — and a Claude subagent attaches to its root pane.
- * Every other surface (structured, finished, dead) hands out a resume command
- * that boots a fresh window. Selecting `resume` for a live tmux pane was the
- * finding-3 bug: it generated a resume command for a conversation still running
- * in a pane you could simply attach to.
- */
-export function attachModeFor(file: FileEntry, rv: RuntimeSessionView | null, opts: HostOptions = {}): AttachMode {
-  const surface = surfaceFor(file, rv, opts);
-  return surface === "live-root" || surface === "live-subagent" ? "live" : "resume";
-}

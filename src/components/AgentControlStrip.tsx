@@ -403,7 +403,6 @@ export interface AgentControlActions {
   /** The attach dialog the terminal action falls back to; the host renders it. */
   attachOpen: boolean;
   closeAttach: () => void;
-  attachMode: ReturnType<typeof useAgentCapabilities>["attachMode"];
 }
 
 export function useAgentControlActions(file: FileEntry): AgentControlActions {
@@ -414,7 +413,7 @@ export function useAgentControlActions(file: FileEntry): AgentControlActions {
     composer's, so its controls and its Send never tell two host stories. */
 export function useAgentControlActionsWith(
   file: FileEntry,
-  { caps, attachMode, structuredSession }: Pick<ReturnType<typeof useAgentCapabilities>, "caps" | "attachMode" | "structuredSession">,
+  { caps, structuredSession }: Pick<ReturnType<typeof useAgentCapabilities>, "caps" | "structuredSession">,
 ): AgentControlActions {
   const { t } = useLocale();
 
@@ -447,14 +446,8 @@ export function useAgentControlActionsWith(
   /* One click, one command (operator request): the terminal button copies the
      COMPLETE resume command (cd + env + CLI) straight to the clipboard and
      confirms via the strip's own status toast — no dialog hop. The dialog
-     remains the fallback for the live-tmux mode (two commands to choose from)
-     and for any fetch/clipboard failure, so nothing is ever less capable than
-     before. */
+     remains the fallback for any fetch/clipboard failure. */
   const copyAttachCommand = async () => {
-    if (attachMode === "live") {
-      setAttachOpen(true);
-      return;
-    }
     clearStatus();
     try {
       const response = await fetch(`/api/attach-command?path=${encodeURIComponent(file.path)}`);
@@ -588,7 +581,6 @@ export function useAgentControlActionsWith(
     terminal: () => void copyAttachCommand(),
     attachOpen,
     closeAttach: () => setAttachOpen(false),
-    attachMode,
   };
 }
 
@@ -787,7 +779,7 @@ export function AgentControlStrip({ file }: { file: FileEntry }) {
         onToggleOverflow={() => setOverflowOpen((open) => !open)}
         status={actions.status}
       />
-      {actions.attachOpen ? <AttachTerminalDialog file={file} mode={actions.attachMode} onClose={actions.closeAttach} /> : null}
+      {actions.attachOpen ? <AttachTerminalDialog file={file} onClose={actions.closeAttach} /> : null}
     </div>
   );
 }

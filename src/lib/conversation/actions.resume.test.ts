@@ -18,11 +18,7 @@ function fixture(engine: "claude" | "codex") {
  const value = registry.ensureConversation(engine, transcript, null);
  const wakes: string[] = [];
  const deps = { registry: () => registry, structuredEnabled: () => true, dispatchStructuredControl: async () => null,
-  onResumed: (id: string) => { wakes.push(id); },
-  interruptConversation: async () => ({ ok: true as const, target: null }),
-  killConversation: async () => ({ ok: true as const, target: null }),
-  compactConversation: async () => ({ ok: true as const, target: null }),
-  answerDialogKey: async () => ({ ok: true as const, target: null }) };
+  onResumed: (id: string) => { wakes.push(id); } };
  return { registry, value, transcript, directory, wakes, deps,
   request: { conversationId: value.id, transcriptPath: transcript, action: "resume" },
   close: () => { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); } };

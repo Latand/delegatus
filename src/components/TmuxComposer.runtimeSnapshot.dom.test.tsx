@@ -20,7 +20,7 @@ import { useRuntimeReceiptsForArtifact, type RuntimeSessionView } from "@/hooks/
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
-import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
+import { capabilitiesFor } from "./agentCapabilities";
 import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
 import { useAgentCapabilities } from "./useAgentCapabilities";
 import type { RuntimeReceipt } from "./runtime/runtimeModel";
@@ -116,7 +116,6 @@ beforeEach(() => {
         runtime: structuredView,
         structuredSession: structuredView,
         runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, structuredView, options),
       };
     },
     useRuntimeReceiptsForArtifact: (path, conversationId) => {

@@ -1,27 +1,20 @@
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
 import type { AccountContext } from "./accounts/contracts";
-import { AgentRegistry, setAgentRegistryForTests, type ConversationObservation, type RegistryFile, type TmuxHostEvidence } from "./agent/registry";
-import { emptyLaunchProfile, type SuccessorProviderPort } from "./accounts/migration/contracts";
-import { drainHeldDeliveries, reconcileMigrations } from "./accounts/migration/coordinator";
-import { cleanupFailedImageDelivery, deliverConversationMessage, killConversation, migrationDeliveryOutcome, reconfigureConversation, resumeConversation, type DeliveryFailure } from "./delivery";
+import { AgentRegistry, setAgentRegistryForTests, type ConversationObservation } from "./agent/registry";
+import { emptyLaunchProfile } from "./accounts/migration/contracts";
+import { drainHeldDeliveries } from "./accounts/migration/coordinator";
+import { deliverConversationMessage, migrationDeliveryOutcome, resumeConversation, type DeliveryFailure } from "./delivery";
 import { withConversationActuation } from "./deliveryActuation";
 import { defaultPipelinePorts } from "./pipelines/engine";
 import type { RuntimeHostClient } from "./runtime/client";
-import { heldDeliveryOccurrences } from "./runtime/deliveredMessageOccurrences";
-import { messageTextDigest } from "./runtime/messageTextDigest";
-import { resolveSendReceipt, sendReceiptFor } from "./runtime/sendSettlement";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./runtime/structuredRecovery";
 import type { FileEntry } from "./types";
-import { TmuxDeliveryUncertainError } from "./tmux";
-import { resumeSpecForSession, type ResumeSpecOptions } from "./agent/cli";
-import { beginRegistryResume } from "./agent/transcriptHost";
-import { resolveAttachCommand } from "./agent/attachCommand";
 
 // Command/control tests use a fake interpreter and its explicit inventory.
 let restoreFeatureReader: () => void;
@@ -35,12 +28,6 @@ afterEach(() => restoreFeatureReader());
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-test-"));
 const failure: DeliveryFailure = { ok: false, outcome: "failed", error: "resume unavailable", status: 503 };
 
-function inboxImage(name: string): string {
-  const pathname = path.join(SANDBOX, name);
-  fs.writeFileSync(pathname, "image");
-  return pathname;
-}
-
 beforeEach(() => {
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   fs.mkdirSync(SANDBOX, { recursive: true });
@@ -49,28 +36,6 @@ beforeEach(() => {
 afterEach(() => setAgentRegistryForTests(null));
 
 afterAll(() => fs.rmSync(SANDBOX, { recursive: true, force: true }));
-
-test("removes a direct-delivery inbox image before returning its host failure", () => {
-  const imagePath = inboxImage("direct.png");
-
-  expect(cleanupFailedImageDelivery(failure, [imagePath])).toEqual(failure);
-  expect(fs.existsSync(imagePath)).toBe(false);
-});
-
-test("removes a relayed-delivery inbox image before returning its host failure", () => {
-  const imagePath = inboxImage("relay.png");
-
-  expect(cleanupFailedImageDelivery(failure, [imagePath])).toEqual(failure);
-  expect(fs.existsSync(imagePath)).toBe(false);
-});
-
-test("retains an inbox image when transcript-host actuation became ambiguous", () => {
-  const imagePath = inboxImage("ambiguous-host.png");
-  const ambiguous: DeliveryFailure = { ...failure, actuation: "started" };
-
-  expect(cleanupFailedImageDelivery(ambiguous, [imagePath])).toEqual(ambiguous);
-  expect(fs.existsSync(imagePath)).toBe(true);
-});
 
 test("migration delivery keeps an internally held result recoverable", () => {
   expect(migrationDeliveryOutcome({ ok: true, target: "conversation_held", outcome: "held" })).toBe("held");
@@ -96,12 +61,11 @@ test("a definitively unpublished resume returns a typed unsent failure to seat r
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
 });
 
-test("structured resume recovery returns a pane-less target and skips legacy host delivery", async () => {
+test("structured resume recovery returns a pane-less target", async () => {
   const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf744444";
   const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
   fs.writeFileSync(pathname, "");
   const registry = new AgentRegistry(path.join(SANDBOX, "structured-resume-registry.json"));
-  let legacyHostCalls = 0;
   let recoveryCalls = 0;
 
   const outcome = await resumeConversation(pathname, {
@@ -117,11 +81,7 @@ test("structured resume recovery returns a pane-less target and skips legacy hos
       };
     },
     listFiles: async () => [],
-    deliver: async () => {
-      legacyHostCalls += 1;
-      return { ok: true, outcome: "resumed", target: "%9" };
-    },
-  } as never);
+  });
 
   expect(outcome).toMatchObject({
     ok: true,
@@ -131,7 +91,6 @@ test("structured resume recovery returns a pane-less target and skips legacy hos
     structured: true,
   });
   expect(recoveryCalls).toBe(1);
-  expect(legacyHostCalls).toBe(0);
 });
 
 test("dead structured send recovery delivers through the new host", async () => {
@@ -457,335 +416,6 @@ test.each(["codex", "claude"] as const)("%s send creates one structured successo
   ))).toHaveLength(1);
 });
 
-test("idle reconfiguration survives a transient host miss and resumes after verified termination", async () => {
-  const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf733333";
-  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
-  fs.writeFileSync(pathname, "");
-  const registry = new AgentRegistry(path.join(SANDBOX, "reconfigure-registry.json"));
-  const key = { engine: "codex" as const, sessionId };
-  registry.upsert({
-    key, artifactPath: pathname, cwd: SANDBOX, accountId: "default",
-    launchProfile: emptyLaunchProfile({ cwd: SANDBOX, role: "worker", readOnly: true, permissionMode: "never", allowSubagents: true }), status: "idle",
-    host: KILL_HOST, claimEpoch: 1, claimOwner: null, pendingAction: null,
-  });
-  const entry: FileEntry = {
-    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer", title: "worker",
-    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "idle",
-    proc: "running", pid: KILL_HOST.agent.pid, model: "gpt-5.6-sol", effort: "high", fast: false,
-    pendingQuestion: null, waitingInput: null,
-  };
-  let resumed = 0;
-  let killed = false;
-  let resumePolicy: { readOnly?: boolean | null; permissionMode?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] } = {};
-
-  const outcome = await reconfigureConversation(pathname, { model: "gpt-5.6-terra", effort: "medium", fast: true }, {
-    pathAllowed: () => true,
-    listFiles: async () => [entry],
-    resumeSpecFor: (_root, _path, options) => {
-      resumePolicy = options ?? {};
-      return { command: "codex resume", cwd: SANDBOX, windowName: "codex-resume", engine: "codex" };
-    },
-    livePaneHost: async () => null,
-    registry,
-    paneScreen: async () => "›\n? for shortcuts",
-    killHost: async () => { killed = true; return true; },
-    deliver: async () => registry.withOperationLock(key, { pid: process.pid, startIdentity: null }, async () => {
-      resumed += 1;
-      return killed
-        ? { ok: true, outcome: "resumed", target: "%8" }
-        : { ok: true, outcome: "delivered-to-live", target: KILL_HOST.paneId };
-    }),
-  });
-
-  expect(outcome).toMatchObject({ ok: true, outcome: "reconfigured", target: "%8" });
-  expect(resumed).toBe(1);
-  expect(killed).toBe(true);
-  /* The rebuilt command carries the durable MCP grant too (#739): dropping it
-     relaunched the session on the baseline while the profile still claimed it. */
-  expect(resumePolicy).toMatchObject({ readOnly: true, permissionMode: "never", allowSubagents: true, mcpServers: ["viewer"] });
-});
-
-test("legacy account reconfiguration queues a conversation reseat without touching the active pane", async () => {
-  const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf744440";
-  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
-  fs.writeFileSync(pathname, "");
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-account-reconfigure-registry.json"));
-  const conversation = registry.ensureConversation("codex", pathname, "source-account");
-  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-5.6-sol", effort: "high", fast: false });
-  registry.upsert({
-    key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: SANDBOX, accountId: "source-account",
-    launchProfile: emptyLaunchProfile({ cwd: SANDBOX, model: "gpt-5.6-sol", effort: "high" }), status: "live",
-    host: KILL_HOST, claimEpoch: 1, claimOwner: null, pendingAction: null,
-  });
-  const entry: FileEntry = {
-    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer", title: "worker",
-    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "live",
-    proc: "running", pid: KILL_HOST.agent.pid, model: "gpt-5.6-sol", effort: "high", fast: false,
-    pendingQuestion: null, waitingInput: null,
-  };
-  let resolved = 0;
-  let migrationTicks = 0;
-  let killed = 0;
-
-  const outcome = await reconfigureConversation(pathname, {
-    model: "gpt-5.6-terra", effort: "medium", fast: true, accountId: "target-account",
-  }, {
-    pathAllowed: () => true,
-    listFiles: async () => [entry],
-    registry,
-    validateAccount: async () => {},
-    resolveAccount: (engine, accountId) => {
-      expect([engine, accountId]).toEqual(["codex", "target-account"]);
-      resolved += 1;
-      return {} as AccountContext;
-    },
-    requestMigrationTick: () => { migrationTicks += 1; },
-    killHost: async () => { killed += 1; return true; },
-  });
-
-  expect(outcome).toMatchObject({ ok: true, outcome: "pending" });
-  expect(resolved).toBe(1);
-  expect(migrationTicks).toBe(1);
-  expect(killed).toBe(0);
-  expect(registry.conversationForPath(pathname)?.migration).toMatchObject({
-    phase: "waiting-turn",
-    targetId: "target-account",
-  });
-  expect(registry.launchProfileForPath(pathname)).toMatchObject({
-    model: "gpt-5.6-terra",
-    effort: "medium",
-    fast: true,
-  });
-});
-
-for (const refuse of [false, true]) test(`pane reseat writes its profile and migration off-loop and leaves a refused send intact (${refuse})`, async () => {
-  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("./agent/registryLockHolderFixture");
-  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("./blockingWaits");
-  const made = sqliteRegistryFixture("llv-pane-reseat", refuse ? { sqliteWriterDeadlineMs: 80 } : {});
-  const registry = made.registry;
-  const holder = registryLockHolder(made.sqliteFilename);
-  const sessionId = crypto.randomUUID();
-  const pathname = path.join(made.root, `${sessionId}.jsonl`);
-  fs.writeFileSync(pathname, "");
-  const conversation = registry.ensureConversation("codex", pathname, "source-account");
-  registry.upsert({ key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: made.root,
-    accountId: "source-account", launchProfile: emptyLaunchProfile({ cwd: made.root, model: "gpt-5.6-sol", effort: "high" }),
-    status: "live", host: KILL_HOST, claimEpoch: 1, claimOwner: null, pendingAction: null });
-  const held = registry.holdDelivery(conversation.id, "accepted before pane switch", "pane-original-key");
-  const previous = registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile;
-  const entry: FileEntry = { path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer", title: "worker",
-    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "live", proc: "running",
-    pid: KILL_HOST.agent.pid, model: "gpt-5.6-sol", effort: "high", fast: false, pendingQuestion: null, waitingInput: null };
-  const switchAccount = () => reconfigureConversation(pathname, { model: "gpt-5.6-terra", effort: "medium", fast: true, accountId: "target-account" },
-    { pathAllowed: () => true, listFiles: async () => [entry], registry, validateAccount: async () => {}, resolveAccount: () => ({}) as AccountContext,
-      requestMigrationTick: () => {}, attributeAccountChoice: () => null });
-  try {
-    resetBlockingWaitsForTests(() => {});
-    await holder.hold();
-    const { value } = await whileRegistryWriterHeld(holder, switchAccount, { release: !refuse });
-
-    expect(value).toMatchObject(refuse ? { ok: false, status: 503, code: "REGISTRY_WRITER_BUSY" } : { ok: true, outcome: "pending" });
-    expect(registry.snapshot().heldDeliveries[held.id]?.text).toBe(held.text);
-    if (refuse) {
-      expect(registry.conversation(conversation.id)?.migration).toBeNull();
-      expect(registry.conversation(conversation.id)?.generations.at(-1)?.launchProfile).toEqual(previous);
-      await holder.release();
-      expect(await switchAccount()).toMatchObject({ ok: true, outcome: "pending" });
-    } else {
-      expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "migration.reseat-request")?.operationId).toBe(registry.conversation(conversation.id)?.migration?.operationId);
-    }
-    expect(registry.conversation(conversation.id)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gpt-5.6-terra", effort: "medium", fast: true });
-  } finally { await holder.close(); registry.close(); made.cleanup(); }
-});
-
-test("legacy account reconfiguration leaves the conversation untouched when auth preflight fails", async () => {
-  const sessionId = "019f4e76-66b4-\x37f87-94b2-cfa9bf744441";
-  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
-  fs.writeFileSync(pathname, "");
-  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-account-reconfigure-auth-registry.json"));
-  const conversation = registry.ensureConversation("codex", pathname, "source-account");
-  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-5.6-sol", effort: "high", fast: false });
-  registry.upsert({
-    key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: SANDBOX, accountId: "source-account",
-    launchProfile: emptyLaunchProfile({ cwd: SANDBOX, model: "gpt-5.6-sol", effort: "high" }), status: "idle",
-    host: KILL_HOST, claimEpoch: 1, claimOwner: null, pendingAction: null,
-  });
-  const entry: FileEntry = {
-    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer", title: "worker",
-    engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "idle",
-    proc: "running", pid: KILL_HOST.agent.pid, model: "gpt-5.6-sol", effort: "high", fast: false,
-    pendingQuestion: null, waitingInput: null,
-  };
-  let migrationTicks = 0;
-  let killed = 0;
-
-  const outcome = await reconfigureConversation(pathname, {
-    model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "signed-out-account",
-  }, {
-    pathAllowed: () => true,
-    listFiles: async () => [entry],
-    registry,
-    validateAccount: async () => { throw new Error("codex account requires authentication"); },
-    resolveAccount: () => ({}) as AccountContext,
-    requestMigrationTick: () => { migrationTicks += 1; },
-    killHost: async () => { killed += 1; return true; },
-  });
-
-  expect(outcome).toMatchObject({ ok: false, error: "codex account requires authentication" });
-  expect(migrationTicks).toBe(0);
-  expect(killed).toBe(0);
-  expect(registry.conversationForPath(pathname)?.migration).toBeNull();
-  expect(registry.launchProfileForPath(pathname)).toMatchObject({
-    model: "gpt-5.6-sol",
-    effort: "high",
-    fast: false,
-  });
-});
-
-const KILL_HOST: TmuxHostEvidence = {
-  kind: "tmux",
-  endpoint: "/run/user/1000/agent-log-viewer",
-  server: { pid: 900, startIdentity: "900:one" },
-  paneId: "%7",
-  panePid: { pid: 107, startIdentity: "107:one" },
-  windowName: "worker",
-  agent: { pid: 207, startIdentity: "207:one" },
-  argv: ["codex", "resume", "session"],
-};
-
-function killSnapshot(pathname: string, host: TmuxHostEvidence | null): RegistryFile {
-  const registry = new AgentRegistry(path.join(SANDBOX, "kill-registry.json"));
-  registry.upsert({
-    key: { engine: "codex", sessionId: "019f4e76-66b4-\x37f87-94b2-cfa9bf711111" },
-    artifactPath: pathname,
-    cwd: "/repo",
-    accountId: "default",
-    launchProfile: emptyLaunchProfile({ cwd: "/repo", role: "worker" }),
-    status: "idle",
-    host,
-    claimEpoch: 3,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  return registry.snapshot();
-}
-
-test("conversation kill resolves the registry pane id and reports verified success", async () => {
-  const pathname = "/transcripts/worker.jsonl";
-  const killed: string[] = [];
-
-  const outcome = await killConversation(pathname, {
-    pathAllowed: () => true,
-    listFiles: async () => [],
-    registrySnapshot: () => killSnapshot(pathname, KILL_HOST),
-    killHost: async (host) => { killed.push(host.paneId); return true; },
-  });
-
-  expect(outcome).toEqual({ ok: true, target: "%7" });
-  expect(killed).toEqual(["%7"]);
-});
-
-test("conversation kill fails clearly when the registry has no pane", async () => {
-  const pathname = "/transcripts/missing.jsonl";
-
-  const outcome = await killConversation(pathname, {
-    pathAllowed: () => true,
-    listFiles: async () => [],
-    registrySnapshot: () => killSnapshot(pathname, null),
-  });
-
-  expect(outcome).toEqual({ ok: false, outcome: "failed", error: "no registered agent pane for this conversation", status: 404 });
-});
-
-test("conversation kill rejects success when process-death verification fails", async () => {
-  const pathname = "/transcripts/stubborn.jsonl";
-
-  const outcome = await killConversation(pathname, {
-    pathAllowed: () => true,
-    listFiles: async () => [],
-    registrySnapshot: () => killSnapshot(pathname, KILL_HOST),
-    killHost: async () => false,
-  });
-
-  expect(outcome).toEqual({ ok: false, outcome: "failed", error: "the registered pane changed or its process did not exit", status: 409 });
-});
-
-test("conversation kill refuses ownership replaced while waiting for the session lock", async () => {
-  const pathname = "/transcripts/racing.jsonl";
-  const oldSnapshot = killSnapshot(pathname, KILL_HOST);
-  const replacement: TmuxHostEvidence = {
-    ...KILL_HOST,
-    paneId: "%8",
-    panePid: { pid: 108, startIdentity: "108:one" },
-    agent: { pid: 208, startIdentity: "208:one" },
-  };
-  const freshSnapshot = structuredClone(oldSnapshot);
-  freshSnapshot.entries["codex:019f4e76-66b4-\x37f87-94b2-cfa9bf711111"]!.host = replacement;
-  let snapshots = 0;
-  const killed: string[] = [];
-  const unhosted: string[] = [];
-  const registry = {
-    readOnlySnapshot: () => snapshots++ === 0 ? oldSnapshot : freshSnapshot,
-    withOperationLock: async (_key: unknown, _owner: unknown, task: () => Promise<unknown>) => task(),
-    markUnhosted: (key: { sessionId: string }) => { unhosted.push(key.sessionId); },
-  };
-
-  const outcome = await killConversation(pathname, {
-    pathAllowed: () => true,
-    listFiles: async () => [],
-    registrySnapshot: () => oldSnapshot,
-    registry: registry as never,
-    killHost: async (host) => { killed.push(host.paneId); return true; },
-  });
-
-  expect(outcome).toMatchObject({ ok: false, status: 409 });
-  expect(killed).toEqual([]);
-  expect(unhosted).toHaveLength(0);
-});
-
-test("conversation kill preserves replacement ownership with matching process fields", async () => {
-  const pathname = "/transcripts/owned-before-kill.jsonl";
-  const replacementPath = "/transcripts/replacement-owner.jsonl";
-  const registry = new AgentRegistry(path.join(SANDBOX, "kill-replacement-registry.json"));
-  const key = { engine: "codex" as const, sessionId: "019f4e76-66b4-\x37f87-94b2-cfa9bf722222" };
-  registry.upsert({
-    key,
-    artifactPath: pathname,
-    cwd: "/repo",
-    accountId: "default",
-    launchProfile: emptyLaunchProfile({ cwd: "/repo", role: "worker" }),
-    status: "idle",
-    host: KILL_HOST,
-    claimEpoch: 3,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  const replacement: TmuxHostEvidence = {
-    ...KILL_HOST,
-    endpoint: "/run/user/1000/replacement-tmux",
-    windowName: "replacement-worker",
-    argv: ["codex", "exec", "replacement"],
-  };
-
-  const outcome = await killConversation(pathname, {
-    pathAllowed: () => true,
-    listFiles: async () => [],
-    registry,
-    killHost: async () => {
-      const entry = registry.snapshot().entries[`codex:${key.sessionId}`]!;
-      registry.upsert({ ...entry, artifactPath: replacementPath, host: replacement, status: "live" });
-      return true;
-    },
-  });
-
-  expect(outcome).toEqual({ ok: true, target: "%7" });
-  expect(registry.snapshot().entries[`codex:${key.sessionId}`]).toMatchObject({
-    artifactPath: replacementPath,
-    status: "live",
-    host: replacement,
-  });
-});
-
 test("image-only reservations stay request-local and never drain without the client payload", async () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "image-reservation-registry.json"));
   const observation: ConversationObservation = {
@@ -829,14 +459,6 @@ test("a reservation the migration drain claimed recovers into a structured send 
   expect(handed).toEqual([true]);
   expect(outcome).toMatchObject({ ok: true });
 });
-
-/** The ordinary migration tick, with nothing to switch and nothing it may deliver or write to a board. */
-const tickWhileWaiting = (registry: AgentRegistry) => reconcileMigrations(
-  { async create() { throw new Error("no switch in this fixture"); }, async verify() { throw new Error("no switch in this fixture"); } } satisfies SuccessorProviderPort,
-  { async deliver() { throw new Error("the tick must not deliver this send"); } },
-  registry,
-  { remapBoardPaths: () => { throw new Error("no board repair in this fixture"); }, transferBoardPathPlacements: () => { throw new Error("no board repair in this fixture"); } },
-);
 
 test("delivered reservations retain only a bounded idempotency window", () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "delivery-tombstones-registry.json"));
@@ -1131,267 +753,25 @@ test("a send or resume aimed at a superseded round answers 409 with the live cha
   expect(recoveryCalls).toBe(0);
 });
 
-test("transcript resume repeats the liveness probe inside registry admission", async () => {
+test("a transcript another live session owns is refused at registry admission", async () => {
   const sessionId = ["33333333", "3333", "4333", "8333", "333333333333"].join("-");
   const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
   fs.writeFileSync(pathname, "{}");
   const registry = new AgentRegistry(path.join(SANDBOX, "resume-admission.json"), undefined, undefined, { sqliteMode: "sqlite" });
   let probes = 0;
-  let deliveries = 0;
   try {
     const result = await resumeConversation(pathname, {
       registry, pathAllowed: () => true,
       listFiles: async () => [{ engine: "codex", path: pathname, cwd: "/repo" } as FileEntry],
       recover: async () => null,
-      // A session starts after the outer routing probe but before admission.
-      liveOwnership: () => ++probes === 1 ? null : "session",
-      deliver: async () => { deliveries++; return { ok: true, outcome: "resumed", target: "%7" }; },
+      liveOwnership: () => { probes += 1; return "session"; },
     });
     expect(result).toMatchObject({ ok: false, status: 409 });
-    expect(probes).toBe(2);
-    expect(deliveries).toBe(0);
+    expect(probes).toBeGreaterThan(0);
     expect(registry.conversationForPath(pathname)).toBeNull();
   } finally { registry.close(); }
 });
 
-test("a tmux resume rebuilds the command with the conversation's stored MCP grant", async () => {
-  /* A plain fixture name: the publication gate reads a real session-id shape as
-     a resource identifier, and every lookup here is overridden anyway. */
-  const pathname = path.join(SANDBOX, "resume-grant-fixture.jsonl");
-  fs.writeFileSync(pathname, "");
-  const stored = emptyLaunchProfile({ allowSubagents: true, plugins: ["computer-use"], readOnly: true, sandbox: "full", permissionMode: "never" });
-  /* Written past the profile helper on purpose: this stands for the grant a
-     conversation carries, whatever the bound of the day admits. */
-  const profile = { ...stored, mcpServers: ["viewer", "granted-connector"] };
-  const options: ResumeSpecOptions[] = [];
-
-  const outcome = await resumeConversation(pathname, {
-    pathAllowed: () => true,
-    registry: {
-      conversationForPath: () => null,
-      launchProfileForPath: () => profile,
-    },
-    recover: async () => null,
-    listFiles: async () => [{ root: "codex-sessions", path: pathname, project: "p", mtime: 0, size: 0 } as unknown as FileEntry],
-    // Liveness is injected so the case never reads this machine's processes.
-    liveOwnership: () => null,
-    resumeSpecFor: (_root: string, _path: string, given: ResumeSpecOptions) => {
-      options.push(given);
-      return { command: "resume", transcript: pathname, launchProfile: profile };
-    },
-    deliver: async () => ({ ok: true, outcome: "resumed", target: "%7" }),
-  } as never);
-
-  expect(outcome).toMatchObject({ ok: true });
-  /* The grant travels with the resume: omitting it relaunched the session on
-     the Viewer baseline while the durable profile still claimed it (#739). */
-  expect(options).toHaveLength(1);
-  expect(options[0]!).toMatchObject({ mcpServers: ["viewer", "granted-connector"], readOnly: true, sandbox: "full", permissionMode: "never" });
-});
-
-test("a resume that cannot build a command names the failing condition (issue #935)", async () => {
-  const pathname = path.join(SANDBOX, "unresumable-fixture.jsonl");
-  fs.writeFileSync(pathname, "");
-  const entry = { root: "claude-projects", path: pathname, project: "p", mtime: 0, size: 0, engine: "claude" } as unknown as FileEntry;
-
-  const outcome = await resumeConversation(pathname, {
-    pathAllowed: () => true,
-    registry: {
-      conversationForPath: () => ({ id: "conversation_named", supersededBy: null }),
-      conversationDeliverySnapshot: () => ({ conversationAliases: {} }),
-      launchProfileForPath: () => null,
-      transcriptAccountId: () => "account-b",
-    },
-    recover: async () => null,
-    listFiles: async () => [entry],
-    resumeSpecFor: () => null,
-    resumeEligibility: () => ({ ok: false, reason: "the conversation transcript cannot be read from disk" }),
-    deliver: async () => ({ ok: true, outcome: "resumed", target: "%7" }),
-  } as never);
-
-  /* The generic "this conversation cannot be resumed" hid an account-ownership
-     failure, a missing session id, and an unreadable file behind one string. */
-  expect(outcome).toMatchObject({
-    ok: false,
-    status: 409,
-    error: "the conversation transcript cannot be read from disk",
-  });
-});
-
-async function resumeSpecAccountFor(recorded: string | null, fixture: string): Promise<string | null | undefined> {
-  const pathname = path.join(SANDBOX, fixture);
-  fs.writeFileSync(pathname, "");
-  const entry = { root: "claude-projects", path: pathname, project: "p", mtime: 0, size: 0, engine: "claude" } as unknown as FileEntry;
-  const options: { accountId?: string | null }[] = [];
-
-  const outcome = await resumeConversation(pathname, {
-    pathAllowed: () => true,
-    registry: {
-      conversationForPath: () => ({ id: "conversation_recorded", supersededBy: null }),
-      conversationDeliverySnapshot: () => ({ conversationAliases: {} }),
-      launchProfileForPath: () => null,
-      transcriptAccountId: () => recorded,
-    },
-    recover: async () => null,
-    listFiles: async () => [entry],
-    resumeSpecFor: (_root: string, _path: string, given: { accountId?: string | null }) => {
-      options.push(given);
-      return { command: "resume", launchProfile: null };
-    },
-    deliver: async () => ({ ok: true, outcome: "resumed", target: "%7" }),
-  } as never);
-
-  expect(outcome).toMatchObject({ ok: true });
-  expect(options).toHaveLength(1);
-  return options[0]!.accountId;
-}
-
-test("a resume passes the conversation's recorded account to the resume spec (issue #935)", async () => {
-  /* Under the shared transcript store the path names no owner, so the recorded
-     account is the only thing that picks the home the resume runs under. The
-     legacy account is the one id every machine has, so this asserts the
-     pass-through without naming anybody's account. */
-  expect(await resumeSpecAccountFor("default", "recorded-account-fixture.jsonl")).toBe("default");
-});
-
-test("a resume whose recorded account this machine no longer has asks the rule instead (#1279)", async () => {
-  /* Provenance that resolves to nothing is not continuity: `resumeSpecFor`
-     would fall through to the shared-store fallback and answer from the
-     engine's ACTIVE account, with neither the project's pool nor any quota
-     read. So the automatic rule decides — and this project is unbound, so it
-     offers no account and the builder's own fallback stands, unchanged. */
-  expect(await resumeSpecAccountFor("account-that-was-retired", "retired-account-fixture.jsonl")).toBeNull();
-});
-
-test("conversation stop refuses a pane claimed by another registry session", async () => {
-  const pathname = "/transcripts/ambiguous.jsonl";
-  const snapshot = killSnapshot(pathname, KILL_HOST);
-  const existing = Object.values(snapshot.entries)[0]!;
-  snapshot.entries["codex:other"] = { ...existing, key: { engine: "codex", sessionId: "other" }, artifactPath: "/transcripts/other.jsonl" };
-  let effects = 0;
-  const result = await killConversation(pathname, {
-    pathAllowed: () => true, listFiles: async () => [], registrySnapshot: () => snapshot,
-    killHost: async () => { effects++; return true; },
-  });
-  expect(result.ok).toBe(false);
-  expect(effects).toBe(0);
-});
-
-test("a viewer-spawned child with its own registered pane can stop independently", async () => {
-  const pathname = "/transcripts/independent-child.jsonl";
-  const killed: string[] = [];
-  const result = await killConversation(pathname, {
-    pathAllowed: () => true,
-    listFiles: async () => [{ path: pathname, parent: "/transcripts/parent.jsonl" } as never],
-    registrySnapshot: () => killSnapshot(pathname, KILL_HOST),
-    killHost: async (host) => { killed.push(host.paneId); return true; },
-  });
-  expect(result).toMatchObject({ ok: true, target: KILL_HOST.paneId });
-  expect(killed).toEqual([KILL_HOST.paneId]);
-});
-
-function tmuxTierFixture(live = false) {
-  const sessionId = crypto.randomUUID();
-  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
-  fs.writeFileSync(pathname, "");
-  const registry = new AgentRegistry(path.join(SANDBOX, "tier-registry.json"));
-  setAgentRegistryForTests(registry);
-  const key = { engine: "codex" as const, sessionId };
-  registry.upsert({
-    key, artifactPath: pathname, cwd: SANDBOX, accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: SANDBOX, title: "Tier continuity fixture" }),
-    status: live ? "idle" : "dead", host: live ? KILL_HOST : null,
-    claimEpoch: 1, claimOwner: null, pendingAction: null,
-  });
-  const conversation = registry.ensureConversation("codex", pathname, null);
-  registry.updateConversationLaunchProfile(conversation.id, {
-    model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast",
-  });
-  const entry: FileEntry = {
-    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "fixture",
-    title: "Tier continuity fixture", engine: "codex", kind: "session", fmt: "codex", parent: null,
-    mtime: 1, size: 0, activity: "idle", proc: live ? "running" : null,
-    pid: live ? KILL_HOST.agent.pid : null, model: "gpt-6-astra", effort: "high", fast: true,
-    pendingQuestion: null, waitingInput: null,
-  };
-  const stub = path.join(SANDBOX, "codex-mcp-stub");
-  fs.writeFileSync(stub, `#!/bin/sh\nprintf '[{"name":"viewer"}]'\n`);
-  fs.chmodSync(stub, 0o755);
-  const resumeSpecFor = (_root: string, _path: string, options: ResumeSpecOptions = {}) => {
-    const previous = process.env.LLV_CODEX_BINARY;
-    process.env.LLV_CODEX_BINARY = stub;
-    try {
-      return resumeSpecForSession("codex", sessionId, SANDBOX, path.join(SANDBOX, "codex-home"), options);
-    } finally {
-      if (previous === undefined) delete process.env.LLV_CODEX_BINARY;
-      else process.env.LLV_CODEX_BINARY = previous;
-    }
-  };
-  return { registry, key, entry, conversation, resumeSpecFor };
-}
-
-test("tmux Resume carries the stored ultrafast tier into the command", async () => {
-  const { registry, entry, resumeSpecFor } = tmuxTierFixture();
-  let command = "";
-  const outcome = await resumeConversation(entry.path, {
-    registry, pathAllowed: () => true, listFiles: async () => [entry],
-    recover: async () => null, liveOwnership: () => null, resumeSpecFor,
-    deliver: async ({ spec }) => {
-      command = spec!.command;
-      return { ok: true, outcome: "resumed", target: "%7" };
-    },
-  });
-  expect(outcome).toMatchObject({ ok: true, outcome: "resumed" });
-  expect(command).toContain("-c 'service_tier=ultrafast'");
-  expect(command).not.toContain("service_tier=priority");
-});
-
-for (const fast of [true, false]) {
-  test(`tmux reconfigure ${fast ? "effort only keeps ultrafast" : "to Standard clears the durable tier and attach"}`, async () => {
-    const { registry, key, entry, conversation, resumeSpecFor } = tmuxTierFixture(true);
-    let command = "";
-    const outcome = await reconfigureConversation(entry.path, { model: "gpt-6-astra", effort: "medium", fast }, {
-      registry, pathAllowed: () => true, listFiles: async () => [entry], resumeSpecFor,
-      livePaneHost: async () => null, paneScreen: async () => "›\n? for shortcuts",
-      killHost: async () => true,
-      deliver: async ({ spec }) => {
-        command = spec!.command;
-        const prepared = beginRegistryResume(entry, spec!, registry);
-        if (!prepared) throw new Error("expected registry resume");
-        expect(registry.settleSpawn(prepared.receipt.launchId, {
-          key, artifactPath: entry.path, cwd: SANDBOX, accountId: null,
-          launchProfile: prepared.receipt.launchProfile, status: "idle", host: null,
-          claimEpoch: 1, claimOwner: null, pendingAction: null,
-        }).kind).toBe("settled");
-        return { ok: true, outcome: "resumed", target: "%7" };
-      },
-    });
-    expect(outcome).toMatchObject({ ok: true, outcome: "reconfigured" });
-    expect(command).toContain(`-c 'service_tier=${fast ? "ultrafast" : "standard"}'`);
-    const durableProfile = registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile;
-    expect(durableProfile).toMatchObject({ effort: "medium", fast });
-    expect(durableProfile.serviceTier ?? null).toBe(fast ? "ultrafast" : null);
-    // Re-read the durable profile and drive the real path-attach composer.
-    const attached = resolveAttachCommand(entry.path, {
-      files: [entry], resumeSpecFor, accountIdForPath: () => "fixture",
-      accountLabelFor: () => "Fixture", launchProfileForPath: pathname => registry.launchProfileForPath(pathname),
-    });
-    expect(attached.ok).toBe(true);
-    if (!attached.ok) throw new Error(attached.error);
-    if (fast) expect(attached.value.command).toContain("service_tier=ultrafast");
-    else expect(attached.value.command).not.toContain("service_tier=ultrafast");
-  });
-}
-
-/* docs/design/delivery-progress-and-drain.md, P17 (A1 legacy steps, A9, C2). */
-function legacyEntry(pathname: string, pid: number | null): FileEntry {
-  return {
-    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer",
-    title: "legacy", engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0,
-    activity: "idle", proc: pid === null ? null : "running", pid, model: "gpt-5.6-sol", effort: "high", fast: false,
-    pendingQuestion: null, waitingInput: null,
-  } as FileEntry;
-}
 
 /* No structured host holds the conversation and recovery raises none: the send
    is refused before anything is reserved, and no terminal transport is tried. */

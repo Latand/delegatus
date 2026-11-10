@@ -46,7 +46,7 @@ import { TmuxComposer } from "./TmuxComposer";
 import { OutboxBubbles } from "./conversation/OutboxBubbles";
 import { messageRowRecovery } from "./conversation/rowRecovery";
 import { readOutbox, resetOutboxForTests, retryOutbox, useOutbox } from "./conversation/outbox";
-import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
+import { capabilitiesFor } from "./agentCapabilities";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
 /* Attachment submissions are kept in IndexedDB before they reach the wire. */
@@ -126,7 +126,7 @@ async function mountScenario(name: string, fault: "lost" | "outage") {
     useAgentCapabilities: candidate => {
       const options = { runtimeEnabled: true };
       return { caps: capabilitiesFor(candidate, view, options), runtime: view, structuredSession: view,
-        runtimeEnabled: true, attachMode: attachModeFor(candidate, view, options) };
+        runtimeEnabled: true };
     },
     sendRuntimeMessage: async options => {
       state.sends += 1;

@@ -10,7 +10,7 @@ import { setLocale } from "@/lib/i18n";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { RuntimeReceipt } from "./runtime/runtimeModel";
 import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
-import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
+import { capabilitiesFor } from "./agentCapabilities";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
 /**
@@ -299,7 +299,6 @@ test.each([
       useAgentCapabilities: (candidate) => ({
         caps: capabilitiesFor(candidate, view, { runtimeEnabled: true }),
         runtime: view, structuredSession: view, runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, view, { runtimeEnabled: true }),
       }),
       useRuntimeReceiptsForArtifact: () => [receipt],
     });
