@@ -581,9 +581,9 @@ type ScopeHistoryDigest = { revision: number; curatedAt: string | null; stored: 
  * parses the whole scope row, retained history included, on the serving loop:
  * tens of megabytes for a long-lived scope. Every curator page, every pass and
  * every apply over an unchanged row then reads only its revision column. */
-function scopeHistoryDigest(scope: string): ScopeHistoryDigest {
+function scopeHistoryDigest(scope: string, slot: ReaderSlot = "__llvRoleViewReader"): ScopeHistoryDigest {
   const file = statePath("state.sqlite"), rowKey = `s:${scope}`;
-  const db = reader();
+  const db = reader(slot);
   const stored = () => db.query<{ row_revision: number }, [string]>(
     "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?").get(rowKey)?.row_revision;
   const identity = databaseFileIdentity(file), version = stored();
@@ -648,9 +648,14 @@ export function roleScopeReadMetadata(scope: string, pass: string): ScopeReadMet
 }
 
 /** Time of the latest entry one pass left in a scope's history, in epoch
- * milliseconds; null when the pass never wrote there. */
+ * milliseconds; null when the pass never wrote there. A curator apply orders
+ * itself by this answer inside its write transaction, so it reads through the
+ * connection that never holds a history cursor: a suspended cooperative view
+ * read pins the view connection to the commit it started on and would hide an
+ * earlier call's write. The digest memo is keyed by the row revision each
+ * connection itself sees, so both connections share it safely. */
 export function roleScopePassLastAt(scope: string, pass: string): number | null {
-  return scopeHistoryDigest(scope).passAt.get(pass) ?? null;
+  return scopeHistoryDigest(scope, "__llvCurationVersionReader").passAt.get(pass) ?? null;
 }
 
 /** Decode the displayed scopes and their rule/task lineage, excluding unrelated
