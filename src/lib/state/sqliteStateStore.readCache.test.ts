@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { initializeStateCollections, SqliteStateCollection } from "./sqliteStateStore";
 import { DatabaseReplacedError } from "./currentDatabase";
+import { READ_CACHE_MAX_SLOTS } from "./collectionReadCache";
 
 type Row = { id: string; nested: { text: string } };
 const row = (id: string, text = id): Row => ({ id, nested: { text } });
@@ -92,12 +93,25 @@ test("scope churn evicts decoded graphs even when old collection instances survi
   const decode = (v: unknown) => { decodes++; return v as Row; };
   const first = new SqliteStateCollection(filename, options(decode));
   first.snapshot();
-  for (let n = 0; n < 9; n++) {
+  for (let n = 0; n < READ_CACHE_MAX_SLOTS + 1; n++) {
     new SqliteStateCollection(filename, { ...options(decode), readCacheKey: `version-${n}` }).snapshot();
   }
   const before = decodes;
   first.snapshot();
   expect(decodes).toBe(before + 2);
+}));
+
+test("thirty live collections keep the first one decoded (#3809)", () => fixture(filename => {
+  let decodes = 0;
+  const decode = (v: unknown) => { decodes++; return v as Row; };
+  const first = new SqliteStateCollection(filename, options(decode));
+  first.snapshot();
+  for (let n = 0; n < 30; n++) {
+    new SqliteStateCollection(filename, { ...options(decode), readCacheKey: `live-${n}` }).snapshot();
+  }
+  const before = decodes;
+  first.snapshot();
+  expect(decodes).toBe(before);
 }));
 
 test("oversized collections are returned but never retained by the shared cache", () => fixture(async filename => {
