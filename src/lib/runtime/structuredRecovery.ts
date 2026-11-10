@@ -35,7 +35,7 @@ import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { statePath } from "@/lib/configDir";
 import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
-import { loadPipelineOwnershipForStartupAsync, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { loadPipelineOwnershipForStartupAsync, pipelineStartupAttemptMatches, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
 import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -434,8 +434,12 @@ async function recoverCandidate(
           const recipientSelection = () => {
             const snapshot = registry.startupHostSnapshot(current!.key);
             const conversationIds = conversationIdsResolvingTo(snapshot,current!.conversationId);
+            const entry = snapshot.entries[sessionKeyId(current!.key)];
+            const generation = registry.conversation(current!.conversationId)?.generations.at(-1);
             return { ids: [...new Set(conversationIds.flatMap(id => (snapshot.memberships[id] ?? [])
-              .filter(item => item.kind === "pipeline").map(item => item.containerId)))], conversationIds };
+              .filter(item => item.kind === "pipeline").map(item => item.containerId)))], conversationIds,
+              agentPaths: [...new Set([entry?.artifactPath, generation?.path].filter((value): value is string => !!value))],
+              sessionIds: [current!.key.sessionId] };
           };
           const recipient = recipientSelection();
           const recipientIdentity = JSON.stringify(recipient);
@@ -457,9 +461,9 @@ async function recoverCandidate(
           authorize();
           const claim = await withPipelineStartupAdmission(async available => {
             if (!available) throw new StructuredRecoveryHeldForUpdateError("pipeline authority is unavailable for native reconnect");
-            const owners = await loadPipelineOwnershipForStartupAsync(recipient.ids,new Set(recipient.conversationIds));
+            const owners = await loadPipelineOwnershipForStartupAsync(recipient.ids,new Set(recipient.conversationIds),recipient);
             if (owners.some(row => row.survivors.some(identity => processIdentityStatus(identity) !== "dead")
-              || row.attempts.some(attempt => recipient.conversationIds.includes(attempt.conversationId as ViewerConversationId) && attempt.suspended))) {
+              || row.attempts.some(attempt => pipelineStartupAttemptMatches(attempt,recipient) && attempt.suspended))) {
               throw new StructuredRecoveryHeldForUpdateError("recipient pipeline custody is unresolved for native reconnect");
             }
             return registry.deliveryWriteOrBusy({ label: "registry.reconnect-startup-host" }, () => {
