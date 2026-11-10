@@ -201,8 +201,8 @@ function validPipelineBranch(value: string): boolean {
    lane in `provisioning` for ever. */
 const BASE_FETCH_TIMEOUT = "60s";
 
-/** `--signal=KILL` takes `timeout` down with its command, so a real expiry
-    usually ends on SIGKILL with no exit status at all (#1692). */
+/** The executor deadline ends the owned child on SIGKILL with no exit
+    status. Retain the exit codes returned by older timeout adapters. */
 function killedAtBound(result: ExecResult): boolean {
   return result.code === 124 || result.code === 137 || result.signal === "SIGKILL";
 }
@@ -226,9 +226,9 @@ export async function resolvePipelineBase(
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
     const fetch = (await exec(
-      "timeout",
-      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
-      repoDir,
+      "git",
+      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
+      repoDir, undefined, { timeoutMs: parseInt(BASE_FETCH_TIMEOUT) * 1_000 },
     ));
     if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
@@ -289,8 +289,9 @@ export async function resolvePipelineBaseAsync(
     if (!localBase && origin.code !== 0) return failure("reading origin for the pipeline base", origin);
   }
   if (!requestedRef && !localBase) {
-    const fetch = await exec("timeout",
-      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal);
+    const fetch = await exec("git",
+      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal,
+      { timeoutMs: parseInt(BASE_FETCH_TIMEOUT) * 1_000 });
     if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
     if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
@@ -1776,10 +1777,8 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
     detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
 }
 
-/** A publication tick gets one bounded remote read. The engine tick is already
-    the retry loop, so retrying or sleeping inside this synchronous adapter only
-    multiplies event-loop stalls. `timeout` exists in both the runtime image and
-    the Linux host namespace used by agent shims. */
+/** A publication tick gets one remote read bounded by the portable executor.
+    The engine tick owns retries; this adapter never waits between attempts. */
 async function readRemotePipelineBranch(
   pipeline: Pipeline,
   exec: ExecPort,
@@ -1787,9 +1786,9 @@ async function readRemotePipelineBranch(
 ): Promise<{ ok: true; sha: string } | { ok: false; error: string }> {
   if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
   const result = (await exec(
-    "timeout",
-    ["--signal=KILL", REMOTE_READ_TIMEOUT, "git", "ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
-    pipeline.worktreeDir,
+    "git",
+    ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
+    pipeline.worktreeDir, undefined, { timeoutMs: parseInt(REMOTE_READ_TIMEOUT) * 1_000 },
   ));
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
   if (killedAtBound(result)) {
@@ -2038,8 +2037,11 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       // Only observations of the in-flight effect remain authorized. Never
       // let reconciliation open another write after proactive revocation.
-      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
-        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const remoteRead = command === "git" && args.length === 4
+        && args[0] === "ls-remote" && args[1] === "--heads"
+        && args[2] === (pipeline.delivery?.target.remote || "origin")
+        && args[3] === (pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`)
+        && options?.timeoutMs === parseInt(REMOTE_READ_TIMEOUT) * 1_000;
       const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
       if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
         return { code: null, stdout: "", stderr: "publication authority revoked" };

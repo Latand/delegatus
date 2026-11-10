@@ -966,6 +966,7 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
       (await git(worktree, "add", "build.txt"));
       (await git(worktree, "commit", "-m", "stage work"));
       const tip = (await git(worktree, "rev-parse", "HEAD"));
+      const protectionReads: string[] = [];
       if (shape.startsWith("forge-protected")) {
         const forgeUrl = "https://github.com/fixture/repo.git";
         const exec = h.ports.exec;
@@ -975,12 +976,19 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
         savePipelines([lane]);
         const remoteExec = h.ports.provisionExec!;
         h.ports.provisionExec = async (command, args, ...rest) => {
-          if (command === "timeout" && args.includes("ls-remote")) return { code: 0, stdout: `${tip}\trefs/heads/${branch}\n`, stderr: "" };
-          if (command === "timeout" && args.includes("gh")) {
-            expect(args).toContain(`repos/fixture/repo/branches/${encodeURIComponent(branch)}`);
+          if (command === "git" && args[0] === "ls-remote") {
+            expect(args).toEqual(["ls-remote", "--heads", lane.delivery!.target.remote, `refs/heads/${branch}`]);
+            expect(rest).toEqual([worktree, undefined, { timeoutMs: 5_000 }]);
+            protectionReads.push("git");
+            return { code: 0, stdout: `${tip}\trefs/heads/${branch}\n`, stderr: "" };
+          }
+          if (command === "gh" && args[0] === "api") {
+            expect(args).toEqual(["api", `repos/fixture/repo/branches/${encodeURIComponent(branch)}`, "--jq", ".protected"]);
+            expect(rest).toEqual([worktree, undefined, { timeoutMs: 5_000 }]);
             // The forge check must hold no registry mutation lease.
             const { withPipelineMutation } = await import("./store");
             await withPipelineMutation(() => {});
+            protectionReads.push("gh");
             return { code: 0, stdout: "true\n", stderr: "" };
           }
           return remoteExec(command, args, ...rest);
@@ -1020,7 +1028,11 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
       if (shape === "owned" || shape === "owned-checkout") expect(parked.stateDetail).toContain("another pipeline owns");
       if (shape === "owned-destination") expect(parked.stateDetail).toContain("adoption destination");
       if (shape === "protected") expect(parked.stateDetail).toContain("protected base branch");
-      if (shape.startsWith("forge-protected")) expect(parked.stateDetail).toContain("protected forge branch");
+      if (shape.startsWith("forge-protected")) {
+        expect(protectionReads).toEqual(["git", "gh"]);
+        expect(parked.stateDetail).toContain("protected forge branch");
+        expect(parked.runs[0]!.attempts[0]!.branchAdoption).toBeUndefined();
+      }
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }

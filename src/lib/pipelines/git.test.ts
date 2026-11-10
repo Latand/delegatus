@@ -1,5 +1,5 @@
 import { cpuPriorityFromEnv } from "../runtime/cpuPriority";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -85,9 +85,9 @@ test("an unpinned base without origin resolves local main without fetching", asy
     await git(root, "-c", "user.name=Fixture", "-c", "user.email=" + ["noreply", "example.invalid"].join("@"), "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
-    const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal) => {
+    const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal, options) => {
       calls.push([command, ...args].join(" "));
-      return realProvisionExec(command, args, cwd, signal);
+      return realProvisionExec(command, args, cwd, signal, options);
     });
     expect(result).toEqual({ ok: true, baseBranch: "main", baseRef: head });
     expect(calls.some(call => call.includes(" fetch "))).toBe(false);
@@ -388,12 +388,12 @@ for (const advanceRemote of [false, true]) {
       (await git(subject.worktreeDir, "commit", "--allow-empty", "-m", "next accepted stage"));
       const localNext = (await git(subject.worktreeDir, "rev-parse", "HEAD"));
       let raced = false;
-      const racing: ExecPort = async (command, args, cwd) => {
+      const racing: ExecPort = async (command, args, cwd, env, options) => {
         if (command === "git" && args[0] === "push") {
           raced = true;
           (await git(writer, "push", "origin", deliveryBranch));
         }
-        return (await realExec(command, args, cwd));
+        return (await realExec(command, args, cwd, env, options));
       };
       const refused = await publishPipelineBranch(subject, racing, { acceptedSha: localNext });
       expect(raced).toBe(true);
@@ -557,10 +557,10 @@ test("backup creation is repeatable after checkout failure and never overwrites 
   const { root, repo, subject, local } = (await deliveryProvisionFixture());
   try {
     savePipelines([subject]);
-    const failed = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) =>
+    const failed = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal, options) =>
       args[0] === "worktree" && args[1] === "add"
         ? { code: 1, stdout: "", stderr: "injected checkout failure" }
-        : (await realProvisionExec(command, args, cwd, signal)));
+        : (await realProvisionExec(command, args, cwd, signal, options)));
     expect(failed).toMatchObject({ ok: false, preservedLocalRef: { sha: local } });
     const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
     expect(retry).toMatchObject({ ok: true, sha: subject.baseRef, preservedLocalRef: failed.preservedLocalRef });
@@ -830,6 +830,43 @@ test("async Git fetch and checkout pin a real advanced remote and adopt only tha
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test.each(["direct", "provision"] as const)("portable base consumers fetch without timeout utilities and preserve pinned and failed outcomes: %s", async port => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-base-"));
+  try {
+    const origin = path.join(root, "origin.git"), source = path.join(root, "source"), bin = path.join(root, "bin");
+    await git(root, "init", "--bare", "--initial-branch=main", origin);
+    await git(root, "clone", origin, source);
+    await git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+    await git(source, "push", "origin", "main");
+    const head = await git(source, "rev-parse", "HEAD");
+    fs.mkdirSync(bin);
+    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+    expect(Bun.which("timeout", { PATH: bin })).toBeNull();
+    expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
+    const calls: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];
+    const direct: ExecPort = (command, args, cwd, env, options) => {
+      calls.push({ command, args, timeoutMs: options?.timeoutMs });
+      return realExec(command, args, cwd, { ...env, PATH: bin }, options);
+    };
+    const provision: import("./git").ProvisionExecPort = async (command, args, cwd, signal, options) =>
+      await direct(command, args, cwd, options?.env, { ...options, signal });
+    const resolve = (input: { baseRef?: string }) => port === "direct"
+      ? resolvePipelineBase(source, input, direct) : resolvePipelineBaseAsync(source, input, provision);
+    calls.length = 0;
+    expect(await resolve({})).toEqual({ ok: true, baseBranch: "main", baseRef: head });
+    expect(calls.filter(call => call.args[0] === "fetch")).toEqual([{
+      command: "git", args: ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], timeoutMs: 60_000,
+    }]);
+    calls.length = 0;
+    expect(await resolve({ baseRef: head })).toEqual({ ok: true, baseBranch: "main", baseRef: head });
+    expect(calls.some(call => call.args[0] === "fetch")).toBe(false);
+    await git(source, "remote", "set-url", "origin", path.join(root, "absent.git"));
+    expect(await resolve({})).toMatchObject({ ok: false, error: expect.stringContaining("fetching origin/main:") });
+    fs.unlinkSync(path.join(bin, "git"));
+    expect(await resolve({})).toMatchObject({ ok: false, error: expect.stringContaining("git") });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("async exec reports launch errors, pre-abort, and a killed timeout without continuing", async () => {
   expect((await realProvisionExec("missing-provision-command", [], publicationState)).code).not.toBe(0);
   const abort = new AbortController();
@@ -839,10 +876,11 @@ test("async exec reports launch errors, pre-abort, and a killed timeout without 
   expect(result.stderr).toBe("command cancelled");
   expect(fs.existsSync(marker)).toBe(false);
   const calls: string[] = [];
-  const base = await resolvePipelineBaseAsync(publicationState, {}, async (command, args, cwd) => {
+  const base = await resolvePipelineBaseAsync(publicationState, {}, async (command, args, cwd, signal, options) => {
     if (command === "git" && args[0] === "remote") return { code: 0, stdout: "https://example.invalid/repo.git", stderr: "" };
     calls.push(args.join(" "));
-    return (await realProvisionExec(command, [args[0]!, "0.05s", process.execPath, "-e", "setTimeout(() => {}, 5000)"], cwd));
+    expect(options?.timeoutMs).toBe(60_000);
+    return (await realProvisionExec(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], cwd, signal, { ...options, timeoutMs: 50 }));
   });
   expect(base).toEqual({ ok: false, error: "fetching origin/main: git fetch timed out after 60s" });
   expect(calls).toHaveLength(1);
@@ -865,13 +903,13 @@ for (const interruption of ["timeout", "cancellation"] as const) {
       (await git(source, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
       (await git(source, "config", "filter.slow.required", "true"));
       const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: (await git(source, "rev-parse", "HEAD")) };
-      pending = provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) => {
+      pending = provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal, options) => {
         // Exercise a real killed checkout without making this regression wait
         // sixty seconds. All probes still use the production asynchronous port.
         if (interruption === "timeout" && args[0] === "worktree" && args[1] === "add") {
-          return (await realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal));
+          return (await realProvisionExec(command, args, cwd, signal, { ...options, timeoutMs: 500 }));
         }
-        return (await realProvisionExec(command, args, cwd, signal));
+        return (await realProvisionExec(command, args, cwd, signal, options));
       }, abort.signal);
       for (let attempt = 0; attempt < 200 && !fs.existsSync(marker); attempt += 1) await Bun.sleep(10);
       expect(fs.existsSync(marker)).toBe(true);
@@ -919,9 +957,9 @@ test("interrupted checkout recovery preserves whitespace paths and symlinks acro
     (await git(source, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
     (await git(source, "config", "filter.slow.required", "true"));
     const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: (await git(source, "rev-parse", "HEAD")) };
-    const interrupted = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) => {
-      if (args[0] === "worktree" && args[1] === "add") return (await realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal));
-      return (await realProvisionExec(command, args, cwd, signal));
+    const interrupted = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal, options) => {
+      if (args[0] === "worktree" && args[1] === "add") return (await realProvisionExec(command, args, cwd, signal, { ...options, timeoutMs: 500 }));
+      return (await realProvisionExec(command, args, cwd, signal, options));
     });
     expect(interrupted.ok).toBe(false);
     expect(fs.existsSync(marker)).toBe(true);
@@ -957,9 +995,9 @@ test("interrupted checkout recovery rejects and preserves a changed tracked syml
     (await git(source, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
     (await git(source, "config", "filter.slow.required", "true"));
     const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: (await git(source, "rev-parse", "HEAD")) };
-    const interrupted = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) => {
-      if (args[0] === "worktree" && args[1] === "add") return (await realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal));
-      return (await realProvisionExec(command, args, cwd, signal));
+    const interrupted = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal, options) => {
+      if (args[0] === "worktree" && args[1] === "add") return (await realProvisionExec(command, args, cwd, signal, { ...options, timeoutMs: 500 }));
+      return (await realProvisionExec(command, args, cwd, signal, options));
     });
     expect(interrupted.ok).toBe(false);
     expect(fs.existsSync(marker)).toBe(true);
@@ -993,8 +1031,8 @@ test("async adoption preserves untracked files and edits made after its safety s
   const tracked = path.join(subject.worktreeDir, "tracked.txt");
   const changedAfterScan = "concurrent operator edit\n";
   let injected = false;
-  const racingExec = async (command: string, args: string[], cwd: string, signal?: AbortSignal) => {
-    const result = await realProvisionExec(command, args, cwd, signal);
+  const racingExec: import("./git").ProvisionExecPort = async (command, args, cwd, signal, options) => {
+    const result = await realProvisionExec(command, args, cwd, signal, options);
     if (!injected && command === "git" && args[0] === "rev-parse" && args.includes("--git-dir")) {
       injected = true;
       fs.writeFileSync(tracked, changedAfterScan);
@@ -1050,7 +1088,7 @@ test("default base fetches and resolves origin/main without inspecting a dirty s
 
   expect((await resolvePipelineBase("/repo", {}, exec))).toEqual({ ok: true, baseBranch: "main", baseRef: expectedBase });
   expect(calls).toEqual([
-    "timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+    "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
     "git rev-parse --verify --end-of-options origin/main^{commit}",
   ]);
 });
@@ -1059,11 +1097,11 @@ test("a base fetch the network never answers is killed at its bound and reported
   const calls: string[] = [];
   const exec: ExecPort = (command, args) => {
     calls.push(`${command} ${args.join(" ")}`);
-    return command === "timeout" ? { code: null, stdout: "", stderr: "", signal: "SIGKILL" } : { code: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" };
+    return command === "git" && args[0] === "fetch" ? { code: null, stdout: "", stderr: "", signal: "SIGKILL" } : { code: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" };
   };
 
   expect((await resolvePipelineBase("/repo", {}, exec))).toEqual({ ok: false, error: "fetching origin/main: git fetch timed out after 60s" });
-  expect(calls).toEqual(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]);
+  expect(calls).toEqual(["git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]);
 });
 
 test("an explicit base resolves to an exact SHA without fetching", async () => {
@@ -3264,7 +3302,7 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
     await createPipelineWithDelivery(comparison, box.subject.delivery!.target);
     const head = (await box.commit("reserved.txt", "accepted\n"));
     let takeover: ReturnType<typeof takeoverPipelineDelivery> | undefined;
-    const racing: ExecPort = async (command, args, cwd) => {
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
       if (command === "git" && args[0] === "push") {
         const db = new Database(path.join(publicationState, "state.sqlite"), { readonly: true });
         try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
@@ -3274,7 +3312,7 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
         expect((await realExec("flock", ["-n", lock, "true"], cwd)).code).not.toBe(0);
         takeover = takeoverPipelineDelivery(comparison.id, box.subject.id, 1, "select comparison", "conversation_builder");
       }
-      return (await realExec(command, args, cwd));
+      return (await realExec(command, args, cwd, env, options));
     };
     expect(await publishPipelineBranch(box.subject, racing, { acceptedSha: head })).toMatchObject({ ok: true, sha: head });
     expect((await takeover)?.error).toContain("in flight");
@@ -3421,9 +3459,9 @@ test("a lost push reply is reconciled before explicit takeover and stale owner p
     await createPipelineWithDelivery(comparison, box.subject.delivery!.target);
     const head = (await box.commit("reply.txt", "accepted\n"));
     let pushed = false;
-    const lostReply: ExecPort = async (command, args, cwd) => {
-      if (pushed && command === "timeout") return { code: 124, stdout: "", stderr: "reply lost" };
-      const result = (await realExec(command, args, cwd));
+    const lostReply: ExecPort = async (command, args, cwd, env, options) => {
+      if (pushed && command === "git" && args[0] === "ls-remote") return { code: 124, stdout: "", stderr: "reply lost" };
+      const result = (await realExec(command, args, cwd, env, options));
       if (command === "git" && args[0] === "push") pushed = true;
       return result;
     };
@@ -3490,8 +3528,8 @@ test("post-push settlement contention stays recoverable in the same live Viewer"
   let held: Promise<void> | undefined;
   try {
     const head = (await box.commit("contention.txt", "accepted\n"));
-    const racing: ExecPort = async (command, args, cwd) => {
-      const result = (await realExec(command, args, cwd));
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      const result = (await realExec(command, args, cwd, env, options));
       if (command === "git" && args[0] === "push") held = withPipelineMutation(async () => { await gate; });
       return result;
     };
@@ -3631,7 +3669,7 @@ test("an unreachable remote gets one time-bounded read per publication call (#99
     if (command === "git" && args[0] === "branch") return { code: 0, stdout: `${pipeline().branch}\n`, stderr: "" };
     if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: `${head}\n`, stderr: "" };
     if (command === "git" && args[0] === "remote") return { code: 0, stdout: "git@example.invalid:owner/repo.git\n", stderr: "" };
-    if (command === "timeout") return { code: 124, stdout: "", stderr: "" };
+    if (command === "git" && args[0] === "ls-remote") return { code: 124, stdout: "", stderr: "" };
     return { code: 128, stdout: "", stderr: "remote read must be bounded" };
   };
 
@@ -3642,7 +3680,7 @@ test("an unreachable remote gets one time-bounded read per publication call (#99
     detail: "checking the remote pipeline branch: git remote read timed out after 5s",
   });
   expect(calls.filter((call) => call.includes("ls-remote"))).toEqual([
-    `timeout --signal=KILL 5s git ls-remote --heads origin refs/heads/${pipeline().branch}`,
+    `git ls-remote --heads origin refs/heads/${pipeline().branch}`,
   ]);
   expect(calls.some((call) => call.startsWith("sleep "))).toBe(false);
 });
@@ -3653,7 +3691,7 @@ test("the approval's remote head read is time-bounded and tells transport failur
     const calls: string[] = [];
     const exec: ExecPort = (command, args) => {
       calls.push(`${command} ${args.join(" ")}`);
-      if (command === "timeout") return { code: result.code, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+      if (command === "git" && args[0] === "ls-remote") return { code: result.code, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
       return { code: 128, stdout: "", stderr: "remote read must be bounded" };
     };
     return { result: (await currentPipelineRemoteBranchHead(pipeline(), exec)), calls };
@@ -3662,7 +3700,7 @@ test("the approval's remote head read is time-bounded and tells transport failur
 
   const answered = (await answer({ code: 0, stdout: `${head}\trefs/heads/${pipeline().branch}\n` }));
   expect(answered.result).toEqual({ ok: true, sha: head });
-  expect(answered.calls).toEqual([`timeout --signal=KILL 5s git ls-remote --heads origin refs/heads/${pipeline().branch}`]);
+  expect(answered.calls).toEqual([`git ls-remote --heads origin refs/heads/${pipeline().branch}`]);
 
   expect((await answer({ code: 124 })).result).toEqual({
     ok: false,
@@ -3687,24 +3725,83 @@ test("the approval's remote head read is time-bounded and tells transport failur
   expect((await answer({ code: 0, stdout: "" })).result).toEqual({ ok: false, transient: false, error: "the remote pipeline branch has no exact commit SHA" });
 });
 
-test("a real remote read that hangs is killed at the bound and reads as a network timeout (#1692)", async () => {
-  /* `timeout --signal=KILL` takes itself down with the command, so the child
-     ends on a signal with no exit status. An SSH transport that never answers
-     is the incident's shape, reproduced here without a network. */
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-remote-hang-"));
+test.each(["deadline", "deadline-delayed-marker", "ready-child-expiry", "cancellation", "denied", "transport"] as const)("portable real remote transport preserves outcome and owned cleanup: %s", async mode => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-remote-"));
+  const abort = new AbortController();
+  const sentinel = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+  let pending: ReturnType<typeof currentPipelineRemoteBranchHead> | undefined;
+  let advanceDeadline = false;
+  let restoreDeadlineControl: (() => void) | undefined;
   try {
-    (await git(root, "init", "--initial-branch=main"));
-    (await git(root, "config", "core.sshCommand", "sh -c 'sleep 30' fake-ssh"));
-    (await git(root, "remote", "add", "origin", "ssh://git@example.invalid/owner/repo.git"));
-    const subject = pipeline();
-    subject.worktreeDir = root;
-
-    const read = (await currentPipelineRemoteBranchHead(subject, realExec));
-
-    /* Only a read killed at its bound answers this way; the fake transport
-       would otherwise have run its thirty seconds and exited. */
-    expect(read).toEqual({ ok: false, transient: true, error: "checking the remote pipeline branch: git remote read timed out after 5s" });
+    await git(root, "init", "--initial-branch=main");
+    const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+    const nativeGit = process.platform === "win32" ? Bun.which("git")! : Bun.which("git", { PATH: "/usr/bin:/bin" })!;
+    fs.symlinkSync(nativeGit, path.join(bin, "git"));
+    const marker = path.join(root, "transport-pids"), helper = path.join(root, "transport");
+    fs.writeFileSync(helper, `#!/bin/sh\n${mode === "deadline-delayed-marker" ? '"' + Bun.which("sleep")! + '" 6\n' : ""}echo "$PPID $$" > "$TRANSPORT_PIDS"\n` +
+      (mode === "denied" ? "echo 'Permission denied (publickey).' >&2\nexit 255\n"
+        : mode === "transport" ? "echo 'Connection refused' >&2\nexit 255\n"
+        : `exec "${Bun.which("sleep")!}" 30\n`), { mode: 0o700 });
+    await git(root, "remote", "add", "origin", "ssh://example.invalid/project.git");
+    const subject = { ...pipeline(), worktreeDir: root };
+    let actual: Awaited<ReturnType<typeof realExec>> | undefined;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      expect(options?.timeoutMs).toBe(5_000);
+      if (mode === "ready-child-expiry") {
+        // Keep the executor's real timer running while its remote children start;
+        // cross the deadline only after both owned PIDs are recorded below.
+        const nativeNow = Date.now;
+        const startedAt = nativeNow();
+        const clock = spyOn(Date, "now").mockImplementation(() => startedAt + (advanceDeadline ? 10_000 : 0));
+        restoreDeadlineControl = () => clock.mockRestore();
+      }
+      actual = await realExec(command, args, cwd, { ...env, PATH: bin, GIT_SSH_COMMAND: helper, GIT_SSH_VARIANT: "ssh", TRANSPORT_PIDS: marker }, { ...options, signal: abort.signal });
+      return actual;
+    };
+    expect(Bun.which("timeout", { PATH: bin })).toBeNull();
+    expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
+    pending = currentPipelineRemoteBranchHead(subject, exec);
+    if (mode === "cancellation" || mode === "ready-child-expiry") {
+      for (let n = 0; n < (mode === "ready-child-expiry" ? 1_500 : 500) && !fs.existsSync(marker); n++) await Bun.sleep(10);
+      expect(fs.existsSync(marker)).toBe(true);
+      if (mode === "cancellation") abort.abort();
+      if (mode === "ready-child-expiry") {
+        const pids = fs.readFileSync(marker, "utf8").trim().split(/\s+/).map(Number);
+        expect(pids).toHaveLength(2);
+        advanceDeadline = true;
+      }
+    }
+    const result = await pending;
+    if (mode === "deadline" || mode === "deadline-delayed-marker" || mode === "ready-child-expiry" || mode === "cancellation") {
+      expect(actual).toMatchObject({ code: null, signal: "SIGKILL", stderr: mode === "cancellation" ? "command cancelled" : "command timed out after 5000ms" });
+      expect(result).toEqual({ ok: false, transient: true, error: "checking the remote pipeline branch: git remote read timed out after 5s" });
+    } else {
+      expect(actual?.code).toBe(128);
+      expect(actual?.signal).toBeNull();
+      expect(result).toMatchObject({ ok: false, transient: mode === "transport", error: expect.stringContaining(mode === "denied" ? "Permission denied" : "Connection refused") });
+    }
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    if (mode === "ready-child-expiry" || mode === "cancellation" || mode === "denied" || mode === "transport") {
+      expect(fs.existsSync(marker)).toBe(true);
+      const pids = fs.readFileSync(marker, "utf8").trim().split(/\s+/).map(Number);
+      expect(pids).toHaveLength(2);
+      for (let n = 0; n < 200 && pids.some(alive); n++) await Bun.sleep(10);
+      expect(pids.map(alive)).toEqual([false, false]);
+    } else if (fs.existsSync(marker)) {
+      const recorded = fs.readFileSync(marker, "utf8").trim();
+      if (recorded) {
+        const pids = recorded.split(/\s+/).map(Number);
+        expect(pids).toHaveLength(2);
+        for (let n = 0; n < 200 && pids.some(alive); n++) await Bun.sleep(10);
+        expect(pids.map(alive)).toEqual([false, false]);
+      }
+    }
+    expect(sentinel.exitCode).toBeNull();
+    expect(alive(sentinel.pid)).toBe(true);
   } finally {
+    abort.abort(); await pending;
+    restoreDeadlineControl?.();
+    sentinel.kill(); await sentinel.exited;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);
@@ -3720,11 +3817,11 @@ test("publication pushes only the immutable accepted revision when the branch ad
        sits exactly in that window. Pushing `refs/heads/<branch>` would carry
        this unaccepted commit to origin and leave review fenced on a target that
        never passed; pushing the accepted object cannot. */
-    const racing: ExecPort = async (command, args, cwd) => {
-      if (command === "timeout" && args.includes("ls-remote") && racy === null) {
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      if (command === "git" && args[0] === "ls-remote" && racy === null) {
         racy = (await box.commit("racy.txt", "never accepted\n"));
       }
-      return (await realExec(command, args, cwd));
+      return (await realExec(command, args, cwd, env, options));
     };
 
     const published = await publishPipelineBranch(box.subject, racing, { acceptedSha: accepted });
