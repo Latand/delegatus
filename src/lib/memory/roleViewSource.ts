@@ -22,6 +22,8 @@ const owner = globalThis as typeof globalThis & {
     rows: Map<string, { revision: number; row: CurationRuleInput | null; bytes: number }> };
   __llvCurationInputs?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { stamp: string; row: CurationScopeInput; calls: ScopeCalls; bytes: number }> };
+  __llvScopeReadMetadata?: { file: string; identity: string | null;
+    rows: Map<string, { revision: number; value: { revision: number; curatedAt: string | null; hasPass: boolean; departuresSince: string } }> };
   __llvCurationScopeProjection?: { file: string; identity: string | null; bytes: number;
     rows: Map<string, { revision: number; row: RoleMemoryScopeRow; bytes: number }> };
 };
@@ -564,8 +566,29 @@ async function projectedScopeRowsCooperatively(rowKeys: readonly string[]): Prom
   return rows;
 }
 
-export function roleScopeReadMetadata(scope: string, pass: string) {
+type ScopeReadMetadata = { revision: number; curatedAt: string | null; hasPass: boolean; departuresSince: string };
+
+/** One answer per stored scope row, pass and database file. The query below
+ * parses the whole scope row, retained history included, on the serving loop:
+ * tens of megabytes for a long-lived scope. A curator pages through one scope
+ * at one stored revision, so every page after the first reads only the row's
+ * revision column. */
+export function roleScopeReadMetadata(scope: string, pass: string): ScopeReadMetadata {
+  const file = statePath("state.sqlite"), rowKey = `s:${scope}`;
   const db = reader();
+  const stored = () => db.query<{ row_revision: number }, [string]>(
+    "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?").get(rowKey)?.row_revision;
+  const identity = databaseFileIdentity(file), version = stored();
+  let cache = owner.__llvScopeReadMetadata;
+  if (!cache || cache.file !== file || cache.identity !== identity) {
+    cache = owner.__llvScopeReadMetadata = { file, identity, rows: new Map() };
+  }
+  const key = JSON.stringify([rowKey, pass]), held = cache.rows.get(key);
+  if (held && version !== undefined && held.revision === version) {
+    cache.rows.delete(key); cache.rows.set(key, held);
+    return { ...held.value };
+  }
+  if (held) cache.rows.delete(key);
   const row = db.query<{ revision: number; curatedAt: string | null; hasPass: number; departuresSince: string | null }, [string, string, string]>(`
     SELECT json_extract(s.value_json, '$.revision') AS revision,
       json_extract(s.value_json, '$.curatedAt') AS curatedAt,
@@ -575,9 +598,16 @@ export function roleScopeReadMetadata(scope: string, pass: string) {
         THEN json_extract(h.value, '$.at') END) AS departuresSince
     FROM state_rows s LEFT JOIN json_each(s.value_json, '$.history') h
     WHERE s.collection='role_memory' AND s.row_key=? GROUP BY s.row_key
-  `).get(pass, pass, `s:${scope}`);
-  return row ? { revision: row.revision ?? 0, curatedAt: row.curatedAt, hasPass: !!row.hasPass, departuresSince: row.departuresSince ?? "" } :
+  `).get(pass, pass, rowKey);
+  const value: ScopeReadMetadata = row ? { revision: row.revision ?? 0, curatedAt: row.curatedAt, hasPass: !!row.hasPass, departuresSince: row.departuresSince ?? "" } :
     { revision: 0, curatedAt: null, hasPass: false, departuresSince: "" };
+  // Keep the answer only when the row and the file stayed the same across the
+  // read; a peer write in between leaves the next call to read again.
+  if (row && version !== undefined && stored() === version && databaseFileIdentity(file) === identity) {
+    cache.rows.set(key, { revision: version, value: { ...value } });
+    while (cache.rows.size > 64) cache.rows.delete(cache.rows.keys().next().value!);
+  }
+  return value;
 }
 
 /** Decode the displayed scopes and their rule/task lineage, excluding unrelated
