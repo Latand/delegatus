@@ -13,7 +13,6 @@ import {
   viewerCandidateGateKey,
   viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   viewerComposeServiceFromConfig,
-  viewerComposeServiceWithExistingTmux,
   type ViewerComposeService,
 } from "./candidateContainer";
 
@@ -34,7 +33,6 @@ const composeService = {
     PORT: "8898",
     LLV_RUNTIME_EVENTS: "0",
     LLV_RUNTIME_HOST_SOCKET: "/compose/runtime.sock",
-    TMUX_TMPDIR: "/tmp",
     LLV_DOCKER_NSENTER_SHIMS: "1",
     LLV_TRANSCRIBE_BACKEND: "chatgpt",
     HF_HOME: "/home/user/.cache/huggingface",
@@ -51,82 +49,9 @@ const composeService = {
   "user": "1000:1000",
   volumes: [
     { type: "bind", source: "/home/user", target: "/home/user", bind: {} },
-    { type: "bind", source: "/tmp/tmux-1000", target: "/tmp/tmux-1000", bind: {} },
   ],
   working_dir: "/app",
 } satisfies ViewerComposeService;
-
-test("existing tmux endpoints survive repeated Compose resolution without changing state or configured mounts", () => {
-  const state = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-endpoint-"));
-  const marker = path.join(state, "legacy-tmux-migration-complete");
-  try {
-    const configured = { ...composeService, environment: { TMUX_TMPDIR: "/configured/tmux" } };
-    expect(viewerComposeServiceWithExistingTmux(state, configured)).toBe(configured);
-    fs.writeFileSync(marker, "completed\n");
-    const before = fs.statSync(marker);
-    const resolved = viewerComposeServiceWithExistingTmux(state, configured);
-    expect(resolved.environment.TMUX_TMPDIR).toBe("/run/user/1000/agent-log-viewer");
-    expect(resolved.volumes.at(-1)).toEqual({
-      type: "bind", source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", bind: {},
-    });
-    expect(viewerComposeServiceWithExistingTmux(state, resolved)).toEqual(resolved);
-    expect(viewerComposeServiceWithExistingTmux(state, configured)).toEqual(resolved);
-    expect(configured.environment.TMUX_TMPDIR).toBe("/configured/tmux");
-    expect(configured.volumes).toHaveLength(2);
-    expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
-    expect(fs.statSync(marker).mtimeMs).toBe(before.mtimeMs);
-    expect(fs.readdirSync(state)).toEqual(["legacy-tmux-migration-complete"]);
-    expect(viewerComposeServiceWithExistingTmux(state, { ...configured, user: "1201:1201" }).environment.TMUX_TMPDIR)
-      .toBe("/run/user/1201/agent-log-viewer");
-    expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, user: "viewer" })).toThrow("numeric uid");
-    for (const volume of [
-      { type: "bind" as const, source: "/elsewhere", target: "/run/user/1000/agent-log-viewer", bind: {} },
-      { type: "bind" as const, source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", read_only: true, bind: {} },
-    ]) {
-      expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, volumes: [volume] }))
-        .toThrow("writable host directory");
-    }
-  } finally { fs.rmSync(state, { recursive: true, force: true }); }
-});
-
-test("explicit external tmux retains its configured host bind without a migration marker", () => {
-  const state = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-explicit-endpoint-"));
-  try {
-    for (const configuredEndpoint of ["/run/user/1000/agent-log-viewer", "/configured/tmux", "", undefined]) {
-      const configured: ViewerComposeService = {
-        ...composeService,
-        environment: { LLV_LEGACY_TMUX_EXTERNAL: "1", ...(configuredEndpoint === undefined ? {} : { TMUX_TMPDIR: configuredEndpoint }) },
-      };
-      const endpoint = configuredEndpoint || "/tmp";
-      const volume = { type: "bind" as const, source: endpoint, target: endpoint, bind: {} };
-      const originalEnvironment = { ...configured.environment };
-      const resolved = viewerComposeServiceWithExistingTmux(state, configured);
-      expect(resolved.environment.TMUX_TMPDIR).toBe(endpoint);
-      expect(resolved.volumes).toEqual([...configured.volumes, volume]);
-      expect(viewerComposeServiceWithExistingTmux(state, resolved)).toEqual(resolved);
-      expect(viewerComposeServiceWithExistingTmux(state, configured)).toEqual(resolved);
-      const args = viewerCandidateDockerArgs(candidate, resolved, { runtimeSocket: "/runtime.sock", tmuxTmpdir: endpoint });
-      expect(environmentFromArgs(args).TMUX_TMPDIR).toBe(endpoint);
-      expect(valuesAfter(args, "--mount")).toContain(`type=bind,source=${endpoint},target=${endpoint}`);
-      for (const conflict of [{ ...volume, source: "/elsewhere" }, { ...volume, read_only: true }]) {
-        for (const volumes of [[conflict], [volume, conflict]]) {
-          expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, volumes }))
-            .toThrow("writable host directory");
-        }
-      }
-      expect(configured.volumes).toHaveLength(2);
-      expect(configured.environment).toEqual(originalEnvironment);
-    }
-    expect(() => viewerComposeServiceWithExistingTmux(state, {
-      ...composeService, environment: { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "relative/path" },
-    })).toThrow("must be absolute");
-    for (const flag of [undefined, "0"]) {
-      const configured = { ...composeService, environment: { ...(flag === undefined ? {} : { LLV_LEGACY_TMUX_EXTERNAL: flag }), TMUX_TMPDIR: "/configured/tmux" } };
-      expect(viewerComposeServiceWithExistingTmux(state, configured)).toBe(configured);
-    }
-    expect(fs.readdirSync(state)).toEqual([]);
-  } finally { fs.rmSync(state, { recursive: true, force: true }); }
-});
 
 function valuesAfter(args: string[], flag: string): string[] {
   return args.flatMap((value, index) => value === flag ? [args[index + 1]!] : []);
@@ -177,7 +102,6 @@ test("promoted candidate derives its runtime contract from Compose", () => {
   const args = viewerCandidateDockerArgs(candidate, { ...composeService, environment: { ...composeService.environment,
     LLV_HOT_STATE_RELEASE_REVISION: "old-release", DELEGATUS_HOT_STATE_RELEASE_REVISION: "old-alias-release" } }, {
     runtimeSocket: "/state/runtime-host.sock",
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const environment = environmentFromArgs(args);
   expect(environment.LLV_HOT_STATE_RELEASE_REVISION).toBe(candidate.revision);
@@ -185,7 +109,6 @@ test("promoted candidate derives its runtime contract from Compose", () => {
 
   expect(runtimeEventsEnabled(environment as NodeJS.ProcessEnv)).toBe(true);
   expect(runtimeHostSocket(environment as NodeJS.ProcessEnv)).toBe("/state/runtime-host.sock");
-  expect(environment.TMUX_TMPDIR).toBe("/run/user/1000/agent-log-viewer");
   expect(environment.HF_HOME).toBe("/home/user/.cache/huggingface");
   expect(environment.LLV_TRANSCRIBE_BACKEND).toBe("chatgpt");
   expect(environment.LLV_DOCKER_NSENTER_SHIMS).toBe("1");
@@ -201,7 +124,6 @@ test("promoted candidate derives its runtime contract from Compose", () => {
   ]);
   expect(valuesAfter(args, "--mount")).toEqual([
     "type=bind,source=/home/user,target=/home/user",
-    "type=bind,source=/tmp/tmux-1000,target=/tmp/tmux-1000",
   ]);
   expect(args[args.indexOf("--restart") + 1]).toBe("unless-stopped");
   expect(args[args.indexOf("--network") + 1]).toBe("host");
@@ -225,7 +147,7 @@ test("candidate and Compose snapshots exclude unapproved ambient API keys", () =
   expect(snapshot.services.viewer.environment[pluginKey]).toBeUndefined();
   expect(snapshot.services.viewer.environment[serviceKey]).toBe("service-fixture");
   const args = viewerCandidateDockerArgs(candidate, service, {
-    runtimeSocket: "/runtime.sock", tmuxTmpdir: "/tmp/tmux",
+    runtimeSocket: "/runtime.sock",
   });
   expect(environmentFromArgs(args)[pluginKey]).toBeUndefined();
   expect(environmentFromArgs(args)[serviceKey]).toBe("service-fixture");
@@ -237,7 +159,6 @@ test("candidate accepts an older Compose snapshot without supplementary groups",
   const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer: legacyViewer } }));
   const args = viewerCandidateDockerArgs(candidate, service, {
     runtimeSocket: "/state/runtime-host.sock",
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
 
   expect(service.group_add).toEqual([]);
@@ -251,7 +172,6 @@ test("promoted candidate validates and pins the operator registry backend mode",
   } satisfies ViewerComposeService;
   const args = viewerCandidateDockerArgs(candidate, configured, {
     runtimeSocket: "/state/runtime-host.sock",
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
 
   expect(valuesAfter(args, "-e").filter((entry) => entry.startsWith(`${AGENT_REGISTRY_SQLITE_ENV}=`)))
@@ -261,7 +181,6 @@ test("promoted candidate validates and pins the operator registry backend mode",
     environment: { ...configured.environment, [AGENT_REGISTRY_SQLITE_ENV]: "invalid" },
   }, {
     runtimeSocket: "/state/runtime-host.sock",
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   })).toThrow("LLV_AGENT_REGISTRY_SQLITE must be off, dual-write, read, or sqlite");
 });
 
@@ -280,7 +199,6 @@ test("actual Viewer Compose keys remain covered by the candidate generator", () 
   const service = viewerComposeServiceFromConfig(config.stdout.toString());
   const args = viewerCandidateDockerArgs(candidate, service, {
     runtimeSocket: "/state/runtime-host.sock",
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const environment = environmentFromArgs(args);
   expect(service.group_add).toEqual(["957"]);
@@ -314,19 +232,15 @@ test("runtime-host propagates every Viewer Compose interpolation input", () => {
     LLV_UID: "1201",
     LLV_GID: "1202",
     LLV_DOCKER_GID: "1203",
-    LLV_TMUX_TMPDIR: "/run/user/1201/agent-log-viewer",
   });
   expect(config.services["runtime-host"].environment).toMatchObject({
     LLV_UID: "1201",
     LLV_GID: "1202",
     LLV_DOCKER_GID: "1203",
-    LLV_TMUX_TMPDIR: "/run/user/1201/agent-log-viewer",
     LLV_ENV_FILE: expect.any(String),
   });
   expect(config.services.viewer.user).toBe("1201:1202");
   expect(config.services.viewer.group_add).toEqual(["1203"]);
-  expect(config.services.viewer.environment.TMUX_TMPDIR).toBe("/run/user/1201/agent-log-viewer");
-  expect(config.services.viewer.volumes.map((volume) => volume.source)).toContain("/tmp/tmux-1201");
 });
 
 test("managed candidate launch retains service.env telemetry opt-outs", () => {
@@ -335,7 +249,6 @@ test("managed candidate launch retains service.env telemetry opt-outs", () => {
     const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer: config.services.viewer } }));
     const args = viewerCandidateDockerArgs(candidate, service, {
       runtimeSocket: "/state/runtime-host.sock",
-      tmuxTmpdir: "/tmp",
     });
     const environment = environmentFromArgs(args);
     expect(environment[optOut.split("=", 1)[0]!], optOut).toBe(optOut.split("=", 2)[1]);
@@ -377,7 +290,6 @@ test("rename slice 3: a DELEGATUS_ Compose input wins over its LLV_ name, and th
   const both = resolvedCompose({ DELEGATUS_UID: "1301", LLV_UID: "1201", LLV_GID: "1202" });
   expect(both.services["runtime-host"].environment.LLV_UID).toBe("1301");
   expect(both.services.viewer.user).toBe("1301:1202");
-  expect(both.services.viewer.volumes.map((volume) => volume.source)).toContain("/tmp/tmux-1301");
 
   const legacy = resolvedCompose({ LLV_UID: "1201", LLV_VIEWER_PORT: "8911" });
   expect(legacy.services["runtime-host"].environment).toMatchObject({ LLV_UID: "1201", LLV_VIEWER_PORT: "8911" });
@@ -396,7 +308,6 @@ test("candidate executes the Compose guard with its runtime launch grant", () =>
   const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer } }));
   const args = viewerCandidateDockerArgs(candidate, service, {
     runtimeSocket: "/state/runtime-host.sock",
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const command = args.slice(args.indexOf(candidate.image) + 1);
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-viewer-guard-"));
@@ -444,7 +355,7 @@ test.each([true, false, undefined])("candidate preserves Compose create_host_pat
     ...composeService,
     volumes: [{ type: "bind", source: "/fixture/missing", target: "/data", read_only: true, bind: { create_host_path: createHostPath } }],
   } } }));
-  const args = viewerCandidateDockerArgs(candidate, service, { runtimeSocket: "/runtime.sock", tmuxTmpdir: "/tmp/tmux" });
+  const args = viewerCandidateDockerArgs(candidate, service, { runtimeSocket: "/runtime.sock" });
   expect(valuesAfter(args, "--volume")).toEqual(createHostPath === true ? ["/fixture/missing:/data:ro"] : []);
   expect(valuesAfter(args, "--mount")).toEqual(createHostPath === true ? [] : ["type=bind,source=/fixture/missing,target=/data,readonly"]);
 });
@@ -457,17 +368,14 @@ test("candidate refuses unsupported or malformed bind options", () => {
   }
   for (const [source, bind] of [["/source:other", { create_host_path: true }], ["/source,readonly", {}], ["relative", {}]] as const) {
     expect(() => viewerCandidateDockerArgs(candidate, { ...composeService, volumes: [{ type: "bind", source, target: "/data", bind }] },
-      { runtimeSocket: "/runtime.sock", tmuxTmpdir: "/tmp/tmux" })).toThrow();
+      { runtimeSocket: "/runtime.sock" })).toThrow();
   }
 });
 
-test("retired external mode adds no supervisor mount or environment switch", () => {
-  const args = viewerCandidateDockerArgs(candidate, composeService, {
-    runtimeSocket: "/state/runtime-host.sock",
-    tmuxTmpdir: "/fixture/tmux",
-    ...{ legacyTmuxExternal: "1" },
-  });
-  expect(environmentFromArgs(args).LLV_LEGACY_TMUX_EXTERNAL).toBeUndefined();
-  expect(valuesAfter(args, "--mount")).not.toContain("type=bind,source=/fixture/tmux,target=/fixture/tmux");
-  expect(environmentFromArgs(args).TMUX_TMPDIR).toBe("/fixture/tmux");
+test("Compose configures no tmux endpoint, mount or switch for any service", () => {
+  const config = resolvedCompose({ LLV_TMUX_TMPDIR: "/run/user/1201/agent-log-viewer", LLV_LEGACY_TMUX_EXTERNAL: "1" });
+  for (const service of Object.values(config.services)) {
+    expect(Object.keys(service.environment ?? {}).filter((name) => /tmux/i.test(name))).toEqual([]);
+    expect((service.volumes ?? []).filter((volume) => /tmux/i.test(`${volume.source}:${volume.target}`))).toEqual([]);
+  }
 });
