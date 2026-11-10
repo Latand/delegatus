@@ -1,5 +1,5 @@
 import { FLOW_ARCHIVE } from "@/lib/flows/retirement";
-import { registryLivenessRows, registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForPath, registryLivenessRows, registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { realExec } from "@/lib/workflows/provision";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -349,8 +349,9 @@ export async function refreshMergedFlowIds(flows: Flow[], overrides: ReaperActua
 }
 
 function profileForPath(snapshot: ReturnType<AgentRegistry["snapshot"]>, pathname: string) {
-  return Object.values(snapshot.entries).find((entry) => entry.artifactPath === pathname)?.launchProfile
-    ?? Object.values(snapshot.conversations)
+  // Indexed, in collection order: the first match is the one a search finds.
+  return registryRowsMatching(snapshot, "entries", "artifactPath", pathname)[0]?.launchProfile
+    ?? registryConversationsForPath(snapshot, pathname)
       .flatMap((conversation) => conversation.generations)
       .find((generation) => generation.path === pathname)?.launchProfile
     ?? null;

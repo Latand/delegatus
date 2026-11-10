@@ -247,3 +247,44 @@ test("the failed-launch check reads no receipt for a first message that settled"
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 60_000);
+
+test("a reaper cycle finds a hosted pane's conversation and entry by index", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-hosted-lookup-"));
+  const sidecar = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  process.env.LLV_STATE_DIR = directory;
+  process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+  delete process.env.LLV_REAPER_ENABLED;
+  const dataset = buildRegistryPerformanceDataset(directory, { ...scaledRegistryPerformanceShape(0.02), hotTerminalRows: 0 });
+  const reads = new Map<string, number>();
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: dataset.filename,
+    onSqliteRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count),
+  });
+  try {
+    await registry.prepareReadOnlySnapshot();
+    /* The oldest conversation and its entry are archived history. */
+    const pathname = dataset.conversationPaths[0]!;
+    const cycle = async (hosts: TranscriptHost[]) => {
+      reads.clear();
+      const report = await runReaperCycle({
+        registry, hosts, files: [],
+        actuation: { terminalizeStaleSpawns: async () => ({ examined: 0, terminalized: [], recovered: [] }) },
+      });
+      return { agents: report.agents.length, entries: reads.get("entries") ?? 0, conversations: reads.get("conversations") ?? 0 };
+    };
+    await cycle([]);
+    const empty = await cycle([]);
+
+    const hosted = await cycle([runtimeHost(pathname)]);
+
+    console.log(JSON.stringify({ probe: "hosted-pane-archive-reads", empty, hosted, archivedEntries: dataset.shape.entries }));
+    expect(hosted.agents).toBe(1);
+    expect(hosted.entries - empty.entries).toBeLessThanOrEqual(2);
+    expect(hosted.conversations - empty.conversations).toBeLessThanOrEqual(2);
+  } finally {
+    registry.close();
+    if (sidecar === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = sidecar;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 60_000);

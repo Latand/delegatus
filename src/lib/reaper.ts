@@ -1,5 +1,6 @@
 import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryConversation, RegistryFile, TmuxHostEvidence } from "@/lib/agent/registry";
+import { registryConversationsForPath, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import type { TranscriptHost } from "@/lib/agent/transcriptHost";
 import type { Flow, Round } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
@@ -91,14 +92,16 @@ const TTL_SECONDS: Record<ReaperClass, number> = {
   "dead-transcript": 30 * 60,
 };
 
+/* Both lookups run once per hosted pane on every cycle. They read the path
+   and artifact indexes; a search through the rows themselves read every
+   archived conversation and entry for each pane. Each index answers in
+   collection order, so the first match is the one a search would find. */
 function conversationForPath(registry: RegistryFile, pathname: string): RegistryConversation | null {
-  return Object.values(registry.conversations).find((conversation) =>
-    conversation.generations.some((generation) => generation.path === pathname)
-    || conversation.continuityPaths.includes(pathname)) ?? null;
+  return registryConversationsForPath(registry, pathname)[0] ?? null;
 }
 
 function profileForPath(registry: RegistryFile, pathname: string): LaunchProfile | null {
-  const direct = Object.values(registry.entries).find((entry) => entry.artifactPath === pathname)?.launchProfile;
+  const direct = registryRowsMatching(registry, "entries", "artifactPath", pathname)[0]?.launchProfile;
   if (direct) return direct;
   const conversation = conversationForPath(registry, pathname);
   return conversation?.generations.find((generation) => generation.path === pathname)?.launchProfile
