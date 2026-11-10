@@ -60,6 +60,9 @@ import * as scanCache from "@/lib/scanner/scanCache";
 import * as transcriptHost from "@/lib/agent/transcriptHost";
 import * as tmux from "@/lib/tmux";
 import { GET as conversationsGET } from "@/app/api/conversations/route";
+import { GET as filesGET } from "@/app/api/files/route";
+import { createFilesProjectionQueue, type FilesProjectionQueue } from "@/app/api/files/projectionQueue";
+import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 const W1 = `w_${"a".repeat(32)}`;
@@ -1096,4 +1099,113 @@ test("refusal transition retains the accepted ID for an authorized member", asyn
     await cache.reconcileCreations();
     expect(cache.creationCards().some(row => row.receipt?.id === pipeline.id && row.status === "refused")).toBe(true);
   } finally { observer.mockRestore(); cache.dispose(); }
+});
+
+describe("a cold pinned board scope the projection queue refuses", () => {
+  const queues = globalThis as typeof globalThis & { __llvFilesProjectionQueue?: FilesProjectionQueue };
+  let release: (() => void) | undefined;
+  let held: Promise<unknown> | undefined;
+  let queue: FilesProjectionQueue;
+  /* The queue runs on a clock and a deadline timer the test owns: a request waits
+     until the queue has taken its build (its timer is armed then), and a deadline
+     passes when the test advances the clock, never after a real delay. */
+  const maxWaitMs = 30_000;
+  let clock = 0;
+  let armed: Array<{ callback: () => void; cancelled: boolean }> = [];
+  let armWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const queued = (count: number) => armed.length >= count ? Promise.resolve() : new Promise<void>(resolve => { armWaiters.push({ count, resolve }); });
+  const expireWaiting = () => {
+    clock += maxWaitMs + 1;
+    for (const entry of armed.filter(candidate => !candidate.cancelled)) { entry.cancelled = true; entry.callback(); }
+  };
+  let ownId: string;
+  let foreignId: string;
+  const pinned = (identity: string, actor?: Member) => {
+    const url = `http://localhost/api/files?view=summary&path=${encodeURIComponent(identity)}`;
+    return actor ? request(new URL(url).pathname + new URL(url).search, actor) : new NextRequest(url, { headers: { host: "localhost" } });
+  };
+  const conversationIn = (project: string, suffix: number) => {
+    const registry = agentRegistry();
+    const receipt = registry.beginSpawn("codex", root, { project, title: `${project} conversation` });
+    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(suffix) }, artifactPath: path.join(root, `${project}-${suffix}.jsonl`), cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+    return receipt.conversationId;
+  };
+  beforeEach(() => {
+    ownId = conversationIn("repo-alpha", 11);
+    foreignId = conversationIn("repo-beta", 12);
+    scanCache.resetFilesRouteCacheForTests();
+    scanCache.setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
+    setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") }, timeoutMs: 30_000 });
+    // One build holds the only worker slot, so a later scope waits past its bound.
+    clock = 0;
+    armed = [];
+    armWaiters = [];
+    queue = createFilesProjectionQueue({
+      maxDepth: 4,
+      maxWaitMs,
+      now: () => clock,
+      timer: (callback) => {
+        const entry = { callback, cancelled: false };
+        armed.push(entry);
+        for (const waiter of armWaiters) if (armed.length >= waiter.count) waiter.resolve();
+        return { cancel: () => { entry.cancelled = true; } };
+      },
+    });
+    queues.__llvFilesProjectionQueue = queue;
+    held = queue.run(() => new Promise<{ timing: string }>(resolve => { release = () => resolve({ timing: "" }); }));
+    delete (globalThis as { __llvFilesProjectionCache?: unknown }).__llvFilesProjectionCache;
+  });
+  afterEach(async () => {
+    release?.();
+    await held;
+    queues.__llvFilesProjectionQueue = undefined;
+    scanCache.setFileScanRunnerForTests(null);
+    scanCache.resetFilesRouteCacheForTests();
+    setFilesResponseWorkerRuntimeForTests(null);
+    shutdownFilesResponseWorker("test");
+  });
+
+  test("a member's own conversation gets a 503 with no rows", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      for (const actor of [member, manager]) {
+        const reply = filesGET(pinned(ownId, actor));
+        await queued(armed.length + 1);
+        expireWaiting();
+        const response = await reply;
+        expect(response.status).toBe(503);
+        const text = await response.text();
+        expect(JSON.parse(text)).toEqual({ error: "board unavailable" });
+        expect(text).not.toContain("files");
+        expect(response.headers.get("etag")).toBeNull();
+      }
+    } finally { warn.mockRestore(); }
+  });
+
+  test("a foreign conversation is refused before the queue is touched", async () => {
+    const before = queue.diagnostics();
+    const response = await filesGET(pinned(foreignId, member));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "workspace_forbidden" });
+    expect(queue.diagnostics()).toEqual(before);
+  });
+
+  test("membership removed during the queue wait gives 403", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const pending = filesGET(pinned(ownId, member));
+      await queued(2);
+      expect(queue.diagnostics().waiting).toBe(1);
+      store.removeWorkspaceMember(W1, member.id);
+      expireWaiting();
+      expect((await pending).status).toBe(403);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("no session gets the sign-in refusal before the queue", async () => {
+    const before = queue.diagnostics();
+    const response = await filesGET(pinned(ownId));
+    expect(response.status).toBe(401);
+    expect(queue.diagnostics()).toEqual(before);
+  });
 });

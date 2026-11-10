@@ -2,6 +2,7 @@
 
 import { startTransition, useEffect, useRef, useState } from "react";
 
+import { modelDisplayName } from "@/lib/agent/models";
 import { createFreshAwareCoalescer } from "@/lib/asyncCoalescer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { DiskPressure } from "@/lib/state/diskPressure";
@@ -795,7 +796,7 @@ function SessionRow({
   const detail = [
     session.role,
     session.stage,
-    session.model,
+    session.model ? modelDisplayName(session.engine ?? "", session.model) : null,
     session.project,
   ].filter((value): value is string => Boolean(value));
   /* Live rows keep the kill button locked; the first click only arms it and a
