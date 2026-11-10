@@ -473,7 +473,7 @@ reuse and after completion. Dirty trees never read or create pass receipts.
 Privacy, frozen install and the advisory audit always run fresh. The runtime
 build and its consumers reuse together; a partial runtime chain rebuilds.
 Head commit and branch also bind history-sensitive tests. Pass receipts expire
-after seven days. Each receipt family retains at most 256 records and 32 MiB; green head files, one record per test file for every lane, retain 8192 records and 256 MiB. Unavailable or malformed entries run the check again.
+after seven days. Each receipt family retains at most 256 records and 32 MiB; green head files, one record per test file for every lane, retain 8192 records and 256 MiB, and step passes retain 8192 records. Unavailable or malformed entries run the check again.
 Each reuse prints the step, recorded time, tree and base with its reason.
 Types, lint and tests run in one private, canonical environment
 (`checkEnvironment` in `scripts/gate-cache.ts`). An agent's session, forge
@@ -556,7 +556,8 @@ systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
 refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted. Linux commands run in a transient service with
 `KillMode=control-group`, a two-second TERM-to-KILL bound and a finite execution deadline
-(`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
+(`LLV_OWNED_RUN_TIMEOUT_MS`; a command sent through `gate-slot.sh` without one gets an hour, a
+runner started any other way fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
 When no user systemd manager is reachable (including a container with a
