@@ -155,7 +155,7 @@ justifies a store of Delegatus's own, and why it does not compete.
 | `stage_report` | `src/lib/mcp/server.ts:3216`, `reportStageCompletion` at `engine.ts:11113` | The one completion channel. It resolves the calling conversation to its live attempt (`resolveStageCompletionTarget`, `engine.ts:10952`), records the report, and answers the agent. "The stage settles when this turn ends, so you may keep working after it" (`prompts.ts:107`). |
 | The role registry | `src/lib/roles/types.ts:1`, `src/lib/roles/defaults.ts` | Twelve roles: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, issue-reporter, visual-critic. A fixer is the builder in `mode: apply-fixes` (`defaults.ts:223`). |
 | One-turn headless Codex | `runHeadlessCodexOnce`, `src/lib/agent/headless.ts:477` | A bounded, read-only, schema-free single answer. The rotation digest uses it with a small model (`handoffDigest.ts:562`). |
-| State in SQLite | `SqliteStateCollection`, `src/lib/state/sqliteStateStore.ts:919`; `docs/design/state-sqlite-migration.md` decision 1 | Durable collections in `state.sqlite` with WAL, integrity checks and the ten-minute backups. "No new database file is introduced." `patchSync` with a `companion` (`sqliteStateStore.ts:1338-1368`) writes two collections of the same database in one transaction. |
+| State in SQLite | `SqliteStateCollection`, `src/lib/state/sqliteStateStore.ts:919`; `docs/design/state-sqlite-migration.md` decision 1 | Durable collections in `state.sqlite` with WAL, integrity checks and the hourly backups. "No new database file is introduced." `patchSync` with a `companion` (`sqliteStateStore.ts:1338-1368`) writes two collections of the same database in one transaction. |
 | Privacy detectors | `staticSensitiveClasses`, `src/lib/privacy/staticDetectors.ts:32`; `scrubIssueReport`, `src/lib/issueReports/scrub.ts:67` | Hints for home paths, credentials, private addresses and ids, already used on text bound for a public issue. |
 | Linked lane rows | `src/lib/links/laneFeed.ts:1-7` | By construction carry identifiers and counts only: "no prompt, spec, finding text, summary, path or conversation id". |
 | The board maintainer | `docs/design/board-maintainer.md` | A per-project agent on the seat tick, every few hours, with board tools. |
@@ -230,7 +230,7 @@ launch envelope holds on its own; 2.6 says where such a block goes.
 
 **Storage.** Three collections in `state.sqlite` through
 `SqliteStateCollection`, so the store inherits WAL, the activation integrity
-check and the ten-minute backups, and adds no database file:
+check and the hourly backups, and adds no database file:
 
 | Collection | One record per | Fields |
 | --- | --- | --- |

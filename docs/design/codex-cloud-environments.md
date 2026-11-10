@@ -91,8 +91,21 @@ never retries it. After its cooldown, a trigger opens another bounded window
 that reuses all setup receipts and the original creation intent. The triggers
 are a pipeline stage that asks for that project/account environment, an
 operator's environment choice, changed account credential metadata, and the
-first look of a newly started release. Stage admission itself still prepares
-its binding under the same cooldown. Pending approval is
+first look of a newly started release. A trigger that arrives inside the
+cooldown stays outstanding and is served once when the cooldown ends. Stage
+admission itself still prepares its binding under the same cooldown.
+
+The worker prepares only the repository's default branch, so one binding
+decides whether a pair is due: the unresolved-ref binding while the
+default-branch lookup is failing, otherwise the default branch's own binding.
+Bindings of other refs belong to the stages that prepared them and never make
+the pair due. The default branch of each pair is remembered from the last
+successful lookup and stored beside the cursor; a pair with no remembered
+branch and no recorded failure owes one lookup. A failed lookup has the same
+budget as a preparation: a ten-minute window of three failures, two and four
+seconds apart, then the cooldown. A changed sign-in or choice opens a new
+window, so the pair stays due until its binding is revalidated or that budget
+is spent. Pending approval is
 scheduled two seconds later. A confirmed terminal FAILED approval clears its
 active operation receipt and advances a persisted approval-attempt counter. The
 next permitted attempt uses a fresh idempotency key with the same configuration
@@ -107,7 +120,8 @@ after 24 hours. Stage admission validates its selected binding again.
 
 When a whole walk finds nothing due the worker goes quiet. Every 30 seconds it
 compares the project list, the accounts' credential metadata and the bindings
-revision with what the walk saw, and it walks again when one of them changed,
+revision with what the walk saw (a change of project or account during a walk
+starts that walk's count again), and it walks again when one of them changed,
 when the earliest binding timer arrives, when a trigger names a pair, or after
 ten minutes (for a changed remote, account pool or legacy project choice).
 

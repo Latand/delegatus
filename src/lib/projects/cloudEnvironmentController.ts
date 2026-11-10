@@ -25,19 +25,33 @@ type SavedBinding = ReturnType<typeof readCloudEnvironmentBindings>["bindings"][
 /** An unavailable binding still inside its short reconciliation window. Past
  * the window (three failures, or the setup deadline) the outcome is terminal. */
 const reconciling = (row: SavedBinding, now: number) => row.retries < 3 && row.deadlineAt > now;
-/** Whether the background walk contacts the provider for one pair.
+/** The one binding that decides whether the background walk contacts the
+ * provider for a pair. The walk prepares only the repository's default branch,
+ * so it answers for two rows: the unresolved-ref row (`ref: ""`), which exists
+ * while the default-branch lookup is failing and therefore speaks for the
+ * pair's latest outcome, and otherwise the default branch's own row. Rows of
+ * other refs belong to the stages that prepared them. `"lookup"` means the
+ * default branch is unknown and no failure is recorded, so one lookup is owed;
+ * `"absent"` means the default branch has no binding yet. */
+export function cloudEnvironmentGate(saved: readonly SavedBinding[], defaultRef: string | undefined): SavedBinding | "lookup" | "absent" {
+  const unresolved = saved.find(row => row.ref === "");
+  if (unresolved) return unresolved;
+  if (defaultRef === undefined) return "lookup";
+  return saved.find(row => row.ref === defaultRef) ?? "absent";
+}
+/** Whether the walk contacts the provider for the pair behind `gate`.
  *
  * Healthy and pending bindings keep their timers: a ready binding is
  * revalidated when its day ends, a setup in progress is polled, a failure
- * inside its reconciliation window backs off and retries. A terminal
- * unavailable binding waits for a trigger: `retryUnavailable` (a pipeline or
- * an operator asked for the pair, or this release visits it for the first
- * time), a sign-in no saved binding has seen, or a changed choice (which
- * reads as `discovering`). Its recorded cooldown bounds every trigger. */
-export function cloudEnvironmentPreparationDue(saved: readonly SavedBinding[], accountVersion: string, now: number, retryUnavailable: boolean): boolean {
-  if (!saved.length || saved.every(row => row.accountVersion !== accountVersion)) return true;
-  return saved.some(row => row.state === "discovering"
-    || (row.retryAt <= now && (row.state !== "unavailable" || retryUnavailable || reconciling(row, now))));
+ * inside its reconciliation window backs off and retries. A changed sign-in
+ * or a changed choice (which reads as `discovering`) is due at once. A
+ * terminal unavailable binding waits for `trigger` (a stage or an operator
+ * asked for the pair, or this release has yet to look at it), and its
+ * recorded cooldown bounds every trigger. */
+export function cloudEnvironmentPreparationDue(gate: ReturnType<typeof cloudEnvironmentGate>, accountVersion: string, now: number, trigger: boolean): boolean {
+  if (typeof gate === "string") return true;
+  if (gate.accountVersion !== accountVersion || gate.state === "discovering") return true;
+  return gate.retryAt <= now && (gate.state !== "unavailable" || trigger || reconciling(gate, now));
 }
 
 const WALK_MS = 2000;
@@ -64,8 +78,14 @@ export class CloudEnvironmentController {
   private accounts: ReturnType<typeof listCodexAccounts> = [];
   private accountsAt = 0;
   private cursor: string | null = null;
-  /** Pairs this release has already evaluated; the first visit is a trigger. */
-  private readonly seen = new Set<string>();
+  /** Each pair's default branch as the last successful lookup reported it,
+   * persisted beside the cursor. */
+  private readonly defaultRefs = new Map<string, string>();
+  /** Pairs with no trigger outstanding. A pair is absent until this release
+   * has served it once, and a demand removes it again; a trigger that meets a
+   * cooldown stays outstanding until the cooldown ends. */
+  private readonly served = new Set<string>();
+  private walkSignature: string | null = null;
   private walked = 0;
   private walkRevision: number | null = null;
   private nextTimerAt = Number.POSITIVE_INFINITY;
@@ -78,7 +98,13 @@ export class CloudEnvironmentController {
   private readCursor(): string {
     if (this.cursor !== null) return this.cursor;
     let after = "";
-    try { const value: unknown = JSON.parse(fs.readFileSync(statePath("cloud-environment-cursor.json"), "utf8")); if (value && typeof value === "object" && "after" in value && typeof value.after === "string") after = value.after; }
+    try {
+      const value: unknown = JSON.parse(fs.readFileSync(statePath("cloud-environment-cursor.json"), "utf8"));
+      if (value && typeof value === "object" && "after" in value && typeof value.after === "string") after = value.after;
+      if (value && typeof value === "object" && "defaultRefs" in value && value.defaultRefs && typeof value.defaultRefs === "object") {
+        for (const [pair, ref] of Object.entries(value.defaultRefs)) if (typeof ref === "string" && ref) this.defaultRefs.set(pair, ref);
+      }
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cloud environment preparation cursor is unreadable"); }
     return this.cursor = after;
   }
@@ -108,6 +134,7 @@ export class CloudEnvironmentController {
       if (!catalog) return;
       if (catalog !== this.catalog) { this.catalog = catalog; this.projects = [...new Set(catalog.map(p => canonicalProject(p.project)))].sort(); }
       if (Date.now() >= this.accountsAt) { this.accounts = this.ports.accounts().filter(a => a.authPresent).sort((a, b) => a.id.localeCompare(b.id)); this.accountsAt = Date.now() + 30_000; }
+      const after = this.readCursor();
       const demand = takeCloudEnvironmentDemand();
       if (demand) {
         const project = canonicalProject(demand.project);
@@ -115,7 +142,8 @@ export class CloudEnvironmentController {
         if (this.projects.includes(project) && this.accounts.some(account => account.id === demand.accountId)) {
           this.guard();
           const pair = `${project}\0${demand.accountId}`;
-          if (await this.visit(project, demand.accountId, pair, true, attempt)) this.restartWalk();
+          this.served.delete(pair);
+          if (await this.visit(project, demand.accountId, pair, attempt)) this.restartWalk();
         }
         return;
       }
@@ -127,14 +155,17 @@ export class CloudEnvironmentController {
         }
         this.restartWalk();
       }
+      // A project or account that appears while pairs are being walked starts
+      // the count again, so the walk ends only after every current pair.
+      if (signature !== this.walkSignature) { this.walkSignature = signature; this.walked = 0; }
       // Read before the walk's first pair: a binding written while it walks
       // differs from this value, so the quiet check walks again.
       if (this.walked === 0) this.walkRevision = this.ports.revision();
-      const selected = this.nextPair(this.readCursor());
+      const selected = this.nextPair(after);
       this.guard();
       if (!selected) { delay = QUIET_MS; return; }
       this.cursor = selected.cursor;
-      if (await this.visit(selected.project, selected.accountId, selected.cursor, false, attempt)) this.restartWalk();
+      if (await this.visit(selected.project, selected.accountId, selected.cursor, attempt)) this.restartWalk();
       else this.idleVisit(signature);
     } catch (error) {
       // A pair that failed before reaching the provider counts as walked, so
@@ -147,7 +178,11 @@ export class CloudEnvironmentController {
       // Only a pass that reached the provider records its place: a restarted
       // release continues after that pair, and an idle pass writes nothing.
       if (!this.stopped && attempt.pair && this.cursor !== null) {
-        try { assertStateMutationAllowed(stateDir()); writeJsonDurably(statePath("cloud-environment-cursor.json"), { after: this.cursor }); }
+        try {
+          assertStateMutationAllowed(stateDir());
+          if (this.defaultRefs.size > 4096) for (const pair of this.defaultRefs.keys()) if (!this.projects.includes(pair.split("\0")[0]!)) this.defaultRefs.delete(pair);
+          writeJsonDurably(statePath("cloud-environment-cursor.json"), { after: this.cursor, defaultRefs: Object.fromEntries(this.defaultRefs) });
+        }
         catch { if (!this.stopped) console.error("[cloud environments] preparation cursor could not be saved"); }
       }
       this.active = false; this.schedule(delay);
@@ -160,23 +195,35 @@ export class CloudEnvironmentController {
     this.quiet = { signature, revision: this.walkRevision, until: Math.min(this.nextTimerAt, Date.now() + QUIET_RESCAN_MS) };
     this.walked = 0; this.nextTimerAt = Number.POSITIVE_INFINITY;
   }
+  /** A binding timer the quiet state must wake for. */
+  private wakeAt(at: number) {
+    this.nextTimerAt = Math.min(this.nextTimerAt, at);
+    if (this.quiet) this.quiet.until = Math.min(this.quiet.until, at);
+  }
   /** Evaluate one pair and, when it is due, run one provider slice for it.
    * Returns whether the provider was contacted. */
-  private async visit(project: string, accountId: string, pair: string, demanded: boolean, attempt: { pair: string | null }): Promise<boolean> {
+  private async visit(project: string, accountId: string, pair: string, attempt: { pair: string | null }): Promise<boolean> {
     const repository = githubRepositoryOfRemote(this.ports.remote(project));
     if (!repository || !this.ports.allowed(project, "codex", accountId)) return false;
     const saved = this.ports.read(project, { accountId }).bindings.filter(r => r.kind === "automatic" && r.repository === repository);
     const version = cloudAccountVersion({ home: this.accounts.find(account => account.id === accountId)!.home });
-    const now = Date.now();
-    if (!cloudEnvironmentPreparationDue(saved, version, now, demanded || !this.seen.has(pair))) {
-      this.seen.add(pair);
-      for (const row of saved) if (row.state !== "unavailable" || reconciling(row, now)) this.nextTimerAt = Math.min(this.nextTimerAt, row.retryAt);
+    const now = Date.now(), trigger = !this.served.has(pair);
+    const gate = cloudEnvironmentGate(saved, this.defaultRefs.get(pair));
+    if (!cloudEnvironmentPreparationDue(gate, version, now, trigger)) {
+      // Not due means a binding whose timer lies ahead. A terminal one wakes
+      // the walk only for an outstanding trigger, which is served when its
+      // cooldown ends; every other binding wakes it at its own timer.
+      if (typeof gate !== "string") {
+        const terminal = gate.state === "unavailable" && !reconciling(gate, now);
+        if (!terminal || trigger) this.wakeAt(gate.retryAt);
+        if (!terminal) this.served.add(pair);
+      }
       return false;
     }
     const resolve = () => this.ports.resolve(project, accountId);
     const chosen = resolve();
     if (chosen.kind !== "available") return false;
-    this.seen.add(pair);
+    this.served.add(pair);
     const assertCurrent = () => {
       this.guard(); const current = resolve();
       if (!this.ports.allowed(project, "codex", accountId) || current.kind !== "available" || current.account.home !== chosen.account.home
@@ -189,6 +236,7 @@ export class CloudEnvironmentController {
       try { ref = (await backend.findRepository(repository)).defaultBranch; } finally { backend.close(); }
       assertCurrent();
       if (typeof ref !== "string" || !ref) throw new Error("Cloud repository default branch is unavailable");
+      this.defaultRefs.set(pair, ref);
       await this.ports.prepare({ project, account: chosen.account, repository, ref, signal: this.abort.signal, assertCurrent });
       await clearCloudEnvironmentPrerequisite(project, accountId, repository, assertCurrent);
     }); } catch (error) { assertCurrent(); await recordCloudEnvironmentPrerequisite(project, accountId, repository, error, assertCurrent, version); }
