@@ -7,12 +7,15 @@ import type { RateLimitState } from "@/lib/types";
 export const localeBcp47 = (locale: Locale = getLocale()): string => (locale === "uk" ? "uk-UA" : "en-US");
 
 /** Visible age label shared by compact quota surfaces. */
-export function formatQuotaAsOf(observedAt: number | string | null | undefined, locale: Locale = getLocale()): string | null {
+export function formatQuotaAsOf(observedAt: number | string | null | undefined, locale: Locale = getLocale(), now: number = Date.now()): string | null {
   if (observedAt === null || observedAt === undefined || observedAt === "") return null;
   const d = typeof observedAt === "number" ? new Date(observedAt * 1000) : new Date(observedAt);
   if (Number.isNaN(d.getTime())) return null;
+  const time = d.toLocaleTimeString(localeBcp47(locale), { hour: "2-digit", minute: "2-digit", hour12: false });
+  // A bare clock only for a reading of today: an earlier day names its date, so an old reading never looks fresh.
+  const sameDay = d.toDateString() === new Date(now).toDateString();
   return translate(locale, "limits.asOf", {
-    time: d.toLocaleTimeString(localeBcp47(locale), { hour: "2-digit", minute: "2-digit", hour12: false }),
+    time: sameDay ? time : `${d.toLocaleDateString(localeBcp47(locale), { day: "numeric", month: "short" })} ${time}`,
   });
 }
 
@@ -81,10 +84,10 @@ export function formatReadClock(readAt: string, now: number = Date.now()): strin
   return d.toLocaleDateString(localeBcp47(), { day: "numeric", month: "short" }) + " " + time;
 }
 
-/** Absolute reset moment: today's resets show the hour, later ones the date too. */
+/** Absolute reset moment: a reset on today's calendar date shows the hour, any other day the date too, so a reset tomorrow never reads as earlier than now. */
 export function formatResetClock(resetsAt: number, now: number): string {
   const d = new Date(resetsAt * 1000);
   const time = d.toLocaleTimeString(localeBcp47(), { hour: "2-digit", minute: "2-digit", hour12: false });
-  if (resetsAt - now < 86400) return time;
+  if (d.toDateString() === new Date(now * 1000).toDateString()) return time;
   return d.toLocaleDateString(localeBcp47(), { day: "numeric", month: "short" }) + " " + time;
 }
