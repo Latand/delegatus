@@ -203,7 +203,7 @@ import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operator
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
-import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, stageGuardShapeError, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
@@ -2710,6 +2710,11 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (action === "dismiss" || action === "undismiss") return pipelineDismissal(pipelineId, action, args, dependencies);
   const assertSource = action === "set-src" ? pipelineSourceAuthority(dependencies, context) : assertWorkspaceMcpCall;
   const request = action === "set-src" ? pipelineSourceRequest(args) : withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact", "includeHints"]);
+  /* A guard field stated on an action it does not guard is refused from the
+     request alone, before any pipeline is read or written. The claim is
+     released, so the corrected call may keep its clientRequestId (#3741). */
+  const guardShape = stageGuardShapeError(request as PatchPipelineRequest);
+  if (guardShape) throw new McpUnadmittedRefusal(guardShape.error ?? "invalid guard field", { field: guardShape.field, status: guardShape.status });
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
