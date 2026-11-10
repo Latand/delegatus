@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
 import { registryConversationsForPath, registryLivenessRows, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
-import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+import { ARCHIVE_CANDIDATES, archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 import { normalizeHostMemory } from "@/lib/runtime/agentMemoryState";
 import { codexHostColumns } from "@/lib/runtime/registry";
 
@@ -644,6 +644,28 @@ test("an archive pass confirms under the lock what it selected before it, and a 
     /* Nothing left: another connection holding the write lock is not waited for. */
     db.exec("BEGIN IMMEDIATE");
     try { expect(store.archiveInactive()).toBe(0); } finally { db.exec("ROLLBACK"); }
+  } finally { db.close(); }
+});
+
+/* registry_rows keeps a copy of every archived row. A search that starts
+   from a field index reads those copies, payload included, before it learns
+   that none of them is hot. */
+test("the candidate search reads registry rows by key from the hot set, never through the retained copies of the archive", () => {
+  const { open,filename } = fixture();
+  const store = open();
+  const db = new Database(filename);
+  try {
+    const selected = archiveCandidates(db,1_000);
+    expect(selected.length).toBeGreaterThan(0);
+    archiveAll(store);
+    expect(archiveCandidates(db,1_000)).toEqual([]);
+    const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${ARCHIVE_CANDIDATES}`).all(1_000).map(row => row.detail);
+    /* Seven collections' branches, each driven by the hot keys. */
+    const driven = plan.flatMap((detail,index) => detail === "SCAN hot" ? [plan[index+1]] : []).slice(-7);
+    expect(driven).toHaveLength(7);
+    for (const detail of driven) expect(detail).toBe("SEARCH r USING INDEX sqlite_autoindex_registry_rows_1 (collection=? AND row_key=?)");
+    /* No part of the search walks one collection's rows, archived copies included. */
+    expect(plan.filter(detail => /^SEARCH \w+ USING (?:COVERING )?INDEX \S+ \(collection=\?\)$/.test(detail))).toEqual([]);
   } finally { db.close(); }
 });
 

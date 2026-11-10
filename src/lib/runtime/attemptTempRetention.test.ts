@@ -431,6 +431,79 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
   }
 });
 
+test("consumer checkouts that take longer than one tick are each read once, and the root retires on a later tick", async () => {
+  const f = fixture(), directory = f.make("slow-consumer-checkouts");
+  f.store.measure(directory, 4096); f.store.release(directory);
+  const processes = Array.from({ length: 5 }, (_, n) => {
+    const checkout = path.join(f.root, `checkout-${n}`), cwd = path.join(checkout, "work");
+    fs.mkdirSync(path.join(checkout, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+    return { pid: 500 + n, namespace: null, stamped: false, paths: [cwd] };
+  });
+  let now = NOW;
+  let shared: InstanceType<typeof filesystem.RepositoryLinkInventory> | undefined;
+  const readdirApi = fs.promises as unknown as {
+    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
+  };
+  const readdir = readdirApi.readdir.bind(readdirApi);
+  // Each checkout directory costs four seconds of the tick's clock, so the
+  // five checkouts take forty seconds: more than one tick's inventory budget
+  // and four times the age at which a single tick repeats a read.
+  const observed = spyOn(readdirApi, "readdir").mockImplementation(async (target, options) => {
+    const entries = await readdir(target, options);
+    if (String(target).startsWith(path.join(f.root, "checkout-"))) now += 4_000;
+    return entries;
+  });
+  const checkoutReads = new Map();
+  const sweep = () => sweepAttemptTemps(f.store, { now: () => now, maxRoots: 1, capBytes: 0, checkoutReads,
+    scan: () => ({ ownNamespace: null, processes }),
+    state: async (_owner, inventory) => { shared = inventory; return "closed"; },
+    references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, shared) });
+  try {
+    const first = await sweep();
+    expect(first).toMatchObject({ removed: 0, deferred: 1, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "data"))).toHaveLength(4096);
+    now += 60_001;
+    const second = await sweep();
+    expect(second).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(first.inventoryWalks + second.inventoryWalks).toBe(5);
+  } finally { observed.mockRestore(); f.store.close(); }
+});
+
+test("with reads kept across ticks, a checkout link made during the final authority read still holds the root", async () => {
+  const f = fixture(), directory = f.make("late-link-kept-reads");
+  f.store.measure(directory, 4096); f.store.release(directory);
+  const consumer = path.join(f.root, "consumer-checkout"), cwd = path.join(consumer, "work");
+  fs.mkdirSync(path.join(consumer, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+  const link = path.join(cwd, "late-dependency");
+  let now = NOW, stateReads = 0;
+  let shared: InstanceType<typeof filesystem.RepositoryLinkInventory> | undefined;
+  const checkoutReads = new Map();
+  const sweep = () => sweepAttemptTemps(f.store, { now: () => now, maxRoots: 1, capBytes: 0, checkoutReads,
+    scan: () => ({ ownNamespace: null, processes: [{ pid: 91, namespace: null, stamped: false, paths: [cwd] }] }),
+    state: async (_owner, inventory) => {
+      shared = inventory;
+      // The third read is the authority read that follows the first complete
+      // reference observation of this root.
+      if (++stateReads === 3) fs.symlinkSync(directory, link, "dir");
+      return "closed";
+    },
+    references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, shared) });
+  try {
+    const first = await sweep();
+    expect(fs.lstatSync(link).isSymbolicLink()).toBeTrue();
+    expect(first).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
+    expect(fs.readFileSync(path.join(directory, "data"))).toHaveLength(4096);
+    now += 60_001;
+    expect((await sweep()).removed).toBe(0);
+    expect(fs.readFileSync(path.join(directory, "data"))).toHaveLength(4096);
+    fs.unlinkSync(link);
+    now += 60_001;
+    expect((await sweep()).removed).toBe(1);
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
 test("a loaded 727-root sweep defers its remaining page without errors or holds", async () => {
   const f = fixture();
   for (let n = 0; n < 727; n++) f.store.measure(f.make(String(n).padStart(4, "0"), 86400000), 4096);

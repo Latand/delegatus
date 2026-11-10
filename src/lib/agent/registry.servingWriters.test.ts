@@ -448,3 +448,39 @@ for (const pass of [false, true]) test(`dead-host reconciliation preserves custo
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]).toMatchObject({ claimOwner: "replacement", claimEpoch: 8 });
   } finally { f.registry.deliveryWriteOrBusy = write; f.registry.close(); }
 });
+
+test("custody checks inside an admitted writer assemble no complete registry view", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "registry-writer-keyed-"));
+  roots.push(root);
+  let snapshotLoads = 0;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite"),
+    onSqliteSnapshotLoad: () => { snapshotLoads += 1; },
+  });
+  const artifactPath = `/sessions/${SESSION}.jsonl`;
+  const conversation = registry.ensureConversation("codex", artifactPath, null);
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", accountId: null, launchProfile: { title: "Keyed custody fixture" } });
+  if (begun.kind !== "created") throw new Error("expected a created launch");
+  let touches = 0;
+  const touch = () => registry.upsert({ key: KEY, artifactPath, cwd: `/repo/${touches++}`, accountId: null, status: "idle",
+    host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  touch();
+  /* Each check follows a commit and a prepared view, as on the serving
+     process: the writer then holds no complete view of its own. */
+  const admitted = async <T>(read: () => T): Promise<{ value: T; loads: number }> => {
+    touch();
+    await registry.prepareReadOnlySnapshot();
+    const before = snapshotLoads;
+    const value = await registry.deliveryWriteOrBusy({ label: "registry.keyed-custody-test" }, read);
+    return { value, loads: snapshotLoads - before };
+  };
+
+  expect(await admitted(() => registry.switchHold(conversation.id))).toEqual({ value: null, loads: 0 });
+  expect(await admitted(() => registry.reconfigureCancelled(conversation.id, "operation-absent"))).toEqual({ value: false, loads: 0 });
+  expect(await admitted(() => registry.endHostlessSpawn(begun.receipt.launchId))).toEqual({ value: false, loads: 0 });
+  const entry = await admitted(() => registry.hostEntry(KEY));
+  expect(entry.loads).toBe(0);
+  // The keyed row is the row a complete view holds, property for property.
+  expect(entry.value).toStrictEqual(structuredClone(registry.readOnlySnapshot().entries[`codex:${SESSION}`]!));
+  expect(await admitted(() => registry.hostEntry({ engine: "codex", sessionId: "absent" }))).toEqual({ value: null, loads: 0 });
+});

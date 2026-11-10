@@ -8,12 +8,15 @@ import { translate } from "@/lib/i18n";
 import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
 import { formatResetClock } from "./rateLimit";
 
+/** A note starts a line, so its first letter is a capital. */
+const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 const base = (over: Partial<EngineAccountsState> = {}): EngineAccountsState => ({
   engine: "codex",
   hidden: [],
   accounts: [
-    // Each capacity chip is reconciled from the account's own windows, so the
-    // fixture carries the windows the chip percentages come from.
+    // Each row lists the account's own windows, so the fixture carries the
+    // windows the percentages come from.
     { id: "main", label: "Main", kind: "legacy", authPresent: true, plan: "Team", loginPending: false, loginState: "authenticated", deviceAuth: null,
       limits: { freshness: "fresh", session: { usedPercent: 88, resetsAt: null, windowMinutes: 300 }, weekly: null } },
     { id: "work", label: "Work", kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null,
@@ -79,12 +82,14 @@ test("the header caller drops the panel below the trigger so an overflow-hidden 
   expect(html).not.toContain("sm:left-full");
 });
 
-test("renders a capacity chip per account and dims the stale one", () => {
+test("lists every window on the account's row, and dims the stale one", () => {
   const html = render(base());
   expect(html).toContain("12%");
   expect(html).toContain("64%");
-  expect(html).toContain("Team");
-  expect(html).toContain("opacity-55"); // the stale Work chip
+  expect(html).toContain("opacity-70"); // the stale Work window
+  // The plan is the status popover's, and the caption names the percentage once.
+  expect(html).not.toContain("Team");
+  expect(html.split(translate("en", "accounts.limitsCaption"))).toHaveLength(2);
 });
 
 test("the expanded toolbar panel retains project pool, carrier, and outside-pool detail", () => {
@@ -108,7 +113,7 @@ test("the expanded toolbar panel retains project pool, carrier, and outside-pool
   expect(html).not.toContain("truncate rounded-full");
 });
 
-test("shows account ids and auth health when labels collide", () => {
+test("names each account's sign-in state on its status dot and offers Sign in on a signed-out row", () => {
   const html = render(base({
     engine: "claude",
     accounts: [
@@ -118,13 +123,15 @@ test("shows account ids and auth health when labels collide", () => {
     active: "managed-three",
   }));
 
-  expect(html).toContain("managed-two");
-  expect(html).toContain("managed-three");
-  expect(html).toContain("Signed out");
-  expect(html).toContain("Authenticated");
-  expect(html).toContain("bg-danger-soft text-danger");
-  expect(html).toContain("needs sign-in");
+  expect(html).toContain('aria-label="Managed two: Signed out"');
+  expect(html).toContain('aria-label="Managed three: Authenticated"');
+  expect(html).toContain('data-account-status-tone="warning"');
+  expect(html).toContain('data-account-status-tone="success"');
+  // The dot is not the only carrier of the state, and no pill repeats it on the row.
+  expect(html).not.toContain("bg-danger-soft text-danger");
+  expect(html).not.toContain("needs sign-in");
   expect(html).toContain(">Sign in<");
+  expect(html).toContain(">default<");
 });
 
 test("breaks out each account's session and weekly windows with reset times", () => {
@@ -143,7 +150,8 @@ test("breaks out each account's session and weekly windows with reset times", ()
   expect(html).toContain(translate("en", "limits.week"));
   expect(html).toContain("45%"); // session remaining (100 − 55)
   expect(html).toContain("92%"); // weekly remaining (100 − 8)
-  expect(html).toContain("reset"); // both windows carry a reset time
+  expect(html).toContain(formatResetClock(nowS + 7200, nowS)); // both windows carry their reset moment
+  expect(html).toContain(formatResetClock(nowS + 259200, nowS));
 });
 
 test("an exhausted account names when it is rate limited until (#1371)", () => {
@@ -167,9 +175,11 @@ test("an exhausted account names when it is rate limited until (#1371)", () => {
     active: "main",
   }));
 
-  expect(html).toContain(translate("en", "rateLimit.badgeUntil", {
+  expect(html).toContain(sentence(translate("en", "rateLimit.badgeUntil", {
     time: formatResetClock(resetsAt, nowS),
-  }));
+  })));
+  // The moment is said once: the window line leaves it off.
+  expect(html.split(formatResetClock(resetsAt, nowS))).toHaveLength(2);
 });
 
 test("an exhausted account on paid credits is not shown as stopped, and one without a balance still is", () => {
@@ -180,20 +190,22 @@ test("an exhausted account on paid credits is not shown as stopped, and one with
   const balance = { balance: "49695.72", checkedAt: null };
   for (const locale of ["en"] as const) {
     const html = row({ spendCredits: true, paidCredits: balance });
-    // The limit state is said once, in the status line; the warning under the
-    // switch carries the paid-credits fact, so the line does not repeat it.
+    // The limit state is said once, in the status line; the credits line carries
+    // the paid-credits fact, so the status line does not repeat it.
     expect(html).toContain(`>${translate(locale, "accounts.pastLimitOnPaid")}<`);
     expect(html.split(translate(locale, "accounts.pastLimitOnPaid"))).toHaveLength(2);
     expect(html).not.toContain("rate-limited");
-    expect(html.split(translate(locale, "accounts.spendCreditsOn"))).toHaveLength(2);
+    expect(html).toContain('data-account-spend-credits="spare"');
     for (const text of ["en", "uk"] as const) expect(translate(text, "accounts.pastLimitOnPaid")).not.toMatch(/·|credit|кредит/);
-    // The corner pill turns amber, as the phone's corner does.
-    expect(html).toMatch(/style="color:var\(--color-warning\)"[^>]*>0%</);
   }
   for (const html of [row({ spendCredits: false, paidCredits: balance }), row({ spendCredits: true, paidCredits: { balance: "0", checkedAt: null } }), row({ spendCredits: true })]) {
-    expect(html).toContain("rate-limited until");
+    expect(html).toContain("Rate-limited until");
     expect(html).not.toContain(translate("en", "accounts.pastLimitOnPaid"));
+  }
+  // One colour rule, read from the number: a spent window is red whether or not credits carry the account.
+  for (const html of [row({ spendCredits: true, paidCredits: balance }), row({ spendCredits: false, paidCredits: balance })]) {
     expect(html).toMatch(/style="color:var\(--color-danger\)"[^>]*>0%</);
+    expect(html).not.toMatch(/style="color:var\(--color-warning\)"[^>]*>0%</);
   }
 });
 
@@ -234,7 +246,7 @@ test("a weekly-horizon window in the session field is labelled by its horizon, n
   }));
   const detail = html.match(/<dl[^>]*Quota windows[^>]*>[\s\S]*?<\/dl>/)?.[0] ?? "";
   expect(detail).not.toBe("");
-  expect(detail).toContain(`<dt class="w-[52px] shrink-0 font-semibold">${translate("en", "limits.week")}</dt>`);
+  expect(detail).toContain(`<dt class="w-[52px] shrink-0 font-semibold text-secondary">${translate("en", "limits.week")}</dt>`);
   const labels = [...detail.matchAll(/<dt[^>]*>([^<]*)<\/dt>/g)].map((match) => match[1]);
   expect(labels).not.toContain(translate("en", "limits.5h"));
   expect(detail).toContain("85%"); // 100 - 15, under the weekly label
@@ -252,10 +264,9 @@ test("dims and labels a stale account limits read and omits a missing reset time
   }));
   const detail = html.match(/<dl[^>]*Quota windows[^>]*>[\s\S]*?<\/dl>/)?.[0] ?? "";
   expect(detail).not.toBe("");
-  // Freshness is a visible, AT-readable caption, not opacity/title alone.
-  expect(detail).toContain("Last known values");
+  // Freshness is a visible, AT-readable note under the windows, not opacity alone.
+  expect(html).toContain("Last known values");
   expect(detail).toContain("opacity-70"); // values stay legible; text carries the meaning
-  expect(html).toContain('title="Last known values — not a live read"');
   expect(detail).toContain("80%"); // 100 − 20 with no reset line
   expect(detail).not.toMatch(/reset (in|now)/); // resetsAt null → no reset-time text
 });
@@ -293,10 +304,14 @@ test("the active account row stays keyboard reachable", () => {
 
 /* Task d7759de2: Main is removed through the same control as every other
    account (the server only hides it, its folder is never touched). */
-test("offers removal for every account, Main included, and keeps cleanup reachable", () => {
+test("every account row opens from its name, closed at rest, and keeps cleanup reachable", () => {
   const html = render(base());
-  expect(html).toContain('aria-label="Remove Work"');
-  expect(html).toContain('aria-label="Remove Main"');
+  expect(html).toContain('data-account-toggle="work"');
+  expect(html).toContain('data-account-toggle="main"');
+  expect([...html.matchAll(/data-account-toggle="[^"]*"[^>]*aria-expanded="(\w+)"|aria-expanded="(\w+)"[^>]*data-account-toggle/g)].every((match) => (match[1] ?? match[2]) === "false")).toBe(true);
+  // Remove, Copy CLI and Refresh live in the opened row, which is not drawn at rest.
+  expect(html).not.toContain('aria-label="Remove Work"');
+  expect(html).not.toContain("data-account-remove=");
   expect(html).toContain("Clean up leftovers");
   expect(html).not.toContain("Force remove");
 });
@@ -334,7 +349,8 @@ test("awaiting_code renders the browser link, bounded code input, hint, and Canc
 test("starting and verifying show a spinner line, Cancel, and a hidden browser link", () => {
   const starting = render(claudeState(loginView({ phase: "starting", loginUrl: null, acceptsCode: false })));
   expect(starting).toContain("Starting sign-in…");
-  expect(starting).toContain("animate-spin");
+  // One spinner per signing-in row: the status dot's; the line beside Cancel carries only words.
+  expect(starting.match(/animate-spin/g)).toHaveLength(1);
   expect(starting).not.toContain("Open claude.ai sign-in");
   expect(starting).not.toContain("claude.ai/login");
   const verifying = render(claudeState(loginView({ phase: "verifying", loginUrl: null, acceptsCode: false })));
@@ -431,7 +447,7 @@ test("a bound account carries no 'Bound to' chip in the dialog; the binding itse
 
 const nowS = () => Math.floor(Date.now() / 1000);
 
-test("the card is the quiet form: identity, status, one limits block with both actions, then the footer (#1418)", () => {
+test("the row at rest: the name, its windows, the limit note and the reset it can use; the rest is in the opened row (#1418)", () => {
   const now = nowS();
   const resetsAt = now + 5 * 86_400;
   const html = render(base({
@@ -449,22 +465,19 @@ test("the card is the quiet form: identity, status, one limits block with both a
     expect(index, needle).toBeGreaterThanOrEqual(0);
     return index;
   };
-  // Identity line, then the limits block (check time, actions, windows), then the footer.
+  // Identity line, then the windows, then the note, then the reset it can use.
   expect(at(">Account A<")).toBeLessThan(at('data-account-limits="account-a"'));
-  expect(at(translate("en", "accounts.limitsChecked"))).toBeLessThan(at('data-account-refresh-limits="account-a"'));
-  expect(at('data-account-refresh-limits="account-a"')).toBeLessThan(at('data-limit-row="weekly"'));
-  expect(at('data-limit-row="weekly"')).toBeLessThan(at('data-account-use-reset="account-a"'));
-  expect(at('data-account-use-reset="account-a"')).toBeLessThan(at(translate("en", "accounts.copyCli")));
-  expect(at(translate("en", "accounts.copyCli"))).toBeLessThan(at('aria-label="Remove Account A"'));
+  expect(at('data-limit-row="weekly"')).toBeLessThan(at('data-account-note="limit"'));
+  expect(at('data-account-note="limit"')).toBeLessThan(at('data-account-use-reset="account-a"'));
   // The exhausted state and its remedy read together.
-  expect(html).toContain(translate("en", "rateLimit.badgeUntil", { time: formatResetClock(resetsAt, now) }));
+  expect(html).toContain(sentence(translate("en", "rateLimit.badgeUntil", { time: formatResetClock(resetsAt, now) })));
   expect(html).toContain("1 reset available");
   expect(html).toContain(translate("en", "accounts.resetsExpire", { at: formatResetClock(now + 20 * 86_400, now) }));
-  // No chip, and no confirmation copy anywhere near the two actions.
+  // The tools, the check time and the removal question are one press away.
+  for (const absent of [translate("en", "accounts.copyCli"), 'aria-label="Remove Account A"', translate("en", "accounts.limitsChecked"), 'data-account-refresh-limits', translate("en", "accounts.removeConfirm", { label: "Account A" })]) expect(html).not.toContain(absent);
+  // No chip, and no confirmation copy near the action.
   expect(html).not.toContain("Bound to");
   expect(html).not.toContain("data-account-projects");
-  expect(html).not.toContain(translate("en", "accounts.removeConfirm", { label: "Account A" }));
-  expect(html).toContain('aria-label="Re-read limits for Account A"');
   expect(html).toContain('aria-label="Use one usage-limit reset on Account A"');
 });
 
@@ -472,7 +485,7 @@ function useResetButton(html: string, id: string): string {
   return html.match(new RegExp(`<button[^>]*data-account-use-reset="${id}"[^>]*>`))?.[0] ?? "";
 }
 
-test("the reset-credit line reads the count, none, or not-checked-yet, and the redeem control follows it (#1373)", () => {
+test("the reset line shows a count to use, and no line at rest for none or not-checked-yet (#1373)", () => {
   const row = (id: string, resetCredits: { availableCount: number; expiresAt: number | null } | null) => ({
     id, label: id, kind: "managed" as const, authPresent: true, loginPending: false, loginState: "authenticated" as const, deviceAuth: null,
     limits: { freshness: "fresh" as const, session: null, weekly: { usedPercent: 100, resetsAt: nowS() + 86_400, windowMinutes: 10_080 } },
@@ -484,15 +497,16 @@ test("the reset-credit line reads the count, none, or not-checked-yet, and the r
   }));
   expect(html).toContain("1 reset available");
   expect(html).toContain("3 resets available");
-  expect(html).toContain(translate("en", "accounts.resetsNone"));
-  expect(html).toContain(translate("en", "accounts.resetsUnknown"));
   expect(useResetButton(html, "one-credit")).not.toContain('disabled=""');
   expect(useResetButton(html, "three-credits")).not.toContain('disabled=""');
-  expect(useResetButton(html, "spent")).toContain('disabled=""');
-  expect(useResetButton(html, "unread")).toContain('disabled=""');
+  // Nothing to use: the open row says so (dom tests), the closed row stays quiet.
+  expect(useResetButton(html, "spent")).toBe("");
+  expect(useResetButton(html, "unread")).toBe("");
+  expect(html).not.toContain(translate("en", "accounts.resetsNone"));
+  expect(html).not.toContain(translate("en", "accounts.resetsUnknown"));
 });
 
-test("Claude cards carry the refresh action but no reset-credit line; a signed-out account gets neither (#1418)", () => {
+test("Claude rows carry no reset-credit line, and a signed-out account lists no windows (#1418)", () => {
   const html = render(base({
     engine: "claude",
     accounts: [
@@ -502,7 +516,7 @@ test("Claude cards carry the refresh action but no reset-credit line; a signed-o
     ],
     active: "signed-in",
   }));
-  expect(html).toContain('data-account-refresh-limits="signed-in"');
+  expect(html).toContain('data-account-limits="signed-in"');
   expect(html).not.toContain("data-account-use-reset");
   expect(html).not.toContain("data-account-reset-credits");
   expect(html).not.toContain('data-account-limits="signed-out"');
@@ -529,27 +543,25 @@ test("no tier bucket: two rows, no placeholder (#1358)", () => {
   expect(html).toContain('data-limit-row="weekly"');
   expect(html).not.toContain('data-limit-row="tier:');
   expect(html).not.toContain("Opus · Week");
-  expect(html).toContain('title="weekly window binds"'); // 60% left on the week binds
   expect(html).toContain(">60%<");
 });
 
-test("a healthy tier bucket renders as its own row named by the tier, and the general week still binds (#1358)", () => {
+test("a healthy tier bucket renders as its own row named by the tier (#1358)", () => {
   const html = render(claudeAccount(opusOnly(10)));
   const row = html.match(/<div[^>]*data-limit-row="tier:opus"[^>]*>[\s\S]*?<\/dd><\/div>/)?.[0] ?? "";
   expect(row).not.toBe("");
   expect(row).toContain(translate("en", "limits.tierWeek", { tier: "Opus" }));
   expect(row).toContain(">90%<");
-  expect(row).toContain(translate("en", "limits.left"));
-  expect(row).toContain("reset");
-  expect(html).toContain('title="weekly window binds"');
+  // The tier resets with the general week, so the moment is said once, on the first of them.
+  expect(row).not.toMatch(/\d{1,2}:\d{2}/);
+  expect(html.match(/<div[^>]*data-limit-row="weekly"[^>]*>[\s\S]*?<\/dd><\/div>/)?.[0]).toMatch(/\d{1,2}:\d{2}/);
   expect(html).toContain(">60%<");
 });
 
-test("a tier bucket tighter than the general week binds the capacity chip (#1358)", () => {
+test("a tier bucket tighter than the general week turns its own number amber (#1358)", () => {
   const html = render(claudeAccount(opusOnly(80)));
   expect(html).toContain(translate("en", "limits.tierWeek", { tier: "Opus" }));
-  expect(html).toContain(`title="${translate("en", "accounts.effectiveTip", { window: translate("en", "limits.windowTier", { tier: "Opus" }) })}"`);
-  expect(html).toContain(">20%<");
+  expect(html).toMatch(/style="color:var\(--color-warning\)"[^>]*>20%</);
 });
 
 test("every tier the provider meters gets its own line, Fable included (#1796)", () => {
@@ -558,8 +570,6 @@ test("every tier the provider meters gets its own line, Fable included (#1796)",
   expect(html).toContain('data-limit-row="tier:opus"');
   expect(html).toContain(translate("en", "limits.tierWeek", { tier: "Fable" }));
   expect(html).toContain(translate("en", "limits.tierWeek", { tier: "Opus" }));
-  // The tightest of them is what the card's chip names.
-  expect(html).toContain(`title="${translate("en", "accounts.effectiveTip", { window: translate("en", "limits.windowTier", { tier: "Fable" }) })}"`);
   expect(html).toContain(">12%<");
 });
 

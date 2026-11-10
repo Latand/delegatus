@@ -29,7 +29,6 @@ import { composerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
 import { useDeliveryProgress } from "@/hooks/useDeliveryProgress";
 import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
-import { useHostTarget } from "@/hooks/useHostTarget";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { activeCardMigration, cardMigrationState, migrationHoldsDelivery, migrationHoldsSends, migrationTargetName } from "@/lib/accounts/migration";
@@ -2240,9 +2239,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const liveMigration = activeCardMigration(file.migration, accountIdFromPath(file.path));
   const holdsSends = migrationHoldsSends(cardMigrationState(liveMigration));
   const holdsDelivery = migrationHoldsDelivery(cardMigrationState(liveMigration));
-  /* An off-screen or far-zoom pane skips the pane-resolution poll; the last
-     known target keeps the composer usable the moment it comes back. */
-  const target = useHostTarget(file.pid, canMessageWithoutPane(file) ? file.path : undefined, !pollPaused);
   /* WHAT ELSE IS IN THE COMPOSER'S BOX, each on the predicate that actually puts
      it there: `NativeQueuePanel` draws nothing with no rows and no unanswered
      hand-off, and the call panel is docked only while a call is up and no
@@ -3586,7 +3582,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   // dead-host drafts usable through recovery admission.
   if (caps.controls.send.state === "hidden") return null;
   const resumable = canMessageWithoutPane(file);
-  if (target === null && !resumable) return null;
+  if (!resumable) return null;
   /* An EXISTING conversation whose runtime ownership is not yet resolved (the
      fail-safe `unresolved` surface: plane on, no host evidence yet) is never a
      spawn draft — its next message reaches the existing agent through
@@ -3613,7 +3609,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     }
     return true;
   };
-  const spawnMode = target === null && !deliveryRoute && !unresolvedOwnership;
+  const spawnMode = !deliveryRoute && !unresolvedOwnership;
   const relayMode = spawnMode && file.root === "claude-projects" && file.kind === "subagent";
 
   const persistSent = (next: SentEntry[]) => {
@@ -5637,9 +5633,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     ? t("composer.sendStructuredAria")
     : unresolvedOwnership
       ? t("composer.resolvingAria")
-      : spawnMode
-        ? t("composer.spawnAria")
-        : t("composer.sendAria", { target: target ?? "" });
+      : t("composer.spawnAria");
 
   /* ── The phone's send slot (mobile v2 §2 rule 8, §4.2) ──────────────────────
      The one inline control under the field. It replaced two rows the operator

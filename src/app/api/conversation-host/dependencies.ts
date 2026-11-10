@@ -1,6 +1,6 @@
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { agentRegistry } from "@/lib/agent/registry";
-import { canonicalTranscriptTarget, readTranscriptHosts } from "@/lib/agent/transcriptHost";
+import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { applyConversationAction, CONVERSATION_ACTIONS } from "@/lib/conversation/actions";
 import { deliverConversationMessage, reconfigureConversation } from "@/lib/delivery";
 import { allowedKillTarget, consumeKillTarget } from "@/lib/resources";
@@ -11,14 +11,12 @@ import {
   collectImagePayloads,
   killPane,
   panePidOf,
-  resolveRequestedTmuxTarget,
   resolveTmuxAttach,
   tmuxEndpointDescriptor,
 } from "@/lib/tmux";
 import type { PriorSubmission } from "@/lib/team";
 
 export interface ConversationHostDependencies {
-  canonicalTranscriptTarget: typeof canonicalTranscriptTarget;
   readTranscriptHosts: typeof readTranscriptHosts;
   applyConversationAction: typeof applyConversationAction;
   conversationActions: readonly string[];
@@ -33,7 +31,6 @@ export interface ConversationHostDependencies {
   collectImagePayloads: typeof collectImagePayloads;
   killPane: typeof killPane;
   panePidOf: typeof panePidOf;
-  resolveRequestedTmuxTarget: typeof resolveRequestedTmuxTarget;
   resolveTmuxAttach: typeof resolveTmuxAttach;
   tmuxEndpointDescriptor: typeof tmuxEndpointDescriptor;
 
@@ -45,7 +42,6 @@ export interface ConversationHostDependencies {
 }
 
 const productionDependencies: ConversationHostDependencies = {
-  canonicalTranscriptTarget,
   readTranscriptHosts,
   applyConversationAction,
   conversationActions: CONVERSATION_ACTIONS,
@@ -63,7 +59,6 @@ const productionDependencies: ConversationHostDependencies = {
   collectImagePayloads,
   killPane,
   panePidOf,
-  resolveRequestedTmuxTarget,
   resolveTmuxAttach,
   tmuxEndpointDescriptor,
 

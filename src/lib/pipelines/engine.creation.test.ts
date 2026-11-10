@@ -1446,6 +1446,7 @@ test.skip("review-loop onFail edges are rejected during creation and graph editi
 
 test("auto-start creation admits the record with its base unresolved and the controller fetches it (#1799)", async () => {
   const h = harness();
+  const exec = spyOn(h.ports, "exec");
   savePipelines([]);
   const result = await createPipelineFromRequest({ task: "Pinned base", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
 
@@ -1464,7 +1465,9 @@ test("auto-start creation admits the record with its base unresolved and the con
 
   await tickPipelines([], h.ports);
 
-  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(exec.mock.calls.filter(([command, args]) => command === "git" && args[0] === "fetch")).toEqual([
+    ["git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], "/repo", undefined, { timeoutMs: 60_000, signal: expect.any(AbortSignal), inheritFd: undefined, additionalInheritedFds: undefined }],
+  ]);
   expect(loadPipelines()[0]).toMatchObject({
     state: "running",
     baseBranch: "main",
@@ -2226,6 +2229,7 @@ test("a parked provisioning retry reuses the pinned base and provisions again", 
 
 test("controller recovery stamps an older unresolved provisioning record before creating its worktree", async () => {
   const h = harness();
+  const exec = spyOn(h.ports, "exec");
   savePipelines([]);
   const created = await createPipelineFromRequest({
     task: "Recover legacy provision",
@@ -2246,7 +2250,9 @@ test("controller recovery stamps an older unresolved provisioning record before 
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
-  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(exec.mock.calls.filter(([command, args]) => command === "git" && args[0] === "fetch")).toEqual([
+    ["git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], "/repo", undefined, { timeoutMs: 60_000, signal: expect.any(AbortSignal), inheritFd: undefined, additionalInheritedFds: undefined }],
+  ]);
 });
 
 test("autoStart false persists a draft without provisioning or spawning", async () => {

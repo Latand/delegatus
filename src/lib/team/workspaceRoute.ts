@@ -235,9 +235,6 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
   if (route === "/api/pipelines/preflight" && !supplied("repoDir")) return [null];
   if ((route.startsWith("/api/runtime/") && !["/api/runtime/snapshot", "/api/runtime/stream", "/api/runtime/delivery-progress"].includes(route)) && !supplied("conversationId")) return [null];
   if ((route === "/api/conversation-host" || route === "/api/tmux" || route.startsWith("/api/session")) && !supplied("path") && !supplied("conversationId")) return [null];
-  if (["/api/conversation-host/targets", "/api/tmux/targets"].includes(route)) {
-    if (!Array.isArray(input.reqs) || input.reqs.some(item => !item || typeof item !== "object" || typeof (item as Record<string, unknown>).path !== "string" || !(item as Record<string, unknown>).path)) return [null];
-  }
   const params = await ctx?.params;
   if (params?.id && route.startsWith("/api/tasks/")) projects.push(await taskProject(params.id));
   if (params?.id && route.startsWith("/api/pipelines/")) projects.push(await (
@@ -286,7 +283,7 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
     if (!scope.memberId) return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
     return (async () => {
       let projects: (string | null)[];
-      const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/conversation-host/targets", "/api/tmux/targets", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
+      const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
       const managerWrite = route === "/api/projects/settings" && request.method === "PUT"
         || route === "/api/projects/cloud-environments" && request.method === "POST";
       const permitted = (project: string | null) => read ? scope!.access(project) !== "none"

@@ -1455,12 +1455,12 @@ export async function bindStructuredDeliveryQueue(
           ...(onlyIfIdle ? { terminateOwnedHost: async () => false } : {}),
           persistCapturedTree: identities => registry.deliveryWriteOrBusy({ label: "registry.controller-stop-capture" }, () => {
             if (authorize()) return false;
-            const current = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
+            const current = registry.hostEntry(expectedKey);
             if (!current || current.claimOwner !== retirementCustody?.claimOwner || current.claimEpoch !== retirementCustody?.claimEpoch
               || current.structuredHost?.writerClaimEpoch !== retirementCustody?.writerClaimEpoch) return false;
             controllerCapture = registry.captureStructuredTerminationSurvivors(expectedKey, ref, identities, CONTROLLER_STOP_SOURCE);
             if (controllerCapture && onlyIfIdle) {
-              const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]!;
+              const entry = registry.hostEntry(expectedKey)!;
               capturedRetirement = { root: ref, claimEpoch: entry.claimEpoch };
             }
             return controllerCapture !== null;

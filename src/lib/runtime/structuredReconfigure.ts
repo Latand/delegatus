@@ -75,7 +75,7 @@ async function terminateReleasedHost(
   await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
     const conversation = registry.conversation(conversationId) ?? undefined;
     if (!stillOwned(conversation) || !custody) return false;
-    const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const entry = registry.hostEntry(key);
     if (!entry
       || entry.claimEpoch !== custody.claimEpoch
       || entry.claimOwner !== custody.claimOwner

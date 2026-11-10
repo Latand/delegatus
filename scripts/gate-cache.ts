@@ -165,10 +165,18 @@ export function environmentFingerprint(env: Partial<NodeJS.ProcessEnv>): string 
 
 /** Each caller owns a namespace. Atomic, immutable-key records; corrupt,
  * oversized, expired or unavailable entries are misses. No values are logged.
- * Concurrent writers may briefly exceed the cap until the next write.
+ * Concurrent writers may briefly exceed the cap until the next write. Every
+ * lane of a repository writes to the same namespace, so a caller that records
+ * many entries per run sizes `limits` for all lanes together.
  */
 export class GateCache<T> {
-  constructor(readonly directory: string, private readonly valid: (value: unknown) => value is T, private readonly maxAgeMs = 7 * 24 * 60 * 60_000) {}
+  private readonly maxEntries: number;
+  private readonly maxBytes: number;
+  constructor(readonly directory: string, private readonly valid: (value: unknown) => value is T, private readonly maxAgeMs = 7 * 24 * 60 * 60_000,
+    limits: { entries?: number; bytes?: number } = {}) {
+    this.maxEntries = limits.entries ?? 256;
+    this.maxBytes = limits.bytes ?? 32 * 1024 * 1024;
+  }
   read(key: string): T | undefined {
     try {
       const file = path.join(this.directory, `${fingerprint(key)}.json`);
@@ -194,7 +202,7 @@ export class GateCache<T> {
       let bytes = Buffer.byteLength(contents);
       for (const [index, file] of files.entries()) {
         bytes += file.size;
-        if (index >= 255 || bytes > 32 * 1024 * 1024 || Date.now() - file.time > this.maxAgeMs) rmSync(file.target, { force: true });
+        if (index >= this.maxEntries - 1 || bytes > this.maxBytes || Date.now() - file.time > this.maxAgeMs) rmSync(file.target, { force: true });
       }
       temporary = path.join(this.directory, `.write-${randomUUID()}`);
       writeFileSync(temporary, contents, { flag: "wx", mode: 0o600 });

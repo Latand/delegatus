@@ -9,7 +9,6 @@ import { stateDir, statePath } from "@/lib/configDir";
 import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
-import { isShellCommand } from "@/lib/status";
 import { accountProbeIdentity, withAccountMutationLockAsync, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, AccountArchiveUnavailableError, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
@@ -18,7 +17,6 @@ const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
 const REGISTRY_VERSION = 1;
 const REGISTRY_LOCK_STALE_MS = 30_000;
-export const LOGIN_STARTUP_GRACE_MS = 15_000;
 /* Shared, read-mostly capability state. Account tokens, sessions, plugin data,
    and MCP OAuth state deliberately have no link and remain home-local. */
 const OVERLAY_LINKS = ["skills", "prompts", "config.toml", "AGENTS.md", "memories", "rules"] as const;
@@ -919,26 +917,3 @@ export function setCodexAccountLoginPane(id: string, loginPane: LoginPane | null
   });
 }
 
-export type CodexLoginState = "pending" | "idle" | "authenticated";
-
-/** Pure reconciliation rule for the tracked device-login pane. */
-export function codexLoginPaneStatus(
-  authPresent: boolean,
-  loginPane: LoginPane | null,
-  pane: Pick<{ windowName: string; command: string }, "windowName" | "command"> | null,
-  now = Date.now(),
-): { state: CodexLoginState; clear: boolean } {
-  if (authPresent) return { state: "authenticated", clear: loginPane !== null };
-  if (!loginPane) return { state: "idle", clear: false };
-  const withinGrace = now - loginPane.startedAt < LOGIN_STARTUP_GRACE_MS;
-  // A null pane can mean a transient tmux failure (nsenter wrapper hiccup, non-zero
-  // exit) as easily as a genuinely dead window. During the startup grace keep the
-  // login pending so one blip can't permanently strand a device login; only at or
-  // past the deadline does a missing pane become idle and clear the tracked pane.
-  if (!pane) return withinGrace ? { state: "pending", clear: false } : { state: "idle", clear: true };
-  if (pane.windowName !== loginPane.windowName) return { state: "idle", clear: true };
-  if (isShellCommand(pane.command)) {
-    return withinGrace ? { state: "pending", clear: false } : { state: "idle", clear: true };
-  }
-  return { state: "pending", clear: false };
-}

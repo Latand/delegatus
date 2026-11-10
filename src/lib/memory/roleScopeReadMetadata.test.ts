@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { roleMemoryCollection, roleScope } from "./roleStore";
-import { roleScopeReadMetadata } from "./roleViewSource";
+import { projectViewRowsCooperatively, roleScopePassLastAt, roleScopeReadMetadata } from "./roleViewSource";
 import type { ScopeHistoryEntry } from "./roleTypes";
 
 const PROJECT = "scope-metadata-fixture";
@@ -77,4 +77,35 @@ test("a scope that was never stored answers empty and is read again once it exis
   expect(roleScopeReadMetadata(scope, "p_one")).toEqual({ revision: 0, curatedAt: null, hasPass: false, departuresSince: "" });
   writeScope(scope, 1, null, []);
   expect(roleScopeReadMetadata(scope, "p_one")).toEqual({ revision: 1, curatedAt: null, hasPass: false, departuresSince: "" });
+});
+
+test("another pass over the same stored scope row reads no body", () => {
+  const scope = roleScope(PROJECT, "builder");
+  writeScope(scope, 2, "2026-10-11T00:00:05.000Z", [
+    { revision: 1, at: "2026-10-11T00:00:01.000Z", by: "curator", pass: "p_one" },
+    { revision: 2, at: "2026-10-11T00:00:05.000Z", by: "agent" },
+    { revision: 2, at: "2026-10-11T00:00:03.000Z", by: "curator" },
+  ]);
+  expect(bodyReads(() => roleScopeReadMetadata(scope, "p_one")).reads).toBe(1);
+  const other = bodyReads(() => roleScopeReadMetadata(scope, "p_two"));
+  expect(other.reads).toBe(0);
+  expect(other.value).toEqual({ revision: 2, curatedAt: "2026-10-11T00:00:05.000Z", hasPass: false, departuresSince: "2026-10-11T00:00:03.000Z" });
+  expect(roleScopeReadMetadata(scope, "p_one")).toEqual({ revision: 2, curatedAt: "2026-10-11T00:00:05.000Z", hasPass: true, departuresSince: "2026-10-11T00:00:03.000Z" });
+});
+
+test("a pass time read sees a write committed while a cooperative view read is suspended", async () => {
+  const builder = roleScope(PROJECT, "builder"), reviewer = roleScope(PROJECT, "reviewer");
+  writeScope(builder, 60, null, Array.from({ length: 60 }, (_, index) => ({ revision: index + 1,
+    at: new Date(Date.UTC(2026, 9, 11, 0, 0, index)).toISOString(), by: "curator" as const, added: [], merged: [], archived: [] })));
+  writeScope(reviewer, 1, null, [{ revision: 1, at: "2026-10-11T00:00:01.000Z", by: "curator", pass: "p_one", added: [], merged: [], archived: [] }]);
+  expect(roleScopePassLastAt(reviewer, "p_one")).toBe(Date.parse("2026-10-11T00:00:01.000Z"));
+  // The view read yields with its history cursor open on the shared view connection.
+  const view = projectViewRowsCooperatively(PROJECT);
+  writeScope(reviewer, 2, null, [
+    { revision: 1, at: "2026-10-11T00:00:01.000Z", by: "curator", pass: "p_one", added: [], merged: [], archived: [] },
+    { revision: 2, at: "2026-10-11T01:00:00.000Z", by: "curator", pass: "p_one", added: [], merged: [], archived: [] }]);
+  const during = roleScopePassLastAt(reviewer, "p_one");
+  await view;
+  expect(during).toBe(Date.parse("2026-10-11T01:00:00.000Z"));
+  expect(roleScopePassLastAt(reviewer, "p_one")).toBe(Date.parse("2026-10-11T01:00:00.000Z"));
 });
