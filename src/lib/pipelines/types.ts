@@ -400,6 +400,9 @@ export type PipelineRuntimeSwitch = {
   to: PipelineRuntimeSeat & { accountPinned: boolean };
   phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
   cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  /** handoff only: written before the switch asks the runtime to stop its
+      source, so a source found gone afterwards reads as the switch's own stop. */
+  stopDispatchedAt?: string;
   rollback?: boolean;
   reconfigureNoop?: boolean;
   /** Withdraws this attempt's execution authority before any teardown. */

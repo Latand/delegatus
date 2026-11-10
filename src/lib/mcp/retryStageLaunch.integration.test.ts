@@ -47,6 +47,8 @@ const LAUNCH = "launch_build_2";
     produced an agent, and `launchId: null` one that never launched at all. */
 function parkedPipeline(options: { launchFailed?: boolean; launchId?: string | null } = {}): Pipeline {
   const [, pipeline] = pipelineCorpus(2, 2);
+  // The corpus keeps a stored legacy review stage; these lanes are current ones.
+  for (const stage of pipeline!.stages) if (stage.kind !== "run") Object.assign(stage, { kind: "run" });
   pipeline!.state = "needs_decision";
   pipeline!.cursor = { ...pipeline!.cursor!, stageId: "build", state: "pending" };
   const latest = pipeline!.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
@@ -233,6 +235,83 @@ test("retry-stage on a stage whose attempt never launched is fenced the same way
     expect(requests.at(-1)).not.toHaveProperty("stageId");
     expect(requests.at(-1)).not.toHaveProperty("launchId");
 
+  } finally {
+    await p.close();
+  }
+});
+
+/** The build attempt ran for a long time and a provider error then parked it,
+    while its launch receipt never closed (#3760). */
+function providerCutPipeline(): Pipeline {
+  const pipeline = parkedPipeline();
+  const latest = pipeline.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
+  const detail = "stage cut by provider error after 0 tries; last: API Error: Connection lost";
+  Object.assign(latest, { state: "needs_decision", verdict: null, error: detail, sessionId: "session_build_2",
+    agentPath: path.join(sandbox, "build-2.jsonl"), completedAt: "2026-01-02T00:00:00.000Z" });
+  pipeline.cursor = { ...pipeline.cursor!, state: "running" };
+  pipeline.stateDetail = detail;
+  return pipeline;
+}
+
+test("retry-stage retries a stage parked after it ran while its launch receipt is still open, stopping its host first (#3760)", async () => {
+  const pipeline = providerCutPipeline();
+  savePipelines([pipeline]);
+  const stops: string[] = [];
+  const spawnReceipt = receiptFor("path-pending");
+  const ports = { ...defaultPipelinePorts(), spawnReceipt,
+    spawnReceiptState: (launchId: string) => spawnReceipt(launchId)?.state ?? null,
+    claimSpawnRetry: () => "claimed" as const,
+    stopStageAgent: async (target: { conversationId?: string | null }) => { stops.push(String(target.conversationId)); return { outcome: "stopped" as const }; } };
+  const p = await protocol({
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+    readPipelineRecord: getPipeline,
+    patchPipeline: (id: string, request: never) => patchPipeline(id, request, ports as never),
+  });
+  try {
+    const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
+    expect(retried.isError, retried.raw).toBe(false);
+    expect(stops).toEqual(["conversation_build_2"]);
+    expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
+  } finally {
+    await p.close();
+  }
+});
+
+test("that retry is refused, and the lane stays parked, while the old host has not confirmed its stop (#3760)", async () => {
+  const pipeline = providerCutPipeline();
+  savePipelines([pipeline]);
+  const spawnReceipt = receiptFor("path-pending");
+  const ports = { ...defaultPipelinePorts(), spawnReceipt,
+    spawnReceiptState: (launchId: string) => spawnReceipt(launchId)?.state ?? null,
+    claimSpawnRetry: () => "claimed" as const,
+    stopStageAgent: async () => ({ outcome: "unconfirmed" as const, error: "the host is still running" }) };
+  const p = await protocol({
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+    readPipelineRecord: getPipeline,
+    patchPipeline: (id: string, request: never) => patchPipeline(id, request, ports as never),
+  });
+  try {
+    const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
+    expect(retried.isError).toBe(true);
+    const after = loadPipelines()[0]!;
+    expect(after.state).toBe("needs_decision");
+    expect(after.runs.find((run) => run.stageId === "build")!.attempts.length).toBe(pipeline.runs.find((run) => run.stageId === "build")!.attempts.length);
+  } finally {
+    await p.close();
+  }
+});
+
+test("a launch that never produced a turn keeps its open receipt refusal (#3760)", async () => {
+  const pipeline = parkedPipeline();
+  const latest = pipeline.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
+  Object.assign(latest, { state: "needs_decision", verdict: null, error: "provider recovery parked", agentPath: null, sessionId: null });
+  pipeline.stateDetail = latest.error;
+  savePipelines([pipeline]);
+  const p = await engineWithReceipts(receiptFor("path-pending"));
+  try {
+    const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
+    expect(retried.isError).toBe(true);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
   } finally {
     await p.close();
   }
