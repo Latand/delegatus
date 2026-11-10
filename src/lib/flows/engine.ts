@@ -749,7 +749,7 @@ async function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, a
       cwd: flow.cwd,
       accountId,
       status: "starting",
-      host,
+      host: null,
       claimEpoch: 0,
       claimOwner: null,
       pendingAction: "spawn",

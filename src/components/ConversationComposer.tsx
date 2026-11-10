@@ -1983,7 +1983,7 @@ function nowMs(): number {
 }
 
 export function structuredComposerSession(runtimeSession: RuntimeSessionView | null): RuntimeSessionView | null {
-  if (!runtimeSession?.structuredControlsEnabled || runtimeSession.legacy) return null;
+  if (!runtimeSession?.structuredControlsEnabled) return null;
   return runtimeSession.session.hostKind === "codex-app-server" || runtimeSession.session.hostKind === "claude-broker"
     || runtimeSession.session.hostKind === "copilot-acp"
     ? runtimeSession
@@ -2042,9 +2042,9 @@ function wireSelectedContext(reference: SelectedContextRef | undefined | null): 
 
 
 /**
- * Chat-style composer pinned under the feed. A live pane gets the text typed
- * straight into its tmux pane; a finished resumable conversation boots a new
- * agent window in the current tmux session with the text as the first prompt.
+ * Chat-style composer pinned under the feed. A live conversation gets the text
+ * delivered to its host; a finished resumable conversation starts a new host
+ * with the text as the first prompt.
  * Sent messages stay visible as a queue above the input until dismissed.
  *
  * OWNERSHIP (#691 hoist): for a conversation card this component is only a

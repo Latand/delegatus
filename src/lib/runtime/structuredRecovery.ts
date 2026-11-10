@@ -309,11 +309,8 @@ function candidateFor(
      old root is already dead. Only a successful termination retry can verify
      and clear this evidence. */
   if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-  if (entry?.host) return null;
-  /* Structured cutover covers every registered transcript. Historical Codex
-     and Claude sessions reach their pane-less host through this recovery path,
-     including conversations that predate registry entries. A verified live
-     tmux owner returned above keeps ownership until that process exits. */
+  /* Every registered transcript reaches its host through this recovery path,
+     including conversations that predate registry entries. */
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
   const hostProcessLive = Boolean(!terminal
     && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));

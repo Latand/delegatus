@@ -3880,39 +3880,6 @@ test("a clientAttemptId replay recovers the reserved card from runtime evidence"
   }
 });
 
-test("spawn route projects a launched path-pending receipt as a truthful success", () => {
-  const store = registry();
-  const begun = store.beginSpawnRequest({
-    engine: "codex",
-    cwd: "/repo",
-    accountId: "terra",
-    clientAttemptId: "attempt_path_pending",
-    requestDigest: "digest",
-    launchProfile: { title: "Project path-pending spawn response" },
-  });
-  if (begun.kind !== "created") throw new Error("expected a new receipt");
-  store.bindSpawnPane(begun.receipt.launchId, { endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9", panePid: { pid: 99, startIdentity: "99:a" }, target: "agents:9.0" });
-  expect(spawnResponseForReceipt(store.snapshot().receipts[begun.receipt.launchId]!)).toMatchObject({ launched: false, target: "%9" });
-  store.markSpawnHostVerified(begun.receipt.launchId, {
-    kind: "tmux", endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9",
-    panePid: { pid: 99, startIdentity: "99:a" }, windowName: "codex-new",
-    agent: { pid: 100, startIdentity: "100:a" }, argv: ["codex"],
-  });
-  store.markSpawnPromptDelivered(begun.receipt.launchId);
-  const pending = store.markSpawnPathPending(begun.receipt.launchId);
-
-  expect(spawnResponseForReceipt(pending, null)).toMatchObject({
-    ok: true,
-    launched: true,
-    retrySafe: false,
-    state: "path-pending",
-    path: null,
-    target: "%9",
-    launchId: begun.receipt.launchId,
-    conversationId: begun.receipt.conversationId,
-  });
-});
-
 test("a completed pane-less receipt replays as a launched structured conversation", () => {
   const store = registry();
   const pathname = `/sessions/${crypto.randomUUID()}.jsonl`;
@@ -3970,25 +3937,6 @@ test("a staged pane-less receipt replays with accepted status", () => {
 
   expect(spawnReplayStatus(response, true)).toBe(202);
   expect(spawnReplayStatus(response, false)).toBe(200);
-});
-
-test("a pane-bound launch verification failure returns launched false with its teaching error", () => {
-  const store = registry();
-  const begun = store.beginSpawnRequest({
-    engine: "claude",
-    cwd: "/repo",
-    accountId: "account-test",
-    launchProfile: { title: "Report pane verification failure" },
-  });
-  if (begun.kind !== "created") throw new Error("expected a new receipt");
-  store.bindSpawnPane(begun.receipt.launchId, { endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9", panePid: { pid: 99, startIdentity: "99:a" }, target: "agents:9.0" });
-  store.failSpawn(begun.receipt.launchId, "test spawn failure");
-
-  expect(spawnResponseForReceipt(store.snapshot().receipts[begun.receipt.launchId]!)).toMatchObject({
-    launched: false,
-    state: "conflict",
-    error: "test spawn failure",
-  });
 });
 
 test("spawn route accepts an explicit stable parent conversation identity", () => {

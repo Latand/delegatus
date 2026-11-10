@@ -788,43 +788,6 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
   return [...terminalized];
 }
 
-/**
- * A registry row written while agents ran in terminal panes can still name a
- * pane as its host. The pane census that used to clear such rows is gone, so
- * the recorded agent process decides: a row whose agent no longer runs under
- * its recorded start identity becomes unhosted. No terminal multiplexer is
- * asked; a row whose process is still alive is left as it is. A live process
- * whose identity cannot be read (no platform reader, hidden /proc) proves
- * nothing either way, so its row keeps its host.
- */
-export async function retireDeadPaneHostRows(
-  registry: Pick<AgentRegistry, "transcriptHostReconciliationRows" | "deliveryWrite" | "markUnhosted">,
-  processIdentity: (pid: number) => string | null = (pid) => procBackend.processIdentity(pid),
-  pidAlive: (pid: number) => boolean = (pid) => procBackend.pidAlive(pid),
-): Promise<number> {
-  const agentGone = (entry: { host: { agent: { pid: number; startIdentity: string | null } } | null }) => {
-    const agent = entry.host?.agent;
-    if (!agent) return false;
-    if (agent.startIdentity === null) return !pidAlive(agent.pid);
-    const identity = processIdentity(agent.pid);
-    return identity === null ? !pidAlive(agent.pid) : identity !== agent.startIdentity;
-  };
-  const dead = registry.transcriptHostReconciliationRows([], []).hostedEntries.filter(([, entry]) => agentGone(entry));
-  if (dead.length === 0) return 0;
-  const written = await registry.deliveryWrite({ label: "registry.markUnhosted" }, () => {
-    let retired = 0;
-    const current = new Map(registry.transcriptHostReconciliationRows([], []).hostedEntries);
-    for (const [id] of dead) {
-      const entry = current.get(id);
-      if (!entry || !agentGone(entry)) continue;
-      registry.markUnhosted(entry.key);
-      retired += 1;
-    }
-    return retired;
-  });
-  return written.acquired ? written.value : 0;
-}
-
 export async function runReaperCycle(options: {
   registry?: AgentRegistry;
   files: FileEntry[];
@@ -869,7 +832,6 @@ export async function runReaperCycle(options: {
     console.error("[reaper] dead structured-host ownership convergence failed", error);
   }
   try {
-    await retireDeadPaneHostRows(registry);
   } catch (error) {
     console.error("[reaper] dead pane-host row convergence failed", error);
   }

@@ -14,6 +14,7 @@ process.env.XDG_CONFIG_HOME = path.join(root, "config");
 delete process.env.LLV_ROOT_CONVERSATION_ID;
 
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { structuredHostFixture } = await import("@/lib/agent/registryTestFixtures");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
 const { requireOperatorAuthority } = await import("@/lib/agent/operatorAuthority");
 const { setDeputyRootResolverForTests } = await import("./deputyAsker");
@@ -97,8 +98,7 @@ async function nativeRelayFixture(hooks: {
   const recipient = actor("project-b", "orchestrator", "codex", "conversation_native_recipient");
   const entry = Object.values(registry.readOnlySnapshot().entries).find(row => row.artifactPath === registry.conversation(sender.id)!.generations.at(-1)!.path)!;
   const identity = captureProcessIdentity(process.pid);
-  registry.upsert({ ...entry, host: { kind: "tmux", endpoint: "fixture", server: identity, paneId: "%1", panePid: identity,
-    windowName: "fixture", agent: identity, argv: [] } });
+  registry.upsert({ ...entry, structuredHost: structuredHostFixture(identity, "codex-app-server") });
   delete process.env.LLV_SPAWN_CAPABILITY;
   const envelopes: Record<string, unknown>[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {

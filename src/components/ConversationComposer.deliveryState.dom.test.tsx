@@ -188,7 +188,6 @@ const structuredRuntimeView = (
   uiState: liveTurn ? "working" : "idle",
   attentions: [],
   receipts: busReceipts,
-  legacy: false,
   structuredControlsEnabled: true,
 });
 

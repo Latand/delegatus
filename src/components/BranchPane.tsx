@@ -130,7 +130,7 @@ interface Props {
   onClose?: () => void;
   /** Native DnD attributes on the header: drag a column by its head to reorder siblings. */
   dragHandle?: React.HTMLAttributes<HTMLElement>;
-  /** Hides the tmux composer: headless runs and finished review rounds take no input. */
+  /** Hides the composer: headless runs and finished review rounds take no input. */
   noComposer?: boolean;
   /** Archive and relay readers keep navigation and transcript disclosure,
       with no transcript, host, account or delivery mutation controls. */

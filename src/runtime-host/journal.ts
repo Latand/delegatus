@@ -310,7 +310,9 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
-    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null) || payload.hostKind === "tmux-legacy"
+    /* A row journalled for a terminal-pane host names a kind that no longer
+       exists; it reads as unhosted. */
+    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null)
       ? payload.hostKind as RuntimeSession["hostKind"]
       : "unhosted",
     host: payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",

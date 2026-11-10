@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { CodexAppServerError } from "@/lib/accounts/codexAppServer";
 import { AgentRegistry, MigrationRevisionError, type ConversationObservation } from "@/lib/agent/registry";
+import { structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { boardFor, mutateBoard, setBoardFileForTests } from "@/lib/board/store";
 import { terminalizeStaleUndeliverableHeldDeliveries } from "@/lib/reaperRuntime";
 import { tailRecordsResult } from "@/lib/scanner/activity";
@@ -143,19 +144,6 @@ async function withInterruptedTailRead<T>(
     fs.readSync = originalReadSync;
     fs.closeSync = originalCloseSync;
   }
-}
-
-function tmuxHost(windowName: string): NonNullable<Parameters<AgentRegistry["upsert"]>[0]["host"]> {
-  return {
-    kind: "tmux",
-    endpoint: "/tmp/tmux-1000/default",
-    server: { pid: 4100, startIdentity: "4100:recovery" },
-    paneId: "%41",
-    panePid: { pid: 4101, startIdentity: "4101:recovery" },
-    windowName,
-    agent: { pid: 4102, startIdentity: "4102:recovery" },
-    argv: ["claude", "--resume"],
-  };
 }
 
 function inventoryEntry(pathname: string, overrides: Partial<FileEntry> = {}): FileEntry {
@@ -4137,7 +4125,8 @@ describe("durable account migration coordinator", () => {
     store.upsert({
       ...hostEntry,
       status: "live",
-      host: tmuxHost("llv-recovery"),
+      host: null,
+      structuredHost: structuredHostFixture({ pid: 4102, startIdentity: "4102:recovery" }),
     });
     expect(store.requestConversationReseat(conversation.id, "healthy").migration?.phase).toBe("waiting-turn");
     const entry = inventoryEntry(pathname, {
@@ -4158,7 +4147,7 @@ describe("durable account migration coordinator", () => {
     expect(counts.create).toBe(0);
     expect(store.conversation(conversation.id)?.migration?.phase).toBe("waiting-turn");
 
-    store.upsert({ ...hostEntry, status: "unhosted", host: null });
+    store.upsert({ ...hostEntry, status: "unhosted", host: null, structuredHost: null });
 
     await reconcileMigrationInventory(store, [entry]);
     await advanceConversationMigration(conversation.id, store, successorProvider);
@@ -4198,7 +4187,8 @@ describe("durable account migration coordinator", () => {
     store.upsert({
       ...hostEntry,
       status: "live",
-      host: tmuxHost("llv-raced-recovery"),
+      host: null,
+      structuredHost: structuredHostFixture({ pid: 4102, startIdentity: "4102:recovery" }),
     });
     const counts = { create: 0, verify: 0 };
     const successorProvider = provider(["/raced-recovery-successor.jsonl"], counts);
@@ -4206,7 +4196,7 @@ describe("durable account migration coordinator", () => {
     await advanceConversationMigration(conversation.id, store, successorProvider);
     expect(counts.create).toBe(0);
 
-    store.upsert({ ...hostEntry, status: "unhosted", host: null });
+    store.upsert({ ...hostEntry, status: "unhosted", host: null, structuredHost: null });
     await advanceConversationMigration(conversation.id, store, successorProvider);
 
     expect(counts.create).toBe(1);

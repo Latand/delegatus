@@ -38,10 +38,10 @@ import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, t
 
 /**
  * System memory pressure + per-agent-session memory attribution, the data
- * behind the rail resources block and its cleanup list. Each tmux pane whose
- * process tree contains a claude/codex CLI is one session; the tree sum is
- * what actually frees up on kill-pane — the MCP children (`npm exec`, node
- * servers) hanging off the CLI usually outweigh the CLI itself.
+ * behind the rail resources block and its cleanup list. Each structured host
+ * is one session; the tree sum is what actually frees up when it is killed —
+ * the MCP children (`npm exec`, node servers) hanging off the CLI usually
+ * outweigh the CLI itself.
  */
 
 /** Per-session process attribution is expensive on large transcript inventories.

@@ -96,7 +96,7 @@ export function ConversationAttention({ file }: { file: FileEntry }) {
   /* A question is answered through the host that asked it. A conversation
      with no structured host has nothing to deliver an answer to, so it shows
      no card; the question stays in the transcript. */
-  if (!runtime || runtime.legacy) return null;
+  if (!runtime) return null;
 
   /* When the host died the banner (§5) owns recovery: these cards can never be
      answered (the request died with the host), so they render as inert history

@@ -296,7 +296,6 @@ const hostedSession = (): RuntimeSessionView => ({
   uiState: "idle",
   attentions: [],
   receipts: [],
-  legacy: false,
   structuredControlsEnabled: true,
 });
 

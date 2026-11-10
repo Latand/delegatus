@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { liveRootSession } from "@/lib/root/adopt";
 import { attentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import { hostedConversationsFromSnapshot, attentionCallerSources, productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } from "./bindings";
@@ -30,7 +31,7 @@ function fixture(history: number) {
   const conversation = { id, engine: "codex", accountId: null, createdAt: stamp, updatedAt: stamp,
     generations: [{ id: session, path: transcript, launchProfile: { role: "worker" } }], continuityPaths: [] };
   const host = { pid: 42, startIdentity: "42:original", bootEpoch: "boot-fixture" };
-  const entry = { key: { engine: "codex", sessionId: session }, artifactPath: transcript, host: { kind: "tmux", agent: host }, structuredHost: null };
+  const entry = { key: { engine: "codex", sessionId: session }, artifactPath: transcript, host: null, structuredHost: structuredHostFixture(host, "codex-app-server") };
   const put = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES (?,?,?,?)");
   db.transaction(() => {
     put.run("conversations", id, JSON.stringify(conversation), 0);

@@ -429,16 +429,6 @@ function ownershipUnavailable(condition: ConversationDeliverabilityCondition = "
   });
 }
 
-function legacyCommandUnavailable(): StructuredMessageResult {
-  return refusedBeforeReservation({
-    ok: false,
-    structured: true,
-    outcome: "failed",
-    error: "legacy delivery cannot preserve structured command semantics",
-    status: 409,
-  });
-}
-
 /** A send addressed to a terminally superseded round (issue #383) never forks
     it through implicit recovery — it answers with the live chain end. */
 function supersededRejection(
@@ -454,22 +444,6 @@ function supersededRejection(
     status: 409,
     successorConversationId: registry.supersedenceChainTail(conversation.id),
   });
-}
-
-function requiresStructuredCommand(request: StructuredMessageRequest): boolean {
-  return request.operationId !== undefined
-    || (request.kind ?? "send") !== "send"
-    || (request.policy !== "steer-or-queue" && (request.policy ?? "interrupt-active") !== "interrupt-active")
-    || request.turnId !== undefined;
-}
-
-function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): boolean {
-  const command = request.command;
-  return command !== undefined
-    && (command.operationId !== request.deliveryId
-      || command.kind !== "send"
-      || (command.policy !== "steer-or-queue" && command.policy !== "interrupt-active")
-      || command.turnId !== undefined);
 }
 
 /** The reservation write never got the delivery record's lock, so nothing
@@ -543,7 +517,7 @@ function commandInput(request: StructuredMessageRequest) {
 }
 
 type PersistedMessageOwner = {
-  kind: "structured" | "legacy";
+  kind: "structured";
   conversation: RegistryConversation;
 };
 
@@ -559,17 +533,7 @@ async function persistedCurrentOwner(
   const snapshot = registry.conversationDeliverySnapshot(request);
   const entry = snapshot.entries[`${conversation.engine}:${generation.id}`];
   if (!entry || entry.artifactPath !== generation.path) return null;
-  const deliverability = await conversationDeliverabilityFromRecord(snapshot, {
-    conversationId: conversation.id,
-    transcriptPath: generation.path,
-  });
-  /* A current legacy host wins over retained structured adapter metadata, the
-     same verdict conversation_deliverability exposes. This keeps a stale
-     runtime projection from recovering over the pane resume just settled. */
-  if (deliverability.deliverable && deliverability.transport === "legacy") {
-    return { kind: "legacy", conversation };
-  }
-  if (entry.host === null && entry.structuredHost !== null && entry.structuredHost !== undefined) {
+  if (entry.structuredHost !== null && entry.structuredHost !== undefined) {
     return { kind: "structured", conversation };
   }
   return null;
@@ -585,10 +549,8 @@ async function heldOutcomeDuringRuntimeSynchronization(
   // not dispatched yet and must keep a reason-bearing bounded deferral.
   if (request.reconcileUncertain) return "delivery-uncertain";
   const owner = await persistedCurrentOwner(request, registry);
-  // This path runs before command dispatch. Legacy ownership still belongs to
-  // its fallback path; every structured or unresolved owner gets a bounded
-  // retry that retains the runtime-read cause.
-  if (owner?.kind === "legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
+  // This path runs before command dispatch: every structured or unresolved
+  // owner gets a bounded retry that retains the runtime-read cause.
   const ownerHint = owner?.kind === "structured" ? "structured runtime owner is synchronizing" : "runtime owner is unavailable";
   return heldForRetry(`${ownerHint}: ${cause}`, "evidence-unreadable");
 }
@@ -657,7 +619,6 @@ async function holdDuringRuntimeSynchronization(
   const persistedConversation = owner?.conversation ?? unresolvedConversation!;
   const rejectedHold = supersededRejection(registry, persistedConversation);
   if (rejectedHold) return rejectedHold;
-  if (owner?.kind === "legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   const conversation = persistedConversation;
   /**
    * #1560: the last way an injection could become a held reservation.
@@ -1216,10 +1177,6 @@ async function deliverHeldAttempt(
   if (afterRuntimeRead !== undefined) return afterRuntimeRead;
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session || (isStructuredHostKind(session.hostKind) && (session.host === "dead" || session.host === "unhosted"))) {
-    const owner = await persistedCurrentOwner(request, registry);
-    if (owner?.kind === "legacy") {
-      return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime session is unavailable");
-    }
     const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
@@ -1292,7 +1249,6 @@ async function deliverHeldAttempt(
     if (invalidAuthority !== undefined) return invalidAuthority;
     return heldForRetry(`the recipient's host could not be made ready: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (session.hostKind === "tmux-legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
   if (!isStructuredHostKind(session.hostKind)) return heldForRetry("the recipient's runtime session is not a structured host");
   try {
     const refs = request.imageRefs ?? [];
@@ -1479,10 +1435,6 @@ export async function enqueueStructuredMessage(
       message: refusal.error, ...refusal,
     });
   } };
-  const durableOwner = await persistedCurrentOwner(request, registry);
-  if (durableOwner?.kind === "legacy") {
-    return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
-  }
   const progress = progressPort(dependencies.progress);
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
@@ -1616,7 +1568,6 @@ export async function enqueueStructuredMessage(
       { progress, reason: "awaiting-host", detail: "no runtime session is registered for the conversation" },
     );
   }
-  if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   if (!isStructuredHostKind(session.hostKind)) {
     const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,

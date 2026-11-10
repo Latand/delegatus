@@ -151,11 +151,7 @@ export interface FileEntry {
   agentActivity?: import("./lifecycle/agentActivity").AgentActivityFacts;
   /** Current registry transport for this exact conversation. Presentation only;
       controls resolve and fence ownership again when the operator acts. */
-  controlHost?: { conversationId: string; transport: "legacy" | "structured" };
-  /** Current canonical root owner for a shared Claude child. The selected
-      conversation keeps its own identity; parentPath binds this projection to
-      the scanner parent, even when the root has advanced to a new generation. */
-  rootControlHost?: { conversationId: string; transport: "legacy" | "structured"; parentPath: string };
+  controlHost?: { conversationId: string; transport: "structured" };
   path: string;
   root: RootKey;
   /** Path relative to its root. */
@@ -818,9 +814,6 @@ export interface ResourcesSystem {
   capturedAt: string;
 }
 
-/** One tmux pane hosting an agent CLI, with its whole process tree's memory.
-    `path` is null for orphans — panes running an agent the scanner could not
-    match to any transcript; they are still killable via their target. */
 /** How many structured hosts one resources payload may carry. The footer polls
     this list, so the bound belongs to the payload rather than to any one
     producer: the registry read, the process scan and the served rows all stop
@@ -829,8 +822,7 @@ export const RESOURCE_STRUCTURED_HOST_LIMIT = 512;
 
 export interface ResourceSession {
   target: string;
-  /** Root pid of the attributed tree: the tmux pane for a legacy row, the host
-      process itself for a structured one. */
+  /** Root pid of the attributed tree: the host process itself. */
   panePid: number;
   /** Transport that owns this row. Absent on observations persisted before
       structured hosts were listed, which only ever held tmux panes. */

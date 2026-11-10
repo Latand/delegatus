@@ -145,7 +145,6 @@ function view(working: boolean): RuntimeSessionView {
     uiState: working ? "working" : "idle",
     attentions: [],
     receipts: busReceipts,
-    legacy: false,
     structuredControlsEnabled: true,
   };
 }

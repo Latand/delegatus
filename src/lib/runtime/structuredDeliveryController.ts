@@ -7,7 +7,7 @@ import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
-import { hotRegistryRows, registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
@@ -585,9 +585,7 @@ type RegistrySessionProjection = Pick<RuntimeSession,
   | "activeTurnId"> & { writerClaim: null; producerKind: string; entryUpdatedAt: string | null };
 
 /** The one runtime projection a conversation's current durable registry row
-    supports. A coexisting tmux host wins because it is also the transport
-    deliverability resolves; structured columns may remain during succession
-    as adapter metadata. The tmux host supplies the card's sole verdict. */
+    supports while no live host publishes for it. */
 function registrySessionProjection(
   registry: AgentRegistry,
   conversationId: string,
@@ -598,15 +596,10 @@ function registrySessionProjection(
   if (!conversation || !generation) return null;
   const sessionKey = { engine: conversation.engine, sessionId: generation.id } as const;
   const entry = startupHostSnapshot(registry, sessionKey).entries[sessionKeyId(sessionKey)] ?? null;
-  const legacy = entry?.host?.kind === "tmux";
-  const host = entry?.status === "dead"
-    ? "dead"
-    : legacy && entry?.status !== "unhosted"
-      ? "hosted"
-      : "unhosted";
+  const host = entry?.status === "dead" ? "dead" : "unhosted";
   const turn = entry?.status === "live" ? "running" : entry?.status === "idle" ? "idle" : "unknown";
-  const structuredKind = legacy ? null : entry?.structuredHost?.kind ?? null;
-  const hostKind = legacy ? "tmux-legacy" : structuredKind ?? "unhosted";
+  const structuredKind = entry?.structuredHost?.kind ?? null;
+  const hostKind = structuredKind ?? "unhosted";
   const provenance = structuredKind ? "structured" : "derived";
   return {
     conversationId,
@@ -662,27 +655,6 @@ async function publishHostState(
   if (!entry) return;
   const conversationId = conversationIdForEntry(registry, entry);
   if (!conversationId) return;
-  /* A generation can temporarily retain a structured adapter beside its
-     current tmux host during recovery or rollback. Delivery resolves that
-     durable row through the legacy host; its structured probe therefore has
-     no authority to publish a second liveness verdict for the same card. A
-     failed probe is environmental evidence about that adapter only. */
-  if (entry.host) {
-    const projection = registrySessionProjection(registry, conversationId);
-    if (!projection) return;
-    if (projection.turn === "idle" && pendingAccountSwitch(registry, conversationId)) requestAccountMigrationTick();
-    const { producerKind, entryUpdatedAt, ...payload } = projection;
-    await publishStructuredHostProjection(client, {
-      scope: { type: "session", id: conversationId },
-      kind: "session-status",
-      producer: {
-        kind: producerKind,
-        eventKey: `legacy-host:${sessionKeyId(entry.key)}:${entryUpdatedAt ?? "unknown"}`,
-      },
-      payload,
-    });
-    return;
-  }
   if (!state) return;
   /* A successor claimed this row after the host was registered: its writer
      publishes for the row now (docs/design/update-drain-liveness.md, R5). */
@@ -1646,20 +1618,6 @@ export async function bindStructuredDeliveryQueue(
     const generation = conversation?.generations.at(-1);
     if (!conversation || !generation) return unclaimed;
     if (sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) !== sessionKeyId(registration.key)) return unclaimed;
-    /* A current legacy host already answers the card's liveness. Publish it
-       directly; reading the coexisting structured adapter can only add a
-       failure about a transport the conversation is not using. */
-    if (entry.host) {
-      projectionRevision += 1;
-      await publishHostState(
-        client,
-        registry,
-        registration,
-        null,
-        `projection:${projectionEpoch}:${projectionRevision}`,
-      );
-      return { conversationId, published: true };
-    }
     /* The host's own state, kept as evidence like every other read in this
        path (#1131). Letting it throw was a conversion of the worst shape: the
        exception answered for the WHOLE loop below, so ONE host that could not
@@ -1921,16 +1879,6 @@ export async function bindStructuredDeliveryQueue(
     /* A carried-over seat keeps the epoch it was registered at. */
     if (item.writerEpoch === undefined) item = { ...item, writerEpoch: publicationEntry?.structuredHost?.writerClaimEpoch ?? null };
     if (item.mcpOwner === undefined) item = { ...item, mcpOwner: viewerMcpOwnerForEntry(publicationEntry ?? undefined) };
-    /* A durable tmux host makes this adapter historical for the current
-       generation. Publish the legacy verdict without probing or registering
-       the adapter: an unreadable pane surface says nothing about host death,
-       and the structured queue must not route work through the stale adapter. */
-    if (publicationEntry?.host) {
-      const displaced = takeRegistration(key);
-      if (displaced) await detachRegistration(key, displaced);
-      await publishHostState(client, registry, item, null);
-      return async () => {};
-    }
     /* The same host under the same key either already holds a registration of
        this generation, with nothing left to do, or holds a carried-over seat
        this call is filling in. Any other host under that key is replaced. */
@@ -2344,13 +2292,9 @@ export async function bindStructuredDeliveryQueue(
       );
       await phase("publishing historical host fallbacks");
       const conversations = (function* () {
-        const hostKeys = new Set(markerKeys);
-        // An entry with a legacy host cannot be archived. Structured rows
-        // may be cold, so retain their indexed selection from marker repair.
-        for (const [key, entry] of hotRegistryRows(startupSnapshot, "entries")) {
-          if (entry.host?.kind === "tmux") hostKeys.add(key);
-        }
-        for (const key of hostKeys) {
+        // Structured rows may be cold, so their indexed selection comes from
+        // marker repair.
+        for (const key of markerKeys) {
           for (const conversation of registryConversationsForEntryKey(startupSnapshot, key)) {
             const generation = conversation.generations.at(-1);
             if (generation && sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) === key) {
@@ -2367,7 +2311,7 @@ export async function bindStructuredDeliveryQueue(
         const id = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
         if (registrations.has(id)) return;
         const entry = startupSnapshot.entries[id];
-        if (!entry?.structuredHost && entry?.host?.kind !== "tmux") return;
+        if (!entry?.structuredHost) return;
         const publicationKey = JSON.stringify(registrySessionProjection(registry, conversation.id));
         if (publishedFallbacks.get(conversation.id) === publicationKey) return;
         const current = client.readSession

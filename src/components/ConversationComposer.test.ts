@@ -14,7 +14,6 @@ import { deliveryAttemptKey, mergeRuntimeReceipts, payloadReceiptEvidence, Runti
 function runtimeSession(structuredControlsEnabled: boolean): RuntimeSessionView {
   return {
     structuredControlsEnabled,
-    legacy: false,
     uiState: "idle",
     attentions: [],
     receipts: [],

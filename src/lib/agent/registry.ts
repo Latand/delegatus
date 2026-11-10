@@ -108,7 +108,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  hotRegistryRows, registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
@@ -230,8 +230,8 @@ export interface AgentRegistryEntry {
   accountId: string | null;
   launchProfile?: LaunchProfile;
   status: AgentHostStatus;
-  host: TmuxHostEvidence | null;
-  /** Structured hosting metadata lives beside legacy tmux evidence during migration. */
+  /** Always null: the column a pane host used to occupy in stored rows. */
+  host: null;
   structuredHost?: StructuredHostColumns | null;
   /** Original identity retained after the host columns are retired. */
   hostExitProcess?: ProcessIdentity;
@@ -2165,18 +2165,6 @@ function detachedRow<T>(value: T): T {
   return copy as T;
 }
 
-/** The registry rows one tmux census is reconciled against. */
-export interface TranscriptHostReconciliationRows {
-  /** The named entries that exist, by `engine:sessionId`. */
-  entries: Record<string, AgentRegistryEntry>;
-  /** The named launches that exist, by launch id. */
-  receipts: Record<string, SpawnReceipt>;
-  /** Every hot entry a tmux pane hosts, in collection order. */
-  hostedEntries: Array<[string, AgentRegistryEntry]>;
-  /** Every hot launch still starting, in collection order. */
-  startingReceipts: SpawnReceipt[];
-}
-
 function restoreOwnedChanges(current: unknown, retired: unknown, previous: unknown): unknown {
   if (JSON.stringify(retired) === JSON.stringify(previous)) return current;
   if (JSON.stringify(current) === JSON.stringify(retired)) return previous === undefined ? undefined : clone(previous);
@@ -2229,7 +2217,7 @@ function knownChildProcesses(receipt: SpawnReceipt | null, entries: AgentRegistr
   return [
     receipt?.verifiedHost?.agent,
     receipt?.pane?.panePid,
-    ...entries.flatMap((entry) => [entry.host?.agent, entry.structuredHost?.process]),
+    ...entries.map((entry) => entry.structuredHost?.process),
   ].filter((identity): identity is ProcessIdentity => Boolean(identity));
 }
 
@@ -2389,7 +2377,11 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
   return {
     ...value,
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
-    host: value.host && typeof value.host === "object" && value.host.kind === "tmux" ? value.host : null,
+    /* A row written while agents ran in terminal panes names a pane as its
+       host. Nothing can reach that pane any more, so the row loads without a
+       host; with no structured host either, it is unhosted. */
+    host: null,
+    status: value.host && !value.structuredHost && value.status !== "dead" ? "unhosted" : value.status,
     structuredHost: normalizeStructuredHost(value.structuredHost),
     ...(value.structuredHost?.exitProcess ? { hostExitProcess: value.structuredHost.exitProcess } : {}),
     ...(terminationSurvivors === undefined ? {} : { structuredTerminationSurvivors: terminationSurvivors }),
@@ -4818,13 +4810,6 @@ function sqliteMirrorRevision(filename: string): number | null {
   }
 }
 
-function isRecoverableSpawnReadinessFailure(error: string | null): boolean {
-  return error === "agent never reached a launch-ready prompt"
-    || error?.startsWith("agent never reached a launch-ready prompt:") === true
-    || error === "launch prompt was not accepted by the agent"
-    || error?.startsWith("launch prompt was not accepted by the agent:") === true;
-}
-
 /** Durable source for identity and handoff evidence. The lock directory is
     intentionally separate from in-memory promises, so a Viewer replacement
     cannot leave an imaginary owner behind. */
@@ -6289,48 +6274,6 @@ export class AgentRegistry {
     });
   }
 
-  /** The rows a tmux census reads: the entries and launches it names, the hot
-      entries a pane still hosts and the hot launches still starting. An
-      archived entry has no host and a starting launch is never archived, so
-      the two selections cover what a complete view would show the census.
-      SQLite selects them by key and index inside one keyed read, which also
-      borrows an admitted writer's transaction; assembling the complete view
-      there walked every retained row on the serving thread. */
-  transcriptHostReconciliationRows(entryIds: readonly string[], launchIds: readonly string[]): TranscriptHostReconciliationRows {
-    const named = (file: RegistryFile) => {
-      const rows: TranscriptHostReconciliationRows = { entries: {}, receipts: {}, hostedEntries: [], startingReceipts: [] };
-      for (const id of new Set(entryIds)) {
-        const entry = file.entries[id];
-        if (entry) rows.entries[id] = detachedRow(entry);
-      }
-      for (const id of new Set(launchIds)) {
-        const receipt = file.receipts[id];
-        if (receipt) rows.receipts[id] = detachedRow(receipt);
-      }
-      return rows;
-    };
-    if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
-      const file = this.readOnlySnapshot();
-      const rows = named(file);
-      rows.hostedEntries = hotRegistryRows(file, "entries").filter(([, entry]) => entry.host?.kind === "tmux");
-      rows.startingReceipts = hotRegistryRows(file, "receipts").flatMap(([, receipt]) => receipt.state === "starting" ? [receipt] : []);
-      return rows;
-    }
-    return this.readKeyed(file => {
-      const rows = named(file);
-      const keys = this.sqliteStore!.transcriptHostSweepKeys();
-      for (const id of keys.hostedEntries) {
-        const entry = rows.entries[id] ?? file.entries[id];
-        if (entry?.host?.kind === "tmux") rows.hostedEntries.push([id, detachedRow(entry)]);
-      }
-      for (const id of keys.startingReceipts) {
-        const receipt = rows.receipts[id] ?? file.receipts[id];
-        if (receipt?.state === "starting") rows.startingReceipts.push(detachedRow(receipt));
-      }
-      return rows;
-    });
-  }
-
   /** Current credential identity for the seat's stdio MCP heartbeat. */
   seatMcpReceipt(conversationId: string): { spawnCapabilityDigest: string; createdAt: string; viewerMcpTransport: "stdio" | "http" | null } | null {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) {
@@ -7298,9 +7241,8 @@ export class AgentRegistry {
         explicitProject,
         launchDisplay: normalizeLaunchDisplay(input.launchDisplay),
         queuedPinnedSpawn: null,
-        /* Only a structured launch ends its turns in the runtime journal, which
-           is where a notice is owed from; a tmux child never would, so it
-           records no launcher and stays the seat tick's to harvest. */
+        /* A structured launch ends its turns in the runtime journal, which
+           is where a notice is owed from. */
         launcher: purpose === "launch" && input.transport === "structured" ? normalizeSpawnLauncher(input.launcher) : null,
         ...(purpose === "launch" && input.origin?.kind === "operator" ? { operatorOrigin: true as const } : {}),
       };
@@ -7352,16 +7294,14 @@ export class AgentRegistry {
     }
   }
 
-  private claimSpawnActuation(launchId: string, transport: "tmux" | "structured"): { claimed: boolean; receipt: SpawnReceipt } {
+  /** Atomically adopts a structured receipt whose pre-host owner exited.
+      A live owner keeps responsibility for its process-local deferred work. */
+  claimStartingStructuredSpawn(launchId: string): { claimed: boolean; receipt: SpawnReceipt } {
     return this.mutate((file) => {
       const receipt = file.receipts[launchId];
       if (!receipt) throw new Error("unknown spawn receipt");
       const unbound = receipt.state === "starting" && !receipt.key && !receipt.pane;
-      const recoverablePane = transport === "tmux"
-        && (receipt.state === "pane-bound" || receipt.state === "host-verified")
-        && !receipt.key
-        && Boolean(receipt.pane);
-      if (receipt.transport !== transport || (!unbound && !recoverablePane)) {
+      if (receipt.transport !== "structured" || !unbound) {
         return { claimed: false, receipt: clone(receipt) };
       }
       if (receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner)) {
@@ -7458,34 +7398,16 @@ export class AgentRegistry {
     return written.acquired && written.value;
   }
 
-  /** Atomically adopts a structured receipt whose pre-host owner exited.
-      A live owner keeps responsibility for its process-local deferred work. */
-  claimStartingStructuredSpawn(launchId: string): { claimed: boolean; receipt: SpawnReceipt } {
-    return this.claimSpawnActuation(launchId, "structured");
-  }
-
-  /** Atomically adopts an unbound, pane-bound, or host-verified tmux receipt
-      after its actuation owner exits. A bound claimant must continue inside
-      the persisted pane identity. */
-  claimTmuxSpawnActuation(launchId: string): { claimed: boolean; receipt: SpawnReceipt } {
-    return this.claimSpawnActuation(launchId, "tmux");
-  }
-
-  /** Compare-and-set release for either transport's pre-settlement actuation
-      claim. Tmux recovery may already own a durable pane; releasing that exact
-      owner lets the next reaper tick resume the same pane without allocating a
-      second host. */
+  /** Compare-and-set release of a launch's pre-settlement actuation claim. A
+      stored launch that asked for the terminal transport releases the same
+      way, so startup can end it as failed. */
   releaseSpawnActuation(launchId: string, owner: ProcessIdentity): { released: boolean; receipt: SpawnReceipt } {
     return this.mutate((file) => {
       const receipt = file.receipts[launchId];
       if (!receipt) throw new Error("unknown spawn receipt");
       const unbound = receipt.state === "starting" && !receipt.key && !receipt.pane;
-      const recoverableTmuxPane = receipt.transport === "tmux"
-        && (receipt.state === "pane-bound" || receipt.state === "host-verified")
-        && !receipt.key
-        && Boolean(receipt.pane);
       if ((receipt.transport !== "structured" && receipt.transport !== "tmux")
-        || (!unbound && !recoverableTmuxPane)
+        || !unbound
         || !receipt.admissionOwner
         || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
         return { released: false, receipt: clone(receipt) };
@@ -7599,23 +7521,6 @@ export class AgentRegistry {
     return result.receipt;
   }
 
-  bindSpawnPane(launchId: string, pane: TmuxSpawnBinding): SpawnReceipt {
-    return this.mutate((file) => {
-      const receipt = file.receipts[launchId];
-      if (!receipt) throw new Error("unknown spawn receipt");
-      if (receipt.pane && (receipt.pane.paneId !== pane.paneId || receipt.pane.server.startIdentity !== pane.server.startIdentity || receipt.pane.panePid.startIdentity !== pane.panePid.startIdentity)) {
-        receipt.state = "conflicted";
-        receipt.error = "spawn_pane_conflict";
-        return clone(receipt);
-      }
-      if (receipt.state === "failed" || receipt.state === "conflicted") return clone(receipt);
-      receipt.pane = { ...pane, display: pane.display ?? pane.target, target: pane.paneId };
-      receipt.target = pane.paneId;
-      if (receipt.state === "starting") receipt.state = "pane-bound";
-      return clone(receipt);
-    });
-  }
-
   async recordSpawnMemoryCapOffLoop(launchId: string, cap: AgentMemoryCap): Promise<void> {
     const normalized = normalizeAgentMemoryCap(cap);
     if (!normalized) throw new Error("invalid agent memory cap");
@@ -7624,28 +7529,6 @@ export class AgentRegistry {
       if (!receipt || receipt.state === "failed" || receipt.state === "conflicted") throw new Error("launch ended before memory planning");
       receipt.memoryCap = normalized;
     }));
-  }
-
-  markSpawnHostVerified(launchId: string, host: TmuxHostEvidence): SpawnReceipt {
-    return this.mutate((file) => {
-      const receipt = file.receipts[launchId];
-      if (!receipt) throw new Error("unknown spawn receipt");
-      if (!receipt.pane ||
-        receipt.pane.paneId !== host.paneId ||
-        receipt.pane.server.pid !== host.server.pid ||
-        receipt.pane.server.startIdentity !== host.server.startIdentity ||
-        receipt.pane.panePid.pid !== host.panePid.pid ||
-        receipt.pane.panePid.startIdentity !== host.panePid.startIdentity) {
-        receipt.state = "conflicted";
-        receipt.error = "spawn_host_identity_conflict";
-        return clone(receipt);
-      }
-      if (receipt.state === "failed" || receipt.state === "conflicted") return clone(receipt);
-      receipt.verifiedHost = host;
-      receipt.target = host.paneId;
-      if (receipt.state === "starting" || receipt.state === "pane-bound") receipt.state = "host-verified";
-      return clone(receipt);
-    });
   }
 
   markSpawnPromptDelivered(launchId: string): SpawnReceipt {
@@ -7689,45 +7572,6 @@ export class AgentRegistry {
     });
   }
 
-  private confirmSpawnPaneAliveInFile(
-    file: RegistryFile,
-    launchId: string,
-    host: TmuxHostEvidence,
-    observed: { engine: AgentEngine; cwd: string },
-  ): SpawnReceipt | null {
-    const receipt = file.receipts[launchId];
-    if (!receipt || receipt.state !== "conflicted" || !receipt.pane) return receipt ?? null;
-    if (receipt.engine !== observed.engine || receipt.cwd !== observed.cwd) return receipt;
-    if (!isRecoverableSpawnReadinessFailure(receipt.error)) {
-      return receipt;
-    }
-    const binding = receipt.pane;
-    const serverMatches = binding.server.pid === host.server.pid
-      && (binding.server.startIdentity === null || binding.server.startIdentity === host.server.startIdentity);
-    const paneMatches = binding.paneId === host.paneId
-      && binding.panePid.pid === host.panePid.pid
-      && (binding.panePid.startIdentity === null || binding.panePid.startIdentity === host.panePid.startIdentity);
-    if (!serverMatches || !paneMatches) return receipt;
-    receipt.state = "host-verified";
-    receipt.error = null;
-    receipt.verifiedHost = host;
-    receipt.target = host.paneId;
-    return receipt;
-  }
-
-  confirmSpawnPaneAlive(
-    launchId: string,
-    host: TmuxHostEvidence,
-    observed: { engine: AgentEngine; cwd: string },
-  ): SpawnReceipt | null {
-    const current = this.readOnlySnapshot().receipts[launchId];
-    if (!current || current.state !== "conflicted") return current ? clone(current) : null;
-    return this.mutate((file) => {
-      const receipt = this.confirmSpawnPaneAliveInFile(file, launchId, host, observed);
-      return receipt ? clone(receipt) : null;
-    });
-  }
-
   private settleSpawnInFile(
     file: RegistryFile,
     launchId: string,
@@ -7749,11 +7593,6 @@ export class AgentRegistry {
     if ([prior, existingTarget].some(candidate => (candidate?.structuredTerminationSurvivors?.length ?? 0) > 0)) {
       return conflict("spawn_identity_conflict");
     }
-    if (completionMode === "observed-completed" && entry.host?.kind === "tmux") {
-      /* Live process evidence can enrich a binding whose birth identity was
-         unavailable during launch verification. */
-      this.confirmSpawnPaneAliveInFile(file, launchId, entry.host, { engine: entry.key.engine, cwd: entry.cwd });
-    }
     if (receipt.state === "failed" || receipt.state === "conflicted") {
       return {
         kind: "conflict",
@@ -7764,13 +7603,6 @@ export class AgentRegistry {
       };
     }
     if (receipt.engine !== entry.key.engine || receipt.cwd !== entry.cwd) return conflict("spawn_identity_conflict");
-    if (receipt.pane && entry.host?.kind === "tmux" && (
-      receipt.pane.paneId !== entry.host.paneId ||
-      receipt.pane.server.pid !== entry.host.server.pid ||
-      (receipt.pane.server.startIdentity !== null && entry.host.server.startIdentity !== receipt.pane.server.startIdentity) ||
-      (receipt.pane.panePid.pid > 0 && receipt.pane.panePid.pid !== entry.host.panePid.pid) ||
-      (receipt.pane.panePid.startIdentity !== null && entry.host.panePid.startIdentity !== receipt.pane.panePid.startIdentity)
-    )) return conflict("spawn_pane_conflict");
     const existingConversation = file.conversations[receipt.conversationId];
     const ownedGeneration = existingConversation?.generations.find((generation) => generation.id === entry.key.sessionId);
     const successorNativeId = existingConversation
@@ -7938,7 +7770,7 @@ export class AgentRegistry {
       file.engineRouting[conversation.engine].revision += 1;
     }
     const settledGeneration = conversation.generations.find((generation) => generation.path === entry.artifactPath);
-    // Same-path tmux resumes publish their accepted profile. Structured recovery may
+    // Same-path resumes of a stored launch publish their accepted profile. Structured recovery may
     // settle after a newer reconfigure has already replaced it.
     if (settledGeneration && receipt.purpose === "resume-successor" && receipt.transport !== "structured"
       && receipt.state !== "completed"
@@ -7991,8 +7823,6 @@ export class AgentRegistry {
       lineage.childSessionKey = entry.key;
       lineage.childArtifactPath = entry.artifactPath;
     }
-    if (entry.host?.kind === "tmux") receipt.verifiedHost = entry.host;
-    if (receipt.target === null && entry.host?.kind === "tmux") receipt.target = entry.host.paneId;
     receipt.state = finalize ? "completed" : "path-pending";
     receipt.error = null;
     if (finalize) {
@@ -9137,10 +8967,9 @@ export class AgentRegistry {
       const entry = file.entries[sessionKeyId(key)];
       if (!entry) return;
       const status = entry.structuredHost?.process ? entry.status : "unhosted";
-      const replacement = { ...entry, host: null, status };
+      const replacement = { ...entry, status };
       const changedHostPaths = activeHostPathsChangedByEntry(file, sessionKeyId(key), replacement);
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
-      entry.host = null;
       entry.status = status;
       entry.updatedAt = now();
       advanceMigrationScopeRevision(file, key.engine, readinessBefore, changedHostPaths);
@@ -9194,29 +9023,6 @@ export class AgentRegistry {
     } finally {
       this.releaseLock(claim);
     }
-  }
-
-  importResumePanes(serverPid: number, records: Map<string, ResumePaneRecord>): void {
-    this.mutate((file) => {
-      if (file.importedResumePanes && file.legacyResumePanes.serverPid === serverPid) return;
-      file.legacyResumePanes = { serverPid, panes: Object.fromEntries(records) };
-      file.importedResumePanes = true;
-    });
-  }
-
-  resumePanes(serverPid: number): Map<string, ResumePaneRecord> {
-    const saved = this.readOnlySnapshot().legacyResumePanes;
-    return saved.serverPid === serverPid
-      ? new Map(Object.entries(saved.panes).map(([pathname, record]) => [pathname, clone(record)]))
-      : new Map();
-  }
-
-  rememberResumePane(serverPid: number, pathname: string, record: ResumePaneRecord): void {
-    this.mutate((file) => {
-      if (file.legacyResumePanes.serverPid !== serverPid) file.legacyResumePanes = { serverPid, panes: {} };
-      file.legacyResumePanes.panes[pathname] = record;
-      file.importedResumePanes = true;
-    });
   }
 
   reconcileSpawnReceipts(live: Iterable<SessionKey>): void {

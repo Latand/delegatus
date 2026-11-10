@@ -158,9 +158,7 @@ test("dead and reused structured-host identities keep stalled card rendering", (
     NOW_S * 1000,
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;
-      return identityAlive(fullEntry.host?.agent, probe)
-        || identityAlive(fullEntry.host?.panePid, probe)
-        || identityAlive(fullEntry.structuredHost?.process, probe);
+      return identityAlive(fullEntry.structuredHost?.process, probe);
     },
   );
 

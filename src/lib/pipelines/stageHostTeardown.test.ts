@@ -46,7 +46,7 @@ type Registry = InstanceType<typeof AgentRegistry>;
 
 /** Seats a structured conversation whose host process is this test process, so
     the liveness probe reports a resident host without spawning anything. */
-function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null; bootEpoch?: string | null } } = {}): {
+function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; process?: { pid: number; startIdentity: string | null; bootEpoch?: string | null } } = {}): {
   registry: Registry;
   conversationId: string;
   launchId: string;
@@ -64,7 +64,7 @@ function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolea
     cwd: sandbox,
     accountId: "codex-subscription",
     status: options.status ?? "live",
-    host: options.pane ?? null,
+    host: null,
     structuredHost: options.hosted === false ? null : {
       kind: "codex-app-server",
       endpoint: "fake:stdio",
@@ -346,23 +346,6 @@ test("the residency probe reads host state without dispatching anything (#670)",
   expect(killed).toEqual([]);
   setAgentRegistryForTests(null);
 });
-
-type TmuxHostEvidence = import("@/lib/agent/registry").TmuxHostEvidence;
-
-/** Durable tmux evidence shaped like a real spawn record. */
-function paneEvidence(paneId: string): TmuxHostEvidence {
-  const identity = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  return {
-    kind: "tmux",
-    endpoint: { tmuxTmpdir: path.join(sandbox, "tmux"), socketName: "default" },
-    windowName: "stage-build",
-    server: identity,
-    agent: identity,
-    paneId,
-    panePid: identity,
-    target: paneId,
-  } as unknown as TmuxHostEvidence;
-}
 
 test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
   const pid = 2_000_000_124;

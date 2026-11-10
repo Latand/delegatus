@@ -4421,7 +4421,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "runtime.announce.resynced": "рантайм пересинхронізовано зі свіжого знімка",
   "runtime.staleSince": "застаріло {duration}",
   "runtime.lastKnown": "останнє оновлення {duration} тому",
-  "runtime.legacyProvenance": "легасі · похідний стан",
   "staging.badge": "Стейджинг",
   "staging.badgeTitle": "Стейджинг-інстанс — ізольований стан; нічого звідси не торкається проду",
   "runtime.drift": "розбіжність: {evidence}",

@@ -887,9 +887,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     Date.now(),
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;
-      return identityAlive(fullEntry.host?.agent, hostProbe)
-        || identityAlive(fullEntry.host?.panePid, hostProbe)
-        || identityAlive(fullEntry.structuredHost?.process, hostProbe);
+      return identityAlive(fullEntry.structuredHost?.process, hostProbe);
     },
   );
   markTiming("files-project-rate-limits");

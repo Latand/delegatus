@@ -36,6 +36,7 @@ const { ctxFor } = await import("@/lib/scanner/context");
 const { lastTurnFor } = await import("@/lib/scanner/turnDuration");
 const { pendingQuestionFor } = await import("@/lib/scanner/questions");
 const { AgentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { structuredHostFixture } = await import("@/lib/agent/registryTestFixtures");
 const { reconcileMigrationInventory } = await import("@/lib/accounts/migration/coordinator");
 const { oauthFailureWithRecoveryTail } = await import("@/lib/accounts/migration/fixtures/claudeRecoveryTail");
 
@@ -699,12 +700,7 @@ test("a warm restart rebuilds Claude recovery evidence and migration keeps the r
     };
     registry.upsert({
       ...hostEntry, status: "live",
-      host: {
-        kind: "tmux", endpoint: path.join(testStateDir, "fixture.sock"),
-        server: { pid: 4100, startIdentity: "4100:fixture" }, paneId: "%41",
-        panePid: { pid: 4101, startIdentity: "4101:fixture" }, windowName: "fixture",
-        agent: { pid: 4102, startIdentity: "4102:fixture" }, argv: ["claude", "--resume"],
-      },
+      host: null, structuredHost: structuredHostFixture({ pid: 4102, startIdentity: "4102:fixture" }),
     });
     await reconcileMigrationInventory(registry, [entry]);
     expect(registry.conversationForPath(transcript)?.turn.state).toBe("busy");
@@ -713,7 +709,7 @@ test("a warm restart rebuilds Claude recovery evidence and migration keeps the r
       complete: true, recoveryReleased: true, turn: { state: "terminal" },
     });
     const rebuiltReads = transcriptReads;
-    registry.upsert({ ...hostEntry, status: "unhosted", host: null });
+    registry.upsert({ ...hostEntry, status: "unhosted", host: null, structuredHost: null });
     await reconcileMigrationInventory(registry, [entry]);
     expect(registry.conversationForPath(transcript)?.turn.state).toBe("terminal");
     expect(transcriptReads).toBe(rebuiltReads);

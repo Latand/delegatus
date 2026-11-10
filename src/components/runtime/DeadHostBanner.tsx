@@ -13,7 +13,7 @@ import { refreshRuntime, type RuntimeSessionView } from "@/hooks/useRuntime";
 /** The host axis is dead (or fell unhosted after a crash) — the banner owns
     recovery, so the stale permission cards and the composer stand down (§5). */
 export function isDeadHostSession(rv: RuntimeSessionView | null): boolean {
-  if (!rv || rv.legacy) return false;
+  if (!rv) return false;
   return rv.session.host === "dead" || rv.session.host === "unhosted";
 }
 

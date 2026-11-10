@@ -57,9 +57,9 @@ function imageCap(supported: boolean): RuntimeImageCapability {
   };
 }
 
-/** Minimal runtime view — `capabilitiesFor` reads `legacy`, host fields and the
+/** Minimal runtime view — `capabilitiesFor` reads the host fields and the
     negotiated image capability. */
-function rv(hostKind: HostKind, host: HostAxis, legacy = false, imageInput?: RuntimeImageCapability): RuntimeSessionView {
+function rv(hostKind: HostKind, host: HostAxis, imageInput?: RuntimeImageCapability): RuntimeSessionView {
   return {
     session: {
       hostKind,
@@ -72,7 +72,6 @@ function rv(hostKind: HostKind, host: HostAxis, legacy = false, imageInput?: Run
     uiState: {} as RuntimeSessionView["uiState"],
     attentions: [],
     receipts: [],
-    legacy,
     structuredControlsEnabled: true,
   };
 }
@@ -151,15 +150,11 @@ test("a superseded round wins over dead and structured, hides everything but the
   expect(surfaceFor(file({ engine: "shell", proc: "running", supersededBy }), null)).toBe<StripSurface>("shell");
 });
 
-test("a tmux-legacy session never counts as a structured host", () => {
-  expect(surfaceFor(file({ proc: "running" }), rv("tmux-legacy", "hosted", true))).toBe<StripSurface>("live-root");
-});
-
 /* ------------------- finding 1: unresolved host fails safe ------------------- */
 
 test("a running conversation with no runtime session under the plane is unresolved — zero legacy controls", () => {
   // The plane is authoritative but no session has arrived: a running pid must NOT
-  // be read as a live tmux pane (it could be a structured/dead host).
+  // be read as a live host (it could be a dead one).
   const f = file({ proc: "running" });
   expect(surfaceFor(f, null, { runtimeEnabled: true })).toBe<StripSurface>("unresolved");
   const caps = capabilitiesFor(f, null, { runtimeEnabled: true });
@@ -177,10 +172,6 @@ test("a running conversation with no runtime session under the plane is unresolv
   const deadView = rv("claude-broker", "dead");
   expect(surfaceFor(conflictingLiveProcessFile(), deadView, { runtimeEnabled: true })).toBe<StripSurface>("unresolved");
   expect(surfaceFor(conflictingOpenTurnFile(), deadView, { runtimeEnabled: true })).toBe<StripSurface>("unresolved");
-});
-
-test("affirmative legacy-tmux evidence resolves a running pane to live-root even under the plane", () => {
-  expect(surfaceFor(file({ proc: "running" }), rv("tmux-legacy", "hosted", true), { runtimeEnabled: true })).toBe<StripSurface>("live-root");
 });
 
 test("hydrated structured and dead hosts resolve to their rows under the plane", () => {
@@ -221,7 +212,7 @@ test("rootHostFrom honors the gate: a flag-off structured root reports structure
 
 test("rootHostFrom surfaces a structured root's negotiated image capability", () => {
   const cap = imageCap(true);
-  expect(rootHostFrom(rv("claude-broker", "hosted", false, cap))).toEqual({ liveness: "live", structured: true, imageInput: cap });
+  expect(rootHostFrom(rv("claude-broker", "hosted", cap))).toEqual({ liveness: "live", structured: true, imageInput: cap });
 });
 
 test("with the gate OFF a scanner-shaped subagent under a structured root takes the legacy live-subagent row", () => {
@@ -328,8 +319,8 @@ test("structured: stop+terminal+kill+runtime enabled, compact follows the engine
   // Images delegate to session.capabilities.imageInput: no negotiated capability
   // (or an unsupported one) disables with the protocol reason; a supported one enables.
   expect(reason("images", f, view)).toBe("composer.structuredImagesProtocol");
-  expect(reason("images", f, rv("codex-app-server", "hosted", false, imageCap(false)))).toBe("composer.structuredImagesProtocol");
-  expect(state("images", f, rv("codex-app-server", "hosted", false, imageCap(true)))).toBe("enabled");
+  expect(reason("images", f, rv("codex-app-server", "hosted", imageCap(false)))).toBe("composer.structuredImagesProtocol");
+  expect(state("images", f, rv("codex-app-server", "hosted", imageCap(true)))).toBe("enabled");
   expect(state("send", f, view)).toBe("enabled");
 });
 

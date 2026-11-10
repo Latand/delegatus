@@ -28,8 +28,6 @@ export interface ConnectionPillViewProps {
   connection: ConnectionState;
   /** Non-null while the transient resynced note is up. */
   resynced: boolean;
-  /** True for a legacy tmux session — pinned to derived provenance. */
-  legacy?: boolean;
   compact?: boolean;
   /** Announcement text, already throttled by the wrapper. */
   announce: string;
@@ -41,7 +39,7 @@ export interface ConnectionPillViewProps {
  * announces state changes once (the wrapper throttles flapping). Receipt/state
  * words are text, never color alone; all motion respects `motion-reduce`.
  */
-export function ConnectionPillView({ connection, resynced, legacy, compact, announce, t }: ConnectionPillViewProps) {
+export function ConnectionPillView({ connection, resynced, compact, announce, t }: ConnectionPillViewProps) {
   const tone = TONE[connection];
   return (
     <Badge tone={tone.badge} data-connection={connection} className={`backdrop-blur ${compact ? "" : "shadow-1"}`}>
@@ -50,7 +48,6 @@ export function ConnectionPillView({ connection, resynced, legacy, compact, anno
         aria-hidden
       />
       <span>{t(`runtime.${connection}`)}</span>
-      {legacy ? <span className="font-normal text-muted">· {t("runtime.legacyProvenance")}</span> : null}
       {resynced ? <span className="rounded-full bg-accent-soft px-1.5 text-accent">{t("runtime.resynced")}</span> : null}
       {/* One polite announcement per settled transition. */}
       <span role="status" aria-live="polite" className="sr-only">
@@ -75,7 +72,6 @@ function useThrottledAnnounce(value: string, delayMs = 600): string {
 }
 
 export interface ConnectionPillProps {
-  legacy?: boolean;
   compact?: boolean;
 }
 
@@ -88,7 +84,7 @@ export interface ConnectionPillProps {
  * mounted so recovery back to live is still spoken. Compact placements are inside their own header and
  * never overlap the footer, so they keep the steady badge.
  */
-export function ConnectionPillBody({ connection, resynced, legacy, compact, announce, t }: ConnectionPillViewProps) {
+export function ConnectionPillBody({ connection, resynced, compact, announce, t }: ConnectionPillViewProps) {
   if (!compact && connection === "live") {
     return (
       <span role="status" aria-live="polite" className="sr-only">
@@ -98,7 +94,7 @@ export function ConnectionPillBody({ connection, resynced, legacy, compact, anno
   }
   return (
     <div className={compact ? `pointer-events-auto absolute right-2 top-1.5 ${Z.sticky}` : `pointer-events-auto fixed bottom-3 left-3 ${Z.sticky}`}>
-      <ConnectionPillView connection={connection} resynced={resynced} legacy={legacy} compact={compact} announce={announce} t={t} />
+      <ConnectionPillView connection={connection} resynced={resynced} compact={compact} announce={announce} t={t} />
     </div>
   );
 }
@@ -108,11 +104,11 @@ export function ConnectionPillBody({ connection, resynced, legacy, compact, anno
  * disabled (the flag is off), so it is inert on the landing page until the
  * backend routes exist and the flag flips on.
  */
-export function ConnectionPill({ legacy, compact }: ConnectionPillProps) {
+export function ConnectionPill({ compact }: ConnectionPillProps) {
   const { t } = useLocale();
   const { enabled, connection, resyncedAt } = useRuntime();
   const resynced = resyncedAt !== null;
   const announce = useThrottledAnnounce(resynced ? t("runtime.announce.resynced") : t(ANNOUNCE_KEY[connection]));
   if (!enabled) return null;
-  return <ConnectionPillBody connection={connection} resynced={resynced} legacy={legacy} compact={compact} announce={announce} t={t} />;
+  return <ConnectionPillBody connection={connection} resynced={resynced} compact={compact} announce={announce} t={t} />;
 }

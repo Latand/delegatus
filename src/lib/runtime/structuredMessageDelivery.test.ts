@@ -73,32 +73,6 @@ function recordStructuredOwner(registry: AgentRegistry, conversation: ReturnType
   });
 }
 
-function recordLegacyOwner(registry: AgentRegistry, conversation: ReturnType<typeof registryWithConversation>["conversation"]): void {
-  const generation = conversation.generations.at(-1)!;
-  registry.upsert({
-    key: { engine: conversation.engine, sessionId: generation.id },
-    artifactPath: generation.path,
-    cwd: generation.launchProfile.cwd,
-    accountId: generation.accountId,
-    launchProfile: generation.launchProfile,
-    status: "idle",
-    host: {
-      kind: "tmux",
-      endpoint: "/run/user/1000/tmux/default",
-      server: { pid: 201, startIdentity: "tmux-server" },
-      paneId: "%21",
-      panePid: { pid: 202, startIdentity: "tmux-pane" },
-      windowName: "legacy-root",
-      agent: { pid: 203, startIdentity: "legacy-agent" },
-      argv: ["codex", "resume", generation.id],
-    },
-    structuredHost: null,
-    claimEpoch: 2,
-    claimOwner: null,
-    pendingAction: null,
-  });
-}
-
 function snapshot(ownedConversationId = conversationId, engine: "codex" | "claude" = "codex", imageSupported = false): RuntimeSnapshot {
   return {
     schemaVersion: 1,
@@ -1419,165 +1393,6 @@ test("a delivered tombstone rejects changed client-id reuse and preserves the ca
   expect(registry.snapshot().heldDeliveries[tombstone.id]).toEqual(tombstone);
 });
 
-test("a persisted tmux current generation falls through during runtime client absence", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  let migrationTicks = 0;
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-deployment-window-message",
-    text: "continue through the legacy pane",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-    requestMigrationTick: () => { migrationTicks += 1; },
-    startupFailed: () => false,
-  });
-
-  expect(result).toBeNull();
-  expect(migrationTicks).toBe(0);
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("legacy synchronization rejects structured command semantics before fallback", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const request = {
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-structured-command",
-    operationId: "operation-legacy-structured-command",
-    kind: "steer" as const,
-    policy: "steer-if-active" as const,
-    turnId: "stale-legacy-turn",
-    text: "preserve structured command semantics",
-    hasImages: false,
-  };
-  const result = await enqueueStructuredMessage(request, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  });
-  const legacySnapshot = snapshot(conversation.id);
-  legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
-  const snapshotResult = await enqueueStructuredMessage(request, {
-    enabled: () => true,
-    client: () => ({ readSession: sessionReader(async () => legacySnapshot) }) as unknown as RuntimeHostClient,
-    registry: () => registry,
-  });
-
-  expect(result).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409 });
-  expect(snapshotResult).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409 });
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("the structured transport refuses a queue send once the owner turns out to be a legacy pane host", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "seat-tick:legacy:1",
-    text: "wake text",
-    hasImages: false,
-    policy: "queue",
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  });
-
-  expect(result).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409,
-    error: "legacy delivery cannot preserve structured command semantics" });
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("a durable legacy host wins over retained structured adapter metadata during runtime client absence", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const generation = conversation.generations.at(-1)!;
-  registry.setStructuredHost({ engine: conversation.engine, sessionId: generation.id }, {
-    kind: "codex-app-server",
-    endpoint: "stdio:conflicting-owner",
-    process: null,
-    eventCursor: 9,
-    protocolVersion: "v2",
-    writerClaimEpoch: 2,
-    activeTurnRef: null,
-    pendingAttention: [],
-    activeFlags: [],
-  });
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "ambiguous-deployment-window-message",
-    text: "keep conflicting ownership fenced",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  });
-
-  expect(result).toBeNull();
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("a live legacy record outranks a stale structured projection for the send immediately after resume", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const generation = conversation.generations.at(-1)!;
-  registry.setStructuredHost({ engine: conversation.engine, sessionId: generation.id }, {
-    kind: "codex-app-server",
-    endpoint: "stdio:stale-after-resume",
-    process: null,
-    eventCursor: 9,
-    protocolVersion: "v2",
-    writerClaimEpoch: 2,
-    activeTurnRef: null,
-    pendingAttention: [],
-    activeFlags: [],
-  });
-  const staleRuntime = snapshot(conversation.id);
-  staleRuntime.sessions[0] = { ...staleRuntime.sessions[0]!, host: "unhosted" };
-  let recoveryCalls = 0;
-
-  expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
-    conversationId: conversation.id,
-  })).toMatchObject({
-    deliverable: true,
-    condition: "deliverable",
-    transport: "legacy",
-    hostStatus: "idle",
-  });
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "send-immediately-after-legacy-resume",
-    text: "deliver through the host the resume just settled",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => ({ readSession: sessionReader(async () => staleRuntime) }) as unknown as RuntimeHostClient,
-    registry: () => registry,
-    republish: async () => false,
-    recover: async () => {
-      recoveryCalls += 1;
-      return null;
-    },
-  });
-
-  expect(result).toBeNull();
-  expect(recoveryCalls).toBe(0);
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
 test("structured runtime synchronization keeps images and oversized text request-local", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
@@ -1604,32 +1419,6 @@ test("structured runtime synchronization keeps images and oversized text request
 
   expect(image).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409 });
   expect(oversized).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 413 });
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("legacy runtime synchronization leaves request-local payloads for the legacy ladder", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const dependencies = {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  };
-
-  expect(await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-runtime-window-image",
-    text: "image caption",
-    hasImages: true,
-  }, dependencies)).toBeNull();
-  expect(await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-runtime-window-oversized",
-    text: "x".repeat(32_001),
-    hasImages: false,
-  }, dependencies)).toBeNull();
   expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
 });
 
@@ -1733,30 +1522,6 @@ test("a persisted structured current generation holds the send after a runtime s
   });
 });
 
-test("a persisted tmux current generation falls through after a runtime snapshot failure", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const client = {
-    readSession: sessionReader(async () => { throw new Error("runtime host is unavailable"); }),
-  } as unknown as RuntimeHostClient;
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-snapshot-window-message",
-    text: "deliver through the legacy pane",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => client,
-    registry: () => registry,
-    startupFailed: () => false,
-  });
-
-  expect(result).toBeNull();
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
 test("structured ownership recovery revokes startup-failure fallback authorization", async () => {
   let startupFailed = true;
   let snapshots = 0;
@@ -1783,22 +1548,6 @@ test("structured ownership recovery revokes startup-failure fallback authorizati
     { path: artifactPath, text: "remain fenced", hasImages: false },
     dependencies,
   )).toMatchObject({ ok: false, structured: true, status: 503 });
-});
-
-test("structured message routing only falls through for an explicit legacy owner", async () => {
-  const legacySnapshot = snapshot();
-  legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
-  const client = {
-    readSession: sessionReader(async () => legacySnapshot),
-    command: async () => { throw new Error("legacy delivery reached the structured host"); },
-  } as unknown as RuntimeHostClient;
-
-  const result = await enqueueStructuredMessage(
-    { path: artifactPath, text: "hello", hasImages: false },
-    { enabled: () => true, client: () => client },
-  );
-
-  expect(result).toBeNull();
 });
 
 test("dead structured composer send is durable before recovery and delivers after claim", async () => {
@@ -3517,54 +3266,6 @@ test("an injection a switch overtook between preflight and its reservation is re
   expect(ended.duringEnding).toMatchObject({ operationId: ended.operationId, waitReason: "switching-accounts", terminal: null });
   expect(ended.after).toMatchObject({ terminal: { state: "failed" } });
   expect(ended.commands).toBe(0);
-});
-
-test("held delivery authorizes legacy fallback from persisted tmux ownership", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-
-  expect(await deliverHeldStructuredMessage({
-    conversationId: conversation.id,
-    path: artifactPath,
-    deliveryId: "held-legacy-startup-failure",
-    clientMessageId: "held-legacy-startup-failure-message",
-    text: "continue through the legacy ladder",
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-    startupFailed: () => true,
-  })).toBeNull();
-});
-
-test("held delivery rejects structured command semantics before legacy fallback", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const request = {
-    conversationId: conversation.id,
-    path: artifactPath,
-    deliveryId: "held-legacy-structured-command",
-    clientMessageId: "held-legacy-structured-command-message",
-    text: "retain the stale turn fence",
-    command: {
-      operationId: "operation-held-legacy-structured-command",
-      kind: "steer" as const,
-      policy: "steer-if-active" as const,
-      turnId: "stale-legacy-turn",
-    },
-  };
-  expect(await deliverHeldStructuredMessage(request, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  })).toBe("failed");
-  const legacySnapshot = snapshot(conversation.id);
-  legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
-  expect(await deliverHeldStructuredMessage(request, {
-    enabled: () => true,
-    client: () => ({ readSession: sessionReader(async () => legacySnapshot) }) as unknown as RuntimeHostClient,
-    registry: () => registry,
-  })).toBe("failed");
 });
 
 test("held delivery stays uncertain during a transient structured snapshot failure", async () => {
