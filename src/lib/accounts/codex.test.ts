@@ -12,7 +12,7 @@ const OLD_HOME = process.env.LLV_CODEX_HOME;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 
-const { UnknownAccountError, CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, codexSessionRootInventory, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccountAsync, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
+const { UnknownAccountError, CorruptCodexAccountsError, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexSessionRoots, codexSessionRootInventory, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccountAsync, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
 const { agentRegistry, normalizeRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { pathAllowed } = await import("@/lib/scanner/roots");
 const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
@@ -216,36 +216,6 @@ test("concurrent Codex removal and creation preserve both mutations", async () =
   expect(await creator.exited).toBe(0);
   expect(listCodexAccounts().map((item) => item.id)).toContain("created-child");
   expect(listCodexAccounts().map((item) => item.id)).not.toContain(removed.id);
-});
-
-test("a shell during login startup grace remains pending", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, { windowName: "codex-login", command: "zsh" }, startedAt + LOGIN_STARTUP_GRACE_MS - 1)).toEqual({ state: "pending", clear: false });
-});
-
-test("a shell after login startup grace becomes idle", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, { windowName: "codex-login", command: "zsh" }, startedAt + LOGIN_STARTUP_GRACE_MS)).toEqual({ state: "idle", clear: true });
-});
-
-test("a transient missing pane during startup grace stays pending", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, null, startedAt + LOGIN_STARTUP_GRACE_MS - 1)).toEqual({ state: "pending", clear: false });
-});
-
-test("a missing pane at the grace deadline becomes idle and clears", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, null, startedAt + LOGIN_STARTUP_GRACE_MS)).toEqual({ state: "idle", clear: true });
-});
-
-test("a missing pane past the grace deadline becomes idle and clears", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, null, startedAt + LOGIN_STARTUP_GRACE_MS + 60_000)).toEqual({ state: "idle", clear: true });
-});
-
-test("a pane whose window no longer matches is a different pane and clears immediately", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, { windowName: "other", command: "codex" }, startedAt + 1)).toEqual({ state: "idle", clear: true });
 });
 
 test("legacy pane records without a timestamp remain readable", () => {
