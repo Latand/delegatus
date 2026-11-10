@@ -2415,7 +2415,7 @@ for (const interleaving of ["current-owner", "retired", "update-handoff"] as con
       if (interleaving === "current-owner") {
         expect(failedReconfigures).toHaveLength(2);
       } else {
-        expect(failedReconfigures).toEqual([heldOperationId]);
+        expect(failedReconfigures).toEqual([heldOperationId!]);
       }
     } finally { queue.retire(); }
   });
