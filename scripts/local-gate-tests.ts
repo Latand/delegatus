@@ -409,6 +409,15 @@ function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
   } catch { return; }
 }
 
+/** Every lane of the repository records its green head files here, one record
+ * per file. A push of the pipeline engine family alone records about seventy,
+ * and a busy machine completes several hundred files an hour, so the default
+ * 256 records were gone within the hour while a record stays valid for a day:
+ * the retry of an unchanged tree then ran every file again. Hold about a day of
+ * records for all lanes together. */
+const HEAD_FILE_LIMITS = { entries: 8192, bytes: 256 * 1024 * 1024 };
+export const headFileCache = (root: string) => new GateCache<TestRun>(cacheDirectory(root, "head-files"), isGreenHeadFile, 24 * 60 * 60_000, HEAD_FILE_LIMITS);
+
 export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
   const started = performance.now();
   const sandbox = recordGateSandbox(mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-")));
@@ -440,7 +449,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const inputs = cleanupIdentity ? gateInputSnapshot(root, base,
       [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], inherited) : undefined;
     const initial = inputs?.snapshot();
-    const headCache = initial ? new GateCache<TestRun>(cacheDirectory(root, "head-files"), isGreenHeadFile, 24 * 60 * 60_000) : undefined;
+    const headCache = initial ? headFileCache(root) : undefined;
     const headKey = (file: string) => fingerprint([3, initial?.key, environmentKey, cleanupIdentity, files, budgets, file]);
     const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
     for (const file of files) {
