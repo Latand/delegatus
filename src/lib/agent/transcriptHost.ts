@@ -77,12 +77,6 @@ export interface TranscriptHostConflict {
   quarantinedPaneIds?: string[];
 }
 
-/** Display target exposed by resource observation and route lookup for one
-    canonical transcript host. Actions keep using the host's stable pane id. */
-export function canonicalTranscriptTarget(snapshot: TranscriptHostSnapshot, pathname: string): string | null {
-  return snapshot.canonicalFor(pathname)?.display ?? null;
-}
-
 export type HostDeliveryOutcome =
   | { ok: true; outcome: "delivered-to-live"; target: string }
   | { ok: true; outcome: "resumed"; target: string }

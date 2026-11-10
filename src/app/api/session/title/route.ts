@@ -6,14 +6,13 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { isoNow } from "@/lib/tasks/helpers";
 import {
   MAX_CUSTOM_TITLE,
-  sanitizeCustomTitle,
   titleKeysForEntry,
   TitleStoreUnreadableError,
   writeSessionTitle,
   type SessionTitleOverride,
 } from "@/lib/session/titleStore";
 import { publishTitleUpdate } from "@/lib/session/titleEvents";
-import { propagateTitleToWindow, resolveTitleTarget } from "@/lib/session/titleTarget";
+import { resolveTitleTarget } from "@/lib/session/titleTarget";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -24,10 +23,6 @@ interface PatchTitleBody {
   conversationId?: unknown;
   title?: unknown;
   baseRevision?: unknown;
-  /** Derived title to stamp on the tmux window on a reset (the set-path window
-      name comes from the server-sanitized stored title). Sanitized server-side;
-      the pane is resolved from the target, not from the client. */
-  windowName?: unknown;
 }
 
 type PatchTitleResponse =
@@ -80,14 +75,6 @@ async function workspacePATCH(req: NextRequest): Promise<NextResponse<PatchTitle
       { status: 409 },
     );
   }
-
-  // Best-effort tmux window rename, bound to the target's own live pane (the pid
-  // is resolved from the target, never trusted from the request). On a set the
-  // window name is the server-sanitized title; on a reset the client supplies
-  // the derived title, which we still sanitize before it reaches tmux.
-  const windowName = outcome.override?.title
-    ?? (typeof body.windowName === "string" ? sanitizeCustomTitle(body.windowName) : null);
-  if (windowName) await propagateTitleToWindow(target, windowName);
 
   // Publish an identity-based set/clear signal + a files bump so other
   // tabs/devices converge even when SSE has disabled their fallback poll.

@@ -60,10 +60,6 @@ import {
 import { recordDeliveryIngress } from "@/lib/runtime/deliveryProgress";
 import { admitConversationMember } from "@/lib/team/authorship";
 
-interface TargetResponse {
-  target: string | null;
-}
-
 interface AttachResponse {
   attach: { target: string; command: string; readOnlyCommand: string };
   endpoint: { kind: "tmux-tmpdir"; tmuxTmpdir: string; socketName: "default"; socketPath: string };
@@ -104,22 +100,6 @@ function respond(outcome: DeliveryOutcome): NextResponse<SendResponse | ApiError
     return NextResponse.json(body, { status });
   }
   return NextResponse.json(outcome);
-}
-
-async function targetForRequest(
-  dependencies: ConversationHostDependencies,
-  pid: number | null,
-  filePath: string,
-): Promise<string | null> {
-  const files = (await dependencies.completedFileScan()).snapshot.files;
-  if (filePath) {
-    /* A supplied path names the conversation being addressed, and it is what
-       the workspace gate authorized. Its canonical host therefore wins over a
-       client-side pid, which may have been recycled for another session or
-       name a process the path never authorized. */
-    return pathAllowed(filePath) ? dependencies.canonicalTranscriptTarget(await currentTranscriptHosts(dependencies, files), filePath) : null;
-  }
-  return pid === null ? null : dependencies.resolveRequestedTmuxTarget(pid, files);
 }
 
 class OperatorActivityTargetConflictError extends Error {}
@@ -184,11 +164,10 @@ function attachJson(body: AttachResponse | AttachError, status = 200): NextRespo
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export async function conversationHostGET(req: NextRequest): Promise<NextResponse<TargetResponse | ApiError | AttachResponse | AttachError>> {
+export async function conversationHostGET(req: NextRequest): Promise<NextResponse<ApiError | AttachResponse | AttachError>> {
   const dependencies = conversationHostDependencies();
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
-  const pidRaw = req.nextUrl.searchParams.get("pid");
   const filePath = req.nextUrl.searchParams.get("path") ?? "";
   const resourceTarget = req.nextUrl.searchParams.get("target") ?? "";
   if (req.nextUrl.searchParams.get("attach") === "1") {
@@ -225,16 +204,7 @@ export async function conversationHostGET(req: NextRequest): Promise<NextRespons
       endpoint: resolution.endpoint,
     });
   }
-  const pid = Number(pidRaw);
-  const hasPid = Number.isInteger(pid) && pid > 0;
-  if (!hasPid && !filePath) {
-    return NextResponse.json({ error: "pid or path is required" }, { status: 400 });
-  }
-  try {
-    return NextResponse.json({ target: await targetForRequest(dependencies, hasPid ? pid : null, filePath) });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 });
-  }
+  return NextResponse.json({ error: "attach=1 is required" }, { status: 400 });
 }
 
 export function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<ConversationHostPostBody>>;

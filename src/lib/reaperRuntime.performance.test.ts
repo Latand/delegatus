@@ -8,7 +8,6 @@ import { performance } from "node:perf_hooks";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "@/lib/agent/registryPerformanceDataset";
-import type { TranscriptHost } from "@/lib/agent/transcriptHost";
 import type { FileEntry } from "@/lib/types";
 
 import { runReaperCycle, terminalizeStaleUndeliverableHeldDeliveries } from "./reaperRuntime";
@@ -22,24 +21,6 @@ afterEach(() => {
   if (originalEnabled === undefined) delete process.env.LLV_REAPER_ENABLED;
   else process.env.LLV_REAPER_ENABLED = originalEnabled;
 });
-
-function runtimeHost(pathname: string): TranscriptHost {
-  return {
-    tmuxServerPid: 900,
-    paneId: "%41",
-    panePid: 1041,
-    agentPid: 2041,
-    display: "agents:41.0",
-    windowName: "worker-41",
-    engine: "codex",
-    cwd: "/repo",
-    agentArgv: ["codex", "resume", pathname],
-    agentIdentity: "2041:one",
-    launchId: null,
-    claimedPaths: [pathname],
-    primaryPath: pathname,
-  };
-}
 
 function runtimeFile(pathname: string, mtime: number): FileEntry {
   return {
@@ -88,7 +69,6 @@ test("a sticky owner-authored verdict prevents later full transcript rescans (is
     }) + "\n");
     await runReaperCycle({
       registry,
-      hosts: [runtimeHost(pathname)],
       files: [runtimeFile(pathname, fs.statSync(pathname).mtimeMs / 1000)],
       now,
     });
@@ -100,7 +80,6 @@ test("a sticky owner-authored verdict prevents later full transcript rescans (is
     }) + "\n");
     await runReaperCycle({
       registry,
-      hosts: [runtimeHost(pathname)],
       files: [runtimeFile(pathname, fs.statSync(pathname).mtimeMs / 1000)],
       now: now + 1_000,
     });
@@ -202,7 +181,7 @@ test("a hygiene pass with nothing to converge reads no archived history again, w
     await registry.prepareReadOnlySnapshot();
     const pass = async () => {
       reads.clear();
-      const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(registry, Date.now(), {}, []);
+      const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(registry, Date.now(), {});
       const candidates = registry.failedSpawnDeliveryCandidates();
       return { terminalized, candidates, deliveries: reads.get("heldDeliveries") ?? 0, conversations: reads.get("conversations") ?? 0 };
     };

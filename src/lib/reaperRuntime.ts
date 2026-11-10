@@ -15,15 +15,12 @@ import {
   type AccountLivenessOptions,
   type LivenessProbe,
 } from "@/lib/agent/accountLiveness";
-import { agentRegistry, type AgentRegistry, type RegistryConversation, type RegistryFile, type TmuxHostEvidence } from "@/lib/agent/registry";
-import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
-import { boardFor } from "@/lib/board/store";
+import { agentRegistry, type AgentRegistry, type RegistryConversation, type RegistryFile } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { resolveFlowMergeIdentity } from "@/lib/flows/git";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
 import type { Flow, FlowMergeEvidence } from "@/lib/flows/types";
-import { reconcileMigrationInventory } from "@/lib/accounts/migration/coordinator";
 import {
   MIGRATION_INTENT_PROGRESS_TIMEOUT_MS,
   migrationIntentIsStale,
@@ -34,10 +31,8 @@ import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { reconcileDeadStructuredRegistryHostsOffLoop } from "@/lib/runtime/registry";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
-import { listFiles } from "@/lib/scanner";
 import { isNativeCodexSubagentTranscript } from "@/lib/scanner/codexNative";
 import { scanUserAuthoredMessagesCooperatively } from "@/lib/session/reader";
-import { killTmuxHostIfMatches, tmuxEndpoint } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 
 import {
@@ -73,10 +68,6 @@ interface ReaperState {
   scannedAt: Record<string, number>;
 }
 
-function hostKey(host: TranscriptHost): string {
-  return `${host.paneId}:${host.agentPid}:${host.agentIdentity ?? "unknown"}`;
-}
-
 function readState(): ReaperState {
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE(), "utf8")) as Partial<ReaperState>;
@@ -103,16 +94,14 @@ function atomicWrite(filename: string, value: unknown): void {
   fs.renameSync(temporary, filename);
 }
 
-function updateObservationState(hosts: TranscriptHost[], now: number): ReaperState {
+/** Rewrites the state file for this cycle. `firstObservedAt` tracked pane
+    hosts; it is kept empty because a state file without it reads as invalid
+    and would drop the authorship stamps beside it. */
+function updateObservationState(): ReaperState {
   const previous = readState();
-  const firstObservedAt: Record<string, string> = {};
-  for (const host of hosts) {
-    const key = hostKey(host);
-    firstObservedAt[key] = previous.firstObservedAt[key] ?? new Date(now).toISOString();
-  }
   const state = {
     version: 1 as const,
-    firstObservedAt,
+    firstObservedAt: {},
     userAuthoredPaths: previous.userAuthoredPaths,
     scannedAt: previous.scannedAt,
   };
@@ -348,14 +337,6 @@ export async function refreshMergedFlowIds(flows: Flow[], overrides: ReaperActua
   return merged;
 }
 
-function profileForPath(snapshot: ReturnType<AgentRegistry["snapshot"]>, pathname: string) {
-  return Object.values(snapshot.entries).find((entry) => entry.artifactPath === pathname)?.launchProfile
-    ?? Object.values(snapshot.conversations)
-      .flatMap((conversation) => conversation.generations)
-      .find((generation) => generation.path === pathname)?.launchProfile
-    ?? null;
-}
-
 function hasViewerWorkerLaunchPrompt(snapshot: ReturnType<AgentRegistry["snapshot"]>, pathname: string): boolean {
   return registryRowsMatching(snapshot, "receipts", "artifactPath", pathname).some((receipt) =>
     receipt.purpose === "launch"
@@ -425,10 +406,8 @@ function viewerNativeSubagentAllowance(file: FileEntry | undefined): number {
 
 async function authorshipEvidence(
   snapshot: ReturnType<AgentRegistry["snapshot"]>,
-  hosts: TranscriptHost[],
   flows: Flow[],
   files: FileEntry[],
-  missingTranscriptPaths: ReadonlySet<string>,
   priorUserAuthoredPaths: Readonly<Record<string, true>>,
   priorScannedAt: Record<string, number>,
 ): Promise<{
@@ -448,25 +427,20 @@ async function authorshipEvidence(
   const userAuthoredPaths = new Set(Object.keys(priorUserAuthoredPaths));
   const unverifiedPaths = new Set<string>();
   const verifiedCleanAt = new Map<string, number>();
-  /* Authorship scanning cannot ride live host discovery alone: a finished
-     headless reviewer is a detached process (never a tmux host) and an exited
-     worker has no host at all, so those paths would never earn a clean stamp and
-     the board would pin them unverified forever — defeating the immediate
-     reviewer collapse central to #112. Cover every quiet claude/codex transcript
-     the scan sees, in addition to the live hosts. A live file is skipped: it is
-     board-exempt regardless and its mtime advances every write, so scanning it
-     would churn without ever producing a usable stamp. */
+  /* Authorship scanning covers every quiet claude/codex transcript the scan
+     sees: a finished headless reviewer is a detached process and an exited
+     worker has no host at all, and without a clean stamp the board would pin
+     them unverified forever (#112). A live file is skipped: it is board-exempt
+     regardless and its mtime advances every write, so scanning it would churn
+     without ever producing a usable stamp. */
   const fileByPath = new Map<string, FileEntry>();
   const targets = new Map<string, "claude" | "codex" | "copilot">();
   await forEachCooperatively(files, (file) => {
     fileByPath.set(file.path, file);
   });
-  await forEachCooperatively(hosts, (host) => {
-    if (host.primaryPath) targets.set(host.primaryPath, host.engine);
-  });
   await forEachCooperatively(files, (file) => {
     if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot") return;
-    if (file.activity === "live" || targets.has(file.path)) return;
+    if (file.activity === "live") return;
     /* Already clean-stamped at or past the current mtime — no need to re-scan;
        the persisted stamp still stands (the caller keeps prior state entries). */
     const stamp = priorScannedAt[file.path];
@@ -481,7 +455,6 @@ async function authorshipEvidence(
   const authorshipReadBudget = { remaining: AUTHORSHIP_CYCLE_BUDGET_BYTES };
   await forEachCooperatively([...targets], async ([pathname, engine]) => {
     if (userAuthoredPaths.has(pathname) || unverifiedPaths.has(pathname)) return;
-    if (missingTranscriptPaths.has(pathname)) return;
     const viewerMessageAllowance = (hasViewerWorkerLaunchPrompt(snapshot, pathname) ? 1 : 0)
       + viewerFlowMessageAllowance(flows, pathname)
       + viewerReviewerLaunchAllowance(flows, pathname)
@@ -509,56 +482,6 @@ async function authorshipEvidence(
   return { userAuthoredPaths, unverifiedPaths, verifiedCleanAt };
 }
 
-function viewerOwnedPaths(snapshot: ReturnType<AgentRegistry["snapshot"]>, hosts: TranscriptHost[]): Set<string> {
-  return new Set(hosts.flatMap((host) =>
-    host.primaryPath && hasViewerWorkerLaunchPrompt(snapshot, host.primaryPath) ? [host.primaryPath] : []));
-}
-
-function manualPaths(snapshot: ReturnType<AgentRegistry["snapshot"]>, hosts: TranscriptHost[], files: FileEntry[]): Set<string> {
-  const filesByPath = new Map(files.map((entry) => [entry.path, entry]));
-  const protectedPaths = new Set<string>();
-  const placementsByProject = new Map<string, ReadonlySet<string>>();
-  for (const host of hosts) {
-    const pathname = host.primaryPath;
-    if (!pathname) continue;
-    const project = filesByPath.get(pathname)?.project || profileForPath(snapshot, pathname)?.project;
-    if (!project) continue;
-    try {
-      let placements = placementsByProject.get(project);
-      if (!placements) {
-        placements = new Set(boardFor(project).explicitManual ?? []);
-        placementsByProject.set(project, placements);
-      }
-      if (placements.has(pathname)) protectedPaths.add(pathname);
-    } catch {
-      protectedPaths.add(pathname);
-    }
-  }
-  return protectedPaths;
-}
-
-async function refreshLifecycle(registry: AgentRegistry): Promise<FileEntry[]> {
-  const files = await listFiles();
-  await reconcileMigrationInventory(registry, files);
-  return files;
-}
-
-function evidenceFor(
-  host: TranscriptHost,
-  processIdentity: (pid: number) => string | null = (pid) => procBackend.processIdentity(pid),
-): TmuxHostEvidence {
-  return {
-    kind: "tmux",
-    endpoint: tmuxEndpoint(),
-    server: { pid: host.tmuxServerPid, startIdentity: processIdentity(host.tmuxServerPid) },
-    paneId: host.paneId,
-    panePid: { pid: host.panePid, startIdentity: processIdentity(host.panePid) },
-    windowName: host.windowName ?? "",
-    agent: { pid: host.agentPid, startIdentity: host.agentIdentity },
-    argv: host.agentArgv,
-  };
-}
-
 function appendJournal(record: ReaperJournalRecord): void {
   const filename = JOURNAL_FILE();
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -570,24 +493,18 @@ function appendJournal(record: ReaperJournalRecord): void {
 
 async function makeInput(
   registry: AgentRegistry,
-  hosts: TranscriptHost[],
   files: FileEntry[],
   state: ReaperState,
   now: number,
   overrides: ReaperActuationOverrides = {},
 ): Promise<ReaperInput> {
   const flows = (overrides.loadFlows ?? loadFlows)();
-  const processIdentity = overrides.processIdentity ?? ((pid: number) => procBackend.processIdentity(pid));
-  const mergedFlowIds = await refreshMergedFlowIds(flows, overrides);
-  const snapshot = registry.readOnlySnapshot();
-  const missingTranscriptPaths = new Set(hosts.flatMap((host) =>
-    host.primaryPath && !fs.existsSync(host.primaryPath) ? [host.primaryPath] : []));
+  /* The refresh persists merge evidence on the flows it confirms. */
+  await refreshMergedFlowIds(flows, overrides);
   const authorship = await authorshipEvidence(
-    snapshot,
-    hosts,
+    registry.readOnlySnapshot(),
     flows,
     files,
-    missingTranscriptPaths,
     state.userAuthoredPaths,
     state.scannedAt,
   );
@@ -603,25 +520,10 @@ async function makeInput(
     stateChanged = true;
   }
   if (stateChanged) atomicWrite(STATE_FILE(), state);
-  const protectedAuthorship = new Set([
-    ...authorship.userAuthoredPaths,
-    ...hosts.flatMap((host) => host.primaryPath && state.userAuthoredPaths[host.primaryPath] ? [host.primaryPath] : []),
-  ]);
   return {
     now,
-    registry: snapshot,
-    hosts,
-    tmuxEvidenceByHost: new Map(hosts.map((host) => [hostKey(host), evidenceFor(host, processIdentity)])),
     reviewerProcesses: observeHeadlessReviewers(flows, overrides),
-    viewerOwnedPaths: viewerOwnedPaths(snapshot, hosts),
-    authorshipUnverifiedPaths: authorship.unverifiedPaths,
-    files,
     flows,
-    manualPaths: manualPaths(snapshot, hosts, files),
-    userAuthoredPaths: protectedAuthorship,
-    missingTranscriptPaths,
-    mergedFlowIds,
-    firstObservedAt: state.firstObservedAt,
     enabled: process.env.LLV_REAPER_ENABLED === "1",
   };
 }
@@ -687,58 +589,6 @@ export async function killHeadlessReviewerIfMatches(
   return false;
 }
 
-function sameTmuxEvidence(left: TmuxHostEvidence, right: TmuxHostEvidence): boolean {
-  return left.kind === right.kind
-    && left.endpoint === right.endpoint
-    && left.server.pid === right.server.pid
-    && left.server.startIdentity === right.server.startIdentity
-    && left.paneId === right.paneId
-    && left.panePid.pid === right.panePid.pid
-    && left.panePid.startIdentity === right.panePid.startIdentity
-    && left.windowName === right.windowName
-    && left.agent.pid === right.agent.pid
-    && left.agent.startIdentity === right.agent.startIdentity
-    && left.argv.length === right.argv.length
-    && left.argv.every((argument, index) => argument === right.argv[index]);
-}
-
-function completeTmuxEvidence(evidence: TmuxHostEvidence): boolean {
-  return evidence.server.startIdentity !== null
-    && evidence.panePid.startIdentity !== null
-    && evidence.agent.startIdentity !== null;
-}
-
-function hostMatchesCandidate(
-  host: TranscriptHost,
-  candidate: ReaperAgentReport,
-  processIdentity: (pid: number) => string | null,
-): boolean {
-  return candidate.targetKind === "tmux"
-    && candidate.tmuxEvidence !== null
-    && sameTmuxEvidence(evidenceFor(host, processIdentity), candidate.tmuxEvidence)
-    && host.primaryPath === candidate.path;
-}
-
-function reportMatchesCandidate(current: ReaperAgentReport, expected: ReaperAgentReport): boolean {
-  return current.targetKind === "tmux"
-    && current.paneId === expected.paneId
-    && current.panePid === expected.panePid
-    && current.agentPid === expected.agentPid
-    && current.processIdentity === expected.processIdentity
-    && current.path === expected.path
-    && current.tmuxEvidence !== null
-    && expected.tmuxEvidence !== null
-    && sameTmuxEvidence(current.tmuxEvidence, expected.tmuxEvidence);
-}
-
-function deliveryRevision(snapshot: RegistryFile, conversationId: string | null): string {
-  if (!conversationId) return "";
-  const deliveries = Object.values(snapshot.heldDeliveries)
-    .filter((delivery) => delivery.conversationId === conversationId)
-    .sort((left, right) => left.id.localeCompare(right.id));
-  return JSON.stringify(deliveries);
-}
-
 async function actuateCandidate(
   registry: AgentRegistry,
   files: FileEntry[],
@@ -746,66 +596,22 @@ async function actuateCandidate(
   agent: ReaperAgentReport,
   overrides: ReaperActuationOverrides = {},
 ): Promise<boolean> {
-  if (agent.targetKind === "process") {
-    if (!agent.flowId || agent.round === null || !agent.processIdentity) return false;
-    const current = evaluateReaper(await makeInput(registry, [], files, state, (overrides.now ?? Date.now)(), overrides));
-    const candidate = current.agents.find((item) => item.targetKind === "process"
-      && item.flowId === agent.flowId
-      && item.round === agent.round
-      && item.agentPid === agent.agentPid
-      && item.processIdentity === agent.processIdentity);
-    if (!candidate?.eligible) return false;
-    return (overrides.killProcess ?? killHeadlessReviewerIfMatches)({ pid: agent.agentPid, identity: agent.processIdentity });
-  }
-  const paneId = agent.paneId;
-  const expectedEvidence = agent.tmuxEvidence;
-  if (paneId === null || !expectedEvidence || !completeTmuxEvidence(expectedEvidence)) return false;
-  const observeHosts = overrides.readHosts ?? readTranscriptHosts;
-  const killHost = overrides.kill ?? killTmuxHostIfMatches;
-  const currentTime = overrides.now ?? Date.now;
-  const processIdentity = overrides.processIdentity ?? ((pid: number) => procBackend.processIdentity(pid));
-  const initialHost = (await observeHosts(true)).hosts.find((host) => hostMatchesCandidate(host, agent, processIdentity));
-  if (!initialHost?.primaryPath) return false;
-  const entry = Object.values(registry.readOnlySnapshot().entries).find((candidate) => candidate.artifactPath === agent.path);
-  if (!entry) return false;
-  const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  return registry.withOperationLock(entry.key, owner, async () => {
-    const claimOwner = `reaper:${crypto.randomUUID()}`;
-    try {
-      (await registry.deliveryWriteOrBusy({ label: "registry.claim" }, registry.claim.bind(registry, entry.key, claimOwner)));
-      const freshSnapshot: TranscriptHostSnapshot = await observeHosts(true);
-      const freshHost = freshSnapshot.hosts.find((host) => hostMatchesCandidate(host, agent, processIdentity));
-      if (!freshHost) return false;
-      const lifecycleFiles = await (overrides.refreshLifecycle ?? refreshLifecycle)(registry);
-      const currentInput = await makeInput(registry, freshSnapshot.hosts, lifecycleFiles, state, currentTime(), overrides);
-      const current = evaluateReaper(currentInput);
-      const candidate = current.agents.find((item) => reportMatchesCandidate(item, agent));
-      if (!candidate?.eligible) return false;
-      if (deliveryRevision(registry.readOnlySnapshot(), candidate.conversationId)
-        !== deliveryRevision(currentInput.registry, candidate.conversationId)) return false;
-      const killed = await killHost(expectedEvidence);
-      const registeredHost = registry.readOnlySnapshot().entries[`${entry.key.engine}:${entry.key.sessionId}`]?.host;
-      if (killed && registeredHost && sameTmuxEvidence(registeredHost, expectedEvidence)) {
-        await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, () => {
-          const current = registry.readOnlySnapshot().entries[`${entry.key.engine}:${entry.key.sessionId}`]?.host;
-          if (current && sameTmuxEvidence(current, expectedEvidence)) registry.markUnhosted(entry.key);
-        });
-      }
-      return killed;
-    } finally {
-      (await registry.deliveryWriteOrBusy({ label: "registry.releaseClaim" }, registry.releaseClaim.bind(registry, entry.key, claimOwner)));
-    }
-  });
+  if (agent.targetKind !== "process" || !agent.flowId || agent.round === null || !agent.processIdentity) return false;
+  const current = evaluateReaper(await makeInput(registry, files, state, (overrides.now ?? Date.now)(), overrides));
+  const candidate = current.agents.find((item) => item.targetKind === "process"
+    && item.flowId === agent.flowId
+    && item.round === agent.round
+    && item.agentPid === agent.agentPid
+    && item.processIdentity === agent.processIdentity);
+  if (!candidate?.eligible) return false;
+  return (overrides.killProcess ?? killHeadlessReviewerIfMatches)({ pid: agent.agentPid, identity: agent.processIdentity });
 }
 
 export interface ReaperActuationOverrides {
-  readHosts?: (fresh?: boolean) => Promise<TranscriptHostSnapshot>;
-  kill?: typeof killTmuxHostIfMatches;
   loadFlows?: typeof loadFlows;
   pidAlive?: (pid: number) => boolean;
   processIdentity?: (pid: number) => string | null;
   killProcess?: typeof killHeadlessReviewerIfMatches;
-  refreshLifecycle?: typeof refreshLifecycle;
   resolveMergeIdentity?: (cwd: string) => Awaited<ReturnType<typeof resolveFlowMergeIdentity>> | ReturnType<typeof resolveFlowMergeIdentity>;
   probePullRequest?: (evidence: FlowMergeEvidence) => PullRequestProbe | null | Promise<PullRequestProbe | null>;
   localBranchMerged?: (flow: Flow, sha: string) => boolean | Promise<boolean>;
@@ -827,14 +633,11 @@ function migrationSourceHasLiveOwner(
   snapshot: RegistryFile,
   conversation: RegistryConversation,
   probe: LivenessProbe,
-  observedSourcePaths: ReadonlySet<string>,
 ): boolean {
   const migration = conversation.migration;
   if (!migration) return false;
   const source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId);
   if (!source) return false;
-  const sourceOwnerKey = `${conversation.engine}:${source.path}`;
-  if (observedSourcePaths.has(sourceOwnerKey)) return true;
   if (identityAlive(source.host?.tmuxHost?.agent, probe)) return true;
   if (Object.values(snapshot.entries).some((entry) =>
     entry.key.engine === conversation.engine
@@ -893,7 +696,6 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
   registry: AgentRegistry,
   now: number = Date.now(),
   liveness: AccountLivenessOptions = {},
-  observedHosts: readonly TranscriptHost[] = [],
 ): Promise<string[]> {
   const snapshot = registry.readOnlySnapshot();
   const offLoop = async <T>(label: string, id: string | null, write: () => T): Promise<{ value: T } | null> => {
@@ -902,9 +704,6 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
     return written.acquired ? { value: written.value } : null;
   };
   const probe = livenessProbe({ ...liveness, now: () => now });
-  const observedSourcePaths = new Set(observedHosts.flatMap((host) =>
-    (host.primaryPath ? [host.primaryPath, ...host.claimedPaths] : host.claimedPaths)
-      .map((pathname) => `${host.engine}:${pathname}`)));
   const terminalized = new Set<string>();
   for (const id of staleUndeliverableHeldDeliveryIds(snapshot, { ...liveness, now: () => now })) {
     const expected = snapshot.heldDeliveries[id]!;
@@ -962,7 +761,7 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
       for (const conversation of owned) {
         if (conversation.migration?.phase !== "requested"
           || !deliveryConversationIds.has(conversation.id)
-          || migrationSourceHasLiveOwner(snapshot, conversation, probe, observedSourcePaths)) continue;
+          || migrationSourceHasLiveOwner(snapshot, conversation, probe)) continue;
         const reason = `delivery cancelled because source conversation ${conversation.id} has no live owner; send again to authorize a fresh delivery`;
         let refused = false;
         for (const id of activeIds) {
@@ -989,9 +788,41 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
   return [...terminalized];
 }
 
+/**
+ * A registry row written while agents ran in terminal panes can still name a
+ * pane as its host. The pane census that used to clear such rows is gone, so
+ * the recorded agent process decides: a row whose agent no longer runs under
+ * its recorded start identity becomes unhosted. No terminal multiplexer is
+ * asked; a row whose process is still alive is left as it is.
+ */
+export async function retireDeadPaneHostRows(
+  registry: Pick<AgentRegistry, "transcriptHostReconciliationRows" | "deliveryWrite" | "markUnhosted">,
+  processIdentity: (pid: number) => string | null = (pid) => procBackend.processIdentity(pid),
+  pidAlive: (pid: number) => boolean = (pid) => procBackend.pidAlive(pid),
+): Promise<number> {
+  const agentGone = (entry: { host: { agent: { pid: number; startIdentity: string | null } } | null }) => {
+    const agent = entry.host?.agent;
+    if (!agent) return false;
+    return agent.startIdentity === null ? !pidAlive(agent.pid) : processIdentity(agent.pid) !== agent.startIdentity;
+  };
+  const dead = registry.transcriptHostReconciliationRows([], []).hostedEntries.filter(([, entry]) => agentGone(entry));
+  if (dead.length === 0) return 0;
+  const written = await registry.deliveryWrite({ label: "registry.markUnhosted" }, () => {
+    let retired = 0;
+    const current = new Map(registry.transcriptHostReconciliationRows([], []).hostedEntries);
+    for (const [id] of dead) {
+      const entry = current.get(id);
+      if (!entry || !agentGone(entry)) continue;
+      registry.markUnhosted(entry.key);
+      retired += 1;
+    }
+    return retired;
+  });
+  return written.acquired ? written.value : 0;
+}
+
 export async function runReaperCycle(options: {
   registry?: AgentRegistry;
-  hosts: TranscriptHost[];
   files: FileEntry[];
   now?: number;
   actuation?: ReaperActuationOverrides;
@@ -1007,7 +838,7 @@ export async function runReaperCycle(options: {
      so it runs regardless of `LLV_REAPER_ENABLED`; failure never blocks the
      reaper. */
   try {
-    await terminalizeStaleUndeliverableHeldDeliveries(registry, now, {}, options.hosts);
+    await terminalizeStaleUndeliverableHeldDeliveries(registry, now, {});
   } catch (error) {
     console.error("[reaper] stale undeliverable held-delivery convergence failed", error);
   }
@@ -1033,12 +864,15 @@ export async function runReaperCycle(options: {
   } catch (error) {
     console.error("[reaper] dead structured-host ownership convergence failed", error);
   }
+  try {
+    await retireDeadPaneHostRows(registry);
+  } catch (error) {
+    console.error("[reaper] dead pane-host row convergence failed", error);
+  }
   /* Stale launch convergence (#334/#926): the reaper cycle is the while-running
      seam that turns dead-evidence pending receipts terminal and actuates due
-     queued pins. Tmux recovery remains available during an intentional
-     structured-runtime rollback, while structured receipts wait for their
-     required client. The pass is bounded and idempotent; its failure never
-     blocks the reaper. */
+     queued pins. Structured receipts wait for their required client. The pass
+     is bounded and idempotent; its failure never blocks the reaper. */
   try {
     const inventorySidecar = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER === "1";
     const hasSpawnWork = !inventorySidecar || registry.openSpawnReceipts().length > 0
@@ -1060,8 +894,8 @@ export async function runReaperCycle(options: {
   } catch (error) {
     console.error("[reaper] registry archive convergence failed",error);
   }
-  const state = updateObservationState(options.hosts, now);
-  const report = evaluateReaper(await makeInput(registry, options.hosts, options.files, state, now, options.actuation));
+  const state = updateObservationState();
+  const report = evaluateReaper(await makeInput(registry, options.files, state, now, options.actuation));
   const completed = await runEvaluatedReaper(report, {
     actuate: (agent) => actuateCandidate(registry, options.files, state, agent, options.actuation),
     journal: appendJournal,
@@ -1073,9 +907,4 @@ export async function runReaperCycle(options: {
 export function readReaperReport(): ReaperReport | null {
   const parsed = readJsonCache(REPORT_FILE()) as ReaperReport | undefined;
   return parsed && typeof parsed === "object" && Array.isArray(parsed.agents) ? parsed : null;
-}
-
-export async function buildReaperReportOnDemand(): Promise<ReaperReport> {
-  const [files, hosts] = await Promise.all([listFiles(), readTranscriptHosts(true)]);
-  return runReaperCycle({ hosts: hosts.hosts, files });
 }
