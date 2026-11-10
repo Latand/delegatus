@@ -311,10 +311,15 @@ test("ordinary content reaches the consumer before block stop", async () => {
     const response = await fetch(`${relay.baseUrl}/v1/messages`, { method: "POST", headers: { authorization: `Bearer ${relay.alias}` } });
     let received = "";
     let first = 0;
-    for await (const chunk of response.body!) {
-      received += new TextDecoder().decode(chunk);
-      if (!first && received.includes("ordinary first delta")) first = performance.now();
-    }
+    const reader = response.body!.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += new TextDecoder().decode(value);
+        if (!first && received.includes("ordinary first delta")) first = performance.now();
+      }
+    } finally { reader.releaseLock(); }
     console.info(JSON.stringify({ written, first, stopped, deltaMs: first - written, ...(first ? {} : { received }) }));
     expect(first).toBeGreaterThan(written);
     expect(first).toBeLessThan(stopped);
