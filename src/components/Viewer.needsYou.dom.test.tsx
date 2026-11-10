@@ -440,7 +440,7 @@ test("desktop: a conversation that starts waiting lights its own card under the 
   const asking = "/sessions/ledger-asking.jsonl";
   laterFiles = [conversation(asking, LEDGER, "Planner of the ledger cutover", {
     activity: "idle", proc: null, lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 600) * 1000 },
-    pendingQuestion: { kind: "question", toolUseId: "tool-ledger", transcriptPath: asking, pid: 1, paneTarget: null, askedAt: iso(540), questions: [{ question: "Which cutover date?", header: "Cutover", multiSelect: false, options: [] }] },
+    pendingQuestion: { kind: "question", toolUseId: "tool-ledger", transcriptPath: asking, pid: 1, askedAt: iso(540), questions: [{ question: "Which cutover date?", header: "Cutover", multiSelect: false, options: [] }] },
   } as Partial<FileEntry>)];
   await rescan();
   await until(() => islandCount(host) === 2);

@@ -249,7 +249,7 @@ test("conversation_action answer through the real control boundary never approve
       structuredEnabled: () => true,
       dispatchStructuredControl: (request) => dispatchStructuredControl(request, { registry: fixture.registry, client, enabled: () => true, kick: () => {} }),
       resumeConversation: async () => { throw new Error("unexpected"); },
-      pendingQuestion: async () => ({ kind: "plan", toolUseId: "toolu_old_plan", transcriptPath: fixture.path, pid: 1, paneTarget: null, askedAt: "2026-10-12T09:00:00.000Z" }),
+      pendingQuestion: async () => ({ kind: "plan", toolUseId: "toolu_old_plan", transcriptPath: fixture.path, pid: 1, askedAt: "2026-10-12T09:00:00.000Z" }),
     },
   );
 

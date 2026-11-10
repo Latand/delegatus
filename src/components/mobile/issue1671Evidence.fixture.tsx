@@ -275,7 +275,7 @@ const files: FileEntry[] = [
        freshly launched agent, the way a real operator's open question does. */
     ...(new URLSearchParams(location.search).has("launch") ? {
       pendingQuestion: {
-        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, paneTarget: null, askedAt: iso(300),
+        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, askedAt: iso(300),
         questions: [{ question: "Which format?", header: "Format", multiSelect: false, options: [] }],
       },
     } : {}),
@@ -736,7 +736,7 @@ function kanbanConversation(title: string, state: "working" | "settled" | "askin
     settled: { mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000 },
     asking: {
       activity: "live", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000,
-      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, paneTarget: null, askedAt: iso(ago),
+      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, askedAt: iso(ago),
         questions: [{ question: "Which unit file stays, the user unit or the system one?", header: "Unit", multiSelect: false, options: [] }] },
     },
     stalled: { activity: "stalled", activityReason: "jsonl_turn_stalled", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, engine: "codex", model: "gpt-6-astra", lastTurn: { startedAt: (now - ago - 600) * 1_000, endedAt: null }, lastAgentWorkAt: (now - ago) * 1_000 },
@@ -987,7 +987,7 @@ if (KANBAN) {
       stuckDelivery: { since: iso(41 * 60), attempts: 2, state: "held" },
     });
     const cleared = reason("Pick the log retention for the stage box", {
-      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, paneTarget: null, askedAt: iso(1_500),
+      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, askedAt: iso(1_500),
         questions: [{ question: "Keep 14 days of logs or 30?", header: "Retention", multiSelect: false, options: [] }] },
       attentionDismissal: { at: iso(600), by: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, reasonId: "toolu-needs-cleared" },
     });

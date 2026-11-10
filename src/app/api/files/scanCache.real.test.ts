@@ -465,7 +465,6 @@ test("persisted Claude question state hydrates without transcript reads and stay
         transcriptPath: pendingPath,
         askedAt: "2026-07-16T12:00:01.000Z",
         pid: process.pid,
-        paneTarget: "%7",
         questions: [{
           header: "Choice",
           question: "Which path?",
@@ -512,7 +511,6 @@ test("persisted Claude question state hydrates without transcript reads and stay
       kind: "question",
       toolUseId: "toolu_persisted_question",
       pid: process.pid,
-      paneTarget: null,
       questions: [{ question: "Which path?", options: [{ label: "Safe", recommended: true }, { label: "Fast", recommended: false }] }],
     });
     expect(pendingQuestionFor(restartedQuiet)).toBeNull();

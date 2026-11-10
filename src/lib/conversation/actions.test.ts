@@ -372,7 +372,7 @@ test("answer reaches the asking conversation's pending question as its chosen la
   const worker = conversation("conversation_worker", ["/sessions/worker.jsonl"]);
   const controls: Array<Record<string, unknown>> = [];
   const pending = {
-    kind: "question" as const, toolUseId: "toolu_roll", transcriptPath: "/sessions/worker.jsonl", pid: 1, paneTarget: null, askedAt: "2026-10-11T11:50:00.000Z",
+    kind: "question" as const, toolUseId: "toolu_roll", transcriptPath: "/sessions/worker.jsonl", pid: 1, askedAt: "2026-10-11T11:50:00.000Z",
     questions: [{ question: "Roll out now?", header: "Rollout", multiSelect: false, options: [
       { label: "Tonight", description: "", recommended: true }, { label: "Tomorrow", description: "", recommended: false },
     ] }],

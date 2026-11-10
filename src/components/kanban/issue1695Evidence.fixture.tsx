@@ -2307,7 +2307,7 @@ if (CALM) {
   const cut = "interrupted by a Delegatus restart";
   const asker = conv("calm-ask", L("Which banner copy ships?", "Який текст банера йде в реліз?"), 9 * MIN, {
     pendingQuestion: {
-      kind: "question", toolUseId: "toolu-calm-ask", transcriptPath: "/repo/calm-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN),
+      kind: "question", toolUseId: "toolu-calm-ask", transcriptPath: "/repo/calm-ask.jsonl", pid: 1, askedAt: iso(9 * MIN),
       questions: [{ question: L("Which banner copy ships?", "Який текст банера йде в реліз?"), header: L("Banner copy", "Текст банера"), multiSelect: false, options: [{ label: L("Short", "Короткий") }, { label: L("Long", "Довгий") }] }],
     },
   });
@@ -3999,7 +3999,7 @@ const needsFiles: FileEntry[] = [];
 const needsAdd = (file: FileEntry) => { needsFiles.push(file); return file; };
 const nfAsk = needsAdd(conversation("nf-ask", "Which export presets should ship first?", NEEDS_NOTHING ? { mtime: now - 20 * MIN } : {
   mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
-  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
+  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
 }));
 const nfLaneBuild = needsAdd(conversation("nf-lane-build", "Reconciling the ledger export", working({ plan: { current: "Reconciling the ledger export" } })));
 const nfClearedBuild = needsAdd(conversation("nf-cleared-build", "Rotating the search alias", { mtime: now - 40 * MIN }));

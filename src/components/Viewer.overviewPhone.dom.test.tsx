@@ -126,7 +126,7 @@ const FILES: FileEntry[] = [
   conversation(ATLAS_REVIEWER, ATLAS, "Reviewer of the atlas legend"),
   conversation(MESH_PLANNER, MESH, "Planner of the mesh migration", {
     activity: "idle", proc: null, lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 600) * 1000 },
-    pendingQuestion: { kind: "question", toolUseId: "tool-mesh", transcriptPath: MESH_PLANNER, pid: 1, paneTarget: null, askedAt: iso(540), questions: [{ question: "Which schema stays?", header: "Schema", multiSelect: false, options: [] }] },
+    pendingQuestion: { kind: "question", toolUseId: "tool-mesh", transcriptPath: MESH_PLANNER, pid: 1, askedAt: iso(540), questions: [{ question: "Which schema stays?", header: "Schema", multiSelect: false, options: [] }] },
   } as Partial<FileEntry>),
   conversation(MESH_LOOSE, MESH, "Sweep the stale mesh caches"),
   conversation(NAMELESS_WORKER, NAMELESS, "Worker with no project name"),

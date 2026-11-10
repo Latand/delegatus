@@ -581,7 +581,6 @@ export interface PendingQuestion {
   toolUseId: string;
   transcriptPath: string;
   pid: number;
-  paneTarget: string | null;
   askedAt: string;
   questions?: PendingQuestionItem[];
   plan?: string;

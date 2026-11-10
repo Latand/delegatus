@@ -154,7 +154,6 @@ test("a pending question takes precedence over a live turn and uses the warning 
       toolUseId: "tool-1",
       transcriptPath: "/sessions/q.jsonl",
       pid: 42,
-      paneTarget: "%1",
       askedAt: new Date(t0).toISOString(),
     },
   }), container);

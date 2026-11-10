@@ -120,7 +120,7 @@ const SEAT_ASKS = [
 /* Row 1: a builder's structured question. */
 const ask = conversation(D, "Чип Чекають: 2–3 варіанти", {
   ...role("builder"), activity: "idle", mtime: now - 4 * MIN, lastAgentWorkAt: (now - 4 * MIN) * 1_000,
-  pendingQuestion: { kind: "question", toolUseId: "toolu-ask-1", transcriptPath: "", pid: null, paneTarget: null, askedAt: iso(4 * MIN),
+  pendingQuestion: { kind: "question", toolUseId: "toolu-ask-1", transcriptPath: "", pid: null, askedAt: iso(4 * MIN),
     questions: [{ question: "Злити #2246 зараз чи після ревʼю?", header: "Злиття #2246", multiSelect: false, options: [] }] },
 });
 if (params.has("memory")) {
@@ -177,7 +177,7 @@ task(S, "t-shop-seat", "assigned", "Оркестратор shop-web", { assignme
 /* Row 6, `plan`: an architect's plan approval. */
 const plan = conversation(S, "Пошук по каталогу", {
   ...role("architect"), activity: "idle", mtime: now - 18 * MIN,
-  pendingQuestion: { kind: "plan", toolUseId: "toolu-plan-1", transcriptPath: "", pid: null, paneTarget: null, askedAt: iso(18 * MIN), questions: [] },
+  pendingQuestion: { kind: "plan", toolUseId: "toolu-plan-1", transcriptPath: "", pid: null, askedAt: iso(18 * MIN), questions: [] },
 });
 task(S, "t-catalog", "assigned", "Пошук по каталогу", { assignments: [assign(plan)] });
 
