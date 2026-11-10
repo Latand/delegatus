@@ -2223,3 +2223,52 @@ test("an unbound sidecar signals the Viewer before any local pipeline preparatio
   expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
   expect(JSON.parse(stdout.trim())).toEqual({ requests: 1, effects: 0, changed: false });
 });
+
+test.each(["fetch", "pinned", "failed"] as const)("portable provisioning controller settles a real Git base without timeout: %s", async mode => {
+  const { os, realExec, createPipelineFromRequest } = await import("./engine.fixture");
+  const { realProvisionExec } = await import("./git");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-controller-"));
+  const h = harness();
+  savePipelines([]);
+  try {
+    const repo = path.join(root, "repo"), origin = path.join(root, "origin.git"), bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+    expect(Bun.which("timeout", { PATH: bin })).toBeNull();
+    expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
+    const git = async (cwd: string, ...args: string[]) => {
+      const result = await realExec("git", args, cwd);
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    await git(root, "init", "--bare", "--initial-branch=main", origin);
+    await git(root, "clone", origin, repo);
+    await git(repo, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+    await git(repo, "push", "origin", "main");
+    const head = await git(repo, "rev-parse", "HEAD");
+    if (mode === "failed") await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
+    let fetches = 0;
+    h.ports.exec = realExec;
+    h.ports.provisionExec = async (command, args, cwd, signal, options) => {
+      if (args[0] === "fetch") { fetches++; expect(options?.timeoutMs).toBe(60_000); }
+      return realProvisionExec(command, args, cwd, signal, { ...options, env: { ...options?.env, PATH: bin } });
+    };
+    const created = await createPipelineFromRequest({ task: "Portable provisioning", repoDir: repo, publication: "internal",
+      ...(mode === "pinned" ? { baseRef: head } : {}),
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+    }, h.ports);
+    expect(created.error).toBeUndefined();
+    expect(created.pipeline).toBeDefined();
+    await tickPipelines([], h.ports);
+    const lane = loadPipelines().find(item => item.id === created.pipeline!.id)!;
+    expect(fetches).toBe(mode === "pinned" ? 0 : 1);
+    if (mode === "failed") {
+      expect(lane).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("fetching origin/main:") });
+      expect(h.spawnInputs).toHaveLength(0);
+      expect(fs.existsSync(lane.worktreeDir)).toBe(false);
+    } else {
+      expect(lane).toMatchObject({ state: "running", baseRef: head, baseBranch: "main" });
+      expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    }
+  } finally { savePipelines([]); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);

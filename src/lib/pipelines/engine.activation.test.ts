@@ -30,6 +30,7 @@ test("an internal terminal pass an older build left waiting on publication close
 test("an internal pipeline pinned to a baseRef is created and provisioned with the network unreachable (#1692)", async () => {
   const h = harness();
   const { remoteCalls } = networkDown(h);
+  const exec = spyOn(h.ports, "exec");
   const { scheduled, advance } = provisionRetryClock(h);
   savePipelines([]);
 
@@ -60,8 +61,11 @@ test("an internal pipeline pinned to a baseRef is created and provisioned with t
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
   expect(parked.baseRef).toBe("");
-  expect(new Set(remoteCalls)).toEqual(new Set(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]));
+  expect(new Set(remoteCalls)).toEqual(new Set(["git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]));
   expect(remoteCalls).toHaveLength(scheduled.length + 1);
+  expect(exec.mock.calls.filter(([command, args]) => command === "git" && args[0] === "fetch")).toEqual(
+    remoteCalls.map(() => ["git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], "/repo", undefined, { timeoutMs: 60_000, signal: expect.any(AbortSignal), inheritFd: undefined, additionalInheritedFds: undefined }]),
+  );
 });
 
 test("pipeline creation accepts the two publication policies and refuses anything else (#1692)", async () => {
