@@ -3706,6 +3706,32 @@ export class SqliteAgentRegistryStore {
     });
   }
 
+  /** Called inside the keyed reader's transaction. The two selections a tmux
+      census makes over rows it did not name: the hot entries a tmux pane
+      hosts and the hot launches still starting, each in collection order.
+      A hosted entry always belongs to the liveness projection, so the hosted
+      selection reads that projection's rows; a store without the projection
+      tests its hot entries. The starting selection seeks the state index. */
+  transcriptHostSweepKeys(): { hostedEntries: string[]; startingReceipts: string[] } {
+    const hot = (collection: string, key: string) => this.changesReady
+      ? ` AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='${collection}' AND c.row_key=${key})` : "";
+    const projected = this.meta("liveness_projection_version") === "2"
+      && Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_liveness_entries'").get());
+    // The projection leads the join and drops its archived keys before any
+    // payload is read: led by the entries, SQLite tests every retained entry,
+    // 17,694 rows and 40 ms on a registry with 185 hot ones, against 3 ms.
+    const hostedEntries = this.db.query<{ row_key: string }, []>(projected
+      ? `SELECT r.row_key FROM registry_liveness_entries e CROSS JOIN registry_rows r
+          ON r.collection='entries' AND r.row_key=e.row_key
+          WHERE json_extract(r.value_json,'$.host.kind')='tmux'${hot("entries", "e.row_key")} ORDER BY r.row_order`
+      : `SELECT r.row_key FROM registry_rows r WHERE r.collection='entries'
+          AND json_extract(r.value_json,'$.host.kind')='tmux'${hot("entries", "r.row_key")} ORDER BY r.row_order`).all().map(row => row.row_key);
+    const startingReceipts = this.db.query<{ row_key: string }, []>(`SELECT r.row_key FROM registry_rows r
+      WHERE r.collection='receipts' AND json_extract(r.value_json,'$.state')='starting'${hot("receipts", "r.row_key")} ORDER BY r.row_order`)
+      .all().map(row => row.row_key);
+    return { hostedEntries, startingReceipts };
+  }
+
   /** Disjoint ranges use the status index and retain unknown or absent
       statuses, which the memory planner has always counted as active. */
   memoryPlanningEntryKeys(): string[] {

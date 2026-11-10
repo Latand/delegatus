@@ -4,9 +4,8 @@ import crypto from "node:crypto";
 
 import type { ResumeSpec } from "@/lib/agent/cli";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type SpawnReceipt, type SpawnRequest, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type SpawnReceipt, type SpawnRequest, type RegistryConversation, type TmuxHostEvidence, type TranscriptHostReconciliationRows } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
-import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { agentProcesses, argvEngine, pidAlive, pidWritesPath, readArgv, readPpid, type AgentProcess } from "@/lib/scanner/process";
@@ -133,8 +132,7 @@ interface HostReconciliation {
 
 export interface TranscriptHostRegistryReconciliationDependencies {
   registry: Pick<AgentRegistry,
-    | "snapshot"
-    | "readOnlySnapshot"
+    | "transcriptHostReconciliationRows"
     | "confirmSpawnPaneAlive"
     | "completeObservedSpawn"
     | "upsert"
@@ -729,21 +727,35 @@ function upsertChangesEntry(
 }
 
 function spawnReceiptReconciliationNeeded(
-  snapshot: ReturnType<AgentRegistry["snapshot"]>,
+  rows: TranscriptHostReconciliationRows,
   liveIds: Set<string>,
 ): boolean {
   const liveArtifactPaths = new Set<string>();
   for (const id of liveIds) {
-    const entry = snapshot.entries[id];
+    const entry = rows.entries[id];
     if (!entry) continue;
     if (entry.pendingAction !== null) return true;
     liveArtifactPaths.add(entry.artifactPath);
   }
   /* A starting launch is never archived: only hot receipts can match (#2761). */
-  return hotRegistryRows(snapshot, "receipts").some(([, receipt]) =>
-    receipt.state === "starting"
-    && receipt.artifactPath !== null
+  return rows.startingReceipts.some(receipt =>
+    receipt.artifactPath !== null
     && liveArtifactPaths.has(receipt.artifactPath));
+}
+
+/** The registry keys one census reads: the launch of every pane that has one,
+    and the entry its root transcript or primary claim settles onto. */
+function reconciledRegistryKeys(hosts: readonly TranscriptHost[]): { entryIds: string[]; launchIds: string[] } {
+  const entryIds: string[] = [];
+  const launchIds: string[] = [];
+  for (const host of hosts) {
+    if (!host.primaryPath) continue;
+    const path = host.launchId ? launchReceiptRootArtifact(host) : host.primaryPath;
+    const key = path ? sessionKeyFromTranscript(host.engine, path) : null;
+    if (host.launchId) launchIds.push(host.launchId);
+    if (key) entryIds.push(`${key.engine}:${key.sessionId}`);
+  }
+  return { entryIds, launchIds };
 }
 
 /**
@@ -770,7 +782,11 @@ export function reconcileObservedTranscriptHosts(
   },
 ): HostReconciliation {
   const { registry, evidenceForHost } = dependencies;
-  let snapshot = registry.readOnlySnapshot();
+  /* The census reads the rows its panes name, plus the hot hosted entries and
+     starting launches. A complete view held under the admitted writer walked
+     every retained row on the serving thread for each poll. */
+  const named = reconciledRegistryKeys(hosts);
+  let rows = registry.transcriptHostReconciliationRows(named.entryIds, named.launchIds);
   let mutated = false;
   const seen = new Set<string>();
   const quarantinedPaneIds = new Set<string>();
@@ -797,8 +813,8 @@ export function reconcileObservedTranscriptHosts(
         continue;
       }
       const rootId = `${rootKey.engine}:${rootKey.sessionId}`;
-      const receipt = snapshot.receipts[host.launchId];
-      const existing = snapshot.entries[rootId];
+      const receipt = rows.receipts[host.launchId];
+      const existing = rows.entries[rootId];
       if (receipt?.state === "completed"
         && receipt.cwd === host.cwd
         && receipt.artifactPath === rootPath
@@ -838,7 +854,7 @@ export function reconcileObservedTranscriptHosts(
     const key = sessionKeyFromTranscript(host.engine, host.primaryPath);
     if (!key) continue;
     const id = `${key.engine}:${key.sessionId}`;
-    const existing = snapshot.entries[id];
+    const existing = rows.entries[id];
     const entry = {
       key,
       artifactPath: host.primaryPath,
@@ -857,15 +873,14 @@ export function reconcileObservedTranscriptHosts(
     seen.add(id);
   }
   /* Completed launch hosts are observed on every tmux-target poll. Their
-     confirmation is usually a durable no-op. The revision-aware read cache
-     supplies fresh projection state for every browser tab, and a real
-     mutation invalidates that cache synchronously. */
-  if (mutated) snapshot = registry.readOnlySnapshot();
+     confirmation is usually a durable no-op, and the rows read before it
+     still stand. A real mutation is read again. */
+  if (mutated) rows = registry.transcriptHostReconciliationRows([...seen], []);
   /* An archived entry has no host, so only hot rows can still claim a pane. */
-  for (const [id, entry] of hotRegistryRows(snapshot, "entries")) {
-    if (entry.host?.kind === "tmux" && !seen.has(id)) registry.markUnhosted(entry.key);
+  for (const [id, entry] of rows.hostedEntries) {
+    if (!seen.has(id)) registry.markUnhosted(entry.key);
   }
-  if (spawnReceiptReconciliationNeeded(snapshot, seen)) {
+  if (spawnReceiptReconciliationNeeded(rows, seen)) {
     registry.reconcileSpawnReceipts([...seen].map((id) => {
       const [engine, sessionId] = id.split(":");
       return { engine: engine as "claude" | "codex", sessionId };
