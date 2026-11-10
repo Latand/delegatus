@@ -772,13 +772,13 @@ export type PipelineStageAttempt = {
   startupOwnerWait?: { launchId: string; deadline: string };
   /** A privacy conflict retains the original launch until its receipt proves
       delivery or safe retirement. The wall deadline survives controller restarts. */
-  roleMemoryDispatchWait?: { launchId: string; deadline: string };
+  roleMemoryDispatchWait?: { launchId: string; deadline: string; reason?: string; detail?: string };
   /** Confirmed original delivery overrides only its matching privacy refusal.
       The receipt and generation must still agree on every later tick. */
   roleMemoryDelivery?: { launchId: string; conversationId: string; transcript: string; retryClaimId: string | null };
-  /** After a privacy revision conflict, require two stable revision
+  /** After a privacy revision conflict or preparation exhaustion, require two stable revision
       observations across persisted ticks before composing again. */
-  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
+  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean; detail?: string };
   roleMemoryFailures?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
