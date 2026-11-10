@@ -1722,7 +1722,7 @@ for (const replacement of ["other payloads under the same version ids", "no arch
     await Promise.resolve();
     expect(() => view.receipts["cold-3"]).toThrow(DatabaseReplacedError);
     const fresh = store.readOnlySnapshot().file;
-    expect(fresh.receipts["cold-1"]?.error).toBe(replacement === "no archived versions" ? undefined : "other-database-1");
+    expect(fresh.receipts["cold-1"]?.error ?? null).toBe(replacement === "no archived versions" ? null : "other-database-1");
   });
 }
 
@@ -1755,4 +1755,44 @@ test("a fresh preparation keeps the projections of unchanged archived versions",
   }, false);
   while (peer.archiveInactive(1024) > 0) { /* archive the new row */ }
   expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 1, failed: 201 });
+});
+
+test("a hot row a peer deletes and adds again with the same content takes its new place among archived rows", () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  const moving = { ...template, launchId: "moving" };
+  writer.mutate(file => {
+    file.receipts.moving = moving;
+    file.receipts.archived = { ...template, launchId: "archived", state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained row */ }
+  const before = Object.keys(reader.readOnlySnapshot().file.receipts);
+  expect(before.indexOf("moving")).toBeLessThan(before.indexOf("archived"));
+  writer.mutate(file => { delete file.receipts.moving; }, false);
+  writer.mutate(file => { file.receipts.moving = moving; }, false);
+  const refreshed = Object.keys(reader.readOnlySnapshot().file.receipts);
+  expect(refreshed).toEqual(Object.keys(open().readOnlySnapshot().file.receipts));
+  expect(refreshed.indexOf("archived")).toBeLessThan(refreshed.indexOf("moving"));
+});
+
+test("a refresh lists an owner synthesized from a delivery in the order a whole load gives it", () => {
+  const { open, delivery } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.readOnlySnapshot().file.heldDeliveries[delivery.id]!;
+  const held = (id: string, delivered: boolean) => ({ ...template, id, clientMessageId: `message-${id}`,
+    command: { ...template.command, operationId: `operation-${id}` },
+    ...(delivered ? { state: "delivered", deliveredAt: "2020-01-01T00:00:00Z" } : {}) }) as typeof template;
+  writer.mutate(file => { file.heldDeliveries.first = held("first", true); }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the delivered row */ }
+  writer.mutate(file => {
+    file.heldDeliveries.second = held("second", false);
+    file.heldDeliveries.third = held("third", false);
+  }, false);
+  reader.readOnlySnapshot();
+  // The archived delivery returns to the hot rows; its owner is synthesized again.
+  writer.mutate(file => { file.heldDeliveries.first!.error = "rewritten"; }, false);
+  const refreshed = Object.keys(reader.readOnlySnapshot().file.deliveryOperationOwners);
+  expect(refreshed).toEqual(Object.keys(open().readOnlySnapshot().file.deliveryOperationOwners));
+  expect(refreshed.indexOf("operation-first")).toBeLessThan(refreshed.indexOf("operation-second"));
 });

@@ -1048,6 +1048,8 @@ export class SqliteAgentRegistryStore {
     collections: Map<RowCollection, {
       hot: Map<string, unknown>; deliveries?: Map<string, unknown>; synthetic: string;
       built: () => Record<string, unknown>; cold?: Map<string, PropertyDescriptor>;
+      /** The stored key order the collection was built with. */
+      order?: readonly string[];
     }>;
   } | null = null;
   /** Counts forgotten cold grant decisions; a change rebuilds the grant-bearing collections. */
@@ -2673,6 +2675,16 @@ export class SqliteAgentRegistryStore {
           yield;
         }
         if (kind === "deliveryOperationOwners") {
+          /* An owner with no stored row is synthesized from its delivery and
+             has no stored order. A whole load lists such owners in the order
+             of their deliveries, so a refresh lists them the same way. */
+          for (const id of yield* this.orderedKeysSteps("heldDeliveries")) {
+            const operationId = Object.hasOwn(file.heldDeliveries,id) ? file.heldDeliveries[id]!.command?.operationId : undefined;
+            if (operationId !== undefined && !Object.hasOwn(ordered,operationId) && Object.hasOwn(file.deliveryOperationOwners,operationId)) {
+              ordered[operationId] = file.deliveryOperationOwners[operationId];
+            }
+            yield;
+          }
           for (const key in file.deliveryOperationOwners) {
             const owner = file.deliveryOperationOwners[key];
             if (!Object.hasOwn(ordered,key)) ordered[key] = owner;
@@ -3328,9 +3340,23 @@ export class SqliteAgentRegistryStore {
     };
     const sameRows = function* (left: Map<string, unknown> | undefined, right: Map<string, unknown>): Generator<void, boolean> {
       if (!left || left.size !== right.size) return false;
+      /* In the same order too: a row deleted and added again with the same
+         content is the same frozen row at a new place. */
+      const keys = left.keys();
       for (const [key,row] of right) {
-        if (left.get(key) !== row) return false;
+        if (keys.next().value !== key || left.get(key) !== row) return false;
         yield;
+      }
+      return true;
+    };
+    /* The hot rows alone do not place a hot row among the archived ones, so a
+       built collection is reused only under the stored order it was built with. */
+    const sameOrder = function* (left: readonly string[] | undefined, right: readonly string[]): Generator<void, boolean> {
+      if (left === right) return true;
+      if (!left || left.length !== right.length) return false;
+      for (let index = 0; index < right.length; index++) {
+        if (left[index] !== right[index]) return false;
+        if (index % 64 === 63) yield;
       }
       return true;
     };
@@ -3365,7 +3391,8 @@ export class SqliteAgentRegistryStore {
       const reusable = previous && sameHot && previous.synthetic === synthetic && sameDeliveries
         && (collection !== "deliveryOperationOwners"
           || source?.coldSignatures.get("heldDeliveries") === coldSignatures.get("heldDeliveries"))
-        && (!READER_GRANT_COLLECTIONS.has(collection) || source!.forgets === this.coldGrantForgets);
+        && (!READER_GRANT_COLLECTIONS.has(collection) || source!.forgets === this.coldGrantForgets)
+        && (yield* sameOrder(previous.order,yield* this.orderedKeysSteps(collection)));
       if (reusable) {
         Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: previous.built });
         reused.add(collection);
@@ -3399,7 +3426,7 @@ export class SqliteAgentRegistryStore {
       yield* built.primeSteps();
       Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });
       coldReused.add(collection);
-      nextCache.collections.set(collection,{ hot,synthetic,built,cold });
+      nextCache.collections.set(collection,{ hot,synthetic,built,cold,order });
     }
     for (const collection of coldKeys.keys()) {
       if (reused.has(collection) || coldReused.has(collection)) continue;
@@ -3447,6 +3474,7 @@ export class SqliteAgentRegistryStore {
     // twice. Grant decisions above are still pinned inside this transaction.
     for (const [collection,archived] of collections) {
       let order = yield* this.orderedKeysSteps(collection);
+      nextCache.collections.get(collection)!.order = order;
       if (collection === "deliveryOperationOwners") {
         // Normalization also synthesizes owners for hot legacy deliveries;
         // neither these nor cold synthetic owners have a stored order yet.
