@@ -233,6 +233,14 @@ function finishSteps<T>(steps: Generator<void, T>): T {
   return next.value;
 }
 
+/** One archived row of a view: its key, the immutable version it holds and
+ * that version's place in its collection. */
+type ColdHeader = { collection: RowCollection; row_key: string; archive_id: number; row_order: number };
+
+/** The archived rows a journal replay found changed since the last view: the
+ * keys whose kept version no longer stands and the versions that stand now. */
+type ColdMappingDelta = { removed: Map<RowCollection, Set<string>>; added: ColdHeader[]; ownersChanged: boolean };
+
 /** Rows one measured header read returns. A header measured alone spent more
  * in its two measurements than in SQLite: the keys of 20,000 rows took 91 ms
  * a row at a time. */
@@ -1022,12 +1030,12 @@ export class SqliteAgentRegistryStore {
       grant decisions are all unchanged (#2761). */
   private coldViewCache: {
     signature: string;
-    headers: readonly { collection: RowCollection; row_key: string; archive_id: number }[];
+    headers: readonly ColdHeader[];
     /** Derived from `headers` once: keys and version ids per collection. */
     coldKeys: Map<RowCollection, Set<string>>;
     coldIds: Map<RowCollection, Map<string, number>>;
     /** The headers of each collection, in archive order. */
-    grouped: Map<RowCollection, { collection: RowCollection; row_key: string; archive_id: number }[]>;
+    grouped: Map<RowCollection, ColdHeader[]>;
     /** Per collection, which archive versions it holds: a mapping change in
         one collection leaves the others' built views reusable. */
     coldSignatures: Map<RowCollection, string>;
@@ -2662,17 +2670,31 @@ export class SqliteAgentRegistryStore {
          holds the archived version it held, or none as before. */
       const kept = this.coldViewCache;
       const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
+      const versionOrder = this.db.query<{ row_order: number }, [number]>("SELECT row_order FROM registry_archive WHERE id=?");
       let archiveUnchanged = kept !== null;
+      /* The journal names every row whose archived version changed, so the
+         kept mapping is brought up to date from those rows alone. */
+      const coldDelta: ColdMappingDelta = { removed: new Map(), added: [], ownersChanged };
       if (kept) for (const change of changes) {
-        if (ROW_COLLECTION_KEYS.has(change.collection)
-          && version.get(change.collection,change.row_key)?.archive_id !== kept.coldIds.get(change.collection as RowCollection)?.get(change.row_key)) {
-          archiveUnchanged = false;
-          break;
-        }
         yield;
+        if (!ROW_COLLECTION_KEYS.has(change.collection)) continue;
+        const collection = change.collection as RowCollection;
+        const current = version.get(collection,change.row_key)?.archive_id;
+        const previous = kept.coldIds.get(collection)?.get(change.row_key);
+        if (current === previous) continue;
+        archiveUnchanged = false;
+        if (previous !== undefined) {
+          const removed = coldDelta.removed.get(collection) ?? new Set<string>();
+          removed.add(change.row_key);
+          coldDelta.removed.set(collection,removed);
+        }
+        if (current !== undefined) {
+          coldDelta.added.push({ collection, row_key: change.row_key, archive_id: current, row_order: versionOrder.get(current)!.row_order });
+        }
       }
       const ownersUnchanged = archiveUnchanged && !ownersChanged;
-      const remembered = yield* this.rememberReadOnlySteps({ file,revision,stamp },false,false,{ archiveUnchanged,ownersUnchanged });
+      const remembered = yield* this.rememberReadOnlySteps({ file,revision,stamp },false,false,
+        { archiveUnchanged,ownersUnchanged,...(kept && !archiveUnchanged ? { coldDelta } : {}) });
       this.snapshotChangeId = this.changeId();
       if (ownsTransaction) this.db.exec("COMMIT");
       return remembered;
@@ -2801,6 +2823,28 @@ export class SqliteAgentRegistryStore {
       if (!this.coldRowProjections.has(id)) missing.push(id);
       yield;
     }
+    yield* this.projectColdClaimsSteps(missing);
+  }
+
+  /** The projection pass for a mapping brought up to date from the journal:
+      versions that left the mapping are forgotten and the ones that entered
+      it are projected, as the complete pass does over every header. */
+  private *rememberColdProjectionDeltaSteps(added: readonly ColdHeader[], retired: readonly number[]): Generator<void, void> {
+    for (const id of retired) {
+      this.coldRowProjections.delete(id);
+      this.forgetColdGrant(id);
+      yield;
+    }
+    const missing: number[] = [];
+    for (const header of added) {
+      if ((READER_GRANT_COLLECTIONS.has(header.collection) || header.collection === "heldDeliveries")
+        && !this.coldRowProjections.has(header.archive_id)) missing.push(header.archive_id);
+      yield;
+    }
+    yield* this.projectColdClaimsSteps(missing);
+  }
+
+  private *projectColdClaimsSteps(missing: readonly number[]): Generator<void, void> {
     for (let offset = 0; offset < missing.length; offset += 64) {
       yield;
       const ids = missing.slice(offset,offset+64);
@@ -3037,7 +3081,7 @@ export class SqliteAgentRegistryStore {
     tracked = false,
     /* What a refresh already read from the journal: whether any archived
        version moved, and whether a stored operation owner did. */
-    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean } = { archiveUnchanged: false, ownersUnchanged: false },
+    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean; coldDelta?: ColdMappingDelta } = { archiveUnchanged: false, ownersUnchanged: false },
   ): StampedSnapshot {
     return finishSteps(this.rememberReadOnlySteps(snapshot, complete, tracked, journal));
   }
@@ -3048,7 +3092,7 @@ export class SqliteAgentRegistryStore {
     tracked = false,
     /* What a refresh already read from the journal: whether any archived
        version moved, and whether a stored operation owner did. */
-    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean } = { archiveUnchanged: false, ownersUnchanged: false },
+    journal: { archiveUnchanged: boolean; ownersUnchanged: boolean; coldDelta?: ColdMappingDelta } = { archiveUnchanged: false, ownersUnchanged: false },
   ): Generator<void, StampedSnapshot> {
     /* A whole load that recorded no dependencies leaves none to trust, and no
        journal position the kept orders could be replayed from. */
@@ -3061,20 +3105,89 @@ export class SqliteAgentRegistryStore {
     const signature = prior && journal.archiveUnchanged ? prior.signature
       : this.changesReady ? snapshot.stamp : "";
     const cache = prior?.signature === signature ? prior : null;
-    let headers: readonly { collection: RowCollection; row_key: string; archive_id: number }[] = cache?.headers ?? [];
-    if (!cache && this.changesReady) {
-      const readHeaders = yield* headerRowSteps(this.db.query<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }, []>(
+    let headers: readonly ColdHeader[] = cache?.headers ?? [];
+    let grouped = cache?.grouped;
+    let coldKeys = cache?.coldKeys;
+    let coldIds = cache?.coldIds;
+    let coldSignatures = cache?.coldSignatures;
+    let keptOwners = cache && journal.ownersUnchanged ? cache.syntheticOwners : null;
+    /* A replayed journal names the archived rows that changed. The kept
+       mapping of every other collection stands as it is, and a changed
+       collection is rebuilt from its kept headers and the named rows; reading
+       the complete mapping again walked every archived row for one of them. */
+    const delta = !cache && prior && journal.coldDelta && this.coldRowProjectionIdentity === identity ? journal.coldDelta : null;
+    if (delta && prior) {
+      grouped = new Map(prior.grouped);
+      coldKeys = new Map(prior.coldKeys);
+      coldIds = new Map(prior.coldIds);
+      coldSignatures = new Map(prior.coldSignatures);
+      const added = new Map<RowCollection, ColdHeader[]>();
+      for (const header of delta.added) {
+        const rows = added.get(header.collection) ?? [];
+        rows.push(header);
+        added.set(header.collection,rows);
+        this.rowCache.get(header.collection)?.delete(header.row_key);
+        this.localRows.delete(grantDecisionKey(header.collection,header.row_key));
+        yield;
+      }
+      const retired: number[] = [];
+      const touched = new Set<RowCollection>([...delta.removed.keys(),...added.keys()]);
+      for (const collection of touched) {
+        const removed = delta.removed.get(collection);
+        const entered = (added.get(collection) ?? []).sort((a, b) => a.row_order - b.row_order);
+        const previousIds = prior.coldIds.get(collection);
+        for (const key of removed ?? []) retired.push(previousIds!.get(key)!);
+        const group: ColdHeader[] = [];
+        const keys = new Set<string>(), ids = new Map<string, number>();
+        let next = 0, total = 0, largest = 0;
+        const hold = (header: ColdHeader) => {
+          group.push(header);
+          keys.add(header.row_key);
+          ids.set(header.row_key,header.archive_id);
+          total += header.archive_id;
+          largest = Math.max(largest,header.archive_id);
+        };
+        for (const header of prior.grouped.get(collection) ?? []) {
+          yield;
+          if (removed?.has(header.row_key)) continue;
+          while (next < entered.length && entered[next]!.row_order < header.row_order) hold(entered[next++]!);
+          hold(header);
+        }
+        while (next < entered.length) hold(entered[next++]!);
+        if (group.length) {
+          grouped.set(collection,group);
+          coldKeys.set(collection,keys);
+          coldIds.set(collection,ids);
+          coldSignatures.set(collection,`${group.length}:${total}:${largest}`);
+        } else {
+          grouped.delete(collection);
+          coldKeys.delete(collection);
+          coldIds.delete(collection);
+          coldSignatures.delete(collection);
+        }
+      }
+      headers = [...grouped.values()].flat();
+      yield;
+      yield* this.rememberColdProjectionDeltaSteps(delta.added,retired);
+      for (const results of this.coldRowProjectionResults.values()) {
+        for (const id of retired) results.delete(id);
+        yield;
+      }
+      /* Synthesized owners follow the archived deliveries and the stored
+         owner keys; with neither named by the journal they stand. */
+      if (!delta.ownersChanged && !touched.has("heldDeliveries")) keptOwners = prior.syntheticOwners;
+    } else if (!cache && this.changesReady) {
+      const readHeaders = yield* headerRowSteps(this.db.query<ColdHeader, []>(
         "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate());
       headers = yield* orderedHeaderSteps(readHeaders, (a, b) => a.row_order - b.row_order);
     }
     yield;
-    if (!cache) yield* this.rememberColdProjectionSteps(headers);
+    if (!cache && !delta) yield* this.rememberColdProjectionSteps(headers);
     const coldGrantChangeId = yield* this.refreshColdGrantDecisionSteps(snapshot.stamp);
     yield;
     /* The archive's mapping changes rarely and commits often: what is derived
        from the mapping alone is kept with it, so a refresh after another
        writer's commit walks only the collections whose hot rows changed. */
-    let grouped = cache?.grouped;
     if (!grouped) {
       grouped = new Map();
       for (const header of headers) {
@@ -3084,7 +3197,6 @@ export class SqliteAgentRegistryStore {
         else grouped.set(header.collection,[header]);
       }
     }
-    const keptOwners = cache && journal.ownersUnchanged ? cache.syntheticOwners : null;
     const syntheticOwners = keptOwners ?? new Map<string,string>();
     const archivedDeliveries = keptOwners ? undefined : grouped.get("heldDeliveries");
     if (archivedDeliveries) {
@@ -3098,9 +3210,6 @@ export class SqliteAgentRegistryStore {
       }
     }
     if (headers.length) this.grantDecisions = null;
-    let coldKeys = cache?.coldKeys;
-    let coldIds = cache?.coldIds;
-    let coldSignatures = cache?.coldSignatures;
     if (!coldKeys || !coldIds || !coldSignatures) {
       coldKeys = new Map<RowCollection, Set<string>>();
       coldIds = new Map<RowCollection, Map<string, number>>();
