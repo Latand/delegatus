@@ -28,11 +28,13 @@ test("downstream acknowledgements advance upstream windows across write(false) a
   let awaitingDrain = false, falseWrites = 0, drains = 0;
   let alias = "";
   const originalWrite = http.ServerResponse.prototype.write;
+  type WriteArguments = Parameters<typeof originalWrite>
+    | [chunk: unknown, callback?: Parameters<typeof originalWrite>[2]];
   // Observe the real relay response only; leave the producer's writes unchanged.
-  const writes = spyOn(http.ServerResponse.prototype, "write").mockImplementation(function (this: http.ServerResponse, ...args: Parameters<typeof originalWrite>) {
+  const writes = spyOn(http.ServerResponse.prototype, "write").mockImplementation(function (this: http.ServerResponse, ...args: WriteArguments) {
     const downstream = this.req.headers.authorization === `Bearer ${alias}`;
     if (downstream && awaitingDrain) rejectRun(new Error("relay wrote again before downstream drain"));
-    const accepted = originalWrite.apply(this, args);
+    const accepted = Reflect.apply(originalWrite, this, args);
     if (downstream && !accepted) {
       awaitingDrain = true; falseWrites++;
       this.once("drain", () => { awaitingDrain = false; drains++; });
