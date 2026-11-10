@@ -246,6 +246,12 @@ export interface EngineHost {
       starts the next turn with it. Only an explicit interrupt stops the turn.
       Absent keeps the replacement: the running turn is interrupted first. */
   readonly sendWaitsForRunningTurn?: boolean;
+  /** The engine reads an input written during a running turn at that turn's
+      next tool boundary, without cutting the tool call; an input the turn
+      never reads starts the next turn. The delivery queue hands such a host
+      an operator's ordinary send while the turn runs, one input at a time.
+      The receipt is `steered` when the running turn took it. */
+  readonly acceptsInputDuringTurn?: boolean;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */

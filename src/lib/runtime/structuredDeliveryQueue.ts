@@ -871,7 +871,9 @@ export class StructuredDeliveryQueue {
   private readonly interruptAcknowledged = new Set<string>();
   private readonly refusedSteerTurns = new Map<string, string | null>();
   /** Steers and native queued sends whose arrival is observed after their lane ended. */
-  private readonly activeSteers = new Map<string, { conversationId: string; turnId: string; settling: Promise<void> }>();
+  private readonly activeSteers = new Map<string, { conversationId: string; turnId: string; settling: Promise<void>;
+    /** Written to a running turn that reads it at its next tool boundary. */
+    awaitsToolBoundary?: boolean }>();
   /** An interrupt can need several drain passes before any message is handed
    * over. Keep that first-dispatch evidence only in this executor and claim;
    * eviction or restart returns to the conservative recovery path. */
@@ -2165,7 +2167,17 @@ export class StructuredDeliveryQueue {
          the journal at a bad moment. */
       let durable = durableStatuses.get(effect.operationId) ?? null;
       if (this.activeInjections.has(effect.operationId)) continue;
-      if (this.activeSteers.has(effect.operationId)) continue;
+      const handedOver = this.activeSteers.get(effect.operationId);
+      if (handedOver) {
+        /* A tool call can outlast the settlement window. The host settles the
+           write when the engine reads it or the host ends; until then the
+           receipt keeps a fresh boundary. */
+        if (handedOver.awaitsToolBoundary) {
+          this.port.progress?.deadline(effect.operationId,
+            new Date(this.timing.now() + SEND_SETTLEMENT_WINDOW_MS).toISOString(), "turn-boundary");
+        }
+        continue;
+      }
       if (durable?.status === "delivering") {
         /* A detached steer observer may have settled this operation while this
            pass was awaiting an earlier control. Its initial status snapshot
@@ -2373,9 +2385,17 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
         continue;
       }
-      const queuesDuringTurn = host.supportsQueuedSend === true && effect.kind === "send"
+      /* An operator's ordinary send to a host that reads input at a tool
+         boundary (Claude) is written while the turn runs: the turn takes it
+         without losing its tool call, where waiting for the turn's end kept a
+         stage's operator waiting for the whole stage. A turn awaiting an
+         answer keeps the wait, and a seat keeps its combined inbox. */
+      const joinsRunningTurn = waitsForTurn && host.acceptsInputDuringTurn === true && effect.kind === "send"
+        && effect.origin?.kind === "operator" && effect.turnId == null && !effect.onlyIfIdle && !canCoalesce(effect)
+        && health.status === "active" && Boolean(health.activeTurnRef);
+      const queuesDuringTurn = joinsRunningTurn || (host.supportsQueuedSend === true && effect.kind === "send"
         && (effect.policy === "queue" || steerOrQueue)
-        && (health.status === "active" || health.status === "attention") && Boolean(health.activeTurnRef);
+        && (health.status === "active" || health.status === "attention") && Boolean(health.activeTurnRef));
       const laterOperatorReplacement = effects.slice(index + 1).some(later => {
         const status = durableStatuses.get(later.operationId)?.status;
         return later.kind === "send" && later.conversationId === effect.conversationId
@@ -2412,6 +2432,8 @@ export class StructuredDeliveryQueue {
       if (health.status === "idle") this.interruptAcknowledged.delete(effect.operationId);
       const deliveryFence = shouldInterrupt
         ? effect.turnId ?? health.activeTurnRef
+        : joinsRunningTurn
+          ? health.activeTurnRef
         : replacesTurn || waitsForTurn
           ? effect.turnId ?? null
           : effect.turnId !== undefined
@@ -2419,15 +2441,15 @@ export class StructuredDeliveryQueue {
             : health.activeTurnRef;
       // Native queued sends can follow the next turn after a pre-write refusal.
       // Keep an observed fence on this attempt; only caller fences are durable.
-      const attemptTurnFenceOnly = host.supportsQueuedSend === true && effect.kind === "send"
-        && effect.policy === "queue" && effect.turnId === undefined;
+      const attemptTurnFenceOnly = joinsRunningTurn || (host.supportsQueuedSend === true && effect.kind === "send"
+        && effect.policy === "queue" && effect.turnId === undefined);
       const entry: QueueEntry = {
         id: effect.operationId,
         content: effect.content,
         contentDigest: effect.contentDigest,
         text: effect.content.text,
         images: effect.content.images,
-        expectedTurnId: replacesTurn || waitsForTurn ? null : deliveryFence,
+        expectedTurnId: (replacesTurn || waitsForTurn) && !joinsRunningTurn ? null : deliveryFence,
         ...(effect.runtime ? { runtime: effect.runtime } : {}),
         ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
         ...(effect.origin ? { origin: effect.origin } : {}),
@@ -2655,8 +2677,13 @@ export class StructuredDeliveryQueue {
               this.activeSteers.delete(effect.operationId);
               this.retrySoon();
             });
-          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: health.activeTurnRef!, settling });
-          this.noteWait(effect, "dispatching", { wake: "none", detail: "queued in the engine behind the running turn; confirmed when its own turn starts" });
+          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: health.activeTurnRef!, settling,
+            ...(joinsRunningTurn ? { awaitsToolBoundary: true } : {}) });
+          if (joinsRunningTurn) this.port.progress?.deadline(effect.operationId,
+            new Date(this.timing.now() + SEND_SETTLEMENT_WINDOW_MS).toISOString(), "turn-boundary");
+          this.noteWait(effect, "dispatching", { wake: "none", detail: joinsRunningTurn
+            ? "written to the running turn; confirmed when the engine reads it at its next tool boundary"
+            : "queued in the engine behind the running turn; confirmed when its own turn starts" });
           void settling.catch(() => undefined);
           continue;
         }
