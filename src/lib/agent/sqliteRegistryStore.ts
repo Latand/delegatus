@@ -1857,6 +1857,22 @@ export class SqliteAgentRegistryStore {
                 yield;
               }
               reader.coldRowProjectionIdentity = identity;
+              /* A projector's result for an archived version follows from the
+                 immutable version alone, so it holds for the same file. The
+                 first projection after a preparation otherwise read, parsed
+                 and normalized every archived row of its collection again in
+                 one synchronous call. The view built below drops the results
+                 of versions that have left the archive. */
+              for (const [projector, results] of priorReader.coldRowProjectionResults) {
+                let left = results.size;
+                const kept = new Map<number, unknown>();
+                reader.coldRowProjectionResults.set(projector, kept);
+                for (const [id, result] of results) {
+                  if (left-- <= 0) break;
+                  kept.set(id, result);
+                  yield;
+                }
+              }
             }
             const hot = yield* reader.loadHotSteps();
             const stamp = reader.storeStamp();

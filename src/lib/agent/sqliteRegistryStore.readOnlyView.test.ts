@@ -1725,3 +1725,34 @@ for (const replacement of ["other payloads under the same version ids", "no arch
     expect(fresh.receipts["cold-1"]?.error).toBe(replacement === "no archived versions" ? undefined : "other-database-1");
   });
 }
+
+test("a fresh preparation keeps the projections of unchanged archived versions", async () => {
+  const { open, kept } = fixture();
+  let reads = 0;
+  const store = open({ onRowPayloadRead: (collection, count) => { if (collection === "receipts") reads += count; } });
+  const peer = open();
+  const template = store.readOnlySnapshot().file.receipts[kept]!;
+  store.mutate(file => {
+    for (let index = 0; index < 200; index++) {
+      const id = `cold-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (store.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const projector = { id: "fresh-preparation-state", collection: "receipts" as const, project: (row: { state: string }) => row.state };
+  const project = (file: RegistryFile) => {
+    const before = reads;
+    const states = registryRowProjection(file, projector);
+    return { read: reads - before, failed: states.filter(([, state]) => state === "failed").length };
+  };
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 200, failed: 200 });
+  peer.mutate(file => { file.receipts[kept]!.error = "peer commit"; }, false);
+  // Every archived version is the one already projected: nothing is read again.
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 0, failed: 200 });
+  // A version that entered the archive since is the only one read.
+  peer.mutate(file => {
+    file.receipts["cold-new"] = { ...template, launchId: "cold-new", state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+  }, false);
+  while (peer.archiveInactive(1024) > 0) { /* archive the new row */ }
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 1, failed: 201 });
+});
