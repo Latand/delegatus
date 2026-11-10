@@ -7,6 +7,25 @@ import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 const read = (version: string, name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, `${name}.json`), "utf8"));
 
 describe("reviewed pins", () => {
+  test.each(["stable", "experimental"])("0.167.0 human command approvals need their reviewed server-request contract (%s)", name => {
+    const previous = read("0.166.0", name), current = read("0.167.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "CommandExecutionApprovalKind.enum: removed",
+      "CommandExecutionApprovalKind: type changed",
+      "CommandExecutionApprovalKind.oneOf: added",
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/CommandExecutionApprovalKind", definitions: schema.definitions,
+    });
+    const before = compile(previous), after = compile(current);
+    for (const kind of ["command", "writeStdin"]) {
+      expect(before(kind)).toBeTrue();
+      expect(after(kind)).toBeTrue();
+    }
+    expect(before("humanCommand")).toBeFalse();
+    expect(after("humanCommand")).toBeTrue();
+    expect(after("unknownCommand")).toBeFalse();
+  });
   test.each(["stable", "experimental"])("0.165.0 extends 0.164.0 additively (%s)", name => {
     const previous = read("0.164.0", name), current = read("0.165.0", name);
     expect(codexSchemaBreaks(previous, current)).toEqual([]);

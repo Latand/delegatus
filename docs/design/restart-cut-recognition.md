@@ -1261,3 +1261,52 @@ No question for the operator remains: the code, read-only counts over this
 machine's own ledgers and transcripts, three scratch runs of the existing
 suites and two scratch probes against the unchanged helpers settled every fact
 this design rests on.
+
+## Canonical cut storage and recipient completeness
+
+Recipient startup preparation requires a complete view of release, restart and
+account-guard cuts. A directory timestamp cannot prove this view: rewriting a
+JSON file in place can change its recipient without changing that timestamp.
+
+The fenced startup initializer imports canonical cut payloads into the existing
+`state.sqlite`, under an `interruption_obligations:<directory-name>` collection.
+The recipient expression index derives directly from each canonical source row;
+insert, replacement, retarget and deletion update both in the same SQLite
+transaction. Uninterpretable rows occupy an indexed unknown bucket. A recipient
+request checks that bucket and reads only its matching rows, with a fixed bound.
+It also validates the database identity, collection format and exact index
+revision. Missing, incompatible or unreadable authority refuses recovery.
+
+The index accepts one occurrence of each supported JSON member, including
+owner, seat, checkpoint and stage members. Duplicate members, escaped member
+names and unknown extensions enter the unknown bucket, because SQLite and
+JavaScript can otherwise read different authority from the same bytes. Existing
+optional boot metadata and background task fields remain supported. Global
+readers preserve these source bytes; recipient evidence refuses until a
+supported writer replaces the row. The fenced initializer installs index
+revision three; a reader facing an older index refuses without rebuilding it.
+
+Predecessor ledger and transcript freshness lasts through the verified claim
+boundary. Recovery checks the exact successor reservation, owner, generation
+and writer before handing over that evidence, then permits attachment and later
+turns to update the session files. Seat, pipeline and interruption authority
+remain guarded through publication and dispatch.
+
+The cutover replaces the old directory path with a format marker. Existing
+per-record paths then fail with `ENOTDIR`; an older file writer cannot change a
+canonical cut through them. A named backup retains the pre-cutover files. The fenced rename retires the legacy source; readers refuse until the SQLite
+marker is published. Initialization rechecks the retired file identities and
+canonical names before publication, and preserves any arriving pending journal. A durable
+intent blocks normal access across an interrupted import or rename; the existing
+startup owner reconciles it under the journal and startup-mutation fences.
+Missing authority after a completed cutover refuses automatic reinitialization.
+
+The pending journal remains an authoritative fallback for an older writer that
+cannot publish a file. A synced empty journal acts as its continuity witness:
+appending, replacing or renaming it into an import claim invalidates recipient
+completeness. Normal global import consumes that work and renews the witness
+only after the journal and claims are accounted for. Recipient requests never
+import journals or initialize storage. Existing global readers, guard cursors,
+cut deduplication, settlement and withdrawal continue through the same store
+adapter, using SQLite payloads after cutover. The backup is retained for explicit
+reconciliation; this change performs no automatic rollback to old writers.

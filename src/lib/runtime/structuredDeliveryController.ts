@@ -1,3 +1,4 @@
+import { viewerMcpOwnerForEntry, type SeatTickConversation } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sweepSendFailureNotices } from "./sendFailureNotice";
@@ -60,7 +61,7 @@ import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, t
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
-import { StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
+import { normalizeViewerMcpObservation, type ViewerMcpObservation, StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
 import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
@@ -84,7 +85,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -108,6 +109,7 @@ export interface StructuredDeliveryHost {
       only while its entry is still at that epoch, so a registration that
       outlives its claim never publishes under a successor's fence. */
   writerEpoch?: number | null;
+  mcpOwner?: SeatTickConversation["viewerMcpOwner"];
 }
 
 interface HostAttachment {
@@ -128,11 +130,15 @@ interface HostRegistration {
   key: SessionKey;
   host: ObservableEngineHost;
   writerEpoch?: number | null;
+  mcpOwner?: SeatTickConversation["viewerMcpOwner"];
   attachment: HostAttachment | null;
   cancelled: boolean;
 }
 
 const DELIVERY_DRAIN_COALESCE_MS = 25;
+/** Echo settlements one controller runs at once; an echo past the bound is
+    settled by the next receipt read instead. */
+const ECHO_SETTLEMENT_CAPACITY = 64;
 const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
 /** How often the delivery watchdog looks for stalls, overdue wakes and lanes
     to reconcile. */
@@ -153,6 +159,7 @@ interface ControllerState {
   activeQueue: StructuredDeliveryQueue | null;
   activeRegistry: AgentRegistry | null;
   activeHosts: Map<string, EngineHost> | null;
+  readMcpObservation?: ((conversationId: string) => ViewerMcpObservation | undefined) | null;
   registerActiveHost: ((item: StructuredDeliveryHost, ownsOperation?: () => Promise<boolean>) => Promise<() => Promise<void>>) | null;
   /* The hosts this generation currently serves, as re-registrable items. A
      successor takes them over at the swap, so a rebind never leaves a
@@ -238,6 +245,7 @@ function retireStructuredDeliveryPublication(): void {
   state.activeQueue = null;
   state.activeRegistry = null;
   state.activeHosts = null;
+  state.readMcpObservation = null;
   state.registerActiveHost = null;
   state.activeRegistrations = null;
   state.republishActiveHost = null;
@@ -811,6 +819,7 @@ export async function bindStructuredDeliveryQueue(
   // seats instead of attempting competing recovery and terminalizing them.
   let startupPending = dependencies.deferStartupWork === true;
   let startupRecoveryReady = !startupPending;
+  const startupRecipientGuards = new Map<string, () => void>();
   let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
   let requestFailureNotices = () => {};
@@ -836,6 +845,8 @@ export async function bindStructuredDeliveryQueue(
       id => lookup.canonicalConversationId(id as ViewerConversationId));
   };
   const authorizeAccountDispatch = (conversationId: string) => {
+    try { startupRecipientGuards.get(conversationId)?.(); }
+    catch { throw new StructuredDispatchDeferredError("recipient startup authority changed before dispatch"); }
     assertPipelineTurnAllowed(conversationId, registry);
     const conversation = registry.conversation(conversationId as ViewerConversationId);
     try {
@@ -918,6 +929,27 @@ export async function bindStructuredDeliveryQueue(
   });
   initializeSendFailureNotices();
   const progressStore = dependencies.progress ?? deliveryProgressStore();
+  /* An engine echo that arrives after its send already ended unverified
+     settles that send from the evidence it left (2026-11-09). One settlement
+     per operation at a time, bounded, off the event pump: the pump never waits
+     for it, and a retired generation's settlements stop at their next check. */
+  const echoSettlements = new Set<string>();
+  const settleEcho = (operationId: string) => {
+    const retired = () => stopped || state.activeQueue !== queue;
+    if (retired() || echoSettlements.has(operationId) || echoSettlements.size >= ECHO_SETTLEMENT_CAPACITY) return;
+    echoSettlements.add(operationId);
+    const assertActive = () => { if (retired()) throw new Error("echo settlement owner retired"); };
+    withoutOperationLease(() => void settleEchoedSend(operationId, {
+      registry, client, assertActive,
+      progress: { get: id => progressStore.get(id), settle: (...args) => { if (!retired()) progressStore.settle(...args); } },
+    }).then(receipt => {
+      if (receipt?.state === "delivered" && !retired()) { requestDrain(); requestFailureNotices(); }
+    }, error => {
+      if (!retired()) controllerDiagnosticError("[structured delivery] echo settlement failed", {
+        operationId, error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => { echoSettlements.delete(operationId); }));
+  };
   /* The first record of an operation carries its original key and admission
      time off the delivery record, so the record answers for the key the
      operator holds. */
@@ -1006,11 +1038,11 @@ export async function bindStructuredDeliveryQueue(
       terminalTurn: (conversationId) => registry.conversation(conversationId as ViewerConversationId)?.turn.state === "terminal",
       deferTarget: (conversationId) => (startupPending
         || (deferredStartupConversations.size > 0
-          && deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))))
+          && deferredStartupConversations.has(registry.canonicalConversationId(conversationId as ViewerConversationId))))
         && hostResolver(registry, hosts)(conversationId) === null,
-      canRecoverDeferredTarget: (conversationId) => startupRecoveryReady
+      canRecoverDeferredTarget: (conversationId) => (startupRecoveryReady || startupPending)
         && (deferredStartupConversations.size === 0
-          || !deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))),
+          || !deferredStartupConversations.has(registry.canonicalConversationId(conversationId as ViewerConversationId))),
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
       /* Off the loop (rule c). The hold is written before the switch is
@@ -1130,7 +1162,13 @@ export async function bindStructuredDeliveryQueue(
           || sendIsSettled(snapshot, operationId);
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
-      authorizeDispatch: (operationId: string, conversationId: string) => {
+      authorizeDispatch: (operationId: string, conversationId: string, origin) => {
+        if (origin?.kind === "agent" && origin.role === "seat-tick") {
+          const observation = structuredDeliveryMcpObservation(conversationId, registry);
+          if (observation?.unverified || observation?.denied.length) {
+            throw new StructuredDispatchDeferredError("seat-mcp-unavailable");
+          }
+        }
         authorizeAccountDispatch(conversationId);
         if (!ownerRelayOperationAuthorized(operationId, conversationId))
           throw new StructuredSendRefusedError("owner relay continuation authorization revoked");
@@ -1466,6 +1504,18 @@ export async function bindStructuredDeliveryQueue(
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return false;
+      let startupAdmission: Pick<import("./structuredRecovery").StructuredRecoveryRequest,
+        "admissionGuard" | "authorityGuard" | "acceptSuccessorClaim"> = {};
+      if (startupPending && !startupRecoveryReady) {
+        if (!startupRecipientGuards.has(conversation.id) && startupRecipientGuards.size >= 256) {
+          throw new (await import("./structuredRecovery")).StructuredRecoveryHeldForUpdateError("recipient startup preparations are at capacity");
+        }
+        const { prepareStructuredStartupRecipient } = await import("./startup");
+        const prepared = await prepareStructuredStartupRecipient(registry, conversation.id, undefined, admission.operationId);
+        prepared.admissionGuard();
+        startupAdmission = prepared;
+        startupRecipientGuards.set(conversation.id, prepared.admissionGuard);
+      }
       /* Startup holds this row until its restart cut evidence is decided:
          the message stays queued and recovery is asked again. Recovery
          refuses the row itself for every other caller; this answers the
@@ -1482,11 +1532,15 @@ export async function bindStructuredDeliveryQueue(
         conversationId: conversation.id,
         ...(startupPending ? { reconnectLiveHost: true } : {}),
         ...admission,
+        ...startupAdmission,
       }, {
         registry,
         client,
         requestDeliveryDrain: requestDrain,
       });
+      if (startupPending && recovered?.admissionGuard && (recovered.spawned || recovered.reconnected)) {
+        startupRecipientGuards.set(conversation.id,recovered.admissionGuard);
+      }
       return recovered?.spawned === true || recovered?.reconnected === true;
     },
     (effect, ownership) => applyStructuredReconfigure(effect, {
@@ -1866,6 +1920,7 @@ export async function bindStructuredDeliveryQueue(
     const publicationEntry = entryForHost(registry, item);
     /* A carried-over seat keeps the epoch it was registered at. */
     if (item.writerEpoch === undefined) item = { ...item, writerEpoch: publicationEntry?.structuredHost?.writerClaimEpoch ?? null };
+    if (item.mcpOwner === undefined) item = { ...item, mcpOwner: viewerMcpOwnerForEntry(publicationEntry ?? undefined) };
     /* A durable tmux host makes this adapter historical for the current
        generation. Publish the legacy verdict without probing or registering
        the adapter: an unreadable pane surface says nothing about host death,
@@ -1971,6 +2026,7 @@ export async function bindStructuredDeliveryQueue(
         if (next.value.kind === "item" && next.value.deliveryEcho) {
           const echo = next.value.deliveryEcho;
           observeDeliveryEcho(progressStore, conversationId, echo, !echo.memberOperationIds || next.value.seq > initialState.eventCursor);
+          for (const operationId of echo.memberOperationIds ?? [echo.operationId]) settleEcho(operationId);
         }
         /* Before the journal append, which retries for as long as the runtime
            host is away: a request nobody can answer is answered now. */
@@ -2009,8 +2065,9 @@ export async function bindStructuredDeliveryQueue(
        registration of the same host sees a seat that is already filled in and
        stands down instead of installing a second subscription and pump. */
     const registration: HostRegistration = seat
-      ?? { key: item.key, host: item.host, writerEpoch: item.writerEpoch, attachment: null, cancelled: false };
+      ?? { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false };
     registration.writerEpoch ??= item.writerEpoch;
+    registration.mcpOwner ??= item.mcpOwner;
     registry.invalidateAccountCreditGuard();
     registration.attachment = { unsubscribe, stopEvents };
     seatRegistration(key, registration);
@@ -2068,11 +2125,29 @@ export async function bindStructuredDeliveryQueue(
   for (const item of inherited) {
     const id = sessionKeyId(item.key);
     if (registrations.has(id)) continue;
-    seatRegistration(id, { key: item.key, host: item.host, writerEpoch: item.writerEpoch, attachment: null, cancelled: false });
+    seatRegistration(id, { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false });
   }
   state.activeHosts = hosts;
+  state.readMcpObservation = conversationId => {
+    const projection = registry.seatTickConversation(conversationId);
+    if (!projection) return normalizeViewerMcpObservation(null);
+    const owner = projection.viewerMcpOwner;
+    if (owner === undefined) return projection.viewerMcp;
+    const registration = owner ? registrations.get(owner.key) : undefined;
+    if (!owner || !registration || registration.cancelled || !registration.host.readViewerMcpObservation
+      || registration.mcpOwner?.identity !== owner.identity) return normalizeViewerMcpObservation(null);
+    const observation = normalizeViewerMcpObservation(registration.host.readViewerMcpObservation());
+    if (projection.viewerMcp && (!observation || observation.seq < projection.viewerMcp.seq)) {
+      return normalizeViewerMcpObservation(null);
+    }
+    const current = registry.seatTickConversation(conversationId);
+    if (state.activeHosts !== hosts || registrations.get(owner.key) !== registration || registration.cancelled
+      || current?.id !== projection.id || current.viewerMcpOwner?.key !== owner.key
+      || current.viewerMcpOwner.identity !== owner.identity) return normalizeViewerMcpObservation(null);
+    return observation;
+  };
   state.registerActiveHost = register;
-  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch }) => ({ key, host, writerEpoch }));
+  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner }) => ({ key, host, writerEpoch, mcpOwner }));
   state.republishActiveHost = async (key) => {
     const registration = registrations.get(sessionKeyId(key));
     if (!registration) return false;
@@ -2163,6 +2238,7 @@ export async function bindStructuredDeliveryQueue(
   });
   state.stopActive = () => {
     stopped = true;
+    startupRecipientGuards.clear();
     queue.retire();
     drainWake.cancel();
     if (settleTimer) clearInterval(settleTimer);
@@ -2183,6 +2259,7 @@ export async function bindStructuredDeliveryQueue(
       state.activeQueue = null;
       state.activeRegistry = null;
       state.activeHosts = null;
+      state.readMcpObservation = null;
       state.registerActiveHost = null;
       state.activeRegistrations = null;
       state.republishActiveHost = null;
@@ -2310,6 +2387,7 @@ export async function bindStructuredDeliveryQueue(
       await phase("draining startup delivery queue");
       assertActive();
       startupPending = false;
+      startupRecipientGuards.clear();
       await queue.drain();
     });
     return completion;
@@ -2495,6 +2573,17 @@ export function structuredDeliveryHostForConversation(conversationId: string, re
   if (registry && state.activeRegistry !== registry) return null;
   if (!conversationId.startsWith("conversation_") || !state.activeRegistry || !state.activeHosts) return null;
   return hostResolver(state.activeRegistry, state.activeHosts)(conversationId);
+}
+
+/** Read the named live adapter; a missing owner never falls back to an older checkpoint. */
+export function structuredDeliveryMcpObservation(conversationId: string, registry: Pick<AgentRegistry, "seatTickConversation">): ViewerMcpObservation | undefined {
+  try {
+    const projection = registry.seatTickConversation(conversationId);
+    if (!projection) return normalizeViewerMcpObservation(null);
+    if (projection.viewerMcpOwner === undefined) return projection.viewerMcp;
+    if (state.activeRegistry !== registry || !state.readMcpObservation) return normalizeViewerMcpObservation(null);
+    return state.readMcpObservation(conversationId);
+  } catch { return normalizeViewerMcpObservation(null); }
 }
 
 export function structuredDeliveryLastError(conversationId: string): string | null {

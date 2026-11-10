@@ -1,9 +1,10 @@
+import { textLengthError } from "@/lib/textLimits";
 import { matchesShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
 
-import { readTaskHold, storedTaskHold } from "./hold";
+import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { defaultTaskDue, isoNow, storedDueHistory } from "./helpers";
@@ -332,10 +333,10 @@ export function taskDuePatch(task: BoardTask, input: PatchTaskInput, now: string
       const reason = typeof input.dueReason === "string" ? input.dueReason.trim() : undefined;
       const slip = !!task.dueAt && Date.parse(task.dueAt) <= Date.parse(now) && next > Date.parse(task.dueAt);
       if (slip && options.actor === "agent" && (!reason || reason.length > 200)) {
-        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: "A slip needs a dueReason of 1 to 200 characters" };
+        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: typeof input.dueReason === "string" ? textLengthError("dueReason", reason?.length ?? 0, 200, "UTF-16 code units", 1) : "A slip needs a dueReason string of 1–200 UTF-16 code units after trimming" };
       }
       if (input.dueReason !== undefined && (typeof input.dueReason !== "string" || (reason?.length ?? 0) > 200)) {
-        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: "dueReason must be at most 200 characters" };
+        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: typeof input.dueReason === "string" ? textLengthError("dueReason", reason?.length ?? 0, 200, "UTF-16 code units") : "dueReason must be a string" };
       }
       const history = storedDueHistory(task.dueHistory) ?? { firstAt: task.dueAt ?? patch.dueAt, slips: 0 };
       patch.dueHistory = slip ? { ...history, slips: history.slips + 1, last: {
@@ -381,8 +382,8 @@ function normalizeSource(value: unknown): TaskSource | undefined | null {
   };
 }
 
-function textLimitError(): { ok: false; error: string; status: number } {
-  return { ok: false, error: `Task text must be no longer than ${TASK_TEXT_LIMIT} characters`, status: 400 };
+function textLimitError(actual: number): { ok: false; error: string; status: number } {
+  return { ok: false, error: textLengthError("text", actual, TASK_TEXT_LIMIT, "UTF-16 code units"), status: 400 };
 }
 
 type DetailsResult = { ok: true; details?: string } | TaskRefusal;
@@ -397,7 +398,7 @@ function normalizeDetails(value: unknown): DetailsResult {
   const details = value.trim();
   if (!details) return { ok: true };
   if (details.length > TASK_DETAILS_LIMIT) {
-    return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+    return { ok: false, error: textLengthError("details", details.length, TASK_DETAILS_LIMIT, "UTF-16 code units"), status: 400, code: "TASK_INVALID_FIELD", field: "details" };
   }
   return { ok: true, details };
 }
@@ -412,7 +413,7 @@ export function createTask(
   if (!project) return { ok: false, error: "project is required", status: 400 };
   const text = normalizeText(input.text);
   if (!text) return { ok: false, error: "task text is required", status: 400 };
-  if (text.length > TASK_TEXT_LIMIT) return textLimitError();
+  if (text.length > TASK_TEXT_LIMIT) return textLimitError(text.length);
   const details = normalizeDetails(input.details);
   if (!details.ok) return details;
   const now = deps.now?.() ?? isoNow();
@@ -501,6 +502,8 @@ export function createTask(
     return boardFullError("project");
   }
 
+  const holdError = validateTaskHoldInput(input.hold);
+  if (holdError) return holdError;
   const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
   const id = deps.id?.() ?? crypto.randomUUID();
   const previous = key === undefined ? undefined : existing
@@ -636,7 +639,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
     const text = typeof input.note === "string" ? input.note.replace(/\s+/g, " ").trim() : "";
     if (text.length > TASK_NOTE_LIMIT) {
-      return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "note", error: `note must be at most ${TASK_NOTE_LIMIT} characters` };
+      return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "note", error: textLengthError("note", text.length, TASK_NOTE_LIMIT, "UTF-16 code units") };
     }
     const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
     patch.note = text ? { text, author, updatedAt: now } : undefined;
@@ -645,7 +648,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (Object.hasOwn(input, "text")) {
     const text = normalizeText(input.text);
     if (!text) return { ok: false, error: "task text is required", status: 400 };
-    if (text.length > TASK_TEXT_LIMIT) return textLimitError();
+    if (text.length > TASK_TEXT_LIMIT) return textLimitError(text.length);
     patch.text = text;
     patch.chosen = options.explicit ? true : undefined;
     /* An operator's edit names a placeholder for good: a later agent
@@ -673,7 +676,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     /* Stored as edited: trimming the whole field, as a whole-field write does,
        would strip the indent of the line an edit uncovers at the top. */
     if (edited.value !== null && edited.value.length > TASK_DETAILS_LIMIT) {
-      return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+      return { ok: false, error: textLengthError("details", edited.value.length, TASK_DETAILS_LIMIT, "UTF-16 code units"), status: 400, code: "TASK_INVALID_FIELD", field: "details" };
     }
     patch.details = edited.value ?? undefined;
   }
@@ -688,6 +691,8 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
   }
   if (Object.hasOwn(input, "hold")) {
+    const holdError = validateTaskHoldInput(input.hold);
+    if (holdError) return holdError;
     patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId, notes);
     if (patch.hold) patch.status = "blocked";
     else if (!Object.hasOwn(input, "status") && task.status === "blocked") {

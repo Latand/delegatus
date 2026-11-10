@@ -19,7 +19,7 @@ import { procBackend } from "@/lib/proc";
 import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
-import { installPipelineControllerReferences, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
+import { installPipelineControllerReferences, pipelineControllerReferenceIndexesCurrent, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
@@ -402,7 +402,57 @@ const PIPELINE_INTEGRATION_FORMAT = `collection IN ('pipelines','pipelines_archi
     OR json_type(value_json, '$.adoptedCreationRequests') IS NOT NULL
   ELSE 0 END`;
 
+/** Invalid cut payloads occupy the NULL bucket, so a keyed absence lookup
+ * also has a bounded proof that no uninterpretable source can name its target.
+ * SQLite maintains this expression from the canonical row on every write.
+ * Removing each supported member once must leave an empty object. Duplicate
+ * or escaped member names otherwise let SQLite's first value disagree with
+ * the JavaScript decoder's last value. Unknown extensions also need a reader
+ * upgrade before this index can certify complete authority. */
+const interruptionRecipientExpression = `CASE WHEN json_valid(value_json) THEN CASE WHEN
+  json_extract(value_json,'$.version')=1 AND json_extract(value_json,'$.id')=row_key
+  AND json_remove(value_json,'$.version','$.id','$.conversationId','$.engine','$.hostKey','$.path',
+    '$.owner','$.claimEpoch','$.turnRef','$.boundary','$.reason','$.recordedAt','$.checkpoint','$.seat','$.stage',
+    '$.state','$.operationId','$.attempts','$.resolvedAt','$.resolution')='{}'
+  AND (json_type(value_json,'$.owner')='null' OR
+    json_extract(json_remove(value_json,'$.owner.pid','$.owner.startIdentity','$.owner.bootEpoch'),'$.owner')='{}')
+  AND json_extract(json_remove(value_json,'$.checkpoint.lastEventAt','$.checkpoint.lastEventKind',
+    '$.checkpoint.backgroundTasks'),'$.checkpoint')='{}'
+  AND (json_type(value_json,'$.seat')='null' OR
+    json_extract(json_remove(value_json,'$.seat.project','$.seat.seatEpoch'),'$.seat')='{}')
+  AND (json_type(value_json,'$.stage') IS NULL OR json_type(value_json,'$.stage')='null' OR
+    json_extract(json_remove(value_json,'$.stage.pipelineId','$.stage.stageId','$.stage.attempt'),'$.stage')='{}')
+  AND row_key GLOB 'interruption-continuation-*'
+  AND json_type(value_json,'$.conversationId')='text'
+  AND json_extract(value_json,'$.engine') IN ('codex','claude')
+  AND json_extract(value_json,'$.reason') IN ('viewer-release','viewer-restart','account-guard')
+  AND json_extract(value_json,'$.state') IN ('owed','submitted','delivered','discharged','failed')
+  AND json_type(value_json,'$.hostKey')='text' AND json_type(value_json,'$.path')='text'
+  AND json_type(value_json,'$.recordedAt')='text' AND json_type(value_json,'$.boundary')='text'
+  AND (json_type(value_json,'$.claimEpoch')='null' OR
+    (json_type(value_json,'$.claimEpoch')='integer' AND json_extract(value_json,'$.claimEpoch') BETWEEN 0 AND 9007199254740991))
+  AND json_type(value_json,'$.turnRef') IN ('null','text')
+  AND (json_type(value_json,'$.owner')='null' OR (json_type(value_json,'$.owner')='object'
+    AND json_type(value_json,'$.owner.pid')='integer' AND json_extract(value_json,'$.owner.pid') BETWEEN 1 AND 9007199254740991
+    AND json_type(value_json,'$.owner.startIdentity') IN ('null','text')))
+  AND json_type(value_json,'$.checkpoint')='object'
+  AND (json_type(value_json,'$.checkpoint.lastEventAt')='null' OR
+    (json_type(value_json,'$.checkpoint.lastEventAt') IN ('integer','real')
+      AND json_extract(value_json,'$.checkpoint.lastEventAt') BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308))
+  AND json_type(value_json,'$.checkpoint.lastEventKind') IN ('null','text')
+  AND (json_type(value_json,'$.seat')='null' OR (json_type(value_json,'$.seat')='object'
+    AND json_type(value_json,'$.seat.project')='text' AND json_type(value_json,'$.seat.seatEpoch')='integer'
+    AND json_extract(value_json,'$.seat.seatEpoch') BETWEEN -9007199254740991 AND 9007199254740991))
+  AND json_type(value_json,'$.operationId') IN ('null','text')
+  AND json_type(value_json,'$.attempts')='integer' AND json_extract(value_json,'$.attempts') BETWEEN 0 AND 9007199254740991
+  AND json_type(value_json,'$.resolvedAt') IN ('null','text') AND json_type(value_json,'$.resolution') IN ('null','text')
+  THEN json_extract(value_json,'$.conversationId') END END`;
+const interruptionRecipientIndex = `CREATE INDEX IF NOT EXISTS state_rows_interruption_recipient_v3
+  ON state_rows(collection, ${interruptionRecipientExpression}, row_key)
+  WHERE collection GLOB 'interruption_obligations:*'`;
+
 const stateSchema = [
+  // The source and its recipient index share the same SQLite transaction.
   `CREATE TABLE IF NOT EXISTS state_collections (
     collection TEXT PRIMARY KEY,
     schema_version INTEGER NOT NULL,
@@ -500,6 +550,7 @@ const stateSchema = [
   `CREATE TRIGGER IF NOT EXISTS pipeline_request_receipt_delete AFTER DELETE ON state_rows
     WHEN OLD.collection IN ('pipelines', 'pipelines_archive')
     BEGIN DELETE FROM pipeline_request_receipts WHERE collection = OLD.collection AND row_key = OLD.row_key; END`,
+  interruptionRecipientIndex,
   `CREATE INDEX IF NOT EXISTS state_rows_collection_order
     ON state_rows(collection, row_order)`,
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
@@ -680,6 +731,7 @@ function openRawDatabase(filename: string): Database {
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && pipelineControllerReferencesReady(db, names)
+          && pipelineControllerReferenceIndexesCurrent(db)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
           && taskDueIndexCurrent(db)
@@ -694,6 +746,7 @@ function openRawDatabase(filename: string): Database {
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
+        db.exec("DROP INDEX IF EXISTS state_rows_interruption_recipient_v2");
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         for (const sql of stateSchema) db.exec(sql);
         if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);
@@ -1214,6 +1267,65 @@ export function pipelineEvidenceRevision(filename: string): string | null {
   return pipelineIndexRevision(filename, "pipeline_evidence_clock");
 }
 
+type TaskPipelineKey = { collection: string; row_key: string };
+let taskPipelineSelection: { filename: string; version: string; links: Map<string, TaskPipelineKey[]> | null } | undefined;
+const MAX_TASK_PIPELINE_LINKS = 20_000;
+
+/** Read an album's active and archived lanes without opening a writer or
+    decoding unrelated history. One scalar membership pass serves the whole
+    board summary, even when it asks for hundreds of tasks. The evidence clock
+    observes raw peer writes as well as store mutations. */
+export function readPipelineRowsForTask(filename: string, taskId: string): unknown[] | null {
+  const revisions = readStateCollectionRevisions(filename, ["pipelines", "pipelines_archive"]);
+  if (revisions.get("pipelines") == null || revisions.get("pipelines_archive") == null) return null;
+  const version = pipelineEvidenceRevision(filename) ?? stateEvidenceVersion(filename);
+  const db = sharedStateReadonlyDatabase(filename);
+  if (taskPipelineSelection?.filename !== filename || taskPipelineSelection.version !== version) {
+    const rows = db.query<TaskPipelineKey & { row_order: number; task_ids: string | null }, [number]>(`
+      SELECT collection, row_key, row_order,
+        CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.taskIds') END AS task_ids
+      FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')
+      LIMIT ?
+    `).all(MAX_TASK_PIPELINE_LINKS + 1);
+    // Ordering the large source collection made SQLite walk its history-order
+    // index and fetch payloads scattered across the database. Sort the compact
+    // membership projection after its sequential read instead.
+    rows.sort((a, b) => a.collection.localeCompare(b.collection) || a.row_order - b.row_order
+      || Buffer.compare(Buffer.from(a.row_key), Buffer.from(b.row_key)));
+    let links = rows.length > MAX_TASK_PIPELINE_LINKS ? null : new Map<string, TaskPipelineKey[]>();
+    let count = 0;
+    if (links) for (const { task_ids, collection, row_key } of rows) {
+      const ids: unknown = typeof task_ids === "string" && task_ids.startsWith("[") ? parseSqliteJson(task_ids, db) : [];
+      if (!Array.isArray(ids)) continue;
+      for (const id of ids) {
+        if (typeof id !== "string") continue;
+        const keys = links.get(id) ?? [];
+        keys.push({ collection, row_key });
+        links.set(id, keys);
+        count++;
+      }
+      if (count > MAX_TASK_PIPELINE_LINKS) { links = null; break; }
+    }
+    taskPipelineSelection = { filename, version, links };
+  }
+  // An installation above the cache bound remains readable through a targeted
+  // query, without retaining an unbounded membership graph.
+  const keys = taskPipelineSelection.links ? taskPipelineSelection.links.get(taskId) ?? []
+    : db.query<TaskPipelineKey, [string]>(`
+      SELECT collection, row_key FROM state_rows
+      WHERE collection IN ('pipelines', 'pipelines_archive') AND EXISTS (
+        SELECT 1 FROM json_each(CASE WHEN json_valid(value_json) THEN value_json ELSE '{}' END, '$.taskIds')
+        WHERE type = 'text' AND value = ?
+      )
+      ORDER BY collection, row_order, row_key
+    `).all(taskId);
+  const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+  return keys.flatMap(({ collection, row_key }) => {
+    const row = read.get(collection, row_key);
+    return row ? [parseSqliteJson(row.value_json, db)] : [];
+  });
+}
+
 /** Only changes to branch claims invalidate an asynchronous ownership read. */
 export function pipelineAuthorityRevision(filename: string): string | null {
   return pipelineIndexRevision(filename, "pipeline_authority_clock");
@@ -1227,6 +1339,84 @@ function pipelineIndexRevision(filename: string, table: "pipeline_evidence_clock
   if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
   const clock = db.query<{ revision: number }, []>(`SELECT revision FROM ${table} WHERE id=1`).get();
   return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
+}
+
+export type PipelineRecipientSelection = { ids: readonly string[]; conversationIds: readonly string[];
+  agentPaths?: readonly string[]; sessionIds?: readonly string[] };
+
+/** Freshness follows the complete selected ownership set and its row revisions.
+ * An unrelated writer cannot revoke a published recipient's dispatch proof. */
+export function recipientPipelineEvidenceRevision(filename: string, selection: PipelineRecipientSelection): string | null {
+  if (!fs.existsSync(filename)) return null;
+  const identity = databaseFileIdentity(filename);
+  const db = connectReadonlyDatabase(filename);
+  try {
+    db.exec("BEGIN");
+    const keys = recipientPipelineEvidenceKeys(db, selection);
+    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    const revision = db.query<{ revision: number }, [string, string]>(
+      "SELECT revision FROM pipeline_evidence_rows WHERE collection=? AND row_key=?");
+    const rows = keys.map(({ collection, row_key }) => [collection, row_key, revision.get(collection, row_key)?.revision ?? null]);
+    if (databaseFileIdentity(filename) !== identity) return null;
+    const collections = db.query("SELECT collection,schema_version FROM state_collections WHERE collection IN ('pipelines','pipelines_archive') ORDER BY collection").all();
+    return JSON.stringify([identity, schema, collections, rows]);
+  } catch { return null; }
+  finally { rollbackQuietly(db); db.close(); }
+}
+
+function recipientPipelineEvidenceKeys(db: BunDatabase, selection: PipelineRecipientSelection) {
+  if (!pipelineControllerReferencesReady(db) || !pipelineControllerReferencesCurrent(db) || !pipelineControllerReferenceIndexesCurrent(db)
+    || !pipelineEvidenceIndexReady(db)) throw new Error("recipient pipeline ownership index is incomplete or incompatible");
+  const metadata = db.query<{ collection: string; schema_version: number }, []>(
+    "SELECT collection,schema_version FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
+  if (metadata.length !== 2 || metadata[0]!.schema_version !== metadata[1]!.schema_version
+    || metadata.some(row => ![5,6].includes(row.schema_version))) {
+    throw new Error("recipient pipeline collections are incomplete or incompatible");
+  }
+  // Indeterminate ownership cannot prove absence for any recipient.
+  if (db.query("SELECT 1 FROM pipeline_owner_refs WHERE kind IN ('unknown','archive:unknown') LIMIT 1").get()) {
+    throw new Error("recipient pipeline ownership contains unknown rows");
+  }
+  const keys = db.query<{ collection: string; row_key: string }, [string, string, string, string]>(`
+    WITH matches AS MATERIALIZED (
+      SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
+        AND row_key IN (SELECT value FROM json_each(?))
+      UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
+        WHERE kind IN ('conversationId','archive:conversationId') AND identity IN (SELECT value FROM json_each(?))
+      UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
+        WHERE kind IN ('agentPath','archive:agentPath') AND identity IN (SELECT value FROM json_each(?))
+      UNION SELECT collection,row_key FROM pipeline_owner_refs INDEXED BY pipeline_owner_lookup
+        WHERE kind IN ('sessionId','archive:sessionId') AND identity IN (SELECT value FROM json_each(?)) LIMIT 257)
+    SELECT collection,row_key FROM matches
+    UNION SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive')
+      AND row_key IN (SELECT row_key FROM matches)
+    ORDER BY collection,row_key LIMIT 257`).all(JSON.stringify(selection.ids), JSON.stringify(selection.conversationIds), JSON.stringify(selection.agentPaths ?? []), JSON.stringify(selection.sessionIds ?? []));
+  if (keys.length > 256) throw new Error("recipient pipeline ownership exceeds its bounded read");
+  return keys;
+}
+
+/** A cold reader uses only the persisted ownership index. Initialization belongs
+ * to the fenced startup writer; this path never backfills retained archives. */
+export function readRecipientPipelineEvidence(filename: string, selection: PipelineRecipientSelection): Array<{ collection: string; key: string; value: unknown }> {
+  if (!fs.existsSync(filename)) throw new Error("recipient pipeline ownership index is unavailable");
+  const identity = databaseFileIdentity(filename);
+  const db = connectReadonlyDatabase(filename);
+  try {
+    db.exec("BEGIN");
+    const keys = recipientPipelineEvidenceKeys(db, selection);
+    const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+    let bytes = 0;
+    const size = db.query<{ bytes: number }, [string,string]>("SELECT length(CAST(value_json AS BLOB)) AS bytes FROM state_rows WHERE collection=? AND row_key=?");
+    const rows = keys.map(({ collection, row_key: key }) => {
+      bytes += size.get(collection,key)?.bytes ?? 0;
+      if (bytes > 16 * 1024 * 1024) throw new Error("recipient pipeline evidence exceeds its bounded byte read");
+      const raw = read.get(collection, key);
+      if (!raw) throw new Error("recipient pipeline ownership row is missing");
+      return { collection, key, value: performanceSpans.sync("state.json", () => parseSqliteJson(raw.value_json, db), 1, Buffer.byteLength(raw.value_json)) };
+    });
+    if (databaseFileIdentity(filename) !== identity) throw new StateSnapshotChangedError();
+    return rows;
+  } finally { rollbackQuietly(db); db.close(); }
 }
 
 export type CompactEvidenceCache<T> = { identity: string; sourceRevision?: number; rows: Map<string, { revision: number; value: T }> };
@@ -2026,6 +2216,45 @@ export class SqliteStateCollection<T> {
       const decoded = this.decodeRow(row.value_json);
       return { key: row.row_key, value: decoded === null ? null : this.options.clone(decoded) };
     });
+  }
+
+  /** A complete bounded cut view, including records with no immediate work.
+   * No payload outside the selected recipients (or the one invalidity witness)
+   * is decoded. A replaced/missing index cannot certify absence. */
+  interruptionRecipients(recipients: readonly string[], limit: number): T[] {
+    if (!this.options.collection.startsWith("interruption_obligations:")
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new Error("invalid interruption recipient lookup");
+    const context = this.refreshReadCache();
+    this.readDb.exec("BEGIN");
+    try {
+      const index = this.readDb.query<{ sql: string }, []>(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='state_rows_interruption_recipient_v3'").get();
+      if (index?.sql !== interruptionRecipientIndex.replace("IF NOT EXISTS ", "")
+        || this.collectionMeta()?.schema_version !== this.options.schemaVersion
+        || this.readDb.query<{ migration_id: string }, [string]>("SELECT migration_id FROM state_collections WHERE collection=?")
+          .get(this.options.collection)?.migration_id !== "interruption-source-v2") throw new Error("interruption source index is incomplete or incompatible");
+      const invalid = this.readDb.query(`SELECT row_key FROM state_rows INDEXED BY state_rows_interruption_recipient_v3
+        WHERE collection=? AND collection GLOB 'interruption_obligations:*'
+          AND ${interruptionRecipientExpression} IS NULL LIMIT 1`).get(this.options.collection);
+      if (invalid) throw new Error("interruption source contains unknown authority");
+      const records: T[] = [];
+      for (const recipient of new Set(recipients)) {
+        const rows = this.readDb.query<{ value_json: string }, [string, string, number]>(`
+          SELECT value_json FROM state_rows INDEXED BY state_rows_interruption_recipient_v3
+          WHERE collection=? AND collection GLOB 'interruption_obligations:*'
+            AND ${interruptionRecipientExpression}=? ORDER BY row_key LIMIT ?
+        `).all(this.options.collection, recipient, limit + 1 - records.length);
+        if (rows.length + records.length > limit) throw new Error("interruption recipient evidence exceeds its bound");
+        for (const row of rows) {
+          const record = this.decodeRow(row.value_json);
+          if (!record) throw new Error("invalid interruption source record");
+          records.push(this.options.clone(record));
+        }
+      }
+      this.assertReadContext(context);
+      this.readDb.exec("COMMIT");
+      return records;
+    } catch (error) { rollbackQuietly(this.readDb); throw error; }
   }
 
   /** Indexed recipient lookup for the bounded send-failure alarm reader. */
@@ -3135,12 +3364,29 @@ export class SqliteStateCollection<T> {
         authorize();
         this.assertLease(db, ownerToken);
         const meta = this.collectionMeta(db)!;
-        const current = new Map(db.query<CollectionRow, [string]>(`
-          SELECT row_key, value_json, row_order, row_revision, controller_active
-          FROM state_rows WHERE collection = ?
-        `).all(this.options.collection).map((row) => [row.row_key, row] as const));
+        /* A patch compares only the rows it names. Reading the collection
+           here made one changed task read every stored task inside the write
+           transaction, and one rule read every rule (#3809). A replacement
+           still needs the whole collection to find what it omits. */
+        const current = new Map<string, CollectionRow>();
+        if (mergeOmitted) {
+          const touched = [...seen, ...requestedDeletes];
+          for (let start = 0; start < touched.length; start += CHANGE_READ_CHUNK) {
+            const chunk = touched.slice(start, start + CHANGE_READ_CHUNK);
+            for (const row of db.query<CollectionRow, SQLQueryBindings[]>(`
+              SELECT row_key, value_json, row_order, row_revision, controller_active
+              FROM state_rows WHERE collection = ? AND row_key IN (${chunk.map(() => "?").join(", ")})
+            `).all(this.options.collection, ...chunk)) current.set(row.row_key, row);
+          }
+        } else {
+          for (const row of db.query<CollectionRow, [string]>(`
+            SELECT row_key, value_json, row_order, row_revision, controller_active
+            FROM state_rows WHERE collection = ?
+          `).all(this.options.collection)) current.set(row.row_key, row);
+        }
         for (const key of [...seen, ...requestedDeletes]) this.assertRowWritable(db, key);
-        const protectedKeys = new Set([...current].filter(([, row]) => this.protectedRow(row, db)).map(([key]) => key));
+        const protectedKeys = mergeOmitted ? new Set<string>()
+          : new Set([...current].filter(([, row]) => this.protectedRow(row, db)).map(([key]) => key));
         const encoded = records.map((record, index) => ({
           key: this.options.key(record),
           valueJson: JSON.stringify(record),
@@ -3161,7 +3407,8 @@ export class SqliteStateCollection<T> {
         if (changed.length === 0 && deleted.length === 0) return companionChanged ? meta.revision : null;
         const nextRevision = meta.revision + 1;
         const nextOrder = mergeOmitted
-          ? (Math.max(-1, ...[...current.values()].map((row) => row.row_order)) + 1)
+          ? db.query<{ last: number }, [string]>(
+            "SELECT COALESCE(MAX(row_order), -1) AS last FROM state_rows WHERE collection = ?").get(this.options.collection)!.last + 1
           : 0;
         let appended = nextOrder;
         const upsert = db.query(`

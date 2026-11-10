@@ -1739,6 +1739,23 @@ test("a crash after the owned stop replays that stop and excludes only its kill 
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("committed");
 });
 
+test("a handoff whose stop landed while its answer was lost still starts its target (#3797)", async () => {
+  const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  let stopped = false; let calls = 0; let spawned = 0;
+  // The runtime ended the source and the answer timed out; from then on the source reads as gone.
+  h.ports.stopStageAgent = async () => { calls++; if (!stopped) { stopped = true; throw new Error("runtime host request timed out"); } return { outcome: "not-running" }; };
+  h.ports.runtimeSwitchSourceUnavailable = id => id === STAGE_CONVERSATION && stopped;
+  h.ports.spawnAgent = async (_input, reserved) => { spawned++; await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" }); return { launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "new", transcript: "/codex/new.jsonl", paneId: null }; };
+  await tickPipelines([], h.ports); expect(stopped).toBe(true); await tickPipelines([], h.ports);
+  const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0];
+  expect(calls).toBe(2);
+  expect(spawned).toBe(1);
+  expect(record?.phase).toBe("committed");
+  expect(record?.retry).toBeUndefined();
+  expect(loadPipelines()[0]!.state).toBe("running");
+});
+
 test("handoff accepts an early successor verdict and rejects the former conversation's report", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
   await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });

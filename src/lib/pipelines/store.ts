@@ -31,7 +31,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
@@ -240,7 +240,7 @@ function isRuntimeSwitches(value: unknown): boolean {
     && seat(item.from) && seat(item.to)
     && typeof item.from.conversationId === "string" && textOrNull(item.from.launchId) && textOrNull(item.from.sessionId) && textOrNull(item.from.agentPath)
     && typeof item.to.accountId === "string" && typeof item.to.accountPinned === "boolean"
-    && ["cutAt", "continuedAt", "settledAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
+    && ["cutAt", "continuedAt", "settledAt", "stopDispatchedAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
     && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
     && (item.retry === undefined || item.retry && typeof item.retry.reason === "string" && item.retry.reason.length <= 2000
       && typeof item.retry.requestedAt === "string" && Number.isFinite(Date.parse(item.retry.requestedAt))
@@ -1330,7 +1330,7 @@ export async function acknowledgePipelineControllerWork(work: import("@/lib/stat
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).acknowledgePipelineTick(work, cursor, dueAt);
 }
 
-export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; state: string }>;
+export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; agentPath: string | null; sessionId: string | null; state: string; suspended?: true }>;
   survivors: import("@/lib/processIdentity").ProcessIdentity[] };
 type CompactPipelineEvidence = { key: string; ownership?: PipelineStartupOwnership; issue?: RegistryRecordIssue };
 type PreparedPipelineEvidence = { pipelines: Pipeline[]; ownership?: PipelineStartupOwnership[]; issues: RegistryRecordIssue[]; signature: string };
@@ -1338,7 +1338,7 @@ let compactEvidence: CompactEvidenceCache<CompactPipelineEvidence> | undefined;
 function startupOwnership(pipeline: Pipeline): PipelineStartupOwnership {
   const attempts = pipeline.runs.flatMap(run => run.attempts);
   return { id: pipeline.id,
-    attempts: attempts.map(attempt => ({ conversationId: attempt.conversationId ?? null, state: attempt.state })),
+    attempts: attempts.map(attempt => ({ conversationId: attempt.conversationId ?? null, agentPath: attempt.agentPath ?? null, sessionId: attempt.sessionId ?? null, state: attempt.state, ...(attempt.suspension ? { suspended: true as const } : {}) })),
     survivors: [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map(host => host.evidence)]
       .flatMap(host => host.unresolvedTermination?.survivors.map(identity => ({ ...identity })) ?? []),
   };
@@ -1466,10 +1466,43 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   finally { if (!budget && pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
-export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>): Promise<PipelineStartupOwnership[]> {
-  const evidence = admittedEvidence.getStore()?.current ?? await preparePipelineEvidence("ownership");
+/** Complete selected ownership, including attempts without membership. Never
+ * shares the global preparation promise or initializes the archive index. */
+async function prepareRecipientPipelineEvidence(selection: PipelineRecipientSelection, budget?: PipelineEvidenceBudget): Promise<PreparedPipelineEvidence> {
+  assertPipelineEvidenceBudget(budget);
+  const signature = evidenceSignature();
+  const rows = readRecipientPipelineEvidence(stateDatabaseFile(), selection);
+  const identities = new Set<string>();
+  const ownership: PipelineStartupOwnership[] = [];
+  const issues: RegistryRecordIssue[] = [];
+  for (const row of rows) {
+    assertPipelineEvidenceBudget(budget);
+    const key = registryRecordKey(row.value);
+    if (identities.has(key) || key !== row.key) throw new PipelineStoreError("recipient pipeline records have contradictory identities");
+    identities.add(key);
+    if (isPipeline(row.value)) ownership.push(startupOwnership(row.value));
+    else issues.push(pipelineRecordIssue(row.value, row.collection));
+  }
+  if (issues.length) throw new PipelineStoreError("recipient pipeline authority contains unreadable or unknown rows");
+  if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("recipient pipeline evidence changed during preparation");
+  return { pipelines: [], ownership, issues, signature };
+}
+
+/** Each supported identity independently retains custody, even before membership is recorded. */
+export function pipelineStartupAttemptMatches(attempt: PipelineStartupOwnership["attempts"][number], selection: PipelineRecipientSelection): boolean {
+  return !!(attempt.conversationId && selection.conversationIds.includes(attempt.conversationId)
+    || attempt.agentPath && selection.agentPaths?.includes(attempt.agentPath)
+    || attempt.sessionId && selection.sessionIds?.includes(attempt.sessionId));
+}
+
+export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>,
+  targets: Pick<PipelineRecipientSelection, "agentPaths" | "sessionIds"> = {}): Promise<PipelineStartupOwnership[]> {
+  const selection = { ...targets, ids: ids ?? [], conversationIds: [...conversationIds ?? []] };
+  const evidence = admittedEvidence.getStore()?.current ?? await (ids && conversationIds
+    ? prepareRecipientPipelineEvidence(selection) : preparePipelineEvidence("ownership"));
   const selected = ids && new Set(ids);
-  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id) || row.attempts.some(attempt => attempt.conversationId !== null && conversationIds?.has(attempt.conversationId))).map(row => ({ ...row,
+  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id)
+    || row.attempts.some(attempt => pipelineStartupAttemptMatches(attempt, selection))).map(row => ({ ...row,
     attempts: row.attempts.map(attempt => ({ ...attempt })), survivors: row.survivors.map(identity => ({ ...identity })) }));
 }
 
@@ -1490,9 +1523,10 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   }
   return result;
 }
-export async function pipelineRegistryHealthAsync(): Promise<RegistryRecordIssue[]> {
+export async function pipelineRegistryHealthAsync(recipient?: PipelineRecipientSelection): Promise<RegistryRecordIssue[]> {
   const admitted = admittedEvidence.getStore()?.current;
   if (admitted) return admitted.issues.map(issue => ({ ...issue }));
+  if (recipient) return (await prepareRecipientPipelineEvidence(recipient)).issues;
   const signature = evidenceSignature();
   const version = stateEvidenceVersion(stateDatabaseFile());
   if (healthWitness?.signature === signature && healthWitness.version === version) {
@@ -2027,7 +2061,7 @@ export async function withPipelineStartupAdmission<T>(
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
   compact = false,
-  options: { signal?: AbortSignal; waitMs?: number } = {},
+  options: { signal?: AbortSignal; waitMs?: number; recipient?: PipelineRecipientSelection } = {},
 ): Promise<T> {
   return withViewerOperation("pipelines.startup-admission", () => withWaitCorrelation({ label: `pipelines.startup-admission:${phase}` }, async () => {
     let entered = false;
@@ -2039,7 +2073,8 @@ export async function withPipelineStartupAdmission<T>(
         try {
           let evidence = prepared;
           const evidenceBudget = { ...(waitMs > 0 ? { deadline } : {}), signal: options.signal };
-          if (!evidence) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+          if (!evidence) evidence = await (options.recipient ? prepareRecipientPipelineEvidence(options.recipient, evidenceBudget)
+            : preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget));
           assertPipelineEvidenceBudget(evidenceBudget);
           const store = pipelineStore();
           assertPipelineEvidenceBudget(evidenceBudget);
@@ -2049,7 +2084,8 @@ export async function withPipelineStartupAdmission<T>(
             const currentSignature = evidenceSignature();
             assertPipelineEvidenceBudget(evidenceBudget);
             if (evidence.signature !== currentSignature) {
-              evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+              evidence = await (options.recipient ? prepareRecipientPipelineEvidence(options.recipient, evidenceBudget)
+            : preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget));
             }
           }
           prepared = evidence;
@@ -2427,6 +2463,21 @@ export function pipelineRecordReader(pipelineId: string) {
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
+}
+
+/** Task-local history, including archived lanes, without materializing every
+    unrelated stage and attempt in the installation. */
+export function loadPipelinesForTask(taskId: string): Pipeline[] {
+  const filename = stateDatabaseFile();
+  // Preserve the store's migration and schema admission for legacy installs.
+  const rows = stateCollectionsInitialized(filename, pipelineStateCollectionSeeds())
+    ? readPipelineRowsForTask(filename, taskId) : null;
+  if (rows === null) return [...loadPipelinesForList(), ...loadArchivedPipelinesForList()]
+    .filter(pipeline => pipeline.taskIds.includes(taskId));
+  return rows.flatMap(row => {
+    const pipeline = decodePipeline(row);
+    return pipeline?.taskIds.includes(taskId) ? [pipeline] : [];
+  });
 }
 
 /** Bounded feed for consumers that need task membership changes without loading

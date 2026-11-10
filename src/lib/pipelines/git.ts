@@ -2086,20 +2086,29 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
-        let output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
-        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail: publicationDiagnosticTail(output, 4000) }) !== "privacy") {
-          output += "\npre-push: privacy: refused";
-        }
+        const output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = publicationDiagnosticTail(output, 4000);
         const lines = output.split("\n");
-        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
+        const checkLines = lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")
+          || line.trim() === "PRIVACY GATE: PASS").map(line => line.trim() === "PRIVACY GATE: PASS" ? line.trim() : line);
+        // Keep the last occurrence in event order: a later privacy start must
+        // remain after an earlier PASS, including when markers repeat.
+        const checks = [...new Set(checkLines.reverse())].reverse().slice(-16);
         const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
-        const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
+        // Reserve every retained status before clipping. Comparing with the
+        // initial tail can lose a PASS when the reserved prefix shortens it.
+        const phases = output.length > 4000 ? [...checks, ...tests].map((line) => line.slice(0, 160)).join("\n") : "";
         // Long diagnostics must not erase the hook phases or failing test names.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const hookStop = preparingDependencies ? null
           : hookBudgetStop(dependencyFailure ? redactPublicationOutput(executed.stdout, executed.stderr) : output);
-        const outputTail = phases ? `${phases}\n…\n${publicationDiagnosticTail(output, 4000 - phases.length - 3)}` : tail;
+        let outputTail = phases ? `${phases}\n…\n${publicationDiagnosticTail(output, 4000 - phases.length - 3)}` : tail;
+        // Check the final bound too: reserving status lines can move a real
+        // refusal outside a tail that originally contained it.
+        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail }) !== "privacy") {
+          const refusal = "pre-push: privacy: refused\n";
+          outputTail = refusal + publicationDiagnosticTail(outputTail, 4000 - refusal.length);
+        }
         failureEvidence = { step: dependencyFailure ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,

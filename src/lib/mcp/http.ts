@@ -18,6 +18,8 @@ import {
   MCP_HTTP_CLIENT_ID,
   MCP_TOOL_NAMES,
   taskExecutorFailure,
+  taskExecutorReplyLost,
+  isMutatingMcpTool,
   type McpToolName,
   type McpToolService,
 } from "./server";
@@ -269,10 +271,17 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
       try {
         // Keep ingress parsing and executor admission on separate loop turns.
         await new Promise<void>(resolve => setImmediate(resolve));
-        return await viewerTaskExecutor().callHttpTool(requested, body, request,
-          nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability }, {
-            signal: registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal,
-          });
+        const signal = registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal;
+        const taskCaller = nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability };
+        const callOnce = () => viewerTaskExecutor().callHttpTool(requested, body, request, taskCaller, { signal });
+        try { return await callOnce(); }
+        catch (error) {
+          /* The executor stopped before its reply. The receipt under the
+             caller's own key answers the same call once more (#3757). */
+          const keyed = typeof (messages[0]?.params as { arguments?: { clientRequestId?: unknown } } | undefined)?.arguments?.clientRequestId === "string";
+          if (!taskExecutorReplyLost(error) || !isMutatingMcpTool(requested as McpToolName) || !keyed || signal.aborted) throw error;
+          return await callOnce();
+        }
       } catch (error) {
         const args = (messages[0]?.params as { arguments?: unknown } | undefined)?.arguments;
         const result = taskExecutorFailure(requested, args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {}, error);

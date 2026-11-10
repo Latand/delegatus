@@ -270,10 +270,15 @@ the project's own commands. After the batch lands, run `resolve N` for each
 deferred PR, resolve its conflicts in the recorded worktree, stage only those
 resolutions and run `resolve N` again to gate and fast-forward its branch.
 
-Every tuple change voids the entire validation: restart every gate, native test
+Full local validation belongs to the ordered PR numbers, exact reviewed heads
+and immutable stable patch-ids. A main-only move rebuilds those same patches,
+preserves the actual validated tuple and records the carried main, tip and time.
+Trusted candidate and PR-body privacy run before each publication; all required
+hosted checks must finish green on the newest tip under strict protection.
+Any membership change voids the validation: restart every gate, native test
 inventory, changed reviewed detector snapshots and fresh native-main baseline;
-carry no corpus, samples, pass list or detector selection as evidence. Rebuild the
-touched-path union from the candidate diff and every input PR's immutable
+carry no corpus, samples, pass list or detector selection into that validation.
+Rebuild the touched-path union from the candidate diff and every input PR's immutable
 reviewed patch base and head, including withheld, moved and deferred PRs. Use
 `touchedTests` to select changed tests and adjacent `.test.ts`/`.test.tsx` files
 from the actual merged candidate. Select reviewed test blobs only for files a
@@ -285,6 +290,15 @@ adaptation and corpus selection. Full browser campaigns are opt-in
 (`gate --browser`): each UI PR ran its own browser checks in review. Unrelated repository tests are
 outside this gate. Deduplicate identical file versions only within that
 validation.
+
+Membership revalidation retains its three-round cap. Main-only refreshes spend
+the finite `land` polling budget, persisted across command restarts. An
+unattributable hosted red on a carried tip gets one full local attribution
+gate within the revalidation cap; a red on a locally validated tip still stops.
+Immediately before merging, the script rechecks paginated human reviews for
+each member and the batch PR. An outstanding member request returns that PR
+to its lane as a review culprit and fully gates the remainder. A human request
+on the batch PR prevents its merge; bot requests alone do not veto it.
 
 Failures, errors and between-test errors that a test file produces on native
 main are pre-existing and never stop the batch; a file main cannot complete is
@@ -674,7 +688,10 @@ block. Missing or incomplete comparison evidence is a check gap to resolve,
 never proof that a failure existed on the base. Other independently evidenced
 defects in the diff retain their findings.
 
-`LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
+`LLV_SKIP_HOOKS=1` skips both hooks for a recorded false positive. The batch
+script also publishes its own batch branch and deferred resolutions after
+trusted privacy with hooks skipped, like the engine's base updates; publish
+integration branches through the script. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns
 when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
 CI OCR. The two required privacy checks remain strict and unchanged; local

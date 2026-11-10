@@ -67,3 +67,12 @@ test("reinitializing a failed child does not erase a prolonged unready interval"
   }));
   expect(seatMcpHealth(receipt, null, root, now).status).toBe("dead");
 });
+
+
+test("engine denial and invalid recovery evidence precede HTTP and startup grace", () => {
+  const viewerMcp = { seq: 4, observedAt: "2026-11-01T00:00:00.000Z", denied: [{ tool: "get_task", seq: 4 }], unverified: false };
+  for (const transport of ["stdio", "http"] as const) {
+    expect(seatMcpHealth(null, null, "unused", 0, transport, viewerMcp)).toMatchObject({ status: "dead", detail: expect.stringContaining("engine approval denied: get_task") });
+    expect(seatMcpHealth(null, null, "unused", 0, transport, { ...viewerMcp, denied: [], unverified: true }).status).toBe("dead");
+  }
+});

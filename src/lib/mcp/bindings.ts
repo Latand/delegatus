@@ -1,3 +1,5 @@
+import { textLengthError } from "@/lib/textLimits";
+import { AsyncResource } from "node:async_hooks";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
@@ -46,7 +48,7 @@ import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMai
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { curatorCallerOf } from "@/lib/memory/curation/guard";
-import { applyCuration, type CurationApply } from "@/lib/memory/curation/apply";
+import { applyCuration, readCurationOperation, curationOperationResult, completeCurationMaintenance, type CurationOperationContext, type CurationApply } from "@/lib/memory/curation/apply";
 import { readCuration } from "@/lib/memory/curation/read";
 import { isMutatingMcpTool } from "./server";
 import { permitIssueReporterTool, permitMaintainerTool, permitCuratorTool } from "./toolAllowlist";
@@ -90,7 +92,7 @@ import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
+import { currentMcpHttpCaller, resolveMcpCallerValue, runWithMcpCallerResolution } from "./callerContext";
 import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
@@ -201,7 +203,7 @@ import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operator
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
-import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, stageGuardShapeError, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
@@ -1990,8 +1992,8 @@ async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
   const receipt = operationId.startsWith("seatmsg_") ? seatMessageReceipt(operationId) : await resolveSendReceipt(operationId);
   if (!receipt) {
     throw new McpToolRefusal(
-      "no accepted send is recorded under that operationId",
-      { code: "OPERATION_UNKNOWN" },
+      "No accepted send is recorded under that operationId. Copy operationId from the send acknowledgement; launchId, pipelineId and clientRequestId belong to other receipt families. For uncertain sends recover with the original send tool, key and arguments; a missing receipt does not prove that the send had no effect.",
+      { code: "OPERATION_UNKNOWN", retryable: false },
     );
   }
   /* Why it is still waiting, or why it settled, as the delivery queue
@@ -2655,7 +2657,48 @@ function closeReportCounts(report: PipelineCloseReport) {
   };
 }
 
-async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+/** The public spelling is deliberately confined to this action's MCP boundary. */
+function pipelineSourceRequest(args: McpToolArgs): PatchPipelineRequest & McpToolArgs {
+  const allowed = new Set(["pipelineId", "action", "clientRequestId", "src", "overwrite", "full", "compact", "includeHints"]);
+  for (const key of Object.keys(args)) if (!allowed.has(key)) {
+    throw new McpToolRefusal(key === "srcPath" ? "set-src requires src; srcPath is not an MCP field" : `unsupported set-src field: ${key}`,
+      { code: "invalid_arguments", retryable: false });
+  }
+  const src = required(args, "src");
+  if (args.overwrite !== undefined && typeof args.overwrite !== "boolean") {
+    throw new McpToolRefusal("overwrite must be a boolean", { code: "invalid_arguments", retryable: false });
+  }
+  return { action: "set-src", srcPath: src, ...(args.overwrite !== undefined ? { overwrite: args.overwrite } : {}) };
+}
+
+/** Pin the caller before dispatch; read fresh authority again inside the writer. */
+function pipelineSourceAuthority(dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): () => void {
+  const snapshot = () => runWithMcpCallerResolution(() => {
+    const authority = dependencies.attentionAuthority();
+    const refuse = (): never => { throw new McpToolRefusal("set-src requires a current identified caller", { code: "caller_changed", retryable: false }); };
+    if (authority.kind === "unidentified" || !authority.conversationId) return refuse();
+    const registry = dependencies.registrySnapshot();
+    const conversation = readOnlyConversationLookupFromSnapshot(registry).conversation(authority.conversationId as `conversation_${string}`);
+    const generation = conversation?.generations.at(-1);
+    if (!conversation || conversation.supersededBy || !generation || generation.archivedAt) return refuse();
+    const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry, authority.conversationId);
+    const caller = attributionOf(dependencies);
+    for (const id of new Set([authority.conversationId, caller.conversationId])) {
+      const revoked = revokedSeatPipelineRefusal(id,
+        value => readOnlyConversationLookupFromSnapshot(registry).canonicalConversationId(value as `conversation_${string}`) ?? value);
+      if (revoked) throw new McpToolRefusal(revoked, { code: "orchestrator_seat_revoked", status: 403 });
+    }
+    return JSON.stringify([authority, caller, generation.id, generation.path, conversation.projectOwnership, principal]);
+  });
+  const pinned = snapshot();
+  return () => {
+    context?.assertCaller?.();
+    assertWorkspaceMcpCall();
+    if (snapshot() !== pinned) throw new McpToolRefusal("set-src caller identity changed", { code: "caller_changed", retryable: false });
+  };
+}
+
+async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
@@ -2665,7 +2708,13 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
      (docs/design/needs-attention.md §5): the same gate and the same attributed
      record `dismiss_attention` writes. */
   if (action === "dismiss" || action === "undismiss") return pipelineDismissal(pipelineId, action, args, dependencies);
-  const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact", "includeHints"]);
+  const assertSource = action === "set-src" ? pipelineSourceAuthority(dependencies, context) : assertWorkspaceMcpCall;
+  const request = action === "set-src" ? pipelineSourceRequest(args) : withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact", "includeHints"]);
+  /* A guard field stated on an action it does not guard is refused from the
+     request alone, before any pipeline is read or written. The claim is
+     released, so the corrected call may keep its clientRequestId (#3741). */
+  const guardShape = stageGuardShapeError(request as PatchPipelineRequest);
+  if (guardShape) throw new McpUnadmittedRefusal(guardShape.error ?? "invalid guard field", { field: guardShape.field, status: guardShape.status });
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
@@ -2674,10 +2723,19 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
   const result = action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies), assertWorkspaceMcpCall)
-    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertWorkspaceMcpCall);
+    : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, undefined, assertSource);
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
     if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
+    // Invalid arguments require a corrected call; an unchanged automatic retry
+    // cannot fix them. Preserve diagnostics without asserting that no effect ran.
+    if (result.status === 400) throw new McpToolRefusal(message, {
+      code: result.code ?? (["publish", "takeover", "set-delivery-remote"].includes(action) ? "delivery_refused" : ["attach-link", "detach-link"].includes(action) ? "WORK_LINK_INVALID" : "PIPELINE_INVALID_FIELD"),
+      field: result.field ?? (["attach-link", "detach-link"].includes(action) ? "link" : undefined), status: 400, retryable: false,
+      ...(result.details ? { details: result.details } : {}),
+      ...(result.close ? { close: result.close } : {}),
+      ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
+    });
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
@@ -2687,7 +2745,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (action === "publish" || action === "takeover" || action === "set-delivery-remote") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
     /* A stale guard names what moved, so the caller re-reads before retrying. */
-    if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status });
+    if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status, retryable: false });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
@@ -2763,7 +2821,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
 function retryStageLaunch(request: Record<string, unknown>, pipeline: Pipeline | null): void {
   if (typeof request.stageId !== "string" || request.launchId !== undefined || !pipeline) return;
   if (request.expectedStageId !== undefined && request.expectedStageId !== request.stageId) {
-    throw new McpToolRefusal(`retry-stage names stage ${request.stageId} and expectedStageId ${String(request.expectedStageId)}; name one stage`, { code: "STAGE_CHANGED", field: "expectedStageId", status: 400 });
+    throw new McpToolRefusal(`retry-stage names stage ${request.stageId} and expectedStageId ${String(request.expectedStageId)}; name one stage`, { code: "STAGE_CHANGED", field: "expectedStageId", status: 400, retryable: false });
   }
   request.expectedStageId = request.stageId;
   if (request.expectedAttempt === undefined) request.expectedAttempt = latestOperationalStageAttempt(pipeline, request.stageId)?.n ?? 0;
@@ -2879,7 +2937,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     }
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
-      throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409 });
+      throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409, retryable: false });
     }
     throw error;
   }
@@ -4147,7 +4205,7 @@ async function bridgeReport(
        refused before anything is stored, never shortened. */
     if (rendered.tooLarge || (rendered.complete && !bridgeReportComplete(rendered.complete))) {
       throw new McpToolRefusal(
-        `The report is longer than ${BRIDGE_REPORT_COMPLETE_MAX_BYTES} bytes as a whole, so it cannot be relayed without leaving items out. Nothing was recorded. Split it into several reports, each with its own key, or shorten the items.`,
+        textLengthError("complete report", rendered.completeByteLength, BRIDGE_REPORT_COMPLETE_MAX_BYTES, "UTF-8 bytes") + " Nothing was recorded. Split it into several reports with distinct keys, preserving complete items, or shorten whole items.",
         { code: "report_too_large", retryable: false, warnings: rendered.warnings },
       );
     }
@@ -8625,6 +8683,47 @@ export function viewerReadTools(
   };
 }
 
+/** Pin the original pass before awaited work; a later pass cannot substitute
+ * for it at commit or disclosure. The operation context never comes from args. */
+async function curatorApplyAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies) {
+  const translate = (error: unknown): never => {
+    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409, retryable: false });
+    if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409, retryable: false });
+    throw error;
+  };
+  try {
+    const conversationId = attributionOf(dependencies).conversationId;
+    const initial = dependencies.attentionAuthority();
+    if (initial.kind === "unidentified") throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller is unavailable");
+    const snapshot = () => dependencies.curatorSnapshot && conversationId ? dependencies.curatorSnapshot(conversationId) : dependencies.registrySnapshot();
+    const pass = curatorCallerOf(conversationId, snapshot());
+    const project = canonicalProject(pass.project);
+    const admission = await dependencies.curatorAdmission?.(conversationId);
+    const assertCurrent = AsyncResource.bind(() => {
+      try {
+        if (typeof admission === "function") admission();
+        const current = dependencies.attentionAuthority();
+        if (!conversationId || current.kind === "unidentified" || current.conversationId !== initial.conversationId
+          || current.conversationId !== conversationId || current.nativeProof !== initial.nativeProof) {
+          throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller changed during this operation");
+        }
+        const owner = curatorCallerOf(conversationId, snapshot());
+        if (owner.id !== pass.id || owner.conversationId !== conversationId || canonicalProject(owner.project) !== project) {
+          throw new RoleMemoryRefusal("CURATE_CALLER", "the original curator pass no longer authorizes this operation");
+        }
+        assertWorkspaceMcpCall(project);
+      } catch (error) { translate(error); }
+    });
+    assertCurrent();
+    const operation: CurationOperationContext = { pass: pass.id, conversationId: conversationId!, project,
+      requestId: requestId(args), digest: requestDigest("curate_rules", args), assertCurrent };
+    return { pass, operation, assertCurrent, recoverCommitted: () => {
+      try { const row = readCurationOperation(operation); return row ? curationOperationResult(row) : null; }
+      catch (error) { return translate(error); }
+    } };
+  } catch (error) { return translate(error); }
+}
+
 export function viewerMcpBindings(
   linkTaskDependencies: LinkTaskToPipelineDependencies = productionLinkTaskDependencies,
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
@@ -8676,7 +8775,7 @@ export function viewerMcpBindings(
       { prepareAdmission: (args: McpToolArgs) => assertExplicitPipelineSource(args, domainDependencies) },
     ),
     pipeline_action: Object.assign(
-      (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
+      (args: McpToolArgs, context?: McpToolCallContext) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies, context)),
       { canonicalizeReceiptArgs: (args: McpToolArgs) => {
         if (args.action !== "resolve-decision" || typeof args.expectedRevision !== "string") return args;
         const id = required(args, "pipelineId");
@@ -8688,7 +8787,13 @@ export function viewerMcpBindings(
         const retained = accepted?.expectedRevision ?? pipelineRevision(pipeline);
         if (!/^[a-f0-9]{7,64}$/i.test(args.expectedRevision) || !retained.toLowerCase().startsWith(args.expectedRevision.toLowerCase())) return args;
         return { ...args, expectedRevision: retained };
-      }, authorizeReceipt: (args: McpToolArgs) => {
+      }, authorizeReceipt: (args: McpToolArgs, context?: McpToolCallContext) => {
+        if (args.action === "set-src") {
+          pipelineSourceRequest(args);
+          const assertSource = pipelineSourceAuthority(domainDependencies, context);
+          assertSource();
+          return assertSource;
+        }
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
         const pipeline = domainDependencies.readPipelineRecord
@@ -8714,33 +8819,43 @@ export function viewerMcpBindings(
       return capability;
     } }),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
-    curate_rules: Object.assign(async (args: McpToolArgs) => {
+    curate_rules: Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
       try {
-        const conversationId = attributionOf(domainDependencies).conversationId;
-        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
-        if (typeof assertAdmission === "function") assertAdmission();
-        const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        const authority = await curatorApplyAuthority(args, domainDependencies);
+        const pass = authority.pass;
+        if (context?.curatorResponse) context.curatorResponse.assertCurrent = authority.assertCurrent;
+        context?.assertCaller?.();
         if (args.action !== "read") {
-          const result = await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
-            if (typeof assertAdmission === "function") assertAdmission();
-            const fresh = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-            return applyCuration(fresh, args as unknown as CurationApply, undefined, { refreshKnownValues: !fresh.importBatch });
+          const assertCurrent = () => { context?.assertCaller?.(); authority.assertCurrent(); };
+          const operation = { ...authority.operation, assertCurrent };
+          assertCurrent();
+          const saved = readCurationOperation(operation);
+          if (saved) return curationOperationResult(saved);
+          await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
+            assertCurrent();
+            return applyCuration(authority.pass, args as unknown as CurationApply, undefined, { refreshKnownValues: false, operation });
           }));
-          if (pass.importBatch) await refreshCurationKnownValuesAsync();
-          if (typeof assertAdmission === "function") assertAdmission();
-          curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-          return result;
+          assertCurrent();
+          // Ancillary maintenance is attempted once, outside the apply retry.
+          // Its failure never turns a committed editorial write into a refusal.
+          try {
+            await refreshCurationKnownValuesAsync();
+            assertCurrent();
+            completeCurationMaintenance(operation, { knownValues: "complete" });
+          } catch { /* The witness retains pending until completion is recorded. */ }
+          assertCurrent();
+          return curationOperationResult(readCurationOperation(operation)!);
         }
         const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
-        if (typeof assertAdmission === "function") assertAdmission();
-        curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        context?.assertCaller?.();
+        authority.assertCurrent();
         return result;
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
         if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
         throw error;
       }
-    }, { authorizeReceipt: async () => {
+    }, { curatorApplyRecovery: (args: McpToolArgs) => curatorApplyAuthority(args, domainDependencies), authorizeReceipt: async () => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);

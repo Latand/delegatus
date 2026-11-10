@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MoreHorizontal } from "lucide-react";
+import { Check, ChevronRight, Copy, Eye, EyeOff, MoreHorizontal } from "lucide-react";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { copyText } from "@/components/feed/CopyButton";
@@ -552,14 +552,14 @@ function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { en
     </span>
   );
   return (
-    <div data-keys-row={entry.id} data-keys-source={entry.source} className={`flex flex-col ${sheet ? "gap-2 px-4 py-2" : "gap-1 rounded-control px-2 py-1"}`}>
+    <div data-keys-row={entry.id} data-keys-source={entry.source} data-settings-unit="" className={`flex flex-col ${sheet ? "gap-2 px-4 py-2" : "gap-1 rounded-control px-2 py-1"}`}>
       <div className={`flex items-center gap-1 ${sheet ? "min-h-11" : "min-h-[34px]"}`}>
         {coarse ? <span className="-ml-3 flex shrink-0">{statusDot}</span> : null}
         <span className="flex min-w-0 flex-1 flex-col gap-px">
-          <span className={`truncate font-semibold text-primary ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{name}
+          <span className={`truncate font-semibold text-primary text-body ${sheet ? "leading-5" : "leading-[18px]"}`}>{name}
             {/* The 232 px panel has no room after the masked tail: a key set by a variable says so after its name. */}
-            {entry.source === "env" && owner && !sheet ? <span data-keys-env-tail="" className="text-[11px] font-medium text-muted">{` · ${t("keys.state.envShort")}`}</span> : null}</span>
-          <span className={`flex min-w-0 font-medium text-muted ${sheet ? "text-label leading-4" : "text-[11px] leading-[14px]"}`}>{second}</span>
+            {entry.source === "env" && owner && !sheet ? <span data-keys-env-tail="" className="text-ui font-medium text-muted">{` · ${t("keys.state.envShort")}`}</span> : null}</span>
+          <span className={`flex min-w-0 font-medium text-muted ${sheet ? "text-label leading-4" : "text-ui leading-4"}`}>{second}</span>
         </span>
         {icons}{addButton}
       </div>
@@ -645,8 +645,7 @@ export function KeysMenuPage({ size = "menu", onImport, onOpenService, focusKey 
   };
   const row = sheet
     ? "flex min-h-11 w-full items-center gap-3 px-4 text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-    : `flex w-full min-h-[30px] items-center gap-2 rounded-control px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken ${FOCUS}`;
-  const glyph = sheet ? "h-[18px] w-[18px] shrink-0 text-secondary" : "h-4 w-4 shrink-0 text-secondary";
+    : `flex w-full min-h-10 items-center gap-2 rounded-control px-2 py-1.5 text-left text-body font-semibold text-primary hover:bg-sunken ${FOCUS}`;
   return (
     <div data-keys-page="" className={`flex flex-col font-normal ${sheet ? "pb-4" : "pb-1"}`}>
       <div className={`flex flex-col empty:hidden ${sheet ? "gap-2 px-4 pt-2" : "gap-1.5 px-2"}`}><Notices answer={answer} failed={failed} reload={() => void reload()} size={size} /></div>
@@ -660,16 +659,14 @@ export function KeysMenuPage({ size = "menu", onImport, onOpenService, focusKey 
       </div>
       {answer?.owner ? (
         <div className="mt-1 flex flex-col border-t border-border pt-1">
-          <button type="button" data-keys-copy-all="" className={row} onClick={() => void copyAll()}>
-            {copied === null ? <Copy className={glyph} aria-hidden /> : <Check className={`${glyph} text-success`} aria-hidden />}
+          <button type="button" data-keys-copy-all="" data-settings-unit="" className={row} onClick={() => void copyAll()}>
             <span className="min-w-0 flex-1 truncate">{t("keys.copyAll")}</span>
           </button>
-          {copied !== null ? <p role="status" data-keys-copied-all="" className={`${sheet ? "px-4 pb-1 text-label" : "px-2 pb-1 text-[11px] leading-snug"} font-medium text-success`}>{t("keys.copiedAll", { count: copied })}</p> : null}
+          {copied !== null ? <p role="status" data-keys-copied-all="" className={`${sheet ? "px-4 pb-1 text-label" : "px-2 pb-1 text-ui leading-snug"} font-medium text-success`}>{t("keys.copiedAll", { count: copied })}</p> : null}
           {answer.staging ? null : (
-            <button type="button" data-keys-open-import="" className={row} onClick={onImport}>
-              <ClipboardPaste className={glyph} aria-hidden />
+            <button type="button" data-keys-open-import="" data-settings-unit="" className={row} onClick={onImport}>
               <span className="min-w-0 flex-1 truncate">{t("keys.import")}</span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+              <ChevronRight data-settings-chevron="" className="h-4 w-4 shrink-0 text-muted" aria-hidden />
             </button>
           )}
         </div>

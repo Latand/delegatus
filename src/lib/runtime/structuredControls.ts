@@ -14,6 +14,7 @@ import {
 } from "@/lib/accounts/accountOverrides";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { HistorySecurityError, MissingSourceAncestorError, sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import { headCwd } from "@/lib/agent/transcript";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -53,6 +54,7 @@ export type StructuredControlResult =
       answered and refused (#1501). */
   | { status: 503; body: { error: string; code: typeof RUNTIME_HOST_UNAVAILABLE_CODE } }
   | { status: 503; body: { error: string; retryable: true } }
+  | { status: 409; body: { error: string; code: import("@/lib/accounts/migration/safeHistoryCopy").HistorySecurityCode | "source-ancestor-missing" } }
   | { status: 400 | 409 | 503; body: { error: string } };
 
 export const RUNTIME_HOST_UNAVAILABLE_CODE = "runtime-host-unavailable";
@@ -269,6 +271,7 @@ export async function dispatchStructuredControl(
     republish?: typeof republishStructuredDeliveryHost;
     onResumed?: (conversationId: string) => void | Promise<void>;
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
+    preflightSource?: typeof import("@/lib/accounts/migration/provider").preflightCodexSource;
   } = {},
 ): Promise<StructuredControlResult | null> {
   if (request.providerRecovery && (request.action !== "kill" || !request.onlyIfIdle)) {
@@ -412,6 +415,7 @@ export async function dispatchStructuredControl(
      journal that only appends cannot take back a record written for a
      reconfigure the host then refused. */
   let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
+  let assertSwitchCurrent: (() => void) | null = null;
   try {
     const requestedCopilotModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
     const copilotAccount = conversation.engine === "copilot"
@@ -499,6 +503,25 @@ export async function dispatchStructuredControl(
       if (conversation.engine !== "copilot" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
       }
+      if (conversation.engine === "codex" && reconfiguration.value.accountId !== generation.accountId) {
+        const { preflightCodexSource, captureCodexSourceAuthority } = await import("@/lib/accounts/migration/provider");
+        const assertSource = captureCodexSourceAuthority(registry, conversation.id, generation);
+        const intent = JSON.stringify([conversation.reconfigure, conversation.migration]);
+        assertSwitchCurrent = () => {
+          assertSource();
+          const current = registry.conversation(conversation.id);
+          const owner = registry.conversationDeliverySnapshot({ conversationId: conversation.id }).entries[sessionKeyId({ engine: "codex", sessionId: generation.id })];
+          if (JSON.stringify([current?.reconfigure, current?.migration]) !== intent
+            || owner?.claimOwner !== entry.claimOwner || owner?.claimEpoch !== entry.claimEpoch
+            || owner?.structuredHost?.writerClaimEpoch !== entry.structuredHost?.writerClaimEpoch
+            || JSON.stringify(owner?.structuredHost?.process) !== JSON.stringify(entry.structuredHost?.process)
+            || owner?.structuredHost?.endpoint !== entry.structuredHost?.endpoint
+            || !accountExists("codex", reconfiguration.value!.accountId!)) throw new Error("account switch ownership changed");
+        };
+        assertSwitchCurrent();
+        await (dependencies.preflightSource ?? preflightCodexSource)(generation, undefined, assertSwitchCurrent);
+        assertSwitchCurrent();
+      }
       /* #1279: a reconfigure that MOVES this conversation onto another account
          places its work there, so this path — which returned before ever
          consulting the binding — now asks it. It asks in order to ATTRIBUTE,
@@ -565,9 +588,11 @@ export async function dispatchStructuredControl(
               conversationId: conversation.id,
               turnId: entry.structuredHost?.activeTurnRef ?? null,
             };
+    assertSwitchCurrent?.();
     const result = await client.command(command);
     /* The host holds a durable receipt for this reconfigure, so the switch is a
        thing that happened and the record describes it. */
+    assertSwitchCurrent?.();
     const accountOverride = attributeSwitch?.();
     (dependencies.kick ?? kickStructuredDeliveryQueue)();
     return {
@@ -582,6 +607,10 @@ export async function dispatchStructuredControl(
       },
     };
   } catch (error) {
+    if (error instanceof HistorySecurityError || error instanceof MissingSourceAncestorError) {
+      const safe = sanitizeProviderError(error);
+      return { status: 409, body: { error: safe.message, code: error instanceof HistorySecurityError ? error.code : "source-ancestor-missing" } };
+    }
     if ((request.action === "kill" || request.action === "reconfigure" || request.action === "compact")
       && isRuntimeHostTransportFailure(error)) {
       /* The socket failed after the command may have reached the journal. The
@@ -590,6 +619,7 @@ export async function dispatchStructuredControl(
       if (durable) {
         /* The socket failed, the receipt did not: the command was accepted, so
            this is the same acceptance the success path attributes. */
+        try { assertSwitchCurrent?.(); } catch { return { status: 409, body: { error: "account switch ownership changed" } }; }
         const accountOverride = attributeSwitch?.();
         (dependencies.kick ?? kickStructuredDeliveryQueue)();
         return {

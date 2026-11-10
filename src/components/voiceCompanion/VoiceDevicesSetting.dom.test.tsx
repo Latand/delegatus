@@ -16,6 +16,7 @@ const harness = installOnboardingDom();
 installActEnv();
 const { createRoot } = await import("react-dom/client");
 const { VoiceDevicesSetting } = await import("./VoiceDevicesSetting");
+const { SettingsDensity } = await import("@/components/settings/settingsRows");
 const { translate } = await import("@/lib/i18n/core");
 const { resetLocaleForTests, setLocale } = await import("@/lib/i18n");
 const voice = await import("@/lib/audio/voiceDevices");
@@ -68,19 +69,19 @@ afterEach(async () => {
   localStorage.removeItem("llv_lang");
 });
 
-async function mount(locale: "en" | "uk" = "en"): Promise<HTMLElement> {
+async function mount(locale: "en" | "uk" = "en", density: "dialog" | "sheet" = "dialog"): Promise<HTMLElement> {
   localStorage.removeItem("llv_lang"); resetLocaleForTests(); setLocale(locale);
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted = { root, host };
-  await act(async () => root.render(<VoiceDevicesSetting />));
+  await act(async () => root.render(<SettingsDensity.Provider value={density}><VoiceDevicesSetting /></SettingsDensity.Provider>));
   await act(async () => settle());
   return host;
 }
 const select = (host: Element, kind: "input" | "output") => host.querySelector<HTMLSelectElement>(`[data-voice-device='${kind}'] select`)!;
 const options = (element: HTMLSelectElement) => [...element.options].map(option => option.textContent);
-/* The lines under a select, one per paragraph (the chosen device's own line is hidden above 640 px by CSS, which jsdom does not apply). */
+/* The lines under a select, one per paragraph. The chosen device's own line is the sheet's: the window's select is wide enough to show it whole. */
 const hint = (host: Element, kind: "input" | "output") => {
   const lines = [...host.querySelectorAll(`[data-voice-device-hint='${kind}'] p`)].map(line => line.textContent);
   return lines.length > 0 ? lines.join("\n") : null;
@@ -100,7 +101,7 @@ for (const locale of ["en", "uk"] as const) {
     world.devices = [mic("m1", ""), speaker("s1", "")];
     world.permission = "prompt";
     const host = await mount(locale);
-    expect(host.querySelector("h3")?.textContent).toBe(tr(locale, "voiceCompanion.devices.title"));
+    expect(host.querySelector("[data-settings-section]")?.textContent).toBe(tr(locale, "voiceCompanion.devices.title"));
     expect(options(select(host, "input"))).toEqual([tr(locale, "voiceCompanion.devices.default")]);
     expect(select(host, "input").disabled).toBe(false);
     expect(options(select(host, "output"))).toEqual([tr(locale, "voiceCompanion.devices.default")]);
@@ -141,11 +142,20 @@ for (const locale of ["en", "uk"] as const) {
   test(`${locale}: a stored device that is present is selected`, async () => {
     voice.setVoiceDeviceChoice("input", { id: "mic-pods", label: "Навушники AirPods Pro (Bluetooth)" });
     voice.setVoiceDeviceChoice("output", { id: "spk-pods", label: "Навушники AirPods Pro (Bluetooth)" });
-    const host = await mount(locale);
+    const host = await mount(locale, "sheet");
     expect(select(host, "input").value).toBe("mic-pods");
     expect(select(host, "output").value).toBe("spk-pods");
     expect(hint(host, "input")).toBe(inUse(locale, "Навушники AirPods Pro (Bluetooth)"));
-    expect(host.querySelector("[data-voice-device-hint='input'] p")?.className).toBe("sm:hidden");
+  });
+
+  test(`${locale}: in the window the chosen device reads in its select, which takes two thirds of the row, and no line repeats it`, async () => {
+    voice.setVoiceDeviceChoice("input", { id: "mic-pods", label: "Навушники AirPods Pro (Bluetooth)" });
+    const host = await mount(locale, "dialog");
+    expect(select(host, "input").value).toBe("mic-pods");
+    expect(select(host, "input").className).toContain("w-2/3");
+    expect(hint(host, "input")).toBeNull();
+    /* The default's line names a device the select does not: it stays. */
+    expect(hint(host, "output")).toBe(inUse(locale, "Realtek Speakers"));
   });
 
   test(`${locale}: a stored device that is gone stays as a disabled option, keeps the choice and says what plays instead`, async () => {
@@ -200,7 +210,7 @@ test("a choice is written at once, and System default clears it", async () => {
 
 test("devicechange lists again, so a plugged-in device appears and an unplugged choice turns missing", async () => {
   voice.setVoiceDeviceChoice("input", { id: "mic-usb", label: "USB Microphone" });
-  const host = await mount();
+  const host = await mount("en", "sheet");
   expect(options(select(host, "input")).some(text => text?.includes("USB Microphone"))).toBe(true);
   expect(select(host, "input").options[1]!.disabled).toBe(true);
   world.devices = [...LABELLED, mic("mic-usb", "USB Microphone", "g-usb")];
@@ -220,7 +230,7 @@ test("during a call a different microphone is announced for the next call, and t
   const call = await voice.openVoiceMicrophone({});
   try {
     voice.setVoiceDeviceChoice("input", { id: "mic-pods", label: "Навушники AirPods Pro (Bluetooth)" });
-    const host = await mount();
+    const host = await mount("en", "sheet");
     expect(hint(host, "input")).toBe(`${translate("en", "voiceCompanion.devices.inUse", { name: "Навушники AirPods Pro (Bluetooth)" })}\n${translate("en", "voiceCompanion.devices.nextCall")}`);
     expect(hint(host, "output")).toBe(translate("en", "voiceCompanion.devices.inUse", { name: "Realtek Speakers" }));
   } finally {

@@ -13,18 +13,19 @@ import { FileRuntimeEventStore } from "../eventStore";
 import { projectEngineHostEvent } from "../engineHostEvents";
 import { applyEvent, installSnapshot, openAttentions, type RuntimeSession } from "@/components/runtime/runtimeModel";
 
-const [mode, directory, writeLog, descriptor] = process.argv.slice(2);
+const [mode, directory, writeLog, descriptor, delivery] = process.argv.slice(2);
 if (!directory || !writeLog) throw new Error("callback fixture needs isolated paths");
-const thread = "callback-process-thread";
+let thread = "callback-process-thread";
 const method = "item/commandExecution/requestApproval";
 
 if (mode === "engine-socket") {
   const config = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+  if (config.threadId) thread = config.threadId;
   const server = http.createServer();
   server.on("connection", connection => connection.on("error", () => {}));
   server.on("error", error => { throw error; });
   const sockets = new WebSocketServer({ server });
-  let pending = true;
+  let pending = !config.recipient;
   let connections = 0;
   sockets.on("connection", socket => {
     const connection = ++connections;
@@ -59,6 +60,21 @@ if (mode === "engine-socket") {
           break;
         case "model/list": reply({ data: [] }); break;
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
+        case "thread/read":
+          reply({ thread: { id: thread, path: config.transcriptPath ?? null, turns: [] } }); break;
+        case "turn/start": {
+          if (!config.recipient) { send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } }); break; }
+          fs.appendFileSync(config.transcriptPath, JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T00:00:00Z",
+            payload: { type: "user_message", id: message.params.clientUserMessageId, input: message.params.input } }) + "\n");
+          const turnId = `recipient-turn-${message.params.clientUserMessageId}`;
+          reply({ turn: { id: turnId } });
+          send({ method: "item/completed", params: { threadId: thread, turnId,
+            item: { type: "userMessage", clientId: message.params.clientUserMessageId, content: message.params.input } } });
+          if (config.completeRecipientTurns) send({ method: "turn/completed", params: {
+            threadId: thread, turn: { id: turnId, status: "completed" },
+          } });
+          break;
+        }
         case "thread/resume": {
           if (Object.keys(message.params).some(key => key !== "threadId" && key !== "config")) throw new Error("reconnect changed the existing thread policy");
           const restored = message.params.config?.mcp_servers?.viewer;
@@ -83,8 +99,11 @@ if (mode === "engine-socket") {
     fs.chmodSync(config.socket, 0o600);
     process.stdout.write(`${JSON.stringify({ endpoint: `codex-unix:${config.socket}`, process: captureProcessIdentity(process.pid) })}\n`);
   });
-} else if (mode === "engine") {
-  const send = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+} else if (mode === "engine" || mode === "engine-mcp") {
+  let batch: unknown[] | null = null;
+  let held: unknown[] = [];
+  const write = (values: unknown[]) => process.stdout.write(values.map(value => `${JSON.stringify(value)}\n`).join(""));
+  const send = (value: unknown) => batch ? batch.push(value) : write([value]);
   process.stdout.on("error", () => process.exit(0));
   let buffer = "";
   process.stdin.on("end", () => process.exit(0));
@@ -104,13 +123,77 @@ if (mode === "engine-socket") {
         case "initialize": reply({ userAgent: "fixture" }); break;
         case "account/read": reply({ account: { type: "chatgpt", planType: "pro" } }); break;
         case "config/read": reply({ config: { mcp_servers: { viewer: { command: "bun", args: ["fixture-viewer"] } } } }); break;
-        case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null }); break;
+        case "mcpServerStatus/list":
+          // Discovery follows ledger restoration and snapshot reconciliation.
+          write(held); held = [];
+          reply({ data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null }); break;
         case "model/list": reply({ data: [] }); break;
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "thread/start":
         case "thread/resume":
-          reply({ thread: { id: thread, path: null, turns: [], status: { type: "idle" } } });
-          if (message.method === "thread/start") send({ jsonrpc: "2.0", id: "approval", method, params: { threadId: thread, turnId: "turn", itemId: "item", startedAtMs: 1 } });
+          if (message.method === "thread/resume") thread = message.params.threadId;
+          if (mode === "engine-mcp" && delivery) batch = [];
+          // The same unfinished turn continues across the producer's hard stop.
+          reply({ thread: { id: thread, path: null,
+            turns: mode === "engine-mcp" ? [{ id: "mcp-turn", status: "inProgress", items: [] }] : [],
+            status: { type: mode === "engine-mcp" ? "active" : "idle" } } });
+          if (mode === "engine-mcp") {
+            const item = (phase: string, fields: Record<string, unknown>) => send({ method: `item/${phase}`,
+              params: { threadId: thread, turnId: "mcp-turn", item: { type: "mcpToolCall", server: "viewer", tool: "get_task", ...fields } } });
+            const success = { status: "completed", result: { content: [], structuredContent: { ok: true } } };
+            const denial = { status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } };
+            if (descriptor?.startsWith("healthy-")) {
+              if (message.method === "thread/start") {
+                item("completed", { id: "initial-denial", ...denial });
+                for (let index = 1; index < Number(descriptor.slice(8)); index++) {
+                  item("started", { id: `healthy-${index}` });
+                  item("completed", { id: `healthy-${index}`, ...success });
+                }
+                item("started", { id: "before-restart" });
+              } else {
+                item("started", { id: "continuation" });
+                item("completed", { id: "continuation", ...success });
+                item("completed", { id: "before-restart", ...success });
+              }
+            } else if (descriptor === "pending-denial" || descriptor?.startsWith("starts-")) {
+              if (message.method === "thread/start") {
+                const count = descriptor === "pending-denial" ? 1 : Number(descriptor.slice(7));
+                for (let index = 1; index < count; index++) item("started", { id: `pending-${index}` });
+                item("started", { id: "before-restart" });
+              } else if (descriptor === "pending-denial") {
+                item("completed", { id: "before-restart", ...denial });
+              } else {
+                item("completed", { id: "later-denial", ...denial });
+                item("started", { id: "before-restart" });
+                item("completed", { id: "before-restart", ...success });
+                item("started", { id: "fresh-recovery" });
+                item("completed", { id: "fresh-recovery", ...success });
+              }
+            } else if (message.method === "thread/start") {
+              item("completed", { id: "initial-denial", status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+              const count = Number(descriptor ?? 1);
+              for (let index = 0; index < count; index++) {
+                item("started", { id: `terminal-${index}` });
+                item("completed", { id: `terminal-${index}`, ...success });
+              }
+              item("completed", { id: "denied", status: "failed", error: { message: "MCP tool call requires approval, but approval policy is never" } });
+              item("started", { id: "before-restart" });
+            } else {
+              item("started", { id: "terminal-0" });
+              item("completed", { id: "terminal-0", ...success });
+              item("completed", { id: "before-restart", ...success });
+            }
+          } else if (message.method === "thread/start") send({ jsonrpc: "2.0", id: "approval", method, params: { threadId: thread, turnId: "turn", itemId: "item", startedAtMs: 1 } });
+          if (batch) {
+            // Buffer one producer item before restore, or deliver all producer
+            // items live. Resume uses the same delivery choice for its full replay.
+            const prefix = delivery === "live" ? 1 : message.method === "thread/start"
+              ? batch.findIndex(frame => (frame as { method?: string }).method?.startsWith("item/")) + 1
+              : batch.length;
+            const frames = batch; batch = null;
+            held = frames.slice(prefix);
+            write(frames.slice(0, prefix));
+          }
           break;
         default: send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "fixture method unavailable" } });
       }
@@ -130,7 +213,7 @@ if (mode === "engine-socket") {
       },
     }, readProtocolVersion: () => "0.162.1", requestTimeoutMs: 10_000,
     spawnProcess: (_binary: string, _args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) => spawn(process.execPath,
-      [import.meta.filename, "engine", directory, writeLog], { ...options, stdio: ["pipe", "pipe", "pipe"] }),
+      [import.meta.filename, mode.startsWith("mcp-") ? "engine-mcp" : "engine", directory, writeLog, ...(descriptor ? [descriptor] : []), ...(delivery ? [delivery] : [])], { ...options, stdio: ["pipe", "pipe", "pipe"] }),
   };
   const registry = mode.startsWith("socket-") ? new AgentRegistry(path.join(directory, "registry.json")) : null;
   const key = { engine: "codex" as const, sessionId: thread };
@@ -148,7 +231,7 @@ if (mode === "engine-socket") {
     if (adopted.length !== 1) throw new Error("registry did not reconnect its surviving callback owner");
     host = adopted[0]!.host;
   } else {
-    host = mode === "dispatch" ? await CodexAppServerHost.start(options) : await CodexAppServerHost.adopt(thread, options);
+    host = mode === "dispatch" || mode === "mcp-produce" ? await CodexAppServerHost.start(options) : await CodexAppServerHost.adopt(thread, options);
     if (registry) {
       registry.upsert({ key, artifactPath: path.join(directory, "thread.jsonl"), cwd: process.cwd(), accountId: "default", status: "idle", host: null,
         claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: { ...codexHostColumns(await host.health(), 0), process: null } });
@@ -156,6 +239,19 @@ if (mode === "engine-socket") {
       if (!claimed?.claimOwner) throw new Error("fixture writer claim unavailable");
       await bindCodexHostPersistence(registry, key, host, claimed.claimOwner, claimed.claimEpoch);
     }
+  }
+  if (mode.startsWith("mcp-")) {
+    const events = host.attach(0);
+    const lastItem = mode === "mcp-resume" && descriptor?.startsWith("starts-") ? "fresh-recovery" : "before-restart";
+    for await (const event of events) {
+      if (event.kind !== "item" || (event.item as { id?: string })?.id !== lastItem
+        || event.phase !== (mode === "mcp-produce" ? "started" : "completed")) continue;
+      process.stdout.write(`${JSON.stringify({ observation: host.readViewerMcpObservation(), enginePid: (await host.health()).pid, activeTurnRef: (await host.health()).activeTurnRef })}\n`);
+      break;
+    }
+    if (mode === "mcp-produce") await new Promise<void>(() => {});
+    await host.release();
+    process.exit(0);
   }
   const id = (await host.health()).pendingAttention[0]!;
   if (!id) throw new Error("fixture callback identity missing");

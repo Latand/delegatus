@@ -1,16 +1,16 @@
 import type { CodexPinnedProtocol } from "@/lib/accounts/codexPinnedProtocol";
-import type { ServerRequest } from "@/lib/accounts/protocol/0.162.1/types/ServerRequest";
-import type { CommandExecutionRequestApprovalResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/CommandExecutionRequestApprovalResponse";
-import type { FileChangeRequestApprovalResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/FileChangeRequestApprovalResponse";
-import type { PermissionsRequestApprovalResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/PermissionsRequestApprovalResponse";
-import type { ToolRequestUserInputResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/ToolRequestUserInputResponse";
-import type { McpServerElicitationRequestResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/McpServerElicitationRequestResponse";
-import type { DynamicToolCallResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/DynamicToolCallResponse";
-import type { ChatgptAuthTokensRefreshResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/ChatgptAuthTokensRefreshResponse";
-import type { AttestationGenerateResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/AttestationGenerateResponse";
-import type { CurrentTimeReadResponse } from "@/lib/accounts/protocol/0.162.1/types/v2/CurrentTimeReadResponse";
-import type { ApplyPatchApprovalResponse } from "@/lib/accounts/protocol/0.162.1/types/ApplyPatchApprovalResponse";
-import type { ExecCommandApprovalResponse } from "@/lib/accounts/protocol/0.162.1/types/ExecCommandApprovalResponse";
+import type { ServerRequest } from "@/lib/accounts/protocol/0.167.0/types/ServerRequest";
+import type { CommandExecutionRequestApprovalResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/CommandExecutionRequestApprovalResponse";
+import type { FileChangeRequestApprovalResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/FileChangeRequestApprovalResponse";
+import type { PermissionsRequestApprovalResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/PermissionsRequestApprovalResponse";
+import type { ToolRequestUserInputResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/ToolRequestUserInputResponse";
+import type { McpServerElicitationRequestResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/McpServerElicitationRequestResponse";
+import type { DynamicToolCallResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/DynamicToolCallResponse";
+import type { ChatgptAuthTokensRefreshResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/ChatgptAuthTokensRefreshResponse";
+import type { AttestationGenerateResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/AttestationGenerateResponse";
+import type { CurrentTimeReadResponse } from "@/lib/accounts/protocol/0.167.0/types/v2/CurrentTimeReadResponse";
+import type { ApplyPatchApprovalResponse } from "@/lib/accounts/protocol/0.167.0/types/ApplyPatchApprovalResponse";
+import type { ExecCommandApprovalResponse } from "@/lib/accounts/protocol/0.167.0/types/ExecCommandApprovalResponse";
 import { isDeepStrictEqual } from "node:util";
 import { codexAttentionActions } from "./codexAttentionActions";
 

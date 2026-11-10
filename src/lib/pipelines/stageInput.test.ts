@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
 import { composeStageInput, composeStageText } from "./stageInput";
 import { TaskPageWorker } from "@/lib/links/taskPageWorker";
 import { leaveSeatLessons, recordLessonRequest, roleMemoryCollection, storedLessonRevision, withoutStoredLessons } from "@/lib/memory/roleStore";
@@ -448,13 +449,18 @@ for (const point of ["skills", "directory", "previous", "specification", "candid
       return result;
     };
     try {
-      const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, previous, laneRoot, exec, 0, { skillPaths: ["tracked.txt"] });
+      const compose = () => composeStageInput(pipeline, stage, stage.effectiveRole, previous, laneRoot, exec, 0, { skillPaths: ["tracked.txt"] });
+      if (kind === "rule") await expect(compose()).rejects.toBeInstanceOf(RoleMemoryChanged);
+      const prompt = await compose();
       expect(changed).toBe(true);
       expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32_000);
       expect(storedLessonRevision() === before).toBe(kind === "request");
       if (kind === "request") expect(calls).toBe(inline ? 1 : 3);
       else {
-        expect(calls).toBeGreaterThan(inline ? 1 : 3);
+        // Early rule changes can populate the new revision's completed cache
+        // before the outer composition defers. The stable pass may reuse it.
+        expect(calls).toBeGreaterThanOrEqual(inline ? 1 : 3);
+        expect(calls).toBeLessThanOrEqual(inline ? 2 : 7);
         expect(prompt).not.toContain(added);
         for (const match of prompt.matchAll(/Full (?:previous output|specification) file: (.+)\n/g)) expect(fs.readFileSync(match[1]!, "utf8")).not.toContain(added);
       }
