@@ -522,7 +522,7 @@ export function useAgentControlActionsWith(
     const operationId = compactOperationRef.current ?? mintIdempotencyKey();
     compactOperationRef.current = operationId;
     try {
-      const response = await fetch("/api/tmux", {
+      const response = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "compact", path: file.path, operationId }),

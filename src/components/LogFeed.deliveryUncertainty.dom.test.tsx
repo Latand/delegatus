@@ -12,7 +12,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
 import { capabilitiesFor } from "./agentCapabilities";
-import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
+import { setConversationComposerRuntimeDependenciesForTests } from "./conversationComposerRuntime";
 import { useAgentCapabilities } from "./useAgentCapabilities";
 import { runtimeReceiptForSend } from "@/lib/runtime/sendSettlement";
 import type { SendReceipt } from "@/lib/runtime/sendSettlement";
@@ -59,7 +59,7 @@ Object.assign(globalThis, {
 });
 
 /* A live structured codex-app-server host for the conversation: the send path
-   must take `sendRuntimeMessage`, not the legacy /api/tmux POST. */
+   must take `sendRuntimeMessage`, not the legacy /api/conversation-host POST. */
 const structuredView: RuntimeSessionView = {
   session: {
     conversationId: "conv-snapshot",
@@ -81,7 +81,7 @@ const structuredView: RuntimeSessionView = {
 
 import { LogFeed } from "./LogFeed";
 import { setLogFeedDependenciesForTests } from "./logFeedDependencies";
-import { TmuxComposer, RuntimeComposerReceipts } from "./TmuxComposer";
+import { ConversationComposer, RuntimeComposerReceipts } from "./ConversationComposer";
 import { writeProfile } from "./runtimeProfile";
 import { enqueueOutbox, updateOutbox, visibleOutbox, readOutbox, resetOutboxForTests, retryOutbox, cancelOutbox, publishTranscriptEchoes } from "./conversation/outbox";
 
@@ -106,7 +106,7 @@ beforeEach(() => {
   realReceiptHook = false;
   setLogFeedDependenciesForTests({ useLogTail: () => ({ lines: [], linesStart: 0, size: 0, loading: false, error: null, tickTime: null, paused: false, setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0 }) });
   setRuntimeUiEnabledForTests(false);
-  setTmuxComposerRuntimeDependenciesForTests({
+  setConversationComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const real = useAgentCapabilities(candidate);
       if (candidate.path !== "/codex-snapshot.jsonl" && candidate.conversationId !== "conv-snapshot") return real;
@@ -135,7 +135,7 @@ afterEach(async () => {
   mountedRoots.clear();
   composerStorage.reset();
   setLogFeedDependenciesForTests(null);
-  setTmuxComposerRuntimeDependenciesForTests(null);
+  setConversationComposerRuntimeDependenciesForTests(null);
   setRuntimeUiEnabledForTests(null);
   setLocale("en");
   structuredView.session.host = "hosted";
@@ -167,7 +167,6 @@ function mockWire(sends: SendBody[], respond: Array<(body: SendBody) => { status
   let call = 0;
   globalThis.fetch = (async (input: string | URL | Request, init?: { body?: string }) => {
     const url = String(input);
-    if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
     if (url !== "/api/runtime/send") throw new Error(`unexpected request: ${url}`);
     const body = JSON.parse(init?.body ?? "{}") as SendBody;
     sends.push(body);
@@ -276,7 +275,7 @@ function rowDelivery(root: ParentNode, id?: string): string {
   return `${row.textContent ?? ""} ${evidence}`;
 }
 
-const surface = () => <><LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} /><TmuxComposer file={file} /></>;
+const surface = () => <><LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} /><ConversationComposer file={file} /></>;
 
 test("captured verify-first receipt stays unknown in mounted composer and feed without local retry", async () => {
   const sends: SendBody[] = [];
@@ -306,7 +305,7 @@ test.each(["failed", "uncertain"] as const)("textless %s receipt polling and rem
       if (init?.method) calls.push({ url, method: init.method, body: init.body as string });
       return Response.json({ receipt });
     }
-    if (init?.method === "POST" && (url === "/api/runtime/send" || url === "/api/tmux")) calls.push({ url, method: init.method, body: init.body as string });
+    if (init?.method === "POST" && (url === "/api/runtime/send" || url === "/api/conversation-host")) calls.push({ url, method: init.method, body: init.body as string });
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   const { createRuntimeBus, setRuntimeBusForTests } = await import("@/hooks/runtimeBus");
@@ -399,7 +398,6 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
   const lookups: string[] = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
     /* The row's one recovery is a READ under its own original key. Here the
        record still cannot say what happened, so the row must stay exactly as
        it is — and ask again later. */
@@ -521,7 +519,7 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
       calls.push({ url, method: init?.method, body: init?.body as string });
       return Response.json(lookupAnswer);
     }
-    if (init?.method === "POST" && (url === "/api/runtime/send" || url === "/api/tmux")) calls.push({ url, method: init.method, body: init.body as string });
+    if (init?.method === "POST" && (url === "/api/runtime/send" || url === "/api/conversation-host")) calls.push({ url, method: init.method, body: init.body as string });
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   enqueueOutbox(file.conversationId!, { id: captured.idempotencyKey, text: captured.text!, images: 0, at: Date.parse(captured.admittedAt!) });
@@ -541,7 +539,7 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
     await settle(() => { retryOutbox(file.conversationId!, captured.idempotencyKey); cancelOutbox(file.conversationId!, captured.idempotencyKey); });
     expect(calls).toEqual(Array.from({ length: 2 }, () => ({ url: `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${captured.idempotencyKey}`, method: undefined, body: undefined })));
     const other = { ...file, path: "/other.jsonl", conversationId: "other-conversation" };
-    await settle(() => mounted.root.render(<TmuxComposer file={other} />));
+    await settle(() => mounted.root.render(<ConversationComposer file={other} />));
     expect(mounted.host.textContent).not.toContain(captured.text!);
     await settle(() => mounted.root.render(surface()));
     for (const status of ["queued", "delivering", "pending", "failed"] as const) {
@@ -674,15 +672,15 @@ test.skipIf(!process.env.LLV_UNCERTAINTY_BROWSER)("390/430 mounted uncertainty h
   const source = `
     import React from 'react'; import {createRoot} from 'react-dom/client';
     import {LogFeed} from './src/components/LogFeed';
-    import {TmuxComposer} from './src/components/TmuxComposer';
+    import {ConversationComposer} from './src/components/ConversationComposer';
     import {setLogFeedDependenciesForTests} from './src/components/logFeedDependencies';
-    import {setTmuxComposerRuntimeDependenciesForTests} from './src/components/tmuxComposerRuntime';
+    import {setConversationComposerRuntimeDependenciesForTests} from './src/components/conversationComposerRuntime';
     import {capabilitiesFor} from './src/components/agentCapabilities';
     import {setRuntimeUiEnabledForTests} from './src/hooks/runtimeBus';
     import {enqueueOutbox,updateOutbox} from './src/components/conversation/outbox';
     const file=${JSON.stringify(file)}, receipt=${JSON.stringify(captured)}, view=${JSON.stringify(structuredView)};
     setRuntimeUiEnabledForTests(false);
-    setTmuxComposerRuntimeDependenciesForTests({useAgentCapabilities:()=>({caps:capabilitiesFor(file,view,{runtimeEnabled:true}),runtime:view,structuredSession:view,runtimeEnabled:true}),useRuntimeReceiptsForArtifact:()=>[
+    setConversationComposerRuntimeDependenciesForTests({useAgentCapabilities:()=>({caps:capabilitiesFor(file,view,{runtimeEnabled:true}),runtime:view,structuredSession:view,runtimeEnabled:true}),useRuntimeReceiptsForArtifact:()=>[
       {...receipt,text:undefined},
       {...receipt,operationId:'same-text-a',idempotencyKey:'same-key-a'},
       {...receipt,operationId:'same-text-b',idempotencyKey:'same-key-b'},
@@ -691,7 +689,7 @@ test.skipIf(!process.env.LLV_UNCERTAINTY_BROWSER)("390/430 mounted uncertainty h
     setLogFeedDependenciesForTests({useLogTail:()=>({lines:[],linesStart:0,size:0,loading:false,error:null,tickTime:null,paused:false,setPaused(){},clear(){},hasMore:false,loadingOlder:false,loadOlder:async()=>0,prependGen:0})});
     enqueueOutbox(file.conversationId,{id:receipt.idempotencyKey,text:receipt.text,images:0,at:Date.parse(receipt.admittedAt)});
     updateOutbox(file.conversationId,receipt.idempotencyKey,{state:'delivering'});
-    createRoot(document.getElementById('root')).render(<><LogFeed file={file} showSvc={false} lineFilter='' onStatus={()=>{}} paused={false} follow={false} setFollow={()=>{}}/><TmuxComposer file={file}/></>);
+    createRoot(document.getElementById('root')).render(<><LogFeed file={file} showSvc={false} lineFilter='' onStatus={()=>{}} paused={false} follow={false} setFollow={()=>{}}/><ConversationComposer file={file}/></>);
   `;
   const build = await Bun.build({ entrypoints: ["uncertainty-fixture"], target: "browser",
     define: { "process.env.NODE_ENV": JSON.stringify("development"), "process.env": "{}" },
@@ -713,7 +711,7 @@ test.skipIf(!process.env.LLV_UNCERTAINTY_BROWSER)("390/430 mounted uncertainty h
       return Response.json({ receipt: { ...captured, revision: 5 } });
     }
     if (path.startsWith("/api/")) {
-      if (path === "/api/runtime/send" || path === "/api/tmux") actions.push({ method: request.method, path, body: await request.text() });
+      if (path === "/api/runtime/send" || path === "/api/conversation-host") actions.push({ method: request.method, path, body: await request.text() });
       return new Response("{}", { status: 404 });
     }
     return new Response('<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/style.css"><div id="root" style="height:844px;display:flex;flex-direction:column"></div><script src="/bundle.js"></script>', { headers: { "Content-Type": "text/html" } });
@@ -1020,7 +1018,7 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
       if (method === "GET") return Response.json({ receipt: captured });
       calls.push(`unexpected:${method}`);
     }
-    if (init?.method === "POST" && ["/api/runtime/send", "/api/tmux"].includes(String(input))) calls.push(`unexpected:${String(input)}`);
+    if (init?.method === "POST" && ["/api/runtime/send", "/api/conversation-host"].includes(String(input))) calls.push(`unexpected:${String(input)}`);
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   enqueueOutbox(file.conversationId!, { id: captured.idempotencyKey, text: captured.text!, images: 0, at: Date.parse(captured.admittedAt!) });
@@ -1076,7 +1074,7 @@ test("safe recovery accepts the producer's linked retry projection and settles o
       calls.push(init?.method ?? "GET");
       return Response.json({ operationId: "safe-retry-leaf", receipt: retry }, { status: 202 });
     }
-    if (init?.method === "POST" && ["/api/runtime/send", "/api/tmux"].includes(String(input))) calls.push("ordinary-send");
+    if (init?.method === "POST" && ["/api/runtime/send", "/api/conversation-host"].includes(String(input))) calls.push("ordinary-send");
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   let mounted = await renderInto(surface());
@@ -1151,7 +1149,7 @@ test.each([
       const operationId = `later-operation-${newSends.length}`;
       return Response.json({ operationId, receipt: { ...settlement, operationId, idempotencyKey: body.idempotencyKey, text: body.text } });
     }
-    if (init?.method === "POST" && ["/api/runtime/send", "/api/tmux"].includes(String(input))) calls.push(`unexpected:${String(input)}`);
+    if (init?.method === "POST" && ["/api/runtime/send", "/api/conversation-host"].includes(String(input))) calls.push(`unexpected:${String(input)}`);
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   if (local) {
@@ -1191,7 +1189,7 @@ test.each([
     await settle(() => {});
     expect(bus.getState().store.operations[original.operationId]?.revision).toBe(4);
     assertSettled();
-    await settle(() => mounted.root.render(<TmuxComposer file={{ ...file, path: "/other.jsonl", conversationId: "other-conversation" }} />));
+    await settle(() => mounted.root.render(<ConversationComposer file={{ ...file, path: "/other.jsonl", conversationId: "other-conversation" }} />));
     expect(Boolean(mounted.host.querySelector(`[data-operation="${original.operationId}"]`))).toBe(false);
     await settle(() => mounted.root.render(surface()));
     assertSettled();
@@ -1650,7 +1648,6 @@ for (const attachment of ["none", "image", "document"] as const) {
     const withheld: Array<() => void> = [];
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url === "/api/tmux/targets") return Response.json({ targets: {} });
       if (url !== "/api/runtime/send") return new Response("{}", { status: 404 });
       const body = JSON.parse(String(init?.body)) as SendBody & { conversationId: string };
       sends.push(body);

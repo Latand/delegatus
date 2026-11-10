@@ -463,7 +463,7 @@ export function capabilitiesFor(file: FileEntry, rv: RuntimeSessionView | null, 
     case "unresolved":
       // The runtime plane owns host capability but hasn't resolved this
       // conversation yet (initial snapshot load / bus outage). Every legacy
-      // control stays hidden and Send is disabled with a reason — no /api/tmux
+      // control stays hidden and Send is disabled with a reason — no /api/conversation-host
       // or /api/proc request can fire against an as-yet-unclassified host, and
       // no dead-host send can slip through (issue #241 finding 1).
       return {

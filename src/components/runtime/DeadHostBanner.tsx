@@ -124,7 +124,7 @@ export function DeadHostBanner({ file }: { file: FileEntry }) {
     // Refresh the runtime store immediately so the banner follows the authoritative
     // host axis; surface transport failures so recovery stays actionable (finding 4).
     try {
-      const res = await fetch("/api/tmux", {
+      const res = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "resume", path: file.path }),

@@ -198,8 +198,7 @@ test("Interrupt on a structured-root subagent names the root through the common 
   const interrupts = calls.filter((c) => c.url.includes("/api/conversation-host"));
   expect(interrupts.length).toBe(1);
   expect((interrupts[0]!.body as { conversationId?: string }).conversationId).toBe("conv-root");
-  // never the legacy routes for a structured root
-  expect(calls.some((c) => c.url.includes("/api/tmux"))).toBe(false);
+  // never the process-signal route for a structured root
   expect(calls.some((c) => c.url.includes("/api/proc"))).toBe(false);
   await act(async () => root.unmount());
 });
@@ -325,7 +324,7 @@ test("a typed capability refusal is localized from its code, not echoed in Engli
   const { host, root } = await mount(structuredRoot);
   await confirmCompact(host);
 
-  expect(calls).toEqual(["/api/tmux"]);
+  expect(calls).toEqual(["/api/conversation-host"]);
   expect(statusText(host)).toBe(translate("en", "receipt.human.unsupportedCapability"));
   expect(statusText(host)).not.toContain("stream-json");
   await act(async () => root.unmount());

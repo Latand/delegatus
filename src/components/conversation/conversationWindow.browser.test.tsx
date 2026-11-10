@@ -856,7 +856,7 @@ describe("send latency slice 3: one message, one row", () => {
    * through a pile of visually different states before it settles.
    *
    * ONE page, one mounted conversation window — the production `LogFeed` and
-   * `TmuxComposer` over the production outbox store — and a configurable fake
+   * `ConversationComposer` over the production outbox store — and a configurable fake
    * host behind them. The driver types into the real field, submits through
    * the path it is exercising, and then advances the host: a receipt lands,
    * the axes move, the transcript carries the message. Every frame it
@@ -5704,7 +5704,7 @@ describe("a control's hint never outlives its click", () => {
     const send = window.fetch;
     window.fetch = async (input, init) => {
       const url = String(input);
-      if (url === "/api/tmux" || url.startsWith("/api/conversation-host")) {
+      if (url === "/api/conversation-host" || url.startsWith("/api/conversation-host")) {
         await new Promise((resolve) => window.heldControls.push(resolve));
         return Response.json({ ok: true });
       }

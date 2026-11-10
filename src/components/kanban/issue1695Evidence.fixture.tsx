@@ -4607,7 +4607,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) return json(structuredSnapshot());
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
-  if (STRUCTURED && url.pathname === "/api/tmux" && method === "POST") {
+  if (STRUCTURED && url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.pillRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json({ ok: true, structured: true });
   }

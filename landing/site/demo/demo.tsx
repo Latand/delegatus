@@ -482,7 +482,6 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (path === "/api/accounts/copilot") return json({ active: null, accounts: [] });
   if (path === "/api/external-relay/conversations") return json({ relays: [], chats: [], answers: [], retentionDays: 30 });
   if (path === "/api/search/transcripts") return json(search(url.searchParams.get("q") ?? "", url.searchParams.get("speaker")));
-  if (path === "/api/tmux/targets") return json({ targets: {} });
   if (path === "/api/staging") return json({ staging: false });
   if (path === "/api/orchestrator/seat/status") {
     return json({

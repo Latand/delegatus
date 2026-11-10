@@ -22,7 +22,7 @@ async function awaitFile(filename: string): Promise<void> {
 /**
  * ── ROLE: controlled Viewer (#1490) ───────────────────────────────────────
  *
- * A real HTTP listener in front of the PRODUCTION handlers — `/api/tmux` is
+ * A real HTTP listener in front of the PRODUCTION handlers — `/api/conversation-host` is
  * `conversationHostPOST` and `/api/spawn` is `POST.withDependencies` — with
  * the runtime behind them replaced at the existing injection seams by
  * fixtures that write into the isolated registry this process shares with the
@@ -242,7 +242,7 @@ async function runHttpHost(configPath: string): Promise<void> {
       const body = await request.text();
       const next = new NextRequest(request.url, { method: request.method, headers: request.headers, body });
       let response: Response;
-      if (url.pathname === "/api/tmux") response = await conversationHostPOST(next);
+      if (url.pathname === "/api/conversation-host") response = await conversationHostPOST(next);
       else if (url.pathname === "/api/spawn") response = await POST.withDependencies(next, spawnDependencies as never);
       else return new Response(JSON.stringify({ error: "unrouted" }), { status: 404, headers: { "content-type": "application/json" } });
       // An immediate-effect proxy loses its answer only AFTER actual work.

@@ -96,7 +96,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { BranchPane } = await import("./BranchPane");
-const { appendComposerDraft } = await import("./TmuxComposer");
+const { appendComposerDraft } = await import("./ConversationComposer");
 const originalFetch = globalThis.fetch;
 const composerStorage = installComposerStorageForTests();
 

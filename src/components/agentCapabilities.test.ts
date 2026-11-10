@@ -240,7 +240,7 @@ test("a scanner-shaped subagent under a live TMUX root gets the legacy live-suba
   const c = child();
   expect(surfaceFor(c, null, { runtimeEnabled: true, root: { liveness: "live", structured: false } })).toBe<StripSurface>("live-subagent");
   const caps = capabilitiesFor(c, null, { runtimeEnabled: true, root: { liveness: "live", structured: false } });
-  expect(caps.controls.stop.state).toBe("enabled");   // ESC → root pane via /api/tmux
+  expect(caps.controls.stop.state).toBe("enabled");   // ESC → root pane via /api/conversation-host
   expect(caps.controls.kill.state).toBe("enabled");   // /api/proc → root pid
   expect(caps.controls.images.state).toBe("enabled");
   expect(caps.controls.terminal.state).toBe("enabled");

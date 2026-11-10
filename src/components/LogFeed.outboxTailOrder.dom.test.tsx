@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
 import { setLocale } from "@/lib/i18n";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { RuntimeReceipt } from "./runtime/runtimeModel";
-import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
+import { setConversationComposerRuntimeDependenciesForTests } from "./conversationComposerRuntime";
 import { capabilitiesFor } from "./agentCapabilities";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
@@ -106,7 +106,7 @@ mock.module("@/hooks/useToolActivityCues", () => ({
 }));
 
 const { LogFeed } = await import("./LogFeed");
-const { TmuxComposer } = await import("./TmuxComposer");
+const { ConversationComposer } = await import("./ConversationComposer");
 const { enqueueOutbox, readOutbox, resetOutboxForTests, seedLaunchOutbox, updateOutbox } = await import("./conversation/outbox");
 
 /* The newest fixture record: the agent's reply after the tool call. */
@@ -127,7 +127,7 @@ afterEach(() => {
   roots.clear();
   dom.document.body.replaceChildren();
   Date.now = originalDateNow;
-  setTmuxComposerRuntimeDependenciesForTests(null);
+  setConversationComposerRuntimeDependenciesForTests(null);
 });
 afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
@@ -164,7 +164,7 @@ function render(renderedFile: FileEntry = file, withComposer = false): HTMLEleme
   flushSync(() => {
     root.render(
       <>
-        {withComposer ? <TmuxComposer file={renderedFile} /> : null}
+        {withComposer ? <ConversationComposer file={renderedFile} /> : null}
         <LogFeed
           file={renderedFile}
           showSvc={false}
@@ -295,7 +295,7 @@ test.each([
       session: { conversationId: file.conversationId, hostKind: "codex-app-server", host: "hosted", recentReceipts: [] },
       uiState: {}, attentions: [], receipts: [receipt], legacy: false, structuredControlsEnabled: true,
     } as unknown as RuntimeSessionView;
-    setTmuxComposerRuntimeDependenciesForTests({
+    setConversationComposerRuntimeDependenciesForTests({
       useAgentCapabilities: (candidate) => ({
         caps: capabilitiesFor(candidate, view, { runtimeEnabled: true }),
         runtime: view, structuredSession: view, runtimeEnabled: true,

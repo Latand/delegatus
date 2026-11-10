@@ -1351,7 +1351,7 @@ export const en = {
   "switchCard.openColumn": "Open {title} as a column",
   "switchCard.remove": "Remove from switchboard",
 
-  // TmuxComposer
+  // ConversationComposer
   "composer.imagesCount": { one: "{count} image", other: "{count} images" },
   "composer.attachmentsCount": { one: "{count} attachment", other: "{count} attachments" },
   /* A send that had to bring the host back reports `spawned`/`resumed` for

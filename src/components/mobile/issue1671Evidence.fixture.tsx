@@ -1600,7 +1600,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
-  if (STAGE_AGENT && ["/api/conversation-host", "/api/tmux", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
+  if (STAGE_AGENT && ["/api/conversation-host", "/api/conversation-host", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (typeof body.text === "string") evidence.sends.push(body);
     return json({ ok: true, outcome: "resumed", receipt: { operationId: "stage-agent-send", idempotencyKey: body.idempotencyKey, conversationId: body.conversationId, kind: "send", status: "delivered", text: body.text, at: new Date().toISOString(), revision: 1 } });
@@ -1943,7 +1943,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body?.mode === "select" && typeof body.id === "string") activeAccount = body.id;
     return json({ ok: true });
   }
-  if (url.pathname === "/api/tmux" && method === "POST") {
+  if (url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(STRUCTURED ? { ok: true, structured: true } : { ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
   }

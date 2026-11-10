@@ -767,7 +767,7 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
         state: "path-pending",
         initialMessage: "queued",
       };
-      if (pathname === "/api/tmux") return {
+      if (pathname === "/api/conversation-host") return {
         operationId: "operation_http_control",
         outcome: "queued",
       };
@@ -810,7 +810,7 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
 
   expect(requests.map((request) => request.pathname)).toEqual([
     "/api/spawn",
-    "/api/tmux",
+    "/api/conversation-host",
     "/api/runtime/deployments",
   ]);
   expect(requests[0]?.body.clientAttemptId).toBe("spawn-http-control");
@@ -3867,7 +3867,7 @@ test("the single dispatch classifies every transport outcome by what it can prov
   let tracker: McpDispatchTracker = { attempted: false };
   const send = () => {
     tracker = { attempted: false };
-    return dispatch("/api/tmux", { text: "x" }, {}, { deadlineAt: Date.now() + 2_000, dispatch: tracker });
+    return dispatch("/api/conversation-host", { text: "x" }, {}, { deadlineAt: Date.now() + 2_000, dispatch: tracker });
   };
   /* The deliberately unanswered request, released before the server stops so
      the teardown never waits on a handler that would otherwise hang forever. */
@@ -3893,7 +3893,7 @@ test("the single dispatch classifies every transport outcome by what it can prov
     }), { headers: { "content-type": "application/json" } });
     expect(await classify(send)).toMatchObject({ kind: "uncertain" });
     answer = () => new Promise<Response>((resolve) => { unanswered.release = resolve; });
-    expect(await classify(() => dispatch("/api/tmux", { text: "x" }, {}, { deadlineAt: Date.now() + 600 }))).toMatchObject({ kind: "uncertain", value: expect.stringContaining("deadline") });
+    expect(await classify(() => dispatch("/api/conversation-host", { text: "x" }, {}, { deadlineAt: Date.now() + 600 }))).toMatchObject({ kind: "uncertain", value: expect.stringContaining("deadline") });
     expect(requests).toBe(7);
 
     /* The server's own verdicts, tagged as such and carrying their status. */
@@ -3916,7 +3916,7 @@ test("the single dispatch classifies every transport outcome by what it can prov
     expect(requests).toBe(13);
     // Exercise every error status, including nonstandard proxy 4xx/5xx,
     // for both mutation endpoints. An unreadable body proves no refusal.
-    for (const pathname of ["/api/tmux", "/api/spawn"]) {
+    for (const pathname of ["/api/conversation-host", "/api/spawn"]) {
       for (let status = 300; status <= 599; status += 1) {
         answer = () => new Response("<html>response lost</html>", { status });
         const before = requests;
@@ -3985,7 +3985,7 @@ test("send and spawn bindings dispatch through the single-attempt seam with the 
   const longKey = "k".repeat(300);
   await bindings.send_message({ clientRequestId: longKey, conversationId: "conversation_target", text: "hello" });
   expect(posted).toEqual([]);
-  expect(dispatched.map((request) => request.pathname)).toEqual(["/api/tmux", "/api/spawn", "/api/tmux"]);
+  expect(dispatched.map((request) => request.pathname)).toEqual(["/api/conversation-host", "/api/spawn", "/api/conversation-host"]);
   expect(dispatched[0]?.body.clientMessageId).toBe("persisted-send-key");
   expect(dispatched[1]?.body.clientAttemptId).toBe("persisted_spawn_key");
   expect("recoveryOnly" in dispatched[1]!.body).toBe(false);

@@ -699,7 +699,8 @@ async function dispatchViewerControl(
   const budgetMs = context.deadlineAt === undefined
     ? fileBudget ?? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(1, context.deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const reconnectSend = pathname === "/api/tmux";
+  /* A message send carries no action; a conversation control names one. */
+  const reconnectSend = pathname === "/api/conversation-host" && body.action === undefined;
   const expiresAt = now + Math.min(fileBudget ?? CONTROL_RECOVERY_BUDGET_MS, budgetMs);
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
@@ -1920,7 +1921,7 @@ async function sendMessage(
       ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
     };
     outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
-      headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", body,
+      headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/conversation-host", body,
         { ...callerCapabilityHeaders(), ...headers }));
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
@@ -4597,7 +4598,7 @@ async function bridgeDirective(args: McpToolArgs, control: ViewerControlDependen
     : undefined;
   const body = bridgeDirectiveBody(instruction, trailer);
 
-  const outcome = await control.post("/api/tmux", {
+  const outcome = await control.post("/api/conversation-host", {
     pid: null,
     path: manager.path,
     conversationId: manager.conversationId,

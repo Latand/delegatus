@@ -27,7 +27,7 @@ export interface AgentCapabilities {
   /** The structured session Stop/Send must route through, or null for the legacy
       tmux path: the conversation's own structured host, or — for a structured-root
       subagent — its ROOT's structured host (so a claude-broker root's child never
-      hits /api/tmux or /api/proc, issue #241 finding 1). */
+      hits /api/conversation-host or /api/proc, issue #241 finding 1). */
   structuredSession: RuntimeSessionView | null;
   /** Whether the runtime plane is the authority for host capability. */
   runtimeEnabled: boolean;

@@ -315,7 +315,7 @@ export interface UseDictationResult {
  *  - batch: MediaRecorder (webm/opus) posted to /api/transcribe on stop —
  *    the fallback whenever no token is available.
  * Lifted out of MicButton so a composer can orchestrate its own send button
- * around the same recording (see TmuxComposer's stop-and-send).
+ * around the same recording (see ConversationComposer's stop-and-send).
  */
 export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDictationOptions): UseDictationResult {
   const { t, locale } = useLocale();

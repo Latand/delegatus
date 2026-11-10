@@ -54,9 +54,9 @@ import { ImagePane } from "@/components/preview/ImagePane";
 import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
-import { appendComposerDraft, RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
+import { appendComposerDraft, RuntimeComposerReceipts, ConversationComposer } from "@/components/ConversationComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
-import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
+import { setConversationComposerRuntimeDependenciesForTests } from "@/components/conversationComposerRuntime";
 import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBusState } from "@/hooks/runtimeBus";
 import { ConversationAttention } from "@/components/runtime/ConversationAttention";
 import { emptyStore, type RuntimeAttention } from "@/components/runtime/runtimeModel";
@@ -316,7 +316,7 @@ const ORPHANED_FILE = {
  * The composer on a conversation whose host is gone: text in the field, an
  * image staged beside it, Send live. Every prop the old gates worked through —
  * `showImage`, `imageDisabled`, `sendDisabledReason`, and the phone's
- * `sendSlot` — is derived here exactly as `TmuxComposer` derives it, from the
+ * `sendSlot` — is derived here exactly as `ConversationComposer` derives it, from the
  * matrix's verdict and `composerSlotKind`.
  *
  * The slot matters most and was the piece a standalone `ComposerBar` used to
@@ -477,7 +477,7 @@ function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
 
 /* ── One message, one row: the whole LIFE of an ordinary send ────────────────
    Not a gallery of reconstructed states — a conversation the driver actually
-   uses. The production `LogFeed` and `TmuxComposer` are mounted together over
+   uses. The production `LogFeed` and `ConversationComposer` are mounted together over
    the production outbox store, and behind them a configurable fake host
    answers `/api/runtime/send` and publishes receipts. The driver types into
    the real field, submits through the path it is exercising, and advances the
@@ -743,7 +743,6 @@ function installFakeTransport(): void {
   const realFetch = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
     if (url.startsWith("/api/log/provenance")) {
       /* The review's own probe: the join held open for as long as the
          scenario says, so nothing about the row may depend on it arriving. */
@@ -1045,7 +1044,7 @@ function LifecycleFixture() {
         <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
           paused={false} follow setFollow={() => undefined} />
       </div>
-      <TmuxComposer file={lifeFile()} />
+      <ConversationComposer file={lifeFile()} />
     </div>
   );
 }
@@ -1089,7 +1088,7 @@ function PayloadNoticeFixture() {
         <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
           paused={false} follow setFollow={() => undefined} />
       </div>
-      {ready ? <TmuxComposer file={lifeFile()} /> : null}
+      {ready ? <ConversationComposer file={lifeFile()} /> : null}
       <span data-fixture-operation-reads hidden>{reads}</span>
     </div>
   );
@@ -1175,7 +1174,7 @@ function mountRetiredOrchestrator(root: HTMLElement): void {
 /** The composer's side of the fake host: a hosted structured session, its
     receipts and the transport behind Send. */
 function installFakeComposerHost(): void {
-  setTmuxComposerRuntimeDependenciesForTests({
+  setConversationComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
       const options = { runtimeEnabled: true };

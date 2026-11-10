@@ -24,7 +24,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
 import { capabilitiesFor } from "./agentCapabilities";
-import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
+import { setConversationComposerRuntimeDependenciesForTests } from "./conversationComposerRuntime";
 import { useAgentCapabilities } from "./useAgentCapabilities";
 
 const dom = new Window();
@@ -81,7 +81,7 @@ const structuredView: RuntimeSessionView = {
 
 import { LogFeed } from "./LogFeed";
 import { setLogFeedDependenciesForTests } from "./logFeedDependencies";
-import { TmuxComposer } from "./TmuxComposer";
+import { ConversationComposer } from "./ConversationComposer";
 import { enqueueOutbox, readOutbox, resetOutboxForTests, updateOutbox } from "./conversation/outbox";
 
 /** The bytes the payload store still holds for one submission. */
@@ -97,7 +97,7 @@ afterAll(() => composerStorage.uninstall());
 beforeEach(() => {
   setLogFeedDependenciesForTests({ useLogTail: () => ({ lines: [], linesStart: 0, size: 0, loading: false, error: null, tickTime: null, paused: false, setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0 }) });
   setRuntimeUiEnabledForTests(false);
-  setTmuxComposerRuntimeDependenciesForTests({
+  setConversationComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const real = useAgentCapabilities(candidate);
       if (candidate.path !== "/codex-refused.jsonl" && candidate.conversationId !== "conv-refused") return real;
@@ -116,7 +116,7 @@ beforeEach(() => {
 afterEach(() => {
   composerStorage.reset();
   setLogFeedDependenciesForTests(null);
-  setTmuxComposerRuntimeDependenciesForTests(null);
+  setConversationComposerRuntimeDependenciesForTests(null);
   setRuntimeUiEnabledForTests(null);
   setLocale("en");
   globalThis.fetch = realFetch;
@@ -146,7 +146,6 @@ function gatedWire(sends: SendBody[], body: unknown, status = 503): () => void {
   const waiters: Array<() => void> = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: { body?: string }) => {
     const url = String(input);
-    if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
     if (url !== "/api/runtime/send") throw new Error(`unexpected request: ${url}`);
     sends.push(JSON.parse(init?.body ?? "{}") as SendBody);
     if (!open) await new Promise<void>((resolve) => waiters.push(resolve));
@@ -196,7 +195,7 @@ const pasteImage = async (host: HTMLElement, tag: string) => {
   expect(host.querySelectorAll("img")).toHaveLength(1);
 };
 
-const surface = () => <><LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} /><TmuxComposer file={file} /></>;
+const surface = () => <><LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} /><ConversationComposer file={file} /></>;
 
 test("a refused send puts its text and its image back in the composer and parks nothing", async () => {
   const sends: SendBody[] = [];
@@ -245,7 +244,6 @@ test("the returned draft is still sendable — ending the saved copy does not fe
        this second send would never leave the composer. */
     globalThis.fetch = (async (input: string | URL | Request, init?: { body?: string }) => {
       const url = String(input);
-      if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
       if (url !== "/api/runtime/send") throw new Error(`unexpected request: ${url}`);
       const body = JSON.parse(init?.body ?? "{}") as SendBody;
       sends.push(body);

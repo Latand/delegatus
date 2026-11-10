@@ -366,7 +366,7 @@ export function RuntimePill({
     setSpeedPending(null);
     setError("");
     try {
-      const response = await fetch("/api/tmux", {
+      const response = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -781,7 +781,7 @@ export function RuntimePill({
       : t("mobile2.composer.accountRunsOnNext", { account: nameOf(runsOnAccount), next: nameOf(accountId) }));
     const draft = liveDraftRef.current;
     try {
-      const response = await fetch("/api/tmux", {
+      const response = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
