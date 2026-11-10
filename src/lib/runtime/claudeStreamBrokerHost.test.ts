@@ -1785,9 +1785,10 @@ describe("ClaudeStreamBrokerHost", () => {
           result(); await idle();
         }
       }
-      /* An operator's ordinary send goes ahead of the deferred follow-ups, and
-         it waits for the running turn's own result: an interrupt would reach
-         Claude as the operator refusing the tool call that turn is running. */
+      /* An operator's ordinary send goes ahead of the deferred follow-ups and
+         never interrupts: an interrupt would reach Claude as the operator
+         refusing the tool call that turn is running. A running turn takes it
+         at its next tool boundary; a turn awaiting an answer is left to end. */
       if (pathway.startsWith("operator")) {
         const incumbent = admit("interrupt-incumbent"); await deliver(incumbent);
         const deferredOrigin = predecessorOrigin === "agent" ? { kind: "agent" as const, role: "reviewer" }
@@ -1811,15 +1812,24 @@ describe("ClaudeStreamBrokerHost", () => {
         queue = newQueue();
         await queue.drain(); await queue.drain();
         await queue.drain();
+        const joins = pathway === "operator-during-turn";
         expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(0);
-        expect(users()).toHaveLength(written);
-        expect(journal.operationResult(replacement.operationId)?.receipt.status).toBe("queued");
+        expect(users()).toHaveLength(written + (joins ? 1 : 0));
+        expect(journal.operationResult(replacement.operationId)?.receipt.status).toBe(joins ? "delivering" : "queued");
         for (const [index, command] of deferred.entries()) {
           expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
         }
-        queue = newQueue();
-        result(); await idle();
-        await deliver(replacement);
+        if (joins) {
+          // The running turn reads it and its one result ends that turn.
+          echo(replacement);
+          await wait(() => journal.operationResult(replacement.operationId)?.receipt.status === "delivered");
+          expect(journal.operationResult(replacement.operationId)?.receipt.turnId).toBe(incumbent.operationId);
+          expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
+        } else {
+          queue = newQueue();
+          result(); await idle();
+          await deliver(replacement);
+        }
         expect(JSON.stringify(users()[written]?.message)).toContain(replacement.text);
         for (const [index, command] of deferred.entries()) {
           expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
@@ -1858,7 +1868,7 @@ describe("ClaudeStreamBrokerHost", () => {
      what you are doing", because the composer's default `interrupt-active`
      send interrupted the turn first. */
   test.each(["running-tool", "awaiting-permission"] as const)(
-    "an ordinary operator send to a busy Claude turn arrives as the next user message, never an interrupt: %s", async (busy) => {
+"an ordinary operator send to a busy Claude turn arrives as a user message, never an interrupt: %s", async (busy) => {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-busy-send-"));
       const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
       const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
@@ -1923,13 +1933,50 @@ describe("ClaudeStreamBrokerHost", () => {
 
         const extra = send("extra-context");
         for (let pass = 0; pass < 4; pass++) { await queue.drain(); await Bun.sleep(5); }
-        // The running tool call is left alone: no interrupt, no permission
-        // answer, and nothing written into the turn.
+        // The running tool call is left alone: no interrupt and no permission answer.
         expect(controls()).toEqual([]);
         expect(child.inputs.filter(frame => frame.type === "control_response")).toEqual([]);
+        expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
+        if (busy === "running-tool") {
+          /* 2026-11-10: a stage's turn lasts as long as the stage, and the
+             operator's message waited for all of it. The message is written
+             while the tool runs and a second one waits for the first's echo. */
+          expect(users()).toHaveLength(2);
+          expect(users()[1]).toMatchObject({ type: "user", message: { role: "user", content: [{ type: "text", text: extra.text }] } });
+          expect(journal.operationResult(extra.operationId)?.receipt.status).toBe("delivering");
+          const second = send("second-context");
+          for (let pass = 0; pass < 3; pass++) { await queue.drain(); await Bun.sleep(5); }
+          expect(users()).toHaveLength(2);
+          expect(journal.operationResult(second.operationId)?.receipt.status).toBe("queued");
+          // The tool ends, the turn reads the message and carries on.
+          child.emitJson({ type: "user", session_id: host.identity.sessionId, message: { role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu-running", content: "done", is_error: false }] } });
+          echo(extra);
+          await wait(() => journal.operationResult(extra.operationId)?.receipt.status === "delivered");
+          expect(journal.operationResult(extra.operationId)?.receipt.turnId).toBe(incumbent.operationId);
+          expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
+          expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended")).toEqual([]);
+          // The second message is written next; this turn ends before reading
+          // it, so it starts the next turn.
+          await wait(() => { void queue.drain(); return users().length === 3; });
+          result();
+          await wait(() => events.load(host.identity.sessionId).some(event => event.kind === "turn-ended"));
+          expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended"))
+            .toEqual([expect.objectContaining({ turnId: incumbent.operationId, status: "completed" })]);
+          expect((await host.health()).activeTurnRef).toBe(second.operationId);
+          echo(second);
+          await wait(() => journal.operationResult(second.operationId)?.receipt.status === "delivered");
+          expect(journal.operationResult(second.operationId)?.receipt.turnId).toBe(second.operationId);
+          result();
+          await wait(() => events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended").length === 2);
+          // No turn is left behind for an input the earlier turn already read.
+          expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+          expect(controls()).toEqual([]);
+          expect(users()).toHaveLength(3);
+          return;
+        }
         expect(users()).toHaveLength(1);
         expect(journal.operationResult(extra.operationId)?.receipt.status).toBe("queued");
-        expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
 
         if (busy === "awaiting-permission") {
           const answer = host.answer("permission-busy", { behavior: "allow" });
@@ -4798,6 +4845,34 @@ describe("meaningful background turns", () => {
       f.child.emitJson({ ...result("next-result"), user_message_uuid: "next-user" });
       expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended").map(e => e.turnId)).toEqual([background, "next-input"]);
       expect(f.ledger.load(sessionId)).toMatchObject([{ entry: { id: "next-input" }, engineMessageId: "next-user", delivered: true }]);
+    } finally { await f.host.release(); }
+  });
+
+  test("a write aimed into a running turn goes one at a time and never into a turn the CLI began itself", async () => {
+    const f = await fixture();
+    try {
+      const users = () => f.child.inputs.filter(frame => frame.type === "user");
+      const first = f.host.send({ id: "first-input", text: "first instruction" });
+      f.child.emitJson({ ...users()[0], uuid: "first-user" });
+      expect(await first).toEqual({ outcome: "turn-started", turnId: "first-input" });
+      const joining = f.host.send({ id: "joining-input", text: "joining instruction", expectedTurnId: "first-input" });
+      expect(users()).toHaveLength(2);
+      expect(await f.host.send({ id: "crowding-input", text: "crowding instruction", expectedTurnId: "first-input" }))
+        .toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users()).toHaveLength(2);
+      f.child.emitJson({ ...users()[1], uuid: "joining-user" });
+      expect(await joining).toEqual({ outcome: "steered", turnId: "first-input" });
+      // A result naming the input the turn read still ends that turn.
+      f.child.emitJson({ ...result("first-result"), user_message_uuid: "joining-user" });
+      expect(await f.host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(f.store.load(sessionId).filter(e => e.kind === "turn-ended").map(e => e.turnId)).toEqual(["first-input"]);
+
+      f.child.emitJson(assistant("background"));
+      const background = (await f.host.health()).activeTurnRef;
+      if (!background) throw new Error("expected an observed background turn");
+      expect(await f.host.send({ id: "late-input", text: "late instruction", expectedTurnId: background }))
+        .toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users()).toHaveLength(2);
     } finally { await f.host.release(); }
   });
 
