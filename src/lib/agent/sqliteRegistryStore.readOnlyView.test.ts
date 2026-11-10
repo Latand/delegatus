@@ -1564,3 +1564,36 @@ test("a complete header read measures its rows in batches", async () => {
   expect(measurements).toBeGreaterThan(0);
   expect(measurements).toBeLessThan(60);
 }, 30_000);
+
+test("a peer's appended and removed rows keep the kept collection order", () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    file.receipts["cold-order"] = { ...template, launchId: "cold-order", state: "failed",
+      createdAt: "2020-01-01T00:00:00Z", error: "retained history" };
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const before = Object.keys(reader.readOnlySnapshot().file.receipts);
+  const headerReads = (started: number) => performanceSpans.snapshot(started).records
+    .filter(record => performanceSites[record.site] === "registry.headers").length;
+
+  writer.mutate(file => {
+    file.receipts["appended-one"] = { ...template, launchId: "appended-one" };
+    file.receipts["appended-two"] = { ...template, launchId: "appended-two" };
+  }, false);
+  let started = performance.now();
+  const appended = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+
+  writer.mutate(file => { delete file.receipts[removed]; }, false);
+  started = performance.now();
+  const shortened = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(shortened.receipts)).toEqual([...before, "appended-one", "appended-two"].filter(key => key !== removed));
+  // The view the reader held keeps the order it was built with.
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+  // A store that reads the order whole agrees.
+  expect(Object.keys(open().readOnlySnapshot().file.receipts)).toEqual(Object.keys(shortened.receipts));
+});

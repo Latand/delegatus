@@ -2274,8 +2274,11 @@ export class SqliteAgentRegistryStore {
     return order.keys;
   }
 
-  /** Drop the kept order of every collection in which a journalled row was
-      added, removed or moved. */
+  /** Bring the kept order of every collection up to the journal. A row
+      appended after the last kept one, the place every new row takes, and a
+      removed row are applied to a copy of the order, because views hold the
+      order they were built with. A row that moved, or one added anywhere
+      else, drops the order of its collection, which is then read again. */
   private *refreshCollectionOrdersSteps(changes: readonly { collection: string; row_key: string }[]): Generator<void, void> {
     const named = new Map<RowCollection, string[]>();
     for (const { collection,row_key: key } of changes) {
@@ -2288,13 +2291,44 @@ export class SqliteAgentRegistryStore {
     for (const [collection,keys] of named) {
       const kept = this.collectionOrders.get(collection)!;
       const position = this.db.query<{ row_order: number }, [string, string]>("SELECT row_order FROM registry_rows WHERE collection=? AND row_key=?");
+      const removed = new Set<string>();
+      const appended: Array<{ key: string; order: number }> = [];
+      let moved = false;
       for (const key of keys) {
         yield;
-        if (position.get(collection,key)?.row_order !== kept.orders.get(key)) {
-          this.collectionOrders.delete(collection);
-          break;
-        }
+        const current = position.get(collection,key)?.row_order;
+        const previous = kept.orders.get(key);
+        if (current === previous) continue;
+        if (current === undefined) removed.add(key);
+        else if (previous === undefined) appended.push({ key, order: current });
+        else { moved = true; break; }
       }
+      if (!moved && !removed.size && !appended.length) continue;
+      appended.sort((a, b) => a.order - b.order);
+      /* Rows that share an order are told apart by the stored row itself, so
+         only a strictly later order is known to follow every kept row. */
+      let last = -Infinity;
+      for (let index = kept.keys.length - 1; index >= 0; index--) {
+        const key = kept.keys[index]!;
+        if (!removed.has(key)) { last = kept.orders.get(key)!; break; }
+      }
+      for (const row of appended) {
+        if (row.order <= last) { moved = true; break; }
+        last = row.order;
+      }
+      if (moved) {
+        this.collectionOrders.delete(collection);
+        continue;
+      }
+      const orders = new Map(kept.orders);
+      for (const key of removed) orders.delete(key);
+      const ordered = removed.size ? kept.keys.filter(key => !removed.has(key)) : [...kept.keys];
+      for (const row of appended) {
+        ordered.push(row.key);
+        orders.set(row.key,row.order);
+      }
+      yield;
+      this.collectionOrders.set(collection,{ keys: ordered, orders });
     }
   }
 
