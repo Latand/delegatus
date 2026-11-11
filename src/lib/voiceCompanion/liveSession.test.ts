@@ -3305,7 +3305,7 @@ for (const backend of ["api", "codex"] as const) for (const release of ["delta",
     await service.close(n3.sessionId);
   });
 
-for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} preserves the inherited cut after two unpolled drops`, async () => {
+for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} preserves the inherited cut after handoff without speech`, async () => {
   const f = fixture();
   if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
   const p = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
@@ -3316,6 +3316,8 @@ for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} prese
   const n = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=1", resume: p.sessionId,
     cursor: { heard: { itemId: reply.id, playedMs: 1200 } } });
   expect(spoken(f)).toHaveLength(0);
+  await f.service.events(n.sessionId, 0);
+  expect(f.admission.reportSpeech(n.sessionId)).toMatchObject([{ kind: "resume", handed: 1, resumePoint: { offset: expect.any(Number), resumeOf: { part: p.sessionId, item: reply.id } } }]);
   await f.service.close(n.sessionId, "transport");
   const n2 = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=2", resume: n.sessionId });
   const start = f.admission.transcriptRecord(n2.sessionId).entries.find(row => row.kind === "session_start")!;
@@ -3326,6 +3328,23 @@ for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} prese
   expect(memory).not.toContain("Перше речення. Друге речення");
   expect(memory).toContain("Друге речення триває тут.");
   await f.service.close(n2.sessionId);
+});
+
+test("slice 2: a genuine Codex input done emits completion before a later drop", async () => {
+  const f = fixture();
+  f.storage.updateSettings({ backend: "codex" }); Object.defineProperty(f.provider, "backend", { value: "codex" });
+  const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId,
+    { type: "session.input_transcript.delta", event_id: "operator-delta", delta: "Please check search.", start_ms: 0, end_ms: 900 },
+    { type: "session.input_transcript.done", event_id: "operator-done", offset_ms: 900 });
+  await f.service.drain(p.sessionId);
+  const finalized = f.admission.events(p.sessionId, 0).filter(row => row.type === "transcript.final");
+  expect(finalized).toMatchObject([{ type: "transcript.final", speaker: "operator", text: "Please check search." }]);
+  await f.service.close(p.sessionId, "transport");
+  const resumed = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId });
+  expect(f.admission.transcriptRecord(resumed.sessionId).entries.find(row => row.kind === "session_start")?.data.resumePoint)
+    .toMatchObject({ kind: "operator", cut: false, heard: "Please check search." });
+  await f.service.close(resumed.sessionId);
 });
 
 test("slice 2: API resume instruction retains the end of a long Ukrainian operator turn", async () => {

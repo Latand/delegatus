@@ -1016,7 +1016,7 @@ for (const connected of [true, false]) test(`slice 2: resume poll waits for ${co
   await f.adapter.dispose();
 });
 
-for (const serverFinalizes of [true, false]) test(`slice 2: ${serverFinalizes ? "server final snapshot" : "ordinary final transcript"} preserves operator cut semantics`, async () => {
+for (const serverFinalizes of [true, false]) test(`slice 2: ${serverFinalizes ? "server final snapshot" : "provider completion marker"} preserves operator cut semantics`, async () => {
   const f = fixture();
   await f.adapter.start({ project: "fixture", locale: "en" });
   f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: false }));
@@ -1024,6 +1024,7 @@ for (const serverFinalizes of [true, false]) test(`slice 2: ${serverFinalizes ? 
   if (serverFinalizes) {
     f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: true }));
   } else {
+    f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: true }));
     f.push(f.event({ type: "transcript.final", speaker: "operator", itemId: "live-operator-1", text: "Please finish this" }));
   }
   f.push(f.event({ type: "session.closed", reason: "transport", incomplete: true }));

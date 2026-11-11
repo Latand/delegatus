@@ -314,7 +314,7 @@ export class CompanionLiveSessions {
       this.storage.read().sessions[input.cursorPart ?? input.resume!]?.backend === "codex" ? "codex" : "api") : undefined;
     // A part can drop before its first poll. Its resume point then exists only
     // in the owed queue, and takes precedence over an older browser cursor.
-    const owedResume = input.resume ? this.admission.reportSpeech(input.resume).find(entry => entry.kind === "resume" && entry.resumePoint && entry.handed === 0) : undefined;
+    const owedResume = input.resume ? this.admission.reportSpeech(input.resume).find(entry => entry.kind === "resume" && entry.resumePoint) : undefined;
     const inheritedPoint = owedResume?.kind === "resume" && owedResume.resumePoint
       && resolvedPosition?.point?.resumeOf.part !== input.resume ? owedResume.resumePoint : undefined;
     const position = inheritedPoint
@@ -622,7 +622,15 @@ export class CompanionLiveSessions {
         if (resumeAnswered) { this.admission.resumeReplied(active.id); active.resumeHold = undefined; }
       }
     } else if (active.codex && (event.type === "session.input_transcript.done" || event.type === "session.output_transcript.done")) {
-      if (typeof event.offset_ms === "number") this.transcript(active, active.transcript.seal(event.type === "session.input_transcript.done" ? "operator" : "companion", event.offset_ms));
+      if (typeof event.offset_ms === "number") {
+        const speaker = event.type === "session.input_transcript.done" ? "operator" : "companion";
+        const snapshots = active.transcript.seal(speaker, event.offset_ms);
+        this.transcript(active, snapshots);
+        // A final snapshot also closes a still-open transcript when the part
+        // drops. This marker distinguishes a provider's genuine `done` event.
+        for (const snapshot of snapshots) if (snapshot.speaker === "operator")
+          this.admission.emit(active.id, { type: "transcript.final", speaker: "operator", itemId: snapshot.itemId, text: snapshot.text });
+      }
     } else if (event.type === "session.delegation.created") {
       const delegation = jsonObject(event.delegation);
       if (typeof delegation?.id !== "string" || !delegation.id || delegation.id.length > 200 || typeof event.offset_ms !== "number"
