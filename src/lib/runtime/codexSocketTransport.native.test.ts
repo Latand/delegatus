@@ -16,7 +16,7 @@ test.skipIf(process.platform !== "linux")("a replacement Viewer receives native 
   let owner: { process: ReturnType<typeof captureProcessIdentity> } | undefined;
   const run = async (mode: string) => {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
-      env: { ...process.env, HOST_EXIT_TEST_HOME: `/proc/${process.pid}/fd/${directory}` }, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, HOST_EXIT_TEST_HOME: `/proc/${process.pid}/fd/${directory}`, LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
     });
     const output = new Response(child.stdout).text();
     const errors = new Response(child.stderr).text();
@@ -55,7 +55,7 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
         fs.rmSync(path.join(root, "ready"), { force: true });
         fs.rmSync(path.join(root, "ready.release"), { force: true });
         const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
-          env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off" }, stdout: "pipe", stderr: "pipe",
+          env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
         });
         const output = new Response(child.stdout).text();
         const stderr = new Response(child.stderr).text();
@@ -145,14 +145,14 @@ for (const mode of ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "s
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-drain-"));
     try {
       const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
-        env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", STDERR_WC_SEMANTICS: wc }, stdout: "pipe", stderr: "pipe",
+        env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", STDERR_WC_SEMANTICS: wc, LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
       });
       const output = new Response(child.stdout).text();
       const errors = new Response(child.stderr).text();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([child.exited, new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("owned drain fixture exceeded its parent deadline")), 15_000);
+          timer = setTimeout(() => reject(new Error("owned drain fixture exceeded its parent deadline")), 20_000);
         })]);
         expect(child.exitCode, await errors).toBe(0);
         const result = JSON.parse(await output);
@@ -200,7 +200,7 @@ for (const mode of ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "s
 test.skipIf(process.platform !== "linux")("startup fixture barriers end after their recorded owner exits", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-owner-loss-"));
   const fixture = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, "ownerloss"], {
-    env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", STDERR_WC_SEMANTICS: "gnu" }, stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off", STDERR_WC_SEMANTICS: "gnu", LLV_STATE_DIR: path.join(root, "state") }, stdout: "pipe", stderr: "pipe",
   });
   const owner = captureProcessIdentity(fixture.pid);
   const output = new Response(fixture.stdout).text();

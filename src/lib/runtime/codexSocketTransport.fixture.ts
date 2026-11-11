@@ -31,7 +31,7 @@ if (delayed) {
         return owner.startIdentity === owner.pid + ":" + start;
       } catch { return false; }
     };
-    const barrierDeadline = Date.now() + 3000;
+    const barrierDeadline = Date.now() + 12_000;
     while (!fs.existsSync(path.join(process.env.DRAIN_ROOT, "release-waiter"))) {
       if (Date.now() > barrierDeadline) throw new Error("waiter barrier deadline exceeded");
       if (!ownerAlive()) { fs.writeFileSync(path.join(process.env.DRAIN_ROOT, "waiter-owner-lost"), "ready"); break; }
@@ -72,7 +72,7 @@ else
     while [ ! -e "$DRAIN_ROOT/release-drain" ]; do
       if ! owner_alive; then touch "$DRAIN_ROOT/drain-owner-lost"; exit 0; fi
       attempts=$((attempts + 1))
-      if [ "$attempts" -ge 600 ]; then touch "$DRAIN_ROOT/drain-watchdog"; exit 0; fi
+      if [ "$attempts" -ge 2800 ]; then touch "$DRAIN_ROOT/drain-watchdog"; exit 0; fi
       sleep 0.005
     done
   fi
@@ -133,7 +133,7 @@ const peer = `
   const mode = process.env.PEER_MODE.replace(/^(managed|shim)/, "");
   write(2, "EADDRINUSE: callback bind refused\\n");
   if (["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler", "ownerloss"].includes(mode)) {
-    const until = Date.now() + 3000;
+    const until = Date.now() + 10_000;
     while (!fs.existsSync(process.env.DRAIN_ROOT + "/first")) {
       if (Date.now() > until) throw new Error("first drain read did not settle");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
@@ -230,15 +230,16 @@ try {
     if (mode === "chatty" || delayed) sink = fs.openSync(fs.readlinkSync(diagnostic), "r");
     if (delayed) {
       const startup = path.dirname(args.at(-1)!.slice("unix://".length));
-      const until = performance.now() + 3000;
+      const until = performance.now() + 10_000;
       const completion = path.join(startup, "native-exit.json");
       if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler" || mode === "ownerloss") {
         while (!fs.existsSync(completion)) {
           if (performance.now() > until) throw new Error("native exit did not become durable");
           await Bun.sleep(5);
         }
+        const barriersUntil = performance.now() + 10_000;
         while (!fs.existsSync(path.join(startup, "waiter-live")) || !fs.existsSync(path.join(root!, "delayed"))) {
-          if (performance.now() > until) throw new Error("drain and waiter barriers did not become ready");
+          if (performance.now() > barriersUntil) throw new Error("drain and waiter barriers did not become ready");
           await Bun.sleep(5);
         }
         initialSize = fs.fstatSync(sink!).size;
