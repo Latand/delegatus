@@ -65,3 +65,31 @@ test("the archive list holds no long text, and one lane's text is one row read a
   }
   expect(Math.abs(large.perLane - small.perLane)).toBeLessThan(64);
 });
+
+test("a lane archived again while a reader holds the list serializes as its whole current record", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-archive-rewrite-"));
+  const prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    savePipelines([lane("cold-held"), lane("cold-other")]);
+    expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(2);
+    const held = await loadArchivedPipelinesForListAsync();
+    const again = lane("cold-held");
+    again.closedAt = "2026-07-03T00:00:00.000Z";
+    again.stages[0]!.prompt = prompt("rewritten");
+    savePipelines([again]);
+    expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+    // The route's response: every lane whole, the rewritten one as stored now.
+    const response = JSON.parse(JSON.stringify({ lanes: held })) as { lanes: typeof held };
+    expect(response.lanes.map(pipeline => pipeline.id)).toEqual(["cold-held", "cold-other"]);
+    expect(response.lanes[0]).toEqual(JSON.parse(JSON.stringify(findPipelineRecord("cold-held"))));
+    expect(response.lanes[0]!.closedAt).toBe("2026-07-03T00:00:00.000Z");
+    expect(response.lanes[0]!.stages[0]!.prompt).toBe(prompt("rewritten"));
+    expect(response.lanes[1]!.spec).toBe(spec("cold-other"));
+    expect(held[0]!.closedAt).toBe("2026-07-02T00:00:00.000Z");
+    expect(loadArchivedPipelinesForList()[0]!.stages[0]!.prompt).toBe(prompt("rewritten"));
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
