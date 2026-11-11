@@ -42852,6 +42852,20 @@ describe("first-run guide: variant 1 on the real components", () => {
             const contradicted = await page.evaluate((words) => document.body.innerText.includes(words), lang === "uk" ? "Не підключено" : "Not connected");
             if (contradicted) failures.push(`${name}: the page says Telegram is not connected while a bot is`);
           }
+          /* Beside the facts the advice starts in the value column, on the line of «Codex»; on a phone and in the middle it keeps the full width. */
+          if (spec.token === "orchestrator-codex-only") {
+            const starts = await page.evaluate(() => {
+              const left = (el: Element | null) => { const r = el?.getBoundingClientRect(); return r ? Math.round(r.left * 10) / 10 : null; };
+              return { advice: left(document.querySelector("[data-onboarding-orchestrator-advice] > span")), value: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")), label: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")?.parentElement?.previousElementSibling ?? null) };
+            });
+            if (starts.advice === null || starts.value === null) failures.push(`${name}: the advice or the Runs on value is missing`);
+            else if (width >= 860 && Math.abs(starts.advice - starts.value) > 1.5) failures.push(`${name}: the advice starts at ${starts.advice}px but the value column at ${starts.value}px`);
+            else if (width < 860 && starts.label !== null && starts.advice > starts.label + 1.5) failures.push(`${name}: the advice is indented to ${starts.advice}px below 860 px (label at ${starts.label}px)`);
+          }
+          if (spec.token === "settings-memory-after") {
+            const line = await page.evaluate(() => document.querySelector("[data-memory-source-line]")?.textContent ?? "");
+            if (!line.includes(translate(lang, "memorySource.limit"))) failures.push(`${name}: the Settings memory line does not say the import spends the plan's limit`);
+          }
           if (spec.token.startsWith("engines-")) {
             const rechecks = await page.evaluate((label) => [...document.querySelectorAll<HTMLElement>("[data-onboarding-dialog] button")].filter((button) => button.getClientRects().length && button.textContent?.trim() === label).length, translate(lang, "onboarding.engines.recheck"));
             if (rechecks > 1) failures.push(`${name}: ${rechecks} Check again buttons`);

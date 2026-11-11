@@ -118,6 +118,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "memorySource.readFailed": "Не вдалося прочитати, якою пам’яттю користуються агенти.",
   "memorySource.saveFailed": "Зміну не збережено; перемикач повернуто.",
   "memorySource.unchosen": "Вимкнено: агенти мають і власну пам’ять Claude та Codex, і правила Delegatus. Увімкніть, щоб лишилася одна пам’ять.",
+  "memorySource.limit": "Імпорт виконують агенти, тож він витрачає ліміт вашого плану.",
   "memorySource.needsOrchestrator": "Спершу потрібен оркестратор: створіть його в проєкті.",
   "memorySource.preparing": "Резервне копіювання нотаток Claude і Codex для куратора. Їхня пам’ять працює, доки імпорт не завершиться.",
   "memorySource.importing": "Імпорт нотаток Claude і Codex через куратора: {done} з {total}{parts}. Їхня пам’ять працює, доки імпорт не завершиться.",

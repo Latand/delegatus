@@ -300,7 +300,7 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
               changing,
             )}
             {rolesOnCodexOnly ? (
-              <div data-onboarding-orchestrator-advice="" className="-mt-1 flex flex-wrap items-baseline gap-x-2 pb-2 text-ui text-secondary max-sm:flex-col max-sm:items-stretch">
+              <div data-onboarding-orchestrator-advice="" className="-mt-1 flex flex-wrap items-baseline gap-x-2 pb-2 text-ui text-secondary min-[860px]:pl-[104px] max-sm:flex-col max-sm:items-stretch">
                 <span>{t("onboarding.orchestrator.adviceClaude")}</span>
                 <button type="button" data-onboarding-orchestrator-connect="claude" onClick={onGoEngines} className="self-start rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center">
                   {t("onboarding.agents.connect", { missing: "Claude" })}

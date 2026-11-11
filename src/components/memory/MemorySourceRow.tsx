@@ -29,7 +29,7 @@ export function memorySourceState(view: MemorySourceView | null, readFailed: boo
 }
 
 /** The state line's words; `now` places the last sync run. */
-export function memorySourceLine(view: MemorySourceView | null, readFailed: boolean, t: TFunction, locale: Locale, now = Date.now()): string {
+export function memorySourceLine(view: MemorySourceView | null, readFailed: boolean, t: TFunction, locale: Locale, now = Date.now(), limit = false): string {
   const state = memorySourceState(view, readFailed);
   const reason = (value: NonNullable<MemorySourceView["lastFailure"]>["reason"]) => t(`memorySource.reason.${value}`);
   const hold = view?.import?.hold ? ` ${t("memorySource.hold", { reason: reason(view.import.hold) })}` : "";
@@ -41,7 +41,8 @@ export function memorySourceLine(view: MemorySourceView | null, readFailed: bool
     case "loading": return t("memorySource.loading");
     case "unknown": return t("memorySource.readFailed");
     case "needs-orchestrator": return t("memorySource.needsOrchestrator");
-    case "unchosen": return t("memorySource.unchosen") + failure;
+    /* The Settings row is the only place that offers the switch without the setup step's lead, so it also says what the import spends. */
+    case "unchosen": return t("memorySource.unchosen") + (limit ? ` ${t("memorySource.limit")}` : "") + failure;
     case "preparing": return t("memorySource.preparing") + hold + waits;
     case "importing": {
       const counts = view!.import!.counts!;
@@ -126,7 +127,7 @@ export function MemorySourceRow({ phone = false, inset = false, readEveryMs = RE
   }, [view]);
 
   const state = memorySourceState(view, readFailed);
-  const line = memorySourceLine(view, readFailed, t, locale);
+  const line = memorySourceLine(view, readFailed, t, locale, undefined, !inset);
   useEffect(() => { onState?.(state); }, [onState, state]);
   const enabled = view?.choice === "delegatus";
   const title = t("memorySource.title");

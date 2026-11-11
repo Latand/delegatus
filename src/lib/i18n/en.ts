@@ -118,6 +118,7 @@ export const en = {
   "memorySource.readFailed": "Could not read which memory agents use.",
   "memorySource.saveFailed": "The change was not saved; the switch is back.",
   "memorySource.unchosen": "Off: agents use Claude's and Codex's own memory and Delegatus rules together. Turn on to keep one memory.",
+  "memorySource.limit": "Agents run the import, so it uses your plan's limit.",
   "memorySource.needsOrchestrator": "Needs an orchestrator first: create one in a project.",
   "memorySource.preparing": "Backing up Claude and Codex notes for the curator. Their memory stays on until the import finishes.",
   "memorySource.importing": "Importing Claude and Codex notes through the curator: {done} of {total}{parts}. Their memory stays on until this finishes.",
