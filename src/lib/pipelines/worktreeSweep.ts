@@ -20,6 +20,7 @@ import type { ExecResult } from "@/lib/workflows/provision";
 import type { WorktreeSweepCache } from "./worktreeSweepCache";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
+import { latestTerminalTime } from "./laneFinish";
 import { pipelineLiteralGitEnv } from "./git";
 import { readWorktreeProvenance } from "./worktreeProvenance";
 import { backupWorktree } from "./worktreeBackup";
@@ -321,15 +322,6 @@ function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
   return !SETTLED_STATES.has(pipeline.state) || !pipelineActivitySettled(pipeline);
 }
 
-function latestTerminalTime(pipelines: readonly SweptPipeline[]): number {
-  const times = pipelines.flatMap(owner => [
-    owner.closedAt,
-    ...(owner.runs ?? []).flatMap(run => run.attempts.map(attempt => attempt.completedAt)),
-    ...(owner.delivery?.journal ?? []).filter(entry => entry.kind === "release").map(entry => entry.at),
-  ])
-    .map(date => date ? Date.parse(date) : Number.NaN).filter(Number.isFinite);
-  return times.length ? Math.max(...times) : 0;
-}
 
 /** The baseline's dependency, build and cache classes. Evidence in
     `.artifacts` and nested repositories remains protected inside them. */

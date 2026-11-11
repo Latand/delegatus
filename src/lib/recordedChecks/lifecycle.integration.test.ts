@@ -913,12 +913,14 @@ for (const restart of [false, true]) test(`a temporary proven no-dispatch comple
 }, 120_000);
 
 test("pending and unread recorded roots measure late files without releasing evidence holds", async () => {
+  const { attemptTempAuthority } = await import("@/lib/runtime/attemptTempProduction");
   const f = await fixture(true);
   const row = await handoffRecordedCheck(f.launch.conversationId, "held-root-pressure", f.log,
     { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
   let now = Date.now() + 120_000;
   const temps = new AttemptTempStore(), store = new RecordedCheckStore();
   const sweep = () => sweepAttemptTemps(temps, { now: () => now, maxRoots: 32, capBytes: 0, references: fixtureReferences,
+    authority: (owner, inventory) => attemptTempAuthority(owner, inventory, () => now),
     state: async () => { throw new Error("held evidence cannot enter retirement admission"); },
     scan: () => { throw new Error("held evidence cannot enter deletion scan"); } });
   const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
