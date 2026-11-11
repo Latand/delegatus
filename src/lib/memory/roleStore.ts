@@ -115,9 +115,7 @@ export function roleMemoryCollection(create = false): SqliteStateCollection<Role
   if (held) return held;
   if (!create && !stateCollectionsInitialized(file, [seed])) return null;
   if (create) initializeStateCollections(file, [seed]);
-  const opened = new SqliteStateCollection<RoleMemoryRow>(file, { collection: COLLECTION, schemaVersion: 1, busyMessage: "role memory busy", key, decode, clone: structuredClone, strictDecode: true,
-    // A whole read lands in the shared, bounded read cache, counted with every other collection.
-    readCacheKey: "role-memory-v1" });
+  const opened = new SqliteStateCollection<RoleMemoryRow>(file, { collection: COLLECTION, schemaVersion: 1, busyMessage: "role memory busy", key, decode, clone: structuredClone, strictDecode: true });
   cache.set(file, opened);
   return opened;
 }

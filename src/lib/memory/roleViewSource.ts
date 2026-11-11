@@ -847,7 +847,7 @@ export function activeProfileBasis(scopes: readonly string[]): Map<string, Array
 export function storedRuleTexts(): { rule: string; why: unknown }[] {
   return reader("__llvCurationVersionReader").query<{ fields: string | null }, []>(`
     SELECT json_extract(value_json, '$.kind', '$.id', '$.rule', '$.why') AS fields FROM state_rows
-    WHERE collection='role_memory' AND row_key > 'r:' AND row_key < 'r;'
+    WHERE collection='role_memory' AND row_key > 'r:' AND row_key < 'r;' ORDER BY row_order, row_key
   `).all().map(row => {
     const [kind, id, rule, why] = JSON.parse(row.fields ?? "[]") as unknown[];
     // The same shape the collection's decoder requires of a rule row.
