@@ -283,6 +283,9 @@ export type WorktreeSweepPorts = {
       deferred by this pass's budget; read again before each removal. */
   conversationCwds: () => readonly string[] | ConversationCwdStatus;
   scan: () => ProcessScan;
+  /** Directories that recorded checks name as roots. A file under one of
+      them is linked evidence wherever it lies. */
+  recordedRoots?: () => readonly string[];
   /** Writes the checkout's resolution to the worktree map; false refuses the removal. */
   recordResolution: (worktree: string) => boolean;
   measure?: (directory: string) => Promise<number>;
@@ -332,6 +335,17 @@ const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
   ".venv", "venv", ".tox", ".nox",
 ]);
 const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_Store"]);
+/** Directories a test runner fills again on every run: Playwright's default
+    output directory and its HTML report. Captures inside them are saved by a
+    backup only when a lane record or a recorded check links them. */
+const RUNNER_OUTPUT_DIRECTORIES: ReadonlySet<string> = new Set(["test-results", "playwright-report"]);
+
+/** The path from its first runner output directory on; null outside one. */
+function runnerOutputPath(relative: string): string | null {
+  const segments = relative.split("/");
+  const at = segments.findIndex(segment => RUNNER_OUTPUT_DIRECTORIES.has(segment));
+  return at < 0 || at === segments.length - 1 ? null : segments.slice(at).join("/");
+}
 
 function rebuildableDirectory(name: string): boolean {
   return REBUILDABLE_DIRECTORIES.has(name) || name.endsWith(".egg-info");
@@ -1337,11 +1351,25 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const unlock = lockCheckoutHead(worktree, accessible, report.errors);
         if (!unlock) { keep({ ...base, reason: "locked" }); return true; }
         let backup: Awaited<ReturnType<typeof backupWorktree>> | undefined;
+        // Runner output is written again by the next run. It stays evidence
+        // only where something names it: a recorded check whose root holds
+        // the file, or the lane's own record (a stage report, a conclusion)
+        // that writes its path from the runner directory on.
+        let lanes: string | undefined, recorded: string[] | undefined;
+        const regenerable = (relative: string) => {
+          const output = runnerOutputPath(relative.split(path.sep).join("/"));
+          if (!output) return false;
+          const file = path.join(worktree, relative);
+          recorded ??= (ports.recordedRoots?.() ?? []).map(root => path.resolve(root));
+          if (recorded.some(root => inside(file, root) && (inside(root, worktree) || inside(worktree, root)))) return false;
+          lanes ??= ownersOf(ownershipPipelines(), worktree).map(owner => JSON.stringify(owner)).join("\n");
+          return !lanes.includes(JSON.stringify(output).slice(1, -1));
+        };
         try {
           if (accessible(worktree) !== worktree) throw new Error("backup filesystem view unavailable");
           backup = await backupWorktree({ directory: worktree, pipelineId: owners[0]!.id, head: entry.head!,
             branch: entry.branch, ignored: classifyStatus(status.stdout, true).ignored,
-            disposable: relative => disposableIgnored(worktree, relative.split(path.sep).join("/")), guard });
+            disposable: relative => disposableIgnored(worktree, relative.split(path.sep).join("/")), regenerable, guard });
           const listing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
           const current = parseWorktreeList(listing.stdout);
           const row = current.find(row => resolve(row.path) === worktree);
@@ -1938,12 +1966,13 @@ export async function productionWorktreeSweepPorts(
   mode: WorktreeSweepMode,
   run: GithubRunner = githubRunner(os.tmpdir(), GH_TIMEOUT_MS),
 ): Promise<WorktreeSweepPorts> {
-  const [{ loadArchivedPipelinesForListAsync, loadPipelinesForListAsync, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }] = await Promise.all([
+  const [{ loadArchivedPipelinesForListAsync, loadPipelinesForListAsync, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }, { recordedRootDirectories }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/projects/curation"),
     import("@/lib/agent/registry"),
     import("@/lib/scanner/describe"),
     import("@/lib/forge/cache"),
+    import("@/lib/recordedChecks/store"),
   ]);
   const pipelines = withArchived(await loadPipelinesForListAsync(), await loadArchivedPipelinesForListAsync());
   const repositories = projectCurationSnapshot().manualProjects.map((project) => project.root);
@@ -1967,6 +1996,7 @@ export async function productionWorktreeSweepPorts(
     repositories,
     conversationCwds: () => conversationCwdStatus(agentRegistry().worktreeProtectionSnapshot()),
     scan: () => scanProcesses(),
+    recordedRoots: () => recordedRootDirectories(),
     recordResolution: (worktree) => recordWorktreeResolution(worktree, access.accessiblePath(worktree)) !== null,
     tempRoots: [...new Set(temp.map(root => root.path))],
   };

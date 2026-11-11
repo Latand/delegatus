@@ -25,6 +25,9 @@ export async function backupWorktree(options: {
   branch: string | null;
   ignored: string[];
   disposable: (relative: string) => boolean;
+  /** A file a test runner writes again on every run and that nothing links.
+   * It is left out of the saved evidence, whatever its format. */
+  regenerable?: (relative: string) => boolean;
   guard: () => boolean;
 }) {
   const { directory, pipelineId, head } = options;
@@ -65,6 +68,7 @@ export async function backupWorktree(options: {
     const components = path.normalize(relative).split(path.sep);
     if (components.includes(".git")) throw new Error("nested repository requires its own preservation");
     const inArtifact = artifact || components.includes(".artifacts");
+    if (!stat.isDirectory() && !inArtifact && options.regenerable?.(relative)) return;
     if (stat.isSymbolicLink()) {
       if (!inArtifact && !isPreservedMedia(relative) && options.disposable(relative)) return;
       throw new Error("linked evidence requires its own preservation");
