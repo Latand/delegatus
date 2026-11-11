@@ -107,7 +107,7 @@ Verdict **confirmed**. This account's catalogue contains GPT-6.1-Sol, and the cu
 ## (iii) Launcher arguments, solo, team and SIGTERM
 
 ```sh
-rtk proxy bash "$GATE" --record "$TMPDIR/cli-measurements-v2.log" python3 "$MEASURE/lifecycle.py"
+MEASUREMENT_RUN_ID=cli-solo-team-shutdown rtk proxy bash "$GATE" --record "$TMPDIR/cli-measurements-v2.log" python3 "$MEASURE/lifecycle.py"
 ```
 
 Each process used the unofficial community launcher's start arguments, with
@@ -149,7 +149,7 @@ Verdict **confirmed**. SIGTERM shut down these empty isolated installs, includin
 ### Update from 1.11.0
 
 ```sh
-rtk proxy bash "$GATE" --record "$TMPDIR/update-measurements-v2.log" python3 "$MEASURE/update.py"
+MEASUREMENT_RUN_ID=legacy-update rtk proxy bash "$GATE" --record "$TMPDIR/update-measurements-v2.log" python3 "$MEASURE/update.py"
 ```
 
 The old CLI used the same start arguments. A private cookie jar opened `/`
@@ -224,7 +224,7 @@ Verdict **could not be measured here**. A real Mac is unavailable for Safari Add
 ## (vi) Readiness with the access key enabled
 
 ```sh
-rtk proxy bash "$GATE" --record "$TMPDIR/cli-measurements-v2.log" python3 "$MEASURE/lifecycle.py"
+MEASUREMENT_RUN_ID=access-key-readiness rtk proxy bash "$GATE" --record "$TMPDIR/cli-measurements-v2.log" python3 "$MEASURE/lifecycle.py"
 ```
 
 The private install received a generated LLV_TOKEN. The unauthenticated
@@ -242,7 +242,7 @@ Verdict **confirmed**. The access-key install is serving, and the launcher's una
 ```sh
 MEASUREMENT_RUN_ID=cold-a rtk proxy bash "$GATE" --record "$TMPDIR/cli-cold-a.log" python3 "$MEASURE/lifecycle.py"
 MEASUREMENT_RUN_ID=cold-b rtk proxy bash "$GATE" --record "$TMPDIR/cli-cold-b.log" python3 "$MEASURE/lifecycle.py"
-rtk proxy bash "$GATE" --record "$TMPDIR/codex-cold-measurements.log" python3 "$MEASURE/codex-start.py"
+MEASUREMENT_RUN_ID=codex-cold rtk proxy bash "$GATE" --record "$TMPDIR/codex-cold-measurements.log" python3 "$MEASURE/codex-start.py"
 rtk proxy bash "$GATE" --record "$TMPDIR/dom-measurements.log" python3 "$MEASURE/run-dom.py"
 ```
 
