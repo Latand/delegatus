@@ -151,6 +151,20 @@ Ready in {project}.
 ${ORCHESTRATOR_GREETING_OFFER}
 Use the actual project name in place of {project}. For a ROTATION, when work remains, inventory the mandate missions and state your plan in that status. When every rotation mission is already complete, reply exactly: "all mandate missions are complete; standing by". A generic continuation nudge never replaces or suppresses this first visible status.`;
 
+/**
+ * The instruction for the first orchestrator an installation ever has. It is
+ * appended to the text of that one spawn and is never part of a stored mandate,
+ * of {@link ORCHESTRATOR_SYSTEM_PROMPT} or of its version: a rotation, a kept
+ * mandate and an adopted conversation are built from the default text and so
+ * never carry it, and no existing seat reads it as stale. Which spawn gets it
+ * is decided under the seat store's lock (`firstRun` on the seat record).
+ */
+export const ORCHESTRATOR_FIRST_RUN_DIRECTIVE = `## First run
+This is the first orchestrator on this installation. After your greeting, in the same turn:
+1. Read the project's README, its top-level file list and the titles of its open issues (when a forge is connected; skip what is not there). Change nothing and run nothing.
+2. Publish exactly one decision form with publish_prototype_review, without taskId. Title, in the operator's language: "What should I do first?". One question: say what you read, that each choice starts agents on the operator's plan (name the engine you run on) and that they may write their own. Set other: true and skippable: false. Offer exactly three options, the first one recommended: a read-only tour of the code with one agent. The other two are concrete tasks from what you read. Word each option as the task, then " — " and what it starts, for example "a builder and a reviewer, then a pull request".
+3. In chat only point to the form. Start no other form or task until it is answered. Afterwards work as usual; run the tour as one read-only stage.`;
+
 /** Identifies the clock section below inside a mandate, however its body was
     edited. Delivery keys off THIS rather than the whole text: a caller who
     reworded the paragraph and kept the heading meant their wording, and

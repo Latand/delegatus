@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Check, ChevronLeft, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, ChevronLeft, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
@@ -8,21 +8,24 @@ import { Z } from "@/components/layers";
 import { requestOrchestratorDraft, type OrchestratorDraftLaunch } from "@/components/orchestrator/draftPrefill";
 import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
+import { useTelegramBot } from "@/hooks/useTelegramBot";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { OnboardingMarker } from "@/lib/onboarding/marker";
-import { ONBOARDING_GUIDE_STEP_IDS, ONBOARDING_LATER_STEP_IDS, ONBOARDING_OPTIONAL_STEP_IDS, ONBOARDING_STEP_IDS, type OnboardingGuideStepId, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/steps";
+import { onboardingStepLists, ONBOARDING_OPTIONAL_STEP_IDS, ONBOARDING_STEP_IDS, type OnboardingGuideStepId, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/steps";
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
 import { CheckStep } from "./CheckStep";
 import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
+import { MemoryStep } from "./MemoryStep";
 import { OrchestratorStep } from "./OrchestratorStep";
 import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
 import type { CreateDraft } from "@/components/ProjectRail";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
+import type { MemorySourceState } from "@/components/memory/MemorySourceRow";
 import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMarkerStatus, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
 
@@ -37,12 +40,8 @@ import { VoiceStep } from "./VoiceStep";
  * menu rows open the Agents table or the Voice step alone in the same shell.
  */
 
-const GUIDE: readonly OnboardingGuideStepId[] = ONBOARDING_GUIDE_STEP_IDS;
-const LATER: readonly OnboardingStepId[] = ONBOARDING_LATER_STEP_IDS;
-
-function isGuideStep(id: OnboardingStepId): id is OnboardingGuideStepId {
-  return (GUIDE as readonly string[]).includes(id);
-}
+/* Until the bot read answers there is no bot: Telegram sits under "Later" (docs: install-and-onboarding §5.4). */
+const NO_BOT_GUIDE = onboardingStepLists(false).guide;
 
 const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.step.engines",
@@ -50,6 +49,7 @@ const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   telegram: "onboarding.step.telegram",
   orchestrator: "onboarding.step.orchestrator",
   agents: "onboarding.step.agents",
+  memory: "onboarding.step.memory",
   phone: "onboarding.step.phone",
   voice: "onboarding.step.voice",
   check: "onboarding.step.check",
@@ -62,6 +62,7 @@ const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   telegram: "onboarding.telegram.heading",
   orchestrator: "onboarding.orchestrator.heading",
   agents: "onboarding.agents.heading",
+  memory: "onboarding.memory.heading",
   phone: "onboarding.phone.heading",
   voice: "onboarding.voice.heading",
   check: "onboarding.check.heading",
@@ -76,6 +77,7 @@ const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0] | null> = {
   telegram: "onboarding.telegram.lead",
   orchestrator: "orchPanel.intro",
   agents: "onboarding.agents.lead",
+  memory: "onboarding.memory.lead",
   phone: "onboarding.phone.lead",
   voice: "onboarding.voice.lead",
   check: null,
@@ -121,8 +123,8 @@ const OPTIONAL: readonly OnboardingStepId[] = ONBOARDING_OPTIONAL_STEP_IDS;
 
 /** The first guide step that is not settled: done, or skipped when the step is
     optional, so a skipped optional step never reopens the guide on itself. */
-export function firstOpenStep(marker: Pick<OnboardingMarker, "steps"> | null): OnboardingGuideStepId {
-  return GUIDE.find((step) => marker?.steps[step] !== "done" && !(OPTIONAL.includes(step) && marker?.steps[step] === "skipped")) ?? GUIDE[0]!;
+export function firstOpenStep(marker: Pick<OnboardingMarker, "steps"> | null, guide: readonly OnboardingGuideStepId[] = NO_BOT_GUIDE): OnboardingGuideStepId {
+  return guide.find((step) => marker?.steps[step] !== "done" && !(OPTIONAL.includes(step) && marker?.steps[step] === "skipped")) ?? guide[0]!;
 }
 
 export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pending", onClose, projects = [], legacyState = false, checkMinutes = DEFAULT_CHECK_MINUTES, onCreateProject }: {
@@ -150,21 +152,46 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const { cli, recheck } = useCliPresence();
   const now = useNow();
   const [view, setView] = useState<OnboardingMode>(mode);
-  const [current, setCurrent] = useState<OnboardingStepId>(() => {
-    const target = mode === "mapping" ? "agents" : mode === "voice" ? "voice" : initialStep ?? null;
-    return target ?? firstOpenStep(marker);
-  });
+  /* One read of the bot per opening of the guide. The step lists are fixed by
+     its first answer: while the read is out, or when it fails, there is no bot. */
+  const bot = useTelegramBot(view === "guide");
+  const [botConnected, setBotConnected] = useState<boolean | null>(null);
+  const { guide: GUIDE, later: LATER } = onboardingStepLists(botConnected === true);
+  const isGuideStep = (id: OnboardingStepId): id is OnboardingGuideStepId => (GUIDE as readonly string[]).includes(id);
+  const target: OnboardingStepId | null = mode === "mapping" ? "agents" : mode === "voice" ? "voice" : initialStep ?? null;
+  const [current, setCurrent] = useState<OnboardingStepId>(() => target ?? firstOpenStep(marker));
   /* The guide step a "Later" step returns to. */
   const [lastGuide, setLastGuide] = useState<OnboardingGuideStepId>(() => isGuideStep(current) ? current : firstOpenStep(marker));
+  /* The step the notice rides on, besides the first. */
+  const [noticeStep, setNoticeStep] = useState<OnboardingGuideStepId>(lastGuide);
+  /* Whether the person has moved between steps yet; until then the opening step is the guide's own choice. */
+  const [moved, setMoved] = useState(false);
+  if (botConnected === null && bot.status) {
+    const connected = bot.status.connected === true;
+    setBotConnected(connected);
+    /* The first answer about the bot fixes the step lists. A guide opened on its first open step, and not yet left,
+       picks that step again from the lists it now has: a connected bot brings its numbered Telegram step back
+       into the walk, and an unresolved one is the step the guide opens on. */
+    if (connected && !moved && target === null) {
+      const opening = firstOpenStep(marker, onboardingStepLists(true).guide);
+      setCurrent(opening);
+      setLastGuide(opening);
+      setNoticeStep(opening);
+    }
+  }
   const [steps, setSteps] = useState<Record<OnboardingStepId, OnboardingStepState>>(() => ({ ...Object.fromEntries(ONBOARDING_STEP_IDS.map((id) => [id, null])), ...marker?.steps }) as Record<OnboardingStepId, OnboardingStepState>);
   const [chosen, setChosen] = useState<GuideProject | null>(null);
   const [cleanStart, setCleanStart] = useState(false);
   const choose = (project: GuideProject) => setChosen(project);
   const projectAction = useRef<(() => Promise<boolean>) | null>(null);
+  /* The Telegram step's save, for the footer's Continue. */
+  const telegramAction = useRef<(() => Promise<boolean> | null) | null>(null);
+  const [memoryState, setMemoryState] = useState<MemorySourceState>("loading");
+  /* The orchestrator step's create action, which the footer carries; null while the step has its own action in the body. */
+  const [createAction, setCreateAction] = useState<{ disabled: boolean; run: () => void } | null>(null);
   const [projectDraft, setProjectDraft] = useState<CreateDraft>("none");
   /* The notice rides on the first guide step and on the step the guide opened
      on, so a later step opens on its own heading. */
-  const [noticeStep] = useState<OnboardingGuideStepId>(lastGuide);
   const stateNotice = view === "guide" && legacyState && (current === GUIDE[0] || current === noticeStep) ? (
     <div role="status" data-onboarding-legacy-state="" className="mb-4 rounded-[10px] border border-border bg-sunken p-3 text-ui text-secondary">
       <p>{t("onboarding.legacy.notice")}</p>
@@ -265,6 +292,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   };
   const markDone = (id: OnboardingStepId) => mark(id, "done");
   const goTo = (id: OnboardingStepId) => {
+    setMoved(true);
     setStepListOpen(false);
     setCurrent(id);
     if (isGuideStep(id)) setLastGuide(id);
@@ -274,6 +302,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const leaveLater = () => {
     if (current === "phone" && phoneOutcome.current !== "serving") mark("phone", "skipped");
     else if (current === "relay" && !relayPaired.current) mark("relay", "skipped");
+    else if (current === "memory" && !["preparing", "importing", "draining", "active"].includes(memoryState)) mark("memory", "skipped");
+    else if (current === "telegram" && !telegramSaved.current) { if (steps.telegram === null) mark("telegram", "skipped"); }
     else markDone(current);
     backToGuide();
   };
@@ -300,9 +330,16 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       goTo("orchestrator");
       return;
     }
-    if (current === "telegram" && !telegramSaved.current) {
-      mark("telegram", "skipped");
-      goTo("orchestrator");
+    if (current === "telegram") {
+      /* A chosen chat or a pasted link is saved first and the dialog moves on once the write is kept; with nothing chosen
+         Continue writes nothing and the step reads as skipped. */
+      const saving = telegramAction.current?.() ?? null;
+      if (saving) {
+        void saving.then((kept) => { if (kept) goTo(GUIDE[Math.min(GUIDE.length - 1, guideIndex + 1)]!); });
+        return;
+      }
+      if (steps.telegram !== "done") mark("telegram", "skipped");
+      goTo(GUIDE[Math.min(GUIDE.length - 1, guideIndex + 1)]!);
       return;
     }
     markDone(current);
@@ -364,6 +401,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     <PhoneStep onSkip={() => skipLater("phone")} onState={(state) => { phoneOutcome.current = state; setPhoneState(state); }} />
   ) : current === "voice" ? (
     <VoiceStep onSkip={() => skipLater("voice")} onGoEngines={() => goTo("engines")} />
+  ) : current === "memory" ? (
+    <MemoryStep onGoOrchestrator={() => goTo("orchestrator")} onState={setMemoryState} />
   ) : current === "relay" ? (
     <RelayStep claude={claude} codex={codex} onGoEngines={() => goTo("engines")} onPaired={() => { relayPaired.current = true; markDone("relay"); }} onHasRelay={onHasRelay} onSkip={() => skipLater("relay")} />
   ) : current === "project" ? (
@@ -371,8 +410,10 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   ) : current === "telegram" ? (
     <TelegramReportsStep
       project={chosen}
+      bot={bot}
+      numbered={guideStep}
+      actionRef={telegramAction}
       onSaved={() => { telegramSaved.current = true; markDone("telegram"); }}
-      onSkip={() => { mark("telegram", "skipped"); goTo("orchestrator"); }}
     />
   ) : current === "orchestrator" ? (
     <OrchestratorStep
@@ -385,6 +426,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       onCreate={create}
       onReadFirst={readFirst}
       onOpenSeat={openSeat}
+      onCreateAction={setCreateAction}
+      onGoAgents={() => goTo("agents")}
       newcomer={unfinishedFirstRun(marker, markerStatus)}
     />
   ) : (
@@ -434,7 +477,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   );
 
   /* The Check step's rows open in place with a failure; the dialog takes the height it needs, up to the viewport. */
-  const checkTall = view === "guide" && current === "check";
+  const checkTall = view === "guide" && (current === "check" || (current === "telegram" && guideStep));
   /* One filled button at a time: while a step's own action is the next thing
      to press (Run the check, Turn on phone access, Create the orchestrator),
      the footer's button steps back to a border. */
@@ -442,12 +485,14 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other" || phoneState === "exposed"))
     || (current === "project" && !chosen && projectDraft === "taken")
     || current === "orchestrator"
-    || current === "telegram"
+    || (current === "telegram" && !guideStep)
+    || current === "memory"
     || current === "relay";
   const counter = guideStep ? t("onboarding.stepCounter", { n: guideIndex + 1, total: GUIDE.length }) : t("onboarding.later");
   const bordered = "border border-border bg-card text-primary hover:bg-sunken";
   const filled = "bg-brand text-on-brand hover:opacity-90";
-  const footerButton = "inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2]";
+  const footerButtonBase = "inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11";
+  const footerButton = `${footerButtonBase} max-sm:flex-[2]`;
   const backButton = (onClick: () => void) => (
     <button type="button" data-onboarding-back="" onClick={onClick} className="inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-3.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-1">
       {t("onboarding.back")}
@@ -461,9 +506,17 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     <>
       {guideIndex > 0 ? backButton(() => goTo(GUIDE[guideIndex - 1]!)) : null}
       {current === "orchestrator" ? (
-        <button type="button" data-onboarding-primary="" data-onboarding-finish-without="" onClick={() => finish("completed", "skipped")} className={`${footerButton} ${bordered}`}>
-          {t("onboarding.finishWithout")}
-        </button>
+        <>
+          <button type="button" data-onboarding-primary="" data-onboarding-finish-without="" onClick={() => finish("completed", "skipped")} className={`${footerButtonBase} ${bordered} max-sm:flex-1`}>
+            {t("onboarding.finishWithout")}
+          </button>
+          {createAction ? (
+            <button type="button" data-onboarding-orchestrator-create="" disabled={createAction.disabled} onClick={createAction.run} className={`${footerButtonBase} ${filled} gap-1.5 disabled:opacity-50 max-sm:order-first max-sm:basis-full`}>
+              <Bot className="h-4 w-4" aria-hidden />
+              {t("orchPanel.confirm")}
+            </button>
+          ) : null}
+        </>
       ) : (
         <button type="button" data-onboarding-primary="" onClick={next} className={`${footerButton} ${stepOwnsPrimary ? bordered : filled}`}>
           {t("onboarding.continue")}
@@ -517,7 +570,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           <div className={heading ? "mt-4" : ""}>{content}</div>
         </div>
         {footerButtons ? (
-          <footer className="flex shrink-0 gap-2 border-t border-border bg-raised px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
+          <footer className="flex shrink-0 flex-wrap gap-2 border-t border-border bg-raised px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
             {footerButtons}
           </footer>
         ) : null}
@@ -561,8 +614,9 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           </div>
         </div>
         {footerButtons ? (
-          <footer className="flex h-[60px] shrink-0 items-center gap-2 border-t border-border bg-raised px-4">
-            <span className="min-w-0 flex-1 text-label font-semibold text-muted tabular-nums">{counter}</span>
+          <footer className="flex h-[60px] shrink-0 items-center justify-end gap-2 border-t border-border bg-raised px-4">
+            {/* Between 640 and 860 px the orchestrator step needs the row for its buttons. */}
+            <span className={`min-w-0 flex-1 text-label font-semibold text-muted tabular-nums ${current === "orchestrator" ? "max-[859px]:hidden" : ""}`}>{counter}</span>
             {footerButtons}
           </footer>
         ) : null}
