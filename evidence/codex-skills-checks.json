@@ -1693,7 +1693,7 @@
       "sharedFixture": "src/lib/pipelines/engine.rolePrivacyEffects.fixture.ts",
       "rule": "Every existing effect scenario runs in exactly one explicit test file. Assertions, inputs, per-test timeouts and process isolation are preserved; the recursive child receives its wrapper path."
     },
-    "finalMainParent": "32a6460958623ce4a09709edd343224a171c8ce4",
+    "finalMainParent": "e6dc5e6b222d72fb1b3bd9503dacf122e7381dce",
     "freshRemovalControls": {
       "pipeline": {
         "normal": {
@@ -1717,6 +1717,16 @@
       },
       "remainingControls": "The other twenty control sites are unchanged; their retained normal/red evidence remains applicable."
     },
-    "lateMainAudit": "The first-run guide appends text to the existing role-preset spawn. The stage-test repair fixes isolation on main. Neither adds a Codex launch mechanism; both are merged without conflict."
+    "lateMainAudit": "The first-run guide appends text to the existing role-preset spawn. The stage-test repair fixes isolation on main. Neither adds a Codex launch mechanism; both are merged without conflict.",
+    "previousMainParent": "32a6460958623ce4a09709edd343224a171c8ce4",
+    "gateRepairIntegration": "The publication-gate repair from main is merged without conflict. It preserves decisive failures during later comparator deadlines and retries configuration-only privacy interruptions. No Codex launch-policy source or launch path changes.",
+    "precedingNativeHook": {
+      "exit": 0,
+      "selectedFiles": 143,
+      "newFailures": 0,
+      "preExistingFailures": 83,
+      "flaky": 3,
+      "verification": "Native pre-push with agent Git overrides cleared and the standard Git exec PATH; all phases passed before this gate-only main integration. Final receipts are retained separately."
+    }
   }
 }
