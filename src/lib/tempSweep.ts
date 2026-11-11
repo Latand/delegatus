@@ -298,7 +298,7 @@ export type TempSweepReport = {
   /** Allocations retained under each guard; absent in older report versions. */
   keptBytes?: TempSweepReport["kept"];
   /** Git or inspection holds beyond the pipeline worktree list. */
-  held?: { path: string; via: string; reason: TreeHold | "pinned"; bytes: number }[];
+  held?: { path: string; via: string; reason: TreeHold | "pinned" | "attempt-owner-unlisted"; bytes: number }[];
   errors: string[];
 };
 
@@ -326,6 +326,10 @@ export type TempSweepOptions = {
   onlyDirectories?: readonly string[];
   /** Re-read durable attempt authority after asynchronous measurements. */
   eligible?: (directory: string) => Promise<boolean>;
+  /** Whether the attempt ledger lists this root. A root that carries the
+   * ledger's owner marker without a ledger row is retired by nobody, so it is
+   * reported as held. Without this port every marked root counts as listed. */
+  attemptLedger?: (directory: string) => boolean;
   /** Synchronous authority and identity fence immediately before quarantine/removal. */
   dispatchGuard?: (directory: string) => boolean;
   /** Registered disposable roots have their own durable authority and streamed
@@ -729,9 +733,12 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       };
       // The attempt ledger owns this root: it measures it with one native
       // `du` and decides its retirement. This sweep never removes it, so a
-      // walk of its tree here would only repeat that measurement.
+      // walk of its tree here would only repeat that measurement. A marked
+      // root the ledger does not list has no owner left; it stays, and the
+      // report names it.
       if (!options.onlyDirectories && fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
-        await keep("inUse", 0);
+        const listed = options.attemptLedger?.(candidate) ?? true;
+        if (await keep("inUse", 0) && !listed) report.held!.push({ path: candidate, via: root.via, reason: "attempt-owner-unlisted", bytes: 0 });
         continue;
       }
       const inspection = inspect(reachable, root, candidate);
@@ -903,8 +910,13 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
   // Root discovery is one snapshot; deletion gets its own fresh process scan.
   let report: TempSweepReport;
   try {
-    try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...ports, roots, ...checkouts }); }
-    finally { await view.close(); }
+    // A ledger that cannot be opened leaves every marked root counted as listed.
+    let ledger: { has: (directory: string) => boolean; close: () => void } | undefined;
+    try { ledger = new (await import("@/lib/runtime/attemptTempRetention")).AttemptTempStore(); }
+    catch (error) { console.error("[temp sweep] attempt ledger unavailable", error instanceof Error ? error.message : String(error)); }
+    const opened = ledger;
+    try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...(opened ? { attemptLedger: (directory: string) => opened.has(directory) } : {}), ...ports, roots, ...checkouts }); }
+    finally { opened?.close(); await view.close(); }
   } catch (error) {
     report = { at: new Date(ports.now?.() ?? Date.now()).toISOString(), failed: true, mode,
       maxAgeHours: maxAgeMs / HOUR_MS, roots: roots.map(root => root.path), removed: [], removedBytes: 0,
@@ -916,7 +928,8 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
   const { young, inUse, worktree, deferred } = report.kept;
   console.log(
     `[temp sweep] removed ${report.removed.length} stale director${report.removed.length === 1 ? "y" : "ies"} (${megabytes(report.removedBytes)});`
-    + ` kept ${young} young, ${inUse} in use, ${worktree} worktree, ${deferred} deferred; ${report.errors.length} error(s)`,
+    + ` kept ${young} young, ${inUse} in use, ${worktree} worktree, ${deferred} deferred;`
+    + ` ${(report.held ?? []).filter(hold => hold.reason === "attempt-owner-unlisted").length} attempt root(s) outside the ledger; ${report.errors.length} error(s)`,
   );
   return report;
 }

@@ -974,12 +974,67 @@ test("a write beside a process cwd outside every checkout leaves the fence stand
   expect(inventory.unchangedAll()).toBeFalse();
 });
 
-test("a replaced directory above a process cwd fells the fence", async () => {
+const holder = (pid: number, cwd: string) => ({ ownNamespace: null, processes: [{ pid, namespace: null, stamped: false, paths: [cwd] }] });
+const pause = (ms = 25) => new Promise(resolve => setTimeout(resolve, ms));
+
+test("a directory above a process cwd that is removed and made again fells the fence", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-replaced-ancestor"); fs.mkdirSync(directory);
   const busy = path.join(parent, "busy"), cwd = path.join(busy, "holder"); fs.mkdirSync(cwd, { recursive: true });
   const inventory = new RepositoryLinkInventory();
-  const scan = { ownNamespace: null, processes: [{ pid: 52, namespace: null, stamped: false, paths: [cwd] }] };
-  expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeTrue();
-  fs.renameSync(busy, busy + "-previous"); fs.mkdirSync(cwd, { recursive: true });
+  expect(await attemptReferencesClear(directory, directory, holder(52, cwd), async () => true, inventory)).toBeTrue();
+  await pause();
+  // The file system may hand both inode numbers back to the new directories.
+  fs.rmSync(busy, { recursive: true }); fs.mkdirSync(cwd, { recursive: true });
   expect(inventory.unchangedAll()).toBeFalse();
+});
+
+test("a checkout marker that disappears fells the fence", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-lost-marker"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
+  fs.mkdirSync(cwd, { recursive: true }); fs.writeFileSync(path.join(repository, ".git"), "gitdir: /elsewhere\n");
+  const inventory = new RepositoryLinkInventory();
+  expect(await attemptReferencesClear(directory, directory, holder(53, cwd), async () => true, inventory)).toBeTrue();
+  await pause();
+  fs.rmSync(path.join(repository, ".git"));
+  expect(inventory.unchangedAll()).toBeFalse();
+});
+
+test("a marker file replaced by a directory, or rewritten in place, fells the fence", async () => {
+  for (const change of ["directory", "rewrite"] as const) {
+    const parent = root(), directory = path.join(parent, "llv-stage-changed-marker"); fs.mkdirSync(directory);
+    const repository = path.join(parent, "checkout"), marker = path.join(repository, ".git");
+    fs.mkdirSync(repository); fs.writeFileSync(marker, "gitdir: /elsewhere/one\n");
+    const inventory = new RepositoryLinkInventory();
+    expect(await attemptReferencesClear(directory, directory, holder(54, repository), async () => true, inventory)).toBeTrue();
+    await pause();
+    if (change === "directory") { fs.rmSync(marker); fs.mkdirSync(marker); }
+    else fs.writeFileSync(marker, "gitdir: /elsewhere/another/place\n");
+    expect(inventory.unchangedAll()).toBeFalse();
+  }
+});
+
+test("an entry made in a checkout directory above a process cwd fells the fence", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-checkout-write"); fs.mkdirSync(directory);
+  const repository = path.join(parent, "checkout"), cwd = path.join(repository, "a/b");
+  fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd, { recursive: true });
+  const inventory = new RepositoryLinkInventory();
+  expect(await attemptReferencesClear(directory, directory, holder(55, cwd), async () => true, inventory)).toBeTrue();
+  await pause();
+  fs.writeFileSync(path.join(repository, "a/late"), "entry");
+  expect(inventory.unchangedAll()).toBeFalse();
+});
+
+test("the vanished cwd of an exited process stops counting; that of a live process still refuses", async () => {
+  const parent = root(), first = path.join(parent, "llv-stage-first"), later = path.join(parent, "llv-stage-later");
+  fs.mkdirSync(first); fs.mkdirSync(later);
+  const gone = path.join(parent, "short-lived"), stays = path.join(parent, "stays"); fs.mkdirSync(gone); fs.mkdirSync(stays);
+  const inventory = new RepositoryLinkInventory();
+  expect(await attemptReferencesClear(first, first, holder(56, gone), async () => true, inventory)).toBeTrue();
+  fs.rmdirSync(gone);
+  expect(inventory.unchangedAll()).toBeFalse();
+  // The next root's scan no longer lists the process that held the cwd.
+  expect(await attemptReferencesClear(later, later, holder(57, stays), async () => true, inventory)).toBeTrue();
+  expect(inventory.unchangedAll()).toBeTrue();
+  // A process the scan still lists, with a cwd that cannot be read, proves nothing.
+  await expect(attemptReferencesClear(later, later, holder(56, gone), async () => true, inventory)).rejects.toThrow();
 });
