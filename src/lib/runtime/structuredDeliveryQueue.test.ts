@@ -4187,7 +4187,7 @@ for (const enabled of [false, undefined]) test(`seat inbox scope falls back to i
 });
 
 
-test.each(["gone", "unknown", "unreadable", "publishing", "actuated", "actuation-wins", "previously-actuated"] as const)("a proven dead stage fails its journaled follow-up once and late recovery cannot revive it: %s", async mode => {
+test.each(["gone", "unknown", "unreadable", "publishing", "actuated", "actuation-wins", "previously-actuated", "previously-actuated-legacy"] as const)("a proven dead stage fails its journaled follow-up once and late recovery cannot revive it: %s", async mode => {
   const { isolatedStageRegistry, stageFollowup } = await import("./deadStageDelivery.fixture");
   const { captureProcessIdentity } = await import("@/lib/processIdentity");
   const { procBackend } = await import("@/lib/proc");
@@ -4212,10 +4212,13 @@ test.each(["gone", "unknown", "unreadable", "publishing", "actuated", "actuation
     operationStatus: async id => journal.operationResult(id),
     command: async command => { commands++; return journal.executeOperation(command); },
     transitionOperation: async (id, status, details, options) => {
-      if (mode === "actuation-wins" && status === "failed") journal.transitionOperation(id, "delivering", {
-        reason: "delivering-owner:other-executor@other-writer" });
+      if (mode === "actuation-wins" && status === "failed") {
+        journal.transitionOperation(id, "delivering", { reason: "delivering-owner:other-executor@other-writer" });
+        journal.transitionOperation(id, "queued", { reason: "delivery-auto-retry", deliveryUnverified: true });
+      }
       const result = journal.transitionOperation(id, status, details, options);
       if (status === "failed") transitions.push(id);
+      if (mode === "actuation-wins" && status === "uncertain") throw new Error("terminal acknowledgement lost");
       return result;
     },
   } as import("./client").RuntimeHostClient;
@@ -4238,23 +4241,28 @@ test.each(["gone", "unknown", "unreadable", "publishing", "actuated", "actuation
     structuredHost: { ...entry.structuredHost!, process: null } });
   if (mode === "actuated") journal.transitionOperation(f.held.command.operationId, "delivering", {
     reason: "delivering-owner:earlier-executor@previous-writer" });
-  if (mode === "previously-actuated") {
+  if (mode === "previously-actuated" || mode === "previously-actuated-legacy") {
     journal.transitionOperation(f.held.command.operationId, "delivering");
-    journal.transitionOperation(f.held.command.operationId, "queued", { reason: "delivery-auto-retry", deliveryUnverified: true });
+    journal.transitionOperation(f.held.command.operationId, "queued", mode === "previously-actuated"
+      ? { reason: "delivery-auto-retry", deliveryUnverified: true } : {});
   }
   const dependencies = { registry, client, progress, hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0,
     recover: async () => { recoveries++; if (late) return { target: null, path: conversation.generations.at(-1)!.path,
       conversationId: conversation.id, spawned: true }; throw new StructuredRecoveryHeldForUpdateError(); } };
   try {
-    if (mode === "actuation-wins") await expect(bindStructuredDeliveryQueue([], dependencies))
-      .rejects.toThrow("runtime operation moved before its transition");
-    else await bindStructuredDeliveryQueue([], dependencies);
+    await bindStructuredDeliveryQueue([], dependencies);
     const failed = journal.operationResult(f.held.command.operationId)!;
     if (mode !== "gone") {
-      expect(failed.receipt.status).toBe(mode === "actuated" || mode === "actuation-wins" ? "delivering"
-        : mode === "previously-actuated" ? "uncertain" : "queued");
+      expect(failed.receipt.status).toBe(mode === "actuated" ? "delivering"
+        : mode === "actuation-wins" || mode === "previously-actuated" || mode === "previously-actuated-legacy" ? "uncertain" : "queued");
       expect(failed.receipt.reason ?? "").not.toContain("stage host is gone");
       expect(commands).toBe(0);
+      if (mode === "actuation-wins") {
+        const { sendReceiptFor } = await import("./sendSettlement");
+        expect(sendReceiptFor(registry.snapshot(), f.held.command.operationId)).toMatchObject({
+          duplicateRisk: true, resend: "verify-first",
+        });
+      }
       return;
     }
     expect(failed.receipt.status, failed.receipt.reason ?? "").toBe("failed");

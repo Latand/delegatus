@@ -333,6 +333,9 @@ export interface RuntimeTransitionOptions {
   retirementClaim?: RuntimeRetirementClaim;
   /** Compare-and-set fence evaluated inside the journal write transaction. */
   fromStatuses?: readonly RuntimeReceiptStatus[];
+  /** A dead-host failure is safe only while the original admission is still
+      untouched. Checked atomically against the journal receipt revision. */
+  requirePristineAdmission?: boolean;
   /** Marks a terminal transition as owed a durable projection, inside the same
       write transaction that commits it (#1612). The caller is saying: the
       answer to this call is what carries the outcome into the delivery record,

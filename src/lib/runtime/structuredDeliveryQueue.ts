@@ -3602,12 +3602,16 @@ export class StructuredDeliveryQueue {
       });
     } catch (error) {
       if (error instanceof StructuredStageHostGoneError) {
-        if (status?.deliveryUnverified || status?.reason === "delivery-auto-retry") {
+        try {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: error.message },
+            { fromStatuses: ["pending", "queued"], requirePristineAdmission: true });
+        } catch {
+          // Recovery awaited; the earlier receipt may have been overtaken by
+          // another executor. The journal's transactional pristine check
+          // refuses failure after any intervening transition. Preserve the
+          // ambiguous outcome so the sender cannot safely resend it.
           await this.terminalizeUnverified(effect.operationId, DELIVERY_UNVERIFIED_AFTER_ACTUATION);
-          return;
         }
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: error.message },
-          { fromStatuses: ["pending", "queued"] });
         return;
       }
       if (error instanceof StructuredRecoverySynchronizingError && this.port.deferTarget?.(effect.conversationId)) {

@@ -297,6 +297,7 @@ export class RuntimeHost {
         }
         const details = request.params?.details;
         const fromStatuses = request.params?.fromStatuses;
+        const requirePristineAdmission = request.params?.requirePristineAdmission;
         const retirementClaim = request.params?.retirementClaim as import("@/lib/runtime/contracts").RuntimeRetirementClaim | undefined;
         if (retirementClaim !== undefined && (!retirementClaim || typeof retirementClaim.executorId !== "string"
           || !retirementClaim.executorId || !retirementClaim.process
@@ -324,6 +325,7 @@ export class RuntimeHost {
           details && typeof details === "object" ? details as RuntimeTransitionDetails : {},
           {
             ...(fromStatuses ? { fromStatuses: fromStatuses as RuntimeReceiptStatus[] } : {}),
+            ...(requirePristineAdmission === true ? { requirePristineAdmission: true } : {}),
             ...(retirementClaim ? { retirementClaim } : {}),
             ...(awaitProjection === true ? { awaitProjection: true } : {}),
             ...(confirmedDelivery === true ? { confirmedDelivery: true } : {}),
