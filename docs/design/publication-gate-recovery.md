@@ -48,6 +48,13 @@ exit 1. The publisher also recognizes the exact budget diagnostics emitted by
 older accepted heads. Assertions, other failed checks, privacy findings and
 failed cleanup remain decisive.
 
+After every worker settles, an aggregate interruption retains any file-level
+error already observed. The comparator reports that diagnostic with exit 1
+alongside the interruption reason, so a cleanup refusal still prevents a
+publisher retry. A runner deadline alone retains the capacity-retry behavior.
+The checkpoint controls exercise both a real surviving child followed by
+aggregate expiry and a clean expiry that resumes green files in a new process.
+
 Completed green head files remain reusable under the existing source,
 selection, environment, toolchain and cleanup checks. A fresh comparator
 process resumes the remaining files. Every failing file still receives the

@@ -349,7 +349,18 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   }
   }));
   const rejected = workers.find(worker => worker.status === "rejected");
-  if (rejected?.status === "rejected") throw rejected.reason;
+  if (rejected?.status === "rejected") {
+    // All owned runners have settled. Preserve their observed diagnostics
+    // before an aggregate deadline can turn failed cleanup into a retry.
+    // A runner deadline alone keeps the existing capacity-retry semantics.
+    const diagnostics = results.flatMap(run => run?.failures.filter(site => site.kind === "error"
+      && site.name !== `${RUNNER_ERROR}runner did not finish (124)`) ?? []);
+    if (diagnostics.length) {
+      const reason = rejected.reason instanceof Error ? rejected.reason.message : String(rejected.reason);
+      throw new Error([reason, ...diagnostics.map(site => `${label}: ${site.file}: ${diagnosticName(site)}`)].join("\n"));
+    }
+    throw rejected.reason;
+  }
   for (const run of results) { failures.push(...run.failures); passed.push(...run.passed); completed.push(...run.completed); }
   return { failures, passed, completed, elapsedMs: performance.now() - started };
 }
