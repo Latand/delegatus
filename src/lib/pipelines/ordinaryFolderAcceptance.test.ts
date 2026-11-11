@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
-import { laneChangeSummary, laneFileDiff, laneFileVersion } from "./laneChanges";
+import { laneChangeSummary, laneFileDiff } from "./laneChanges";
 import { realProvisionExec } from "./git";
 import type { Pipeline } from "./types";
 import {
@@ -163,10 +163,16 @@ beforeAll(async () => {
     observed.completed = lane.state === "completed";
     const summary = await laneChangeSummary(lane, exec);
     if (!("error" in summary)) {
-      const diffs = await Promise.all(summary.files.map(file => laneFileDiff(lane, summary.base, summary.head, file.path, exec)));
-      const drawing = summary.files.find(file => file.path === "drawing.pdf");
-      const oldDrawing = drawing && await laneFileVersion(lane, summary.base, summary.head, summary.base, drawing.path, exec, summary.files);
-      const newDrawing = drawing && await laneFileVersion(lane, summary.base, summary.head, summary.head, drawing.path, exec, summary.files);
+      const summaryFiles = summary.files;
+      const diffs = await Promise.all(summaryFiles.map(file => laneFileDiff(lane, summary.base, summary.head, file.path, exec)));
+      const drawing = summaryFiles.find(file => file.path === "drawing.pdf");
+      const versionReader = (await import("./laneChanges") as unknown as Record<string, unknown>).laneFileVersion;
+      const oldDrawing = drawing && typeof versionReader === "function"
+        ? await (versionReader as (lane: Pipeline, base: string, head: string, version: string, file: string, exec: typeof realExec, files: typeof summaryFiles) => Promise<unknown>)(lane, summary.base, summary.head, summary.base, drawing.path, exec, summaryFiles)
+        : undefined;
+      const newDrawing = drawing && typeof versionReader === "function"
+        ? await (versionReader as (lane: Pipeline, base: string, head: string, version: string, file: string, exec: typeof realExec, files: typeof summaryFiles) => Promise<unknown>)(lane, summary.base, summary.head, summary.head, drawing.path, exec, summaryFiles)
+        : undefined;
       const textDiff = diffs.find((diff, index) => summary.files[index]?.path === "result.txt");
       observed.changes = summary.total === 2 && !summary.truncated
         && diffs.every(diff => !("error" in diff))

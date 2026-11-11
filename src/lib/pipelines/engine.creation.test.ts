@@ -28,6 +28,23 @@ test.each([[true, "master", false], [false, "master", false], [false, "master", 
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test.each([["named delivery", true], ["configured non-origin remote", false]] as const)("%s keeps the established default base branch", async (_kind, delivery) => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("named-delivery-base");
+  try {
+    await f.git(f.repo, "symbolic-ref", "HEAD", "refs/heads/documents");
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    await f.git(f.repo, "branch", "main");
+    await f.git(f.repo, "remote", "add", "publish", "https://example.invalid/project.git");
+    const h = harness();
+    h.ports.exec = (command, args, ...rest) => realExec(command, args, ...rest);
+    const result = await createPipelineFromRequest({ task: "Named delivery base", repoDir: f.repo,
+      stages: RUN_STAGES as never, ...(delivery ? { delivery: { remote: "publish", branch: "refs/heads/result" } } : {}) }, h.ports);
+    expect(result.error).toBeUndefined();
+    expect(result.pipeline!.baseBranch).toBe("main");
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test.each([undefined, "main"])("a local repository without a commit is refused before storage (base %s)", async baseBranch => {
   savePipelines([]);
   const f = await realProvisioningRepo("unborn-base");
@@ -2645,8 +2662,8 @@ test("a followed base in a checkout with no origin is its local branch, and an e
   const h = harness();
   savePipelines([]);
   const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd, env, options) => args[0] === "remote" && args[1] === "get-url"
-    ? { code: 2, stdout: "", stderr: "error: No such remote 'origin'" }
+  h.ports.exec = (command, args, cwd, env, options) => args[0] === "remote" && args.length === 1
+    ? { code: 0, stdout: "", stderr: "" }
     : baseExec(command, args, cwd, env, options);
   const followed = await createPipelineFromRequest({ task: "Local follow", repoDir: "/repo", baseBranch: "release", stages: RUN_STAGES as never, autoStart: false }, h.ports);
   expect(followed.pipeline).toMatchObject({ state: "draft", baseBranch: "release", baseRef: ORIGIN_MAIN_SHA, baseRefPinned: false });

@@ -15620,8 +15620,11 @@ export async function createPipelineFromRequest(
   let localBaseBranch = requestedBaseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
   let localOnly = false;
   if (!explicitBaseRef) {
-    const origin = await ports.exec("git", ["remote", "get-url", "origin"], repoDir);
-    localOnly = origin.code === 2;
+    const remotes = await ports.exec("git", ["remote"], repoDir);
+    /* The checked-out branch is the default only for a genuinely local
+       pipeline. A named delivery remote or any configured Git remote keeps
+       the established main/origin base resolution. */
+    localOnly = !req.delivery?.remote && remotes.code === 0 && remotes.stdout.trim() === "";
     if (localOnly) {
       if (!requestedBaseBranch) {
         const current = await ports.exec("git", ["symbolic-ref", "--quiet", "HEAD"], repoDir);

@@ -110,7 +110,7 @@ was read again at `803f12c1`.
 | --- | --- | --- |
 | Picker | `src/app/api/pipelines/preflight/route.ts:31`, `src/app/api/pipelines/source/route.ts:31` | Both call `preparePipelineRepository(repoDir, false)`: it walks the folder and writes nothing (`src/lib/pipelines/initializeRepository.ts:273-274`). The bare probe alone answers `not_git` (`src/lib/pipelines/preflight.ts:58`, `:66-68`). |
 | Creation in a plain folder | `engine.ts:15589`, bound at `:1928`; `initializeRepository.ts:275-276`, `:315`, `:351`, `:354` | Builds a repository on `main` in a sibling temporary directory with one baseline commit authored by Delegatus, then moves `.git` and a `.gitignore` into the folder. A receipt is kept in `.git/delegatus-initialization.json` (`:36`, `:326`). |
-| Bounds of the baseline | `initializeRepository.ts:118-120`, `:129`, `:133`, `:145`, `:322-323` | 2,000 entries, 32 MiB in all and 4,000 bytes of path names; exceeding one of these bounds refuses the whole folder. The whole inventory must also fit one bridge report of 8,192 bytes (`src/lib/bridge/types.ts:64`); an overflow there is reported with the same path-list message. The 2 MiB per-file bound leaves that file out of the baseline and records it in the omit list; it does not refuse the folder. The first three folder-wide bounds are environment settings (`:52-58`); the path-list bound and the omit list are constants. |
+| Bounds of the baseline | `initializeRepository.ts:118-120`, `:129`, `:133`, `:145`, `:322-323` | The configurable folder-wide limits are 2,000 entries, 32 MiB in all and 2 MiB per file (`:118-120`). Exceeding 2,000 entries or 32 MiB refuses the whole folder; a file over 2 MiB is left out and recorded in the omit list. The separate 4,000-byte path-list limit is a constant (`:133`); exceeding it refuses the folder. The whole inventory must also fit one bridge report of 8,192 bytes (`src/lib/bridge/types.ts:64`); an overflow there is reported with the same path-list message. The omit list itself is also fixed by code. |
 | What the baseline leaves out | `initializeRepository.ts:31`, `:136`, `:138`, `:144`, `:151-155`, `:172-180` | A file over 2 MiB; a file with a second hard link; a symlink or other special entry; a nested repository; a name the omit pattern matches (`*secret*`, `*credential*`, `build`, `out`, `dist`, `coverage`, `.config` and others); a file whose content matches a secret pattern. Each is written into `.gitignore` as a literal path and stays untracked afterwards. |
 | Refused places | `initializeRepository.ts:65-75`, `:77-92`, `:134` | The home directory and its ancestors, a system path, the state directory, a folder inside another repository's working tree, and a folder holding a path name that matches a secret pattern. |
 | A draft made from a conversation | `src/lib/pipelines/fromConversation.ts:149-155` | Runs the bare probe with no initialiser: a conversation in a plain folder is refused with "conversation requires an existing Git working copy". A repository with no commit is refused with "conversation requires a named branch with a commit" (`:166`). |
@@ -579,8 +579,10 @@ admission to the plan with the managed-folder setting on; G4 replaces the
 absent apply step with apply once; G5 replaces the absent undo and, with the
 last clause, removes the stop assertion.
 
-The file references only exports that exist at its base, so the typecheck
-passes. It runs by path through `scripts/gate-slot.sh` with a private `HOME`,
+The test imports only exports that exist at its base. Later capabilities are
+discovered through a dynamic compatibility seam, so the base runner reaches
+the named expected failures instead of stopping on a missing export. It runs
+by path through `scripts/gate-slot.sh` with a private `HOME`,
 `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR`, and `LLV_VIEWER_CONTROL_URL`
 on a closed port. Today it writes about 83 MiB and stops after the walk of the
 folder. From G4 on, a lane checkout and the folder's history add about three
@@ -615,17 +617,18 @@ the task's project still matches; a folder over a bound is refused by preview
 and create with the initialiser's detail, and nothing is written. Today the
 preview refuses with `SOURCE_WORKING_COPY_UNAVAILABLE`.
 
-**With no remote and no branch named, the base is the checked-out branch.**
-When a creation request names neither `baseBranch` nor `baseRef` and the
-repository has no `origin` (`git remote get-url origin` exits 2, the test
-`git.ts:286-288` and `engine.ts:15621` already use), creation reads the
+**With no Git remote, no delivery remote and no branch named, the base is the checked-out branch.**
+When a creation request names neither `baseBranch` nor `baseRef`, has no
+delivery remote, and the repository has no configured Git remote (the local
+`git remote` list is empty), creation reads the
 checked-out branch with one local read (`git symbolic-ref --quiet HEAD`,
 stripping the full `refs/heads/` prefix so a same-named tag cannot change the
 branch name) and records it as the lane's base branch in place of `main`
 (`engine.ts:15669`); a draft records it the same way. Nothing is fetched,
 which keeps the rule of `engine.ts:15613-15619`. Unchanged: a repository with
-`origin`, a named branch or commit, a detached checkout (keeps `main`), and a
-folder the product initialised (its branch is `main`).
+any configured remote, a request with an explicit delivery remote, a named
+branch or commit, a detached checkout (keeps `main`), and a folder the product
+initialised (its branch is `main`).
 Test in `src/lib/pipelines/engine.creation.test.ts` with real Git: a
 repository on `master` with one commit, no remote and nothing named gives a
 lane whose base is `master`; provisioning resolves `refs/heads/master` and
