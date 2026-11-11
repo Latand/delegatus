@@ -26,7 +26,10 @@ import {
   launchOverheadBytes,
   type HandoffDigestRequest,
 } from "./handoffDigest";
+import { applyOnboardingPatch, writeOnboardingMarker } from "@/lib/onboarding/marker";
+import { heldMandateMatches } from "@/components/conversation/heldMandate";
 import {
+  ORCHESTRATOR_FIRST_RUN_DIRECTIVE,
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
@@ -35,6 +38,7 @@ import {
   orchestratorMandateUpgraded,
   orchestratorMandateWithRoleTable,
   orchestratorRoleTable,
+  ORCHESTRATOR_ROLE_TABLE_HEADING,
 } from "./prompt";
 import {
   executeOrchestratorRotation,
@@ -3041,4 +3045,138 @@ test.each([false, true])("tier roundtrip: rotation inherits the explicit profile
     expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
     expect(recorded.spawns[1]).not.toHaveProperty("fast");
   } finally { registry.close(); }
+});
+
+/* The first orchestrator an installation ever has reads the project and offers one form. The instruction rides on that
+   spawn's text only: it is decided under the seat store's lock, never stored in the mandate, and never repeated. */
+const FIRST_ID = "conversation_66666666-6666-4666-8666-666666666666";
+const firstRunSeat = (project = "proj-a") => orchestratorSeatFor(project).active;
+const promptOf = (recorded: Recorded, index = 0) => String(recorded.spawns[index]!.prompt);
+
+test("the first person-made designation on an empty installation ends its spawn text with the first-run instruction and records it", async () => {
+  const { deps, recorded } = dependencies();
+  expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
+  const prompt = promptOf(recorded);
+  expect(prompt.endsWith(`\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}`)).toBe(true);
+  expect(prompt.split(ORCHESTRATOR_FIRST_RUN_DIRECTIVE)).toHaveLength(2);
+  expect(firstRunSeat()?.firstRun).toBe(true);
+  /* Never part of the stored mandate: what a rotation or a kept mandate rebuilds from. */
+  expect(firstRunSeat()?.mandate).not.toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+});
+
+test("the first-run instruction fits the delivery bound beside the default mandate with headroom", () => {
+  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT, []);
+  expect(Buffer.byteLength(`${delivered}\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}`) + launchOverheadBytes("spawn", { mode: "standard" })).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 500);
+});
+
+test("a second designation in another project never gets the instruction, even while the first is still live", async () => {
+  const { deps, recorded } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest(), deps);
+  await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000002"), project: "proj-b" }, deps);
+  expect(promptOf(recorded, 0)).toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+  expect(promptOf(recorded, 1)).not.toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+  expect(firstRunSeat("proj-b")?.firstRun).toBeUndefined();
+});
+
+test("two first designations racing in different projects: only the one that began first carries the instruction", async () => {
+  /* Both intents begin before either spawn answers; the store decides under its lock. */
+  const releases: Array<() => void> = [];
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return { status: 200, body: { ok: true, conversationId: body.project === "proj-a" ? NEW_ID : FIRST_ID, path: null } };
+    },
+  });
+  const first = executeOrchestratorSeatRequest(spawnRequest(), deps);
+  await Bun.sleep(0);
+  const second = executeOrchestratorSeatRequest({ ...spawnRequest("req_00000002"), project: "proj-b" }, deps);
+  await Bun.sleep(0);
+  while (releases.length) releases.shift()!();
+  await Promise.all([first, second]);
+  const withDirective = recorded.spawns.filter((body) => String(body.prompt).includes(ORCHESTRATOR_FIRST_RUN_DIRECTIVE)).map((body) => body.project);
+  expect(withDirective).toEqual(["proj-a"]);
+});
+
+test("a rotation of the first seat carries no instruction", async () => {
+  const { deps } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest(), deps);
+  const successors: Record<string, unknown>[] = [];
+  const { deps: rotating } = dependencies({
+    spawn: async (body) => { successors.push(body); return { status: 200, body: { ok: true, conversationId: FIRST_ID, path: "/tmp/successor.jsonl" } }; },
+    startBoardReport: () => {},
+  });
+  expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000010" }, rotating)).status).toBe(200);
+  expect(String(successors[0]!.prompt)).not.toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+  expect(firstRunSeat()?.firstRun).toBeUndefined();
+});
+
+test("keeping the held mandate and adopting an existing conversation carry no instruction", async () => {
+  const { deps, recorded } = dependencies();
+  /* Adoption: an existing conversation is delivered the mandate, nothing is spawned. */
+  expect((await executeOrchestratorSeatRequest({ project: "proj-a", mandate: "own the board", clientRequestId: "req_00000003", conversationId: OLD_ID }, deps)).status).toBe(200);
+  expect(recorded.spawns).toHaveLength(0);
+  expect(recorded.deliveries.every((delivery) => !delivery.text.includes(ORCHESTRATOR_FIRST_RUN_DIRECTIVE))).toBe(true);
+  expect(firstRunSeat()?.firstRun).toBeUndefined();
+  /* And once an installation has had a seat, a later fresh spawn is not a first run either. */
+  await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000004"), project: "proj-c" }, deps);
+  expect(promptOf(recorded)).not.toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+});
+
+test("an install that predates the guide is never on a first run", async () => {
+  writeOnboardingMarker(applyOnboardingPatch(null, {}, AT));
+  const marker = JSON.parse(fs.readFileSync(path.join(sandbox, "onboarding.json"), "utf8"));
+  fs.writeFileSync(path.join(sandbox, "onboarding.json"), JSON.stringify({ ...marker, reason: "existing-install" }));
+  const { deps, recorded } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest(), deps);
+  expect(promptOf(recorded)).not.toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+  expect(firstRunSeat()?.firstRun).toBeUndefined();
+});
+
+test("a designation made by an agent never gets the instruction", async () => {
+  const { deps, recorded } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest(), deps, { kind: "agent", conversationId: OLD_ID, seatEpoch: null });
+  expect(promptOf(recorded)).not.toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+  expect(firstRunSeat()?.firstRun).toBeUndefined();
+});
+
+test("a seat file that cannot be read grants no first run", async () => {
+  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), "{");
+  const { deps, recorded } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest(), deps);
+  expect(recorded.spawns.every((body) => !String(body.prompt).includes(ORCHESTRATOR_FIRST_RUN_DIRECTIVE))).toBe(true);
+});
+
+test("a pending replay of the first intent sends the same bytes, and a stillborn first attempt does not use the instruction up", async () => {
+  let calls = 0;
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      calls += 1;
+      if (calls === 1) return new Promise<never>(() => {});
+      return { status: 200, body: { ok: true, conversationId: NEW_ID, path: null } };
+    },
+  });
+  void executeOrchestratorSeatRequest(spawnRequest(), deps);
+  await Bun.sleep(0);
+  expect(orchestratorSeatFor("proj-a").pending?.firstRun).toBe(true);
+  expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
+  expect(promptOf(recorded, 1)).toBe(promptOf(recorded, 0));
+  expect(promptOf(recorded, 1)).toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+
+  /* A first attempt that failed before any seat existed is not "a seat the installation had": the retry still is the first. */
+  fs.rmSync(path.join(sandbox, "orchestrator-seats.json"), { force: true });
+  const failing = dependencies({ spawn: async (body) => { failing.recorded.spawns.push(body); return { status: 500, body: { error: "transient" } }; } });
+  await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000009"), project: "proj-z" }, failing.deps);
+  const retry = dependencies();
+  await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000010"), project: "proj-z" }, retry.deps);
+  expect(promptOf(retry.recorded)).toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
+});
+
+test("the seat card still recognises a delivered mandate that ends in the first-run instruction", () => {
+  const delivered = orchestratorMandateWithRoleTable(orchestratorMandateUpgraded("own the board"), null);
+  const roleTable = orchestratorRoleTable(ROLE_DEFAULTS as never);
+  const record = `${delivered}\n\n${roleTable}\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}`;
+  expect(record).toContain(`\n\n${ORCHESTRATOR_ROLE_TABLE_HEADING}\n`);
+  expect(heldMandateMatches({ conversationKey: "c", text: "own the board", ts: undefined, mandate: {} as never }, record)).toBe(true);
 });
