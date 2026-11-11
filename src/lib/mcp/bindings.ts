@@ -2431,7 +2431,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     throw new Refusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
   }
   logMaintenanceWrite(maintainer, "update_task", prior, result.task, changedFields);
-  keepReportPicturesSoon([result.task.text, result.task.details]);
+  if (changedFields.includes("text") || changedFields.includes("details")) keepReportPicturesSoon([result.task.text, result.task.details]);
   return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 

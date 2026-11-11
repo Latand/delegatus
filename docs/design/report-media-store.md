@@ -20,26 +20,36 @@ else.
 ## What is kept
 
 When one of the hooked texts is written, every absolute or `~/` picture path
-in it is copied to `<state>/report-media/`. A path is copied when the service
-can read it and it is a raster (PNG, JPEG, GIF, WebP, AVIF, BMP) whose bytes
-agree with its extension, within the per-picture size. It may lie anywhere
-outside the stores that answer through their own routes: a checkout, the
-stage scratch, `/tmp`, `/var/tmp`, a handoff directory. The text is written
-by the operator or by an agent the operator runs, and the operator reads it.
-The copy is made beside the write and never delays or fails it.
+in it is looked at. A picture is copied to `<state>/report-media/` when:
+
+- it lies, as written and with its links resolved, under a root the path
+  routes already serve (a known project or checkout, the stage scratch, an
+  evidence root), or under a named temp root: the service's own temp directory
+  and `/tmp`, or the list in `LLV_REPORT_MEDIA_TEMP_ROOTS`. Nothing else an
+  agent's text names is read;
+- it is a raster (PNG, JPEG, GIF, WebP, AVIF, BMP) whose bytes agree with its
+  extension, within the per-picture size.
 
 Copies are named by content hash; `index.json` maps each written path to its
-copy and to the lane whose report named it. Video is not kept: a report's
-text draws pictures only. At most 64 pictures are taken from one text.
+copy, to the lane whose report named it and to the project the picture lay
+in. A picture whose copy is already of the same file (size and modification
+time) is not copied again. Pictures are streamed one at a time. One record
+adds at most 64 pictures and 64 MiB. Video is not kept. The copy is made
+beside the write and never delays or fails it; a task update that changes
+neither text nor details does nothing.
 
 ## How it is read
 
 `/api/image`, `/api/artifact` and the task album read a path where it lies
 while a file is there under a root they serve. Otherwise they read the kept
-copy, through the same admission as any evidence picture: after the picture
-was swept, and also for a picture in a place those routes never read, such as
-`/tmp`. A picture with no copy answers as missing, and the text shows a frame
-that says the picture is not available.
+copy, through the usual raster admission: after the picture was swept, and
+for a picture in a named temp root. A copy reaches no further than the roots
+it may be copied from. A workspace member reads a kept copy when the member
+may read the project the picture lay in. A picture with no copy answers as
+missing, and the text shows a frame that says the picture is not available.
+
+The store is read for rasters and is no evidence root: agents are never told
+to render into it.
 
 ## Limits
 
@@ -48,16 +58,24 @@ that says the picture is not available.
 | `LLV_REPORT_MEDIA_MAX_BYTES` | 1 GiB | The whole store. Past it, the pictures named longest ago leave first. |
 | `LLV_REPORT_MEDIA_MAX_FILE_BYTES` | 16 MiB | One picture. A larger one is not copied. |
 | `LLV_REPORT_MEDIA_RETENTION_DAYS` | 7 | How long a copy stays after its clock starts. |
+| `LLV_REPORT_MEDIA_TEMP_ROOTS` | the service temp directory and `/tmp` | Colon-separated temp roots a named picture may be copied from; empty for none. |
 
 The clock of a picture named by a lane's report starts when the lane
 finished: its record is closed and nothing of it is still running. While the
-lane runs, its pictures stay. The clock of a picture that belongs to no lane
-(a task, a bridge report) starts when it was last named, and starts again
-whenever the picture is still found at its own path, so it runs out the
-retention after the picture is gone.
+lane runs, its pictures stay.
 
-The limits are applied on every write to the store; with nothing written,
-nothing grows.
+A picture that belongs to no lane (a task, a bridge report) is looked at once
+the retention has passed since it was last named. While it still lies at its
+own path it stays. When it is first found gone, that moment is recorded, and
+the copy stays the full retention after it.
+
+The index holds at most 10,000 paths. An index that cannot be read is set
+aside as `index.unreadable` and rebuilt by the writes that follow; the copies
+stay, and one that no path names is removed once it is older than the
+retention.
+
+The limits are applied on a write that changes the store; with nothing
+written, nothing grows.
 
 ## Other stores
 

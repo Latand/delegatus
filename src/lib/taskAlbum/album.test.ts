@@ -138,9 +138,12 @@ test("a named file outside the served roots, or one that does not exist, is left
 test("a picture a report named is drawn from its kept copy once it is gone from its own path", async () => {
   const { keepReportPictures } = await import("@/lib/reportMedia/store");
   const { keptReportPicture } = await import("@/lib/reportMedia/lookup");
+  const savedTemp = process.env.LLV_REPORT_MEDIA_TEMP_ROOTS;
+  process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = elsewhere;
   const named = png(elsewhere, "repo-pipeline-ab12cd34/.artifacts/after.png");
   const lost = path.join(elsewhere, "repo-pipeline-ab12cd34", ".artifacts", "lost.png");
-  await keepReportPictures([`Verified: ${named}`]);
+  try { await keepReportPictures([`Verified: ${named}`]); }
+  finally { if (savedTemp === undefined) delete process.env.LLV_REPORT_MEDIA_TEMP_ROOTS; else process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = savedTemp; }
   fs.rmSync(path.join(elsewhere, "repo-pipeline-ab12cd34"), { recursive: true, force: true });
   const file = transcript("retired", [claudeSays(`![after](${named}) and ![lost](${lost})`, 1)]);
   const album = await readTaskAlbum("task-a", {}, deps([task("task-a", [file])]));

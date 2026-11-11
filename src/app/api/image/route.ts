@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { admittedAs, lexicalAllowedRoots, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
 import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -54,7 +54,8 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | 
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
   /* A picture a report named is read from the copy kept for it once it is
      gone from its own path. */
-  const abs = readablePlace(resolveLocal(raw));
+  const requested = resolveLocal(raw);
+  const abs = readablePlace(requested);
 
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) {
@@ -76,7 +77,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | 
        the open file lies at that path. A directory swapped for a link after
        the check must not answer with another place's picture. */
     const workspace = requestWorkspaceScope(req);
-    if (workspace && !workspace.canReadFile(projectForCwd(path.dirname(real)))) return workspaceDenied();
+    /* A kept copy belongs to the project its picture lay in. */
+    const kept = keptPictureProject(requested, abs);
+    if (workspace && !workspace.canReadFile(kept === undefined ? projectForCwd(path.dirname(real)) : kept)) return workspaceDenied();
     handle = await openAdmitted(real);
     if (!(await handle.stat()).isFile()) return NextResponse.json({ error: "not a file" }, { status: 404 });
     data = await handle.readFile();

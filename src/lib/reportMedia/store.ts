@@ -1,14 +1,15 @@
 import crypto from "node:crypto";
 import { realpathSync, type promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
-import { fencedStores, inFencedStore, openAdmitted, resolveLocal } from "@/lib/artifact/localFile";
+import { admittedAs, inFencedStore, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, underRoot, type AllowedRoots } from "@/lib/artifact/localFile";
 import { isEvidenceImage } from "@/lib/artifact/evidenceFormats";
 import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 
-import { REPORT_MEDIA_FILE, reportMediaRoot, reportMediaRows, type ReportMediaRow } from "./lookup";
+import { REPORT_MEDIA_FILE, REPORT_MEDIA_ROWS, reportMediaIndex, reportMediaRoot, type ReportMediaRow } from "./lookup";
 import { writtenPicturePaths } from "./paths";
 
 /*
@@ -17,22 +18,28 @@ import { writtenPicturePaths } from "./paths";
  * temp directory, and those are swept. When such a text is written, each
  * picture it names is copied here, and the path routes read the copy.
  *
- * What is copied is what the text names and the service can read: a raster
- * whose bytes agree with its extension, wherever it lies outside the stores
- * that answer through their own routes. The text is written by the operator
- * or by an agent the operator runs, and it is the operator who reads it.
+ * What is copied is a raster under a root the path routes already serve, or
+ * under one of the named temp roots: nothing an agent's text names elsewhere
+ * is read. The bytes must agree with the extension.
  *
  * The store is small and temporary. One picture is at most `fileBytes`. A
  * copy named by a lane's report leaves `retentionMs` after that lane
- * finished; one that belongs to no lane leaves `retentionMs` after it was
- * last named or last seen at its own path. The whole store holds at most
- * `totalBytes`, the pictures named longest ago leaving first. A dropped
- * picture is simply missing, and the text that names it says so.
+ * finished. One that belongs to no lane is looked at once `retentionMs` have
+ * passed since it was last named: while its picture still lies at its own
+ * path it stays, and it leaves `retentionMs` after it was first found gone.
+ * The whole store holds at most `totalBytes`, the pictures named longest ago
+ * leaving first. A dropped picture is simply missing, and the text that
+ * names it says so.
  */
 
 const MIB = 1024 * 1024;
-/** Pictures one written text may add; the rest are left where they are. */
-export const REPORT_MEDIA_PER_TEXT = 64;
+/** Pictures one written record may add; the rest are left where they are. */
+export const REPORT_MEDIA_PER_RECORD = 64;
+/** Bytes one written record may add. */
+export const REPORT_MEDIA_BYTES_PER_RECORD = 64 * MIB;
+/** A mention this recent needs no second write of the index. */
+const FRESH_MENTION_MS = 3_600_000;
+const STREAM_CHUNK = 256 * 1024;
 
 const MIME: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
@@ -54,6 +61,8 @@ export interface KeepOptions {
   now?: number;
   limits?: ReportMediaLimits;
   laneFinishedAt?: LaneFinishedAt;
+  /** The project a picture's directory belongs to. */
+  projectOf?: (directory: string) => string | null;
 }
 
 function positive(raw: string | undefined, fallback: number): number {
@@ -68,6 +77,18 @@ export function reportMediaLimits(env: Readonly<Record<string, string | undefine
     fileBytes: Math.floor(positive(env.LLV_REPORT_MEDIA_MAX_FILE_BYTES, 16 * MIB)),
     retentionMs: positive(env.LLV_REPORT_MEDIA_RETENTION_DAYS, 7) * 86_400_000,
   };
+}
+
+/**
+ * The temp directories a named picture may be copied from, beside the roots
+ * the path routes serve: the service's own temp directory and `/tmp`, or the
+ * colon-separated list in `LLV_REPORT_MEDIA_TEMP_ROOTS` (empty for none). A
+ * stage's own temp directory lies in the stage scratch, which is served.
+ */
+export function reportMediaTempRoots(env: Readonly<Record<string, string | undefined>> = process.env): string[] {
+  const configured = env.LLV_REPORT_MEDIA_TEMP_ROOTS;
+  const roots = configured === undefined ? [os.tmpdir(), "/tmp"] : configured.split(":");
+  return [...new Set(roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root)).filter((root) => root !== path.parse(root).root))];
 }
 
 /** The lane record's own answer: closed, and nothing of it still running. */
@@ -101,6 +122,14 @@ async function present(file: string): Promise<boolean> {
   }
 }
 
+function real(directory: string): string | null {
+  try {
+    return realpathSync(directory);
+  } catch {
+    return null;
+  }
+}
+
 /** The rows the limits keep. */
 async function retained(rows: ReportMediaRow[], limits: ReportMediaLimits, now: number, laneFinishedAt: LaneFinishedAt): Promise<ReportMediaRow[]> {
   const kept: ReportMediaRow[] = [];
@@ -108,44 +137,75 @@ async function retained(rows: ReportMediaRow[], limits: ReportMediaLimits, now: 
   for (const row of rows) {
     if (row.lane !== undefined && !finishes.has(row.lane)) finishes.set(row.lane, laneFinishedAt(row.lane));
     const finished = row.lane === undefined ? undefined : finishes.get(row.lane);
-    if (finished === null) kept.push(row);
-    else if (finished !== undefined) { if (now - finished <= limits.retentionMs) kept.push(row); }
-    else if (now - Math.max(row.at, row.seenAt) <= limits.retentionMs) kept.push(row);
+    if (finished === null) { kept.push(row); continue; }
+    if (finished !== undefined) { if (now - finished <= limits.retentionMs) kept.push(row); continue; }
+    if (now - row.at <= limits.retentionMs) { kept.push(row); continue; }
     /* With no lane to finish, the clock runs from the moment the picture is
-       gone from its own path. */
-    else if (await present(row.path)) kept.push({ ...row, seenAt: now });
+       found gone from its own path. */
+    if (row.goneAt === undefined) {
+      if (await present(row.path)) kept.push(row);
+      else kept.push({ ...row, goneAt: now });
+    } else if (now - row.goneAt <= limits.retentionMs) kept.push(row);
   }
   kept.sort((left, right) => left.at - right.at || left.path.localeCompare(right.path));
-  const total = () => [...new Map(kept.map((row) => [row.file, row.bytes])).values()].reduce((sum, bytes) => sum + bytes, 0);
-  while (kept.length > 0 && total() > limits.totalBytes) kept.shift();
-  return kept;
+  if (kept.length > REPORT_MEDIA_ROWS) kept.splice(0, kept.length - REPORT_MEDIA_ROWS);
+  const sizes = new Map<string, { bytes: number; rows: number }>();
+  let total = 0;
+  for (const row of kept) {
+    const size = sizes.get(row.file);
+    if (size) size.rows += 1;
+    else { sizes.set(row.file, { bytes: row.bytes, rows: 1 }); total += row.bytes; }
+  }
+  let from = 0;
+  for (; from < kept.length && total > limits.totalBytes; from++) {
+    const size = sizes.get(kept[from]!.file)!;
+    if (--size.rows === 0) total -= size.bytes;
+  }
+  return from > 0 ? kept.slice(from) : kept;
 }
 
-/** Removes every copy no row names, and what an interrupted write left. */
-async function sweepFiles(rows: readonly ReportMediaRow[]): Promise<void> {
+/** Removes the copies no row names any more. A copy no row names that is
+    younger than the retention stays: after an unreadable index it may be the
+    only thing left of a picture, and a later write names it again. */
+async function sweepFiles(rows: readonly ReportMediaRow[], limits: ReportMediaLimits, now: number, dropped: ReadonlySet<string>): Promise<void> {
   const named = new Set(rows.map((row) => row.file));
   for (const name of await fs.readdir(reportMediaRoot())) {
-    if ((REPORT_MEDIA_FILE.test(name) && !named.has(name)) || name.startsWith(".copy-")) {
-      await fs.rm(path.join(reportMediaRoot(), name), { force: true });
-    }
+    const file = path.join(reportMediaRoot(), name);
+    if (name.startsWith(".copy-")) { await fs.rm(file, { force: true }); continue; }
+    if (!REPORT_MEDIA_FILE.test(name) || named.has(name)) continue;
+    const aged = dropped.has(name) || await fs.stat(file).then((stat) => now - stat.mtimeMs > limits.retentionMs, () => false);
+    if (aged) await fs.rm(file, { force: true });
   }
 }
 
-/** Reads one picture through a pinned descriptor; null when the path names no
-    readable raster of an allowed size, or one a fenced store holds. */
-async function readPicture(abs: string, limits: ReportMediaLimits): Promise<Buffer | null> {
-  const mime = MIME[path.extname(abs).toLowerCase()];
-  if (!mime) return null;
+interface Admitted { handle: fsp.FileHandle; resolved: string; bytes: number; mtimeMs: number }
+
+/**
+ * Opens one named picture when it may be copied: it lies, as written and
+ * with its links resolved, under a root the path routes serve or under a
+ * named temp root, outside every fenced store; it is a regular raster file
+ * of an allowed size. The caller reads and closes the descriptor.
+ */
+async function admitPicture(abs: string, lexical: AllowedRoots, realRoots: () => Promise<AllowedRoots>, temp: readonly string[], limits: ReportMediaLimits): Promise<Admitted | null> {
+  if (!MIME[path.extname(abs).toLowerCase()] || underRoot(abs, reportMediaRoot())) return null;
+  const served = admittedAs(abs, lexical);
+  const inTemp = !inFencedStore(abs, lexical.fenced) && temp.some((root) => underRoot(abs, root));
+  if (!served && !inTemp) return null;
   let handle: fsp.FileHandle | undefined;
   try {
     const resolved = await fs.realpath(abs);
-    const closed = [...new Set([...fencedStores(), reportMediaRoot()].flatMap((store) => [store, realOr(store)]))];
-    if (!isEvidenceImage(resolved) || inFencedStore(abs, closed) || inFencedStore(resolved, closed)) return null;
+    const roots = await realRoots();
+    const reachable = (served !== null && realpathAdmitted(served, resolved, roots))
+      || (inTemp && !inFencedStore(resolved, roots.fenced)
+        && (admittedAs(resolved, roots) !== null || temp.some((root) => { const at = real(root); return at !== null && underRoot(resolved, at); })));
+    const store = real(reportMediaRoot());
+    if (!reachable || !isEvidenceImage(resolved) || (store !== null && underRoot(resolved, store))) return null;
     handle = await openAdmitted(resolved);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size < 1 || stat.size > limits.fileBytes) return null;
-    const data = await handle.readFile();
-    return data.length === stat.size && sniffAgrees(mime, data.subarray(0, SNIFF_BYTES)) ? data : null;
+    const admitted = { handle, resolved, bytes: stat.size, mtimeMs: stat.mtimeMs };
+    handle = undefined;
+    return admitted;
   } catch {
     return null;
   } finally {
@@ -153,50 +213,113 @@ async function readPicture(abs: string, limits: ReportMediaLimits): Promise<Buff
   }
 }
 
-function realOr(directory: string): string {
+/** Streams the open picture into the store under its content hash, a chunk
+    at a time; null when its bytes are no picture of its extension or changed
+    size on the way. */
+async function copyPicture(admitted: Admitted, extension: string): Promise<string | null> {
+  const staged = path.join(reportMediaRoot(), `.copy-${crypto.randomUUID()}`);
+  const out = await fs.open(staged, "wx", 0o600);
+  const hash = crypto.createHash("sha256");
+  const chunk = Buffer.alloc(STREAM_CHUNK);
+  let position = 0;
+  let agrees = false;
   try {
-    return realpathSync(directory);
-  } catch {
-    return directory;
+    for (;;) {
+      const { bytesRead } = await admitted.handle.read(chunk, 0, STREAM_CHUNK, position);
+      if (bytesRead <= 0) break;
+      if (position === 0) agrees = sniffAgrees(MIME[extension]!, chunk.subarray(0, Math.min(bytesRead, SNIFF_BYTES)));
+      if (!agrees || position + bytesRead > admitted.bytes) break;
+      hash.update(chunk.subarray(0, bytesRead));
+      await out.write(chunk, 0, bytesRead);
+      position += bytesRead;
+    }
+    if (!agrees || position !== admitted.bytes) return null;
+    await out.sync();
+    const file = `${hash.digest("hex")}${extension}`;
+    const target = path.join(reportMediaRoot(), file);
+    if (await present(target)) await fs.utimes(target, new Date(), new Date());
+    else await fs.rename(staged, target);
+    return file;
+  } finally {
+    await out.close().catch(() => {});
+    await fs.rm(staged, { force: true });
   }
 }
 
+/** Copies the pictures these texts name; see `keepWrittenPictures`. */
+export function keepReportPictures(texts: readonly (string | null | undefined)[], options: KeepOptions = {}): Promise<string[]> {
+  return keepWrittenPictures(writtenPicturePaths(texts), options);
+}
+
 /**
- * Copies the pictures these texts name into the store and applies the limits.
- * A path that names no readable picture is skipped. Returns the paths now
- * kept from these texts.
+ * Copies the named pictures into the store, one at a time, and applies the
+ * limits. A path that names no picture that may be copied is skipped, and so
+ * is one whose copy is already of the same file. Returns the paths now kept.
  */
-export async function keepReportPictures(texts: readonly (string | null | undefined)[], options: KeepOptions = {}): Promise<string[]> {
+export async function keepWrittenPictures(written: readonly string[], options: KeepOptions = {}): Promise<string[]> {
   const now = options.now ?? Date.now();
   const limits = options.limits ?? reportMediaLimits();
-  const paths = reportPicturePaths(texts).slice(0, REPORT_MEDIA_PER_TEXT);
+  const paths = [...new Set(written.map(resolveLocal))];
   if (paths.length === 0) return [];
-  const read: Array<{ path: string; data: Buffer }> = [];
+  const lexical = lexicalAllowedRoots();
+  const temp = reportMediaTempRoots();
+  let roots: Promise<AllowedRoots> | undefined;
+  const realRoots = () => (roots ??= realAllowedRoots());
+  /* Before the lock: which of the paths may be copied at all, and which the
+     store already holds as they are. */
+  const before = new Map((reportMediaIndex() ?? []).map((row) => [row.path, row] as const));
+  const candidates: string[] = [];
+  let pending = false;
   for (const named of paths) {
-    const data = await readPicture(named, limits);
-    if (data) read.push({ path: named, data });
+    if (candidates.length >= REPORT_MEDIA_PER_RECORD) break;
+    const admitted = await admitPicture(named, lexical, realRoots, temp, limits);
+    if (!admitted) continue;
+    await admitted.handle.close().catch(() => {});
+    candidates.push(named);
+    const row = before.get(named);
+    pending ||= !row || row.bytes !== admitted.bytes || row.mtimeMs !== admitted.mtimeMs || now - row.at > FRESH_MENTION_MS
+      || (options.lane !== undefined && row.lane !== options.lane) || row.goneAt !== undefined;
   }
-  if (read.length === 0) return [];
+  if (candidates.length === 0) return [];
+  if (!pending) return candidates;
   const laneFinishedAt = options.laneFinishedAt ?? await recordedLaneFinish();
+  const projectOf = options.projectOf ?? (await import("@/lib/scanner/describe")).projectForCwd;
   await fs.mkdir(reportMediaRoot(), { recursive: true, mode: 0o700 });
-  return withFileTransaction(path.join(reportMediaRoot(), "owner.lock"), "report media is busy", async () => {
-    const rows = new Map(reportMediaRows().map((row) => [row.path, row] as const));
-    for (const { path: named, data } of read) {
-      const file = `${crypto.createHash("sha256").update(data).digest("hex")}${path.extname(named).toLowerCase()}`;
-      const target = path.join(reportMediaRoot(), file);
-      if (!await present(target)) {
-        const staged = path.join(reportMediaRoot(), `.copy-${crypto.randomUUID()}`);
-        await fs.writeFile(staged, data, { flag: "wx", mode: 0o600, flush: true });
-        await fs.rename(staged, target);
+  return withFileTransactionAsync(path.join(reportMediaRoot(), "owner"), "report media is busy", async () => {
+    const index = reportMediaIndex();
+    /* An index that cannot be read is set aside and rebuilt from the writes
+       that follow; the copies stay. */
+    if (index === null) await fs.rename(path.join(reportMediaRoot(), "index.json"), path.join(reportMediaRoot(), "index.unreadable")).catch(() => {});
+    const rows = new Map((index ?? []).map((row) => [row.path, row] as const));
+    const files = new Set([...rows.values()].map((row) => row.file));
+    let budget = REPORT_MEDIA_BYTES_PER_RECORD;
+    for (const named of candidates) {
+      const admitted = await admitPicture(named, lexical, realRoots, temp, limits);
+      if (!admitted) continue;
+      try {
+        const held = rows.get(named);
+        const lane = options.lane ?? held?.lane;
+        let file: string | null = held && held.bytes === admitted.bytes && held.mtimeMs === admitted.mtimeMs
+          && await present(path.join(reportMediaRoot(), held.file)) ? held.file : null;
+        if (file === null) {
+          if (admitted.bytes > budget) continue;
+          budget -= admitted.bytes;
+          file = await copyPicture(admitted, path.extname(named).toLowerCase());
+          if (file === null) continue;
+        }
+        rows.set(named, { path: named, file, bytes: admitted.bytes, mtimeMs: admitted.mtimeMs, at: now,
+          ...(lane ? { lane } : {}), project: projectOf(path.dirname(admitted.resolved)) ?? null });
+      } finally {
+        await admitted.handle.close().catch(() => {});
       }
-      /* A lane's claim on a picture outlasts a later mention from no lane. */
-      const lane = options.lane ?? rows.get(named)?.lane;
-      rows.set(named, { path: named, file, bytes: data.length, at: now, seenAt: now, ...(lane ? { lane } : {}) });
     }
     const kept = await retained([...rows.values()], limits, now, laneFinishedAt);
     await saveRows(kept);
-    await sweepFiles(kept);
+    const named = new Set(kept.map((row) => row.file));
+    const dropped = new Set([...files].filter((file) => !named.has(file)));
+    /* The directory is listed only when a copy left or the index was rebuilt. */
+    if (dropped.size > 0 || index === null) await sweepFiles(kept, limits, now, dropped);
     const held = new Set(kept.map((row) => row.path));
-    return read.map((entry) => entry.path).filter((named) => held.has(named));
+    return candidates.filter((path) => held.has(path));
   });
 }

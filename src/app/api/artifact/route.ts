@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { admittedAs, lexicalAllowedRoots, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -75,7 +75,8 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
 
   /* A picture a report named is read from its kept copy once it is gone. */
-  const abs = readablePlace(resolveLocal(raw));
+  const requested = resolveLocal(raw);
+  const abs = readablePlace(requested);
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) return fail("access-denied", "path is outside the allowed roots");
 
@@ -96,7 +97,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   if (!realpathAdmitted(admission, real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
 
   const workspace = requestWorkspaceScope(req);
-  if (workspace && !workspace.canReadFile(projectForCwd(path.dirname(real)))) return workspaceDenied();
+  /* A kept copy belongs to the project its picture lay in. */
+  const kept = keptPictureProject(requested, abs);
+  if (workspace && !workspace.canReadFile(kept === undefined ? projectForCwd(path.dirname(real)) : kept)) return workspaceDenied();
   /* realpath resolved every link above; a link appearing at the final
      component or at any directory above it between then and now is a race,
      refused. A FIFO does not wedge the open — its fstat below rejects it. */
