@@ -38,7 +38,8 @@ history of the disk task, the "retention cannot keep up" task and this task; the
 service journal from 11:17Z to 14:32Z; read-only (`mode=ro`, `query_only`) reads of the
 state, attempt-temp and recorded-check tables between 14:35Z and 14:50Z; the sweep
 reports written at 14:03Z (worktrees), 14:24Z (attempt temp) and 14:28Z (releases); a
-read-only `/proc` and filesystem probe at about 14:35Z. These sources are private and
+read-only `/proc` and filesystem probe at about 14:35Z; a read-only listing of the state backup
+folder at 16:11Z (§2 C16). These sources are private and
 stay on the machine; this document names things by kind only.
 
 ## 1. What the passes removed and what the measurements found
@@ -95,6 +96,7 @@ Summary (each row condenses the labelled section below it; line numbers are on `
 | C13 | Recorded-check holds on scratch roots | `recordedChecks/store.ts:243` | 68 roots, 98 GB at passes 10 and 11 | acknowledgement, or retention at lane expiry (`store.ts:368-387`) | lane never finishes; EACCES before acknowledgement |
 | C14 | Container images, build cache, stopped containers, anonymous volumes | stages and agents in other projects | 53 GB images, 10 GB cache; 669 containers and 2,816 volumes once | nothing | no pruning code exists |
 | C15 | Keep-marked roots (`.delegatus-keep`) | agents (the five present markers read as agent-written) | 3 roots 13.9 GB (11-04) → 5 roots 13.5 GB (11-11) | nothing, by design | kept forever; the card does not show them |
+| C16 | The product's own state backups (`backups/sqlite` in the state directory) | `backupDatabase` (`state/durability.ts:833`), run by `runBackupPass` (`:1056-1101`) | ~15 GB, tracking three times the size of three databases | `pruneBackups` (`durability.ts:910-943`): per-database retention, then a 2 GiB budget | the three newest generations of each database are never evicted (`:50`, `:933`) and alone exceed the budget; recovery data, by design |
 
 ### C1. Stage scratch roots of finished and closed lanes
 
@@ -359,6 +361,38 @@ Summary (each row condenses the labelled section below it; line numbers are on `
   `tempSweep.ts` `pinned`).
 - **Why it matters [O].** 13.5 GB in five roots, and the card shows none of them.
 
+### C16. The product's own state backups
+
+- **Creator [O].** The Viewer release that owns traffic arms a one-minute timer
+  (`startStateDurability`, `state/durability.ts:1330`); each due pass runs in the backup worker
+  (`:1148`) as `runBackupPass` (`:1056-1101`), which copies each database through
+  `backupDatabase` (`:833`) into `backups/sqlite` of the state directory (`BACKUP_DIRECTORY`,
+  `:46`). Three databases are backed up: `state.sqlite` and `agent-registry.sqlite` hourly when
+  changed, `mcp-receipts.sqlite` daily (`:88-107`); `handoff-queue.sqlite` has no backup (`:115`).
+- **Growth [O].** 14.7 GB at 02:10Z (rest-of-volume measurement), 15.0 GB at 12:06Z (scratch-owners
+  measurement), 15.1 GB at 16:11Z (a read-only listing for this correction). At 16:11Z the folder
+  held nine files, three per database: about 2.1 GB each of the registry and the receipts
+  database, about 0.95 GB each of the state database; the live databases measured 2.2, 2.1 and
+  1.0 GB. The three daily receipts backups grew from 1.90 to 2.06 GB between 11-08 and 11-10. The
+  class therefore grows with the databases themselves, about three times their size, and no
+  manual pass removed it. The oldest time the scratch-owners measurement saw (10-26) is the
+  modification time of the folder itself and of an 8 KB engine-memory import folder beside
+  `sqlite`, not of a backup.
+- **Owner and retention [O].** `pruneBackups` (`durability.ts:910-943`) runs after every pass.
+  It applies each database's retention: the newest three for the receipts database; for the
+  two hourly stores the newest three, up to six four-hourly within a day and up to three daily
+  within four days (`retained`, `:946-970`). Then it evicts the oldest generations until the total
+  is within `BACKUP_BUDGET_BYTES`, 2 GiB (`:48`), but never one of the three newest of a database
+  (`PROTECTED_GENERATIONS`, `:50`; `evictable: index >= PROTECTED_GENERATIONS`, `:933`).
+- **Why it stays [O].** The protected floor alone is about 15 GB, far over the 2 GiB budget, so the
+  budget evicts every generation it may and the folder settles at exactly three generations per
+  database, as the listing shows. This is the rule working as written: the backups are the
+  recovery copies of the product's own databases. The disk card has no row for them
+  (`diskPressure.ts` has no backup category). This document proposes no new lifetime for them;
+  [I] the budget constant predates databases of this size (the comment at `:51-53` measured the two
+  large stores at 2.85 GB together), which a person may want to revisit, but nothing in the passes
+  depended on it.
+
 ### Also measured large: history and caches with their own owners
 
 Account stores (50.6 GB: provider histories and sessions), the transcript and registry
@@ -556,6 +590,7 @@ add no new control.
 1. **Scratch, one row per state with bytes and count:** removed soon (due), removed by a date
    (upcoming), kept because the lane is open, kept because the lane cannot finish (§3.1), kept
    for a check, kept by a keep marker, kept because a standalone repository is unproven (W14),
+   kept because the owner of a trash root cannot be recovered (`owner-unknown`, W5),
    cannot be removed (permissions or Git link, with the count), waiting in the queue. Source: a per-root reason column beside `root_retention`,
    summed incrementally like the existing radix buckets so the card reads a bounded number of
    rows.
@@ -594,7 +629,7 @@ measurement of tick duration on the same fixture.
 | W2 | One deadline for the whole tick: the parent sends its absolute deadline with the request; every step's bound inside the helper is clipped to what remains minus a reply margin | `src/lib/pipelines/worktreeSweepWorker.ts`, `src/lib/worktreeSweep.worker.ts`, `src/lib/runtime/attemptTempProduction.ts`, `attemptTempRetention.ts`, `attemptTempFilesystem.ts`, `attemptTempEvidence.ts`, `attemptEvidenceCopies.ts` | Real parent (`WorktreeSweepWorker`) and real helper entry on isolated state; no step depends on wall-clock speed. Both read a monotonic clock injected by the test (the parent through a constructor port beside `timeoutMs`, which today reads `Date.now()` and `setTimeout`, `worktreeSweepWorker.ts:128-152`; the helper through a test preload), and the preload stops the helper at named points behind IPC barriers that only the test releases. Request timeout 6 units: a `temp` request parked at a barrier while the test advances both clocks by 3; then an `attempt-temp` request for one due root whose reference check is parked at a second barrier after it has started one child process, while the test advances both clocks by 2.5 and releases the barrier. Today the helper starts its own budgets at receipt, so it does not stop; the test then advances the parent clock to 6 and the parent fails with "attempt temp tick exceeded" and kills the helper (red). After: on the release the helper sees less than the reply margin left and replies before the parent clock reaches 6, with the root `deferred`; the root keeps its `dev:ino`, no trash and no journal exist; the child process is gone (its recorded pid no longer exists, checked explicitly); a following request in the same helper is answered. A real-time limit of minutes on the whole test only ends a hang. | none open | normal |
 | W3 | Lanes finish: `closedAt` is the clock of a terminal attempt without `completedAt` in a lane whose close teardown settled; `parkPipelineState` stamps `completedAt` | `src/lib/pipelines/laneFinish.ts`, `laneFinish.test.ts`; `engine.ts:3305` and an engine test | A completed lane with a `needs_decision` attempt lacking `completedAt` and settled activity is finished at `closedAt`; its expired root is retired and its hold acknowledged. Running, spawning and committing attempts still block. Today `{ finished: false }` forever. | `engine.ts` is changed by open #3668, #3710, #3747, #3749, #3801, #3802; none edits `parkPipelineState`; check with `git merge-file` before building | normal |
 | W4 | Removable trees: owner-writable repair (`chmod u+rwX` on own entries, no symlinks, one filesystem) before native removal; the protection snapshot and measurement survive EACCES by using the container namespace with a time bound sized to the tree; failure text keeps `code`, `signal`, `stderr` before the command | `attemptTempFilesystem.ts`, `attemptTempDiagnostics.ts`, `attemptTempRetention.ts:518` | An expired fixture root with a 0555 module-cache directory is removed with no container available; a 000 own directory no longer fails the snapshot. Today: trash left behind / "failed EACCES scandir". | none open | normal |
-| W5 | Orphan trash: a disposable journal in scratch with no ledger row re-registers its original as an orphan, so the normal guards and replay finish it | `attemptTempRetention.ts` (adoption page), `tempSweep.ts` | Isolated scratch with trash and a disposable journal but no ledger row: both are gone after the sweep. Today they stay forever. | none open | normal |
+| W5 | Trash whose ledger row is gone: restore the verified binding to its owner, then let the lane's authority decide; never register it as an orphan. [O] Nothing in the leftovers proves the owner: the disposable journal holds only `directory`, `trash`, `uid`, `identity`, a null snapshot and the `disposable` flag (`tempSweep.ts:421-423`), the owner marker names only the ledger file (`attemptTempRetention.ts:86`), and a null `pipelineId` makes the authority answer `orphan` at once, without reading a lane, its revision or its expiry (`attemptTempProduction.ts:17`); re-registering the path as an orphan would therefore delete the tree of an open or resumed lane. A bounded page per tick looks for the binding only in records that name both the journal's original path and its `dev:ino`: an evidence copy manifest (`original`, `identity`, `pipelineId`, `launchId`, `attemptTempEvidence.ts:118-119`) and a recorded-check root row (`recorded_check_roots` directory and identity, its check's `launch` and `owner`, `recordedChecks/store.ts:108-109`, `:120`). Only when the records found agree on one lane and one launch is the row restored, with the journal's identity and `retainUntilClose` set (no record carries the original value); the replay then runs through the normal retention path, which reads the authority again and checks its revision and expiry at dispatch (`isCurrent`, `attemptTempProduction.ts:19-20`; `finishTreeTrash` under `eligible`, `tempSweep.ts:666-677`). A restored root is replayed only when that authority answers `expired`; any other answer keeps the trash and journal with that answer as the reason. No record, disagreeing records, or a binding with a null `pipelineId` (none of these records carries the root's creation time, which the orphan rule needs) keep the trash and journal under the named reason `owner-unknown`, reported per root (W7) and on the card (§5) | `attemptTempRetention.ts` (a recovery page beside the adoption page), `tempSweep.ts`, `attemptTempRetention.test.ts` | Frozen clock, isolated state, an empty process list and no checkout links; scratch holds trash and a disposable journal and `roots` has no row for the original. (1) An evidence manifest binds it to a lane completed more than seven days ago: trash and journal are gone after the sweep (red today: nothing visits the journal). (2) The same lane is open; (3) the lane was completed and is resumed between the restore and dispatch, so its revision changes; (4) no record names the root; (5) two records name different lanes; (6) the only record has a null `pipelineId`: in (2)–(6) the trash, its content and the journal remain, and the outcome names the authority's answer or `owner-unknown`. Cases (2)–(6) are green today and must stay green. | none open | normal |
 | W6 | Nested worktree registrations inside scratch: after the worktree sweep's own proofs (clean, every commit advertised by a remote or in a merged head, not locked), remove the registration with `git worktree remove`, then retire the root; `merge-batch` removes its worktrees when it ends | `attemptTempRetention.ts`, `attemptTempFilesystem.ts`, `worktreeSweep.ts` (reuse its proof), `scripts/merge-batch.ts` | Fixture root with a registered clean worktree whose commit a fake remote advertises: registration and root removed; with a local-only commit: both kept with a named reason. Today: held forever. | none open | design first |
 | W7 | Sizes and reasons the card can trust: keep `du`'s total on a non-zero exit, never fall back to the root's own blocks, mark the size unmeasured; store one reason per root; report the forecast as a lower bound | `attemptTempFilesystem.ts:650-662`, `attemptTempRetention.ts`, `attemptRetentionReporting.ts` | Fixture root with an unreadable own subdirectory and a 10 MB file: recorded size ≥ 10 MB and `lowerBound: true`. Today 4,096 B and no flag. | none open | normal |
 | W8 | Release working directories: start the Codex stderr drain outside the release directory | `src/lib/runtime/codexSocketTransport.ts:95` and its test | A drain started by a host whose working directory is a release fixture has a working directory outside that release (read from `/proc/<pid>/cwd`). Today it inherits the release directory. | none open | trivial |
