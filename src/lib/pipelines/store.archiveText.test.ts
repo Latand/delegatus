@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { cacheSizes } from "@/lib/cacheTelemetry";
+import { doneCandidates } from "@/lib/done/candidates";
 import { archiveSettledPipelines, buildPipeline, findPipelineRecord, loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, savePipelines } from "./store";
 
 const spec = (id: string) => `lane spec ${id} `.padEnd(12_000, "s");
@@ -88,6 +89,44 @@ test("a lane archived again while a reader holds the list serializes as its whol
     expect(response.lanes[1]!.spec).toBe(spec("cold-other"));
     expect(held[0]!.closedAt).toBe("2026-07-02T00:00:00.000Z");
     expect(loadArchivedPipelinesForList()[0]!.stages[0]!.prompt).toBe(prompt("rewritten"));
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the done projection titles a lane archived again since its list was read from the lane as stored now", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-archive-done-"));
+  const prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    const task = `Deliver the archived work ${"t".repeat(700)}`;
+    const finished = () => {
+      const pipeline = buildPipeline({ id: "cold-done", task, project: "fixture", repoDir: "/repo",
+        stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+          effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+        srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z" });
+      pipeline.state = "completed"; pipeline.cursor = null; pipeline.closedAt = "2026-07-02T00:00:00.000Z";
+      return pipeline;
+    };
+    savePipelines([finished()]);
+    expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+    const held = await loadArchivedPipelinesForListAsync();
+    const again = finished();
+    again.closedAt = "2026-07-03T00:00:00.000Z";
+    savePipelines([again]);
+    expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+    expect(() => held[0]!.task).toThrow();
+    const project = (pipelineRecord?: (id: string) => ReturnType<typeof findPipelineRecord>) => doneCandidates({
+      now: Date.parse("2026-07-04T00:00:00Z"), floor: Date.parse("2026-07-01T00:00:00Z"),
+      forge: { schemaVersion: 1, repositories: {} }, pipelines: held, tasks: [], deployments: [], reports: [], limits: {},
+      pipelineRepository: () => null, repositoryProject: () => null, ...(pipelineRecord ? { pipelineRecord } : {}),
+    }).candidates;
+    const [item] = project(findPipelineRecord);
+    expect(item).toMatchObject({ key: "pipeline:cold-done:done", project: "fixture", at: "2026-07-02T00:00:00.000Z" });
+    expect(item!.title.startsWith("Deliver the archived work")).toBe(true);
+    // A projection with no way to read the lane still completes.
+    expect(project()[0]).toMatchObject({ key: "pipeline:cold-done:done", title: "" });
   } finally {
     if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
     fs.rmSync(root, { recursive: true, force: true });
