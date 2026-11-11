@@ -364,7 +364,7 @@ test.skipIf(process.platform !== "linux")("recorder death ends its original supe
 
 test("closed queue observations round-trip independently of execution budgets", () => {
   const f = fixture();
-  const env = { LLV_CPU_WAIT_ROOTS: "[]", LLV_RECORDED_CHECK_WAIT_ROOT: f.root };
+  const env = { NODE_ENV: "test" as const, LLV_CPU_WAIT_ROOTS: "[]", LLV_RECORDED_CHECK_WAIT_ROOT: f.root };
   const clock = spyOn(Date, "now").mockReturnValue(1000);
   let end: (() => void) | undefined;
   try {

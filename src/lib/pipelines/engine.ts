@@ -14765,7 +14765,8 @@ export async function createPipelineFromRequest(
     taskClass: req.taskClass !== undefined ? taskClass.data : (() => {
       const classes = declaredTasks.map(task => task.accounting?.declaredClass).filter(Boolean);
       if (!classes.length || classes.length !== declaredTasks.length) return taskClass.data;
-      const { project: _project, ...declaration } = classes[0]!;
+      const first = classes[0]!;
+      const declaration = { size: first.size, money: first.money, access: first.access, dataMigration: first.dataMigration };
       return classes.every(row => JSON.stringify(row) === JSON.stringify(classes[0])) ? declaration : taskClass.data;
     })(),
     id: inventedTasks.length && options.creationRequest ? crypto.createHash("sha256").update(options.creationRequest.key).digest("hex").slice(0, 16) : crypto.randomUUID().slice(0, 8),
