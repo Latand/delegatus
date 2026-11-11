@@ -62,7 +62,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
     typeof body.conversationId === "string" ? body.conversationId : undefined,
     body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
     voice ? { sessionId: voice.sessionId as string, proposalId: voice.proposalId as string } : undefined);
-  if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
+  if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, ...(admitted.reason ? { reason: admitted.reason } : {}), admission: "refused" }, { status: admitted.status });
   const forwarded = new NextRequest(req.url, {
     method: "POST", headers: req.headers,
     body: JSON.stringify({

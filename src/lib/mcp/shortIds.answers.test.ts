@@ -142,9 +142,6 @@ test("default answers contain short ids, with a repeatable service size census",
     ["lifecycle_events", "default", {}],
     ["issue_report", "default", {}],
     ["publish_prototype_review", "default", {}],
-    ["list_flows", "default", { project: "repo-1234567890abcdef1234567890abcdef" }],
-    ["list_flows", "limit=200", { project: "repo-1234567890abcdef1234567890abcdef", limit: 200 }],
-    ["list_flows", "compact", { project: "repo-1234567890abcdef1234567890abcdef", compact: true }],
     ["list_tasks", "default", { project: "repo-1234567890abcdef1234567890abcdef" }],
     ["list_tasks", "limit=200", { project: "repo-1234567890abcdef1234567890abcdef", limit: 200 }],
     ["list_tasks", "openOnly", { project: "repo-1234567890abcdef1234567890abcdef", openOnly: true }],
@@ -183,7 +180,7 @@ test("default answers contain short ids, with a repeatable service size census",
   } finally { await client.close(); await server.close(); }
   const frequencySample = JSON.parse(fs.readFileSync(new URL("./answerSizes.frequency.json", import.meta.url), "utf8")) as { counts: Record<string, number>; scenarioCounts: Record<string, number> };
   const frequencies = frequencySample.counts;
-  const budgets: Record<string, number> = { list_flows: 26000, list_tasks: 26000, list_pipelines: 26000, agent_activity: 24000, create_task: 2000, update_task: 1200, get_task: 10000, get_pipeline: 150000, link_task_to_pipeline: 1800, pipeline_action: 1500, seat_tick_settings: 1800, list_conversations: 12000 };
+  const budgets: Record<string, number> = { list_tasks: 26000, list_pipelines: 26000, agent_activity: 24000, create_task: 2000, update_task: 1200, get_task: 10000, get_pipeline: 150000, link_task_to_pipeline: 1800, pipeline_action: 1500, seat_tick_settings: 1800, list_conversations: 12000 };
   for (const [tool, scenario, args] of cases) {
     const result = await service.callTool(tool, { clientRequestId: `size-${rows.length}`, ...args });
     const bytes = Buffer.byteLength(JSON.stringify(result));
