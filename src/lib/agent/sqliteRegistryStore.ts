@@ -1886,7 +1886,11 @@ export class SqliteAgentRegistryStore {
       if (cached) {
         let replayed: StampedSnapshot | null = null;
         try { replayed = this.preparedReader.replayBoundedJournal(); }
-        catch { /* The cooperative preparation below reports what it finds. */ }
+        catch (error) {
+          // The cooperative preparation below takes over; the class of the
+          // refusal is logged so a replay that always fails is visible.
+          console.error("[registry prepare] journal replay failed", error instanceof Error ? error.name : typeof error);
+        }
         if (replayed) return Promise.resolve(replayed);
       }
     }
@@ -1902,21 +1906,37 @@ export class SqliteAgentRegistryStore {
   private replayBoundedJournal(): StampedSnapshot | null {
     const cold = this.coldViewCache;
     if (!this.readOnlyCache || !cold || !this.changesReady || this.writerHeld) return null;
+    /* One read transaction decides and replays: a commit landing between the
+       two would otherwise be replayed without having been judged. */
+    this.db.exec("BEGIN");
+    try {
+      const replayed = this.journalIsBounded(cold.coldIds)
+        ? withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true))))
+        : null;
+      this.db.exec("COMMIT");
+      return replayed;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* Transaction already closed. */ }
+      throw error;
+    }
+  }
+
+  private journalIsBounded(coldIds: ReadonlyMap<RowCollection, ReadonlyMap<string, number>>): boolean {
     const journal = this.db.query<{ first: number; last: number }, []>(
       "SELECT COALESCE(MIN(seq),0) AS first,COALESCE(MAX(seq),0) AS last FROM registry_changes").get()!;
-    if (journal.first === 0 || journal.first > this.snapshotChangeId + 1 || journal.last <= this.snapshotChangeId) return null;
-    if (journal.last - this.snapshotChangeId > PREPARED_REPLAY_CHANGES) return null;
+    if (journal.first === 0 || journal.first > this.snapshotChangeId + 1 || journal.last <= this.snapshotChangeId) return false;
+    if (journal.last - this.snapshotChangeId > PREPARED_REPLAY_CHANGES) return false;
     const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
     for (const change of this.db.query<{ collection: string; row_key: string }, [number]>(
       "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>?").all(this.snapshotChangeId)) {
       if (!ROW_COLLECTION_KEYS.has(change.collection)) continue;
       /* A receipt takes its artifact materialization from its conversation
          when the whole registry is normalized; a row replay does not derive it. */
-      if (change.collection === "conversations") return null;
-      const held = cold.coldIds.get(change.collection as RowCollection)?.get(change.row_key);
-      if (held !== version.get(change.collection, change.row_key)?.archive_id) return null;
+      if (change.collection === "conversations") return false;
+      const held = coldIds.get(change.collection as RowCollection)?.get(change.row_key);
+      if (held !== version.get(change.collection, change.row_key)?.archive_id) return false;
     }
-    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => this.refreshSnapshot()));
+    return true;
   }
 
   /** Attach one caller to the shared preparation. A caller without a signal
@@ -2587,10 +2607,11 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  private *refreshSnapshotSteps(): Generator<void, StampedSnapshot | null> {
+  /** `admitted` says the caller already holds the read transaction the replay runs in. */
+  private *refreshSnapshotSteps(admitted = false): Generator<void, StampedSnapshot | null> {
     const previous = this.readOnlyCache;
     if (!previous || !this.changesReady) return null;
-    const ownsTransaction = !this.writerHeld;
+    const ownsTransaction = !this.writerHeld && !admitted;
     if (ownsTransaction) this.db.exec("BEGIN");
     try {
       const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
