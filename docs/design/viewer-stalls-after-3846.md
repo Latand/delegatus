@@ -21,6 +21,15 @@ the 152,700 registry reads of one gap are now counted as `registry.get` calls
 in the render context, recorded while 20 render spans overlapped that gap, and
 no longer as the rows of one render.
 
+Revised again on 2026-11-11 between 15:05 and 15:19 UTC after a second
+review. Section 5.9 lists what changed. The follow-up's external thread sampler had
+subtracted sums of lifetime CPU counters over a set of threads that can change,
+which gives negative CPU when a helper thread exits and moves earlier work into
+one second when a helper is found late. It now counts each thread by its thread
+id and start time and marks every interval it cannot count as unavailable, with
+the reason. No measured figure in this document came from that sampler, so the
+attribution is unchanged.
+
 The originating board requirements are “Delegatus став частіше підвисати з
 28.10” and “Runtime host гальмує на перебудові знімка сесій”. Both full task
 records were read on 2026-11-11. The first task records the increase observed
@@ -161,7 +170,9 @@ project, event rate and retention coverage, load average, and main-thread
 scheduler counters. Record the CPU time of the Viewer's main thread and its
 `HeapHelper` threads once a second from outside the process, by the
 read-only procedure of section 5.3 ("Collector-thread CPU, observed from
-outside the process"). Preserve event intervals while they still exist.
+outside the process"). It counts each thread by its thread id and start time;
+report the share of the window it covers and its unavailable intervals by
+reason. Preserve event intervals while they still exist.
 Record the history-drain switch and its stored progress without changing
 either; installation alone does not establish that history has moved.
 
@@ -3144,7 +3155,8 @@ gate and test fixes. Among the files this plan names, those commits change
 change none of the files that items 1 to 4 edit. Every number below comes from a
 command in section 5.6, with its time bounds. The revision of 14:19 to 14:40 UTC
 (section 5.7) adds figures from the commands in section 5.8. Main was still
-`1037130e` at 14:19:28.
+`1037130e` at 14:19:28. The second revision (section 5.9) adds the commands of
+section 5.10.
 
 ### 5.1 Checks of parts 1 to 4, and corrections
 
@@ -3366,10 +3378,16 @@ and RSS from 5.55 to 13.46 GB. The serving thread's `rchar` summed over the
 gaps' sample windows is 147.4 GB. GC time on the serving thread is not measured:
 799 records say `gc-entry-unsupported`. A procfs read of the live `662a6012`
 Viewer (PID 946855) at 13:47:09.365 found its main thread at 3,492.6 CPU-seconds
-and its seven `HeapHelper` threads at 621.9 CPU-seconds since the start at
-12:37:44. Inference: collection work is large. How much of it stops the serving
-thread is not established. The follow-up window records the helper threads' CPU
-once a second from outside the process (section 5.3, after item 1).
+and the seven `HeapHelper` threads alive at that read at 621.9 CPU-seconds over
+their own lifetimes. A thread's counter covers only its own life. The seven
+helpers alive at 15:08:12 all started 90 ms after the process (start ticks
+56471747 against 56471738, section 5.10), so they were alive at 13:47 and are
+the seven counted then; their counters run from 12:37:44. A helper that had
+exited before 13:47 would be missing from the sum, so 621.9 s is a lower bound
+of helper CPU since the start. Inference: collection work is large. How much of
+it stops the serving thread is not established. The follow-up window records
+the helper threads' CPU once a second from outside the process (section 5.3,
+after item 1).
 
 #### The installed release so far
 
@@ -3547,34 +3565,64 @@ bodies of the steps listed in section 5.2 in new static performance sites
 
 #### Collector-thread CPU, observed from outside the process
 
-This is part of section 1's follow-up window and needs no product change.
+This is part of section 1's follow-up window and needs no product change. The
+procedure below replaces the one the first revision wrote here (section 5.9).
+That one added up the lifetime counters of whichever helper threads it had last
+found and subtracted adjacent sums. A helper that exited then gave negative CPU,
+and a helper found late brought all its earlier CPU into one second.
 
-- **What is recorded.** Once a second, the `utime + stime` clock ticks of the
-  Viewer's main thread and the sum over its `HeapHelper` threads, read from
-  `/proc/<pid>/task/<tid>/stat`, with the wall-clock time of the read. The
-  helper threads are found by name once a minute from `/proc/<pid>/task/*/comm`,
-  at most 16 of them. The script is `thread_cpu.py` in section 5.8. It writes one
-  JSON line per second to a new file in the follow-up's private evidence
-  directory.
+- **What is recorded.** Once a second the script reads the boot clock, lists
+  `/proc/<pid>/task` and reads each thread's `stat` file once, at most 512
+  threads. A row holds the wall-clock time, the boot clock in clock ticks, the
+  main thread's `utime + stime` ticks, and every `HeapHelper` thread as
+  `[thread id, start ticks since boot, utime + stime ticks]`. A thread that exits
+  between the listing and its read is left out of the row. Any other failed read
+  names the thread in `unread`. The script is `thread_cpu.py` in section 5.10. It
+  writes one JSON line per second to a new file in the follow-up's private
+  evidence directory.
 - **How long.** The follow-up window plus its startup exclusion, at most
-  6,000 one-second rows (100 minutes), a file of about 0.5 MB.
+  6,000 one-second rows (100 minutes). With seven helpers a row is about
+  330 bytes, so the file stays near 2 MB.
 - **What it costs.** Nothing runs inside the Viewer. The reads are procfs reads
-  from a separate process; they send no signal and attach no tracer. On the
-  serving `662a6012` Viewer at 14:22:34 (59 threads, 7 `HeapHelper`), one pass
-  over the main thread and the helpers took 167 µs, and the name listing took
-  1.4 ms (section 5.8).
+  from a separate process. They send no signal and attach no tracer. On the
+  serving `662a6012` Viewer (seven `HeapHelper` threads, and 59 threads in all
+  at 14:22:34), one pass over all threads took 2 ms at the median, 9 ms at the
+  95th percentile and 70 ms at most in a 600-row run (section 5.10), measured
+  in the sampler at 1 ms resolution. The machine's load average was 22 to 35
+  during the run (`uptime` at 15:15:55 and 15:18:29); whether the longer passes
+  were the sampler waiting for a CPU is not measured.
 - **Bounds and switch-off.** The row cap ends it. It also ends when the start
-  identity in `/proc/<pid>/stat` changes or the process disappears, and it writes
-  that reason as its last line. The observer that starts it records the
-  sampler's own PID and stops only that PID. A five-second dry run against the
-  serving Viewer at 14:24:43 to 14:24:48 wrote five rows and exited (section 5.8).
-- **Join.** For each Viewer gap record, the gap interval is `[utc − gapMs, utc]`.
-  Helper CPU inside it is the sum, over the one-second sample intervals, of each
-  interval's tick difference divided by the clock rate, times the fraction of
-  that interval that lies inside the gap. Report per gap the helper CPU against
-  the gap length, and over the window the helper CPU-seconds per wall-second
-  inside gaps against outside gaps. Main-thread ticks give the same pair as a
-  check against the record's `scheduler.runMs`.
+  identity in `/proc/<pid>/stat` changes, the process disappears or its `stat`
+  cannot be read, and it writes that reason as its last line. The observer that
+  starts it records the sampler's own PID and stops only that PID.
+- **Join** (`thread_cpu_join.py`, section 5.10). A thread's identity is its
+  thread id and its start ticks, so a reused thread id is a new identity. Two
+  adjacent rows give one interval. Its helper CPU is the sum of the tick
+  differences of the identities read in both rows, plus all the ticks of
+  identities that appear only in the later row and started after the earlier
+  row's boot-clock read. Those were born inside the interval. The interval is
+  unavailable, and records its reason, when:
+  - an identity of the earlier row is missing from the later one
+    (`thread-exited`): its CPU after the earlier read can no longer be read;
+  - an identity appears that started before the earlier row's read
+    (`thread-missed`): its earlier CPU would be carried into this interval;
+  - either row names an unread thread or more than 512 threads (`unread`);
+  - the rows are more than 2 s apart (`sampling-gap`), or the process ended.
+
+  An unavailable interval adds neither CPU nor wall time. For each Viewer gap
+  record, the gap is `[utc − gapMs, utc]`. Its covered time is the part of the
+  gap that available intervals cover. Its helper CPU is the sum, over those
+  intervals, of the interval's CPU times the fraction of the interval inside the
+  gap. A gap reports its covered seconds always and its helper CPU only when at
+  least 90 % of it is covered. Over the window, report helper CPU-seconds per
+  covered wall-second inside gaps against outside gaps, the covered and the
+  total wall-seconds of each, and the count of unavailable intervals by reason.
+  Main-thread ticks give the same pair as a check against the record's
+  `scheduler.runMs`.
+- **What it cannot see.** A helper born and exited between two reads appears in
+  no row, and the sampler cannot detect it. Its CPU is missing from that
+  interval. The join assumes CPU is spread evenly within each one-second
+  interval.
 - **What it can show.** JavaScriptCore's helper threads mark the heap in
   parallel, and much of that work runs while the serving thread runs too. Their
   CPU in a gap therefore shows whether collection work concentrates in gaps. It
@@ -3785,8 +3833,10 @@ classes of section 5.2 by the same collector. Each of items 2 to 5 then gets the
 profile estimate of section 5.3, step 1, and items 3 to 5 are ranked again by
 it. `pipelines.mutation` (6.80 % of gap time as a class), `registry.write`
 (4.35 %) and `pipelines.controller-schedule` (3.99 %) get an item when their
-frames show a repairable call site. If the follow-up's collector-thread CPU
-concentrates in gaps, or item 1 leaves a large unseen or unresolved share, the
+frames show a repairable call site. If the follow-up's helper CPU per covered
+wall-second inside gaps is at least twice that outside them, with at least 90 %
+of the wall time inside and outside gaps covered (section 5.3), or item 1
+leaves a large unseen or unresolved share, the
 heap growth of section 5.2 becomes the next item. Its owner is the existing
 memory work (PRs 3851 and 3856).
 
@@ -3821,10 +3871,11 @@ memory work (PRs 3851 and 3856).
 - **A collector-thread CPU field in each gap record.** Removed from item 1 at
   revision. The follow-up window measures the same quantity from outside the
   process with no product change (section 5.3). Reconsider when that
-  measurement shows helper CPU per wall-second inside gaps at least twice that
-  outside them, or when item 1 leaves more than 20 % of the clipped samples of
-  long gaps unresolved. The in-process path then needs all four of these
-  links, in three files:
+  measurement shows helper CPU per covered wall-second inside gaps at least
+  twice that outside them, with at least 90 % of the wall time inside and
+  outside gaps covered, or when item 1 leaves more than 20 % of the clipped
+  samples of long gaps unresolved. The in-process path then needs all four of
+  these links, in three files:
   1. Arming, `src/lib/loopProfilerServing.ts`: after `monitor.setProfiler`, call
      a new monitor method (in `viewerLoopMonitor.ts`) that sets the watchdog's
      control cell; after `recorder.start()` resolves (expiry, kill switch or
@@ -3832,25 +3883,34 @@ memory work (PRs 3851 and 3856).
   2. Worker control, `src/lib/loopWatchdog.ts`: one new control cell in the
      shared buffer. The worker reads it every sample and does no thread read
      while it is zero.
-  3. Worker reads, same file: while armed, list `HeapHelper` threads from
-     `/proc/<pid>/task/*/comm` once a minute (at most 16), read their
-     `utime + stime` once a second, and store the cumulative CPU in a new ring
-     field, or −1 when unarmed or unreadable. The procfs root comes from
-     `workerData`, so a test can point it at a fixture directory.
+  3. Worker reads, same file: while armed, once a second, list
+     `/proc/<pid>/task` (at most 512 threads), read each thread's `stat` once,
+     and keep each `HeapHelper` thread's ticks by its identity, the thread id
+     and start ticks. Store in a new ring field the helper CPU since the
+     previous read, counted by the rule of section 5.3's join: the differences
+     of identities read both times, plus all the ticks of identities born after
+     the previous read. Store −1 when unarmed, when an identity of the previous
+     read is gone, when an identity appears that started before the previous
+     read, or when a read fails. The procfs root comes from `workerData`, so a
+     test can point it at a fixture directory.
   4. Interval and output, `src/lib/viewerLoopMonitor.ts`, in the scheduler
-     block (`:186-231`): `gcHelperCpuMs` is the difference between the last and
-     first armed samples of the gap's existing sample window, in milliseconds
-     of CPU summed over the helper threads, with a resolution of one clock tick
-     (10 ms here). When any sample in the window is −1 it is `null`, with
-     `gcHelperCpu: "not-armed"` or `"unavailable"`. Open PR 3710 changes only
-     the operation type union of that file (line 11), read at 14:19.
+     block (`:186-231`): `gcHelperCpuMs` is the sum of the stored increments of
+     the reads inside the gap's existing sample window, in milliseconds of CPU,
+     with a resolution of one clock tick (10 ms here). When any of them is −1 it
+     is `null`, with `gcHelperCpu: "not-armed"` or `"unavailable"`. Open PR 3710
+     changes only the operation type union of that file (line 11), read at
+     14:19.
 
   Acceptance: an isolated test runs the real monitor with the real watchdog
   worker and a fixture procfs root whose helper `stat` files gain a known
   number of ticks during an induced block of at least one second. The emitted
   `[viewer loop-gap]` JSON of that gap carries `gcHelperCpuMs` within one tick
-  of the known increase. With the recorder not armed, or after the kill switch
-  stops it, the worker opens no file under the fixture's task directory.
+  of the known increase. A helper born during the block adds exactly its own
+  ticks. A helper that exits, a thread id reused with a new start time, a
+  helper that appears with an earlier start time and an unreadable `stat` each
+  give `null` with `"unavailable"`, never a negative value or earlier ticks.
+  With the recorder not armed, or after the kill switch stops it, the worker
+  opens no file under the fixture's task directory.
 
 ### 5.6 Commands and bounds for part 5
 
@@ -4183,7 +4243,8 @@ notice. Changed:
   whole (`viewerLoopMonitor.ts:232-235`).
 - Section 1's follow-up records the main thread's and the `HeapHelper` threads'
   CPU once a second from outside the process, by a read-only script (section 5.3,
-  script in 5.8). A five-second dry run against the serving Viewer worked.
+  script in 5.8). A five-second dry run against the serving Viewer worked. The
+  second review found that script's join wrong; section 5.9 replaces both.
 - Section 5.5 defers the in-process field, with the whole path: arming, the
   worker's control cell, the worker's reads, the interval and output fields,
   units and null reasons, and the acceptance the review asked for.
@@ -4413,53 +4474,15 @@ print(json.dumps({'readStart': began, 'lastRecordUtc': utc, 'pid': pid, 'revisio
 `statPassUs` is the mean time of one read of the main thread's and the seven
 helpers' `stat` files over 100 passes, in the reading process.
 
-**The follow-up's thread sampler.** `thread_cpu.py`, SHA-256
-`85b31ad49a4a45a7b53442e2089844ed3bc455fc01ced04997514638aee4645c`:
-
-```python
-# Read-only: CPU ticks of a process's main thread and HeapHelper threads, once a second.
-# Usage: python3 -I thread_cpu.py PID START_IDENTITY OUTPUT_FILE SECONDS (at most 6000)
-import json, os, pathlib, sys, time
-pid, start, out, seconds = int(sys.argv[1]), sys.argv[2], sys.argv[3], min(int(sys.argv[4]), 6000)
-task = pathlib.Path(f'/proc/{pid}/task'); hz = os.sysconf('SC_CLK_TCK')
-def fields(path): s = path.read_text(); return s[s.rfind(')') + 2:].split()
-def ticks(tid): f = fields(task / tid / 'stat'); return int(f[11]) + int(f[12])
-helpers, listed = [], -60.0
-with open(out, 'x') as w:
-    for _ in range(seconds):
-        at = time.time()
-        try:
-            if fields(pathlib.Path(f'/proc/{pid}/stat'))[19] != start: w.write(json.dumps({'utc': round(at, 3), 'end': 'identity-changed'}) + '\n'); break
-            if at - listed >= 60:
-                helpers, listed = [], at
-                for tid in sorted(os.listdir(task), key=int)[:4000]:
-                    try:
-                        if (task / tid / 'comm').read_text().strip() == 'HeapHelper': helpers.append(tid)
-                    except FileNotFoundError: pass
-                helpers = helpers[:16]
-            main, helper = ticks(str(pid)), 0
-            for tid in helpers:
-                try: helper += ticks(tid)
-                except FileNotFoundError: pass
-        except FileNotFoundError: w.write(json.dumps({'utc': round(at, 3), 'end': 'process-gone'}) + '\n'); break
-        w.write(json.dumps({'utc': round(at, 3), 'mainTicks': main, 'helperTicks': helper, 'helpers': len(helpers), 'hz': hz}) + '\n'); w.flush()
-        time.sleep(max(0.0, 1 - (time.time() - at)))
-```
-
-Dry run against the serving Viewer, from 14:24:43.098 to 14:24:48.163 UTC:
-`timeout 20 python3 -I thread_cpu.py 946855 56471738 <scratch>/thread-cpu-dryrun.jsonl 5`.
-It wrote five rows and exited:
-
-```json
-{"utc": 1794407083.138, "mainTicks": 556382, "helperTicks": 103538, "helpers": 7, "hz": 100}
-{"utc": 1794407084.139, "mainTicks": 556476, "helperTicks": 103542, "helpers": 7, "hz": 100}
-{"utc": 1794407085.139, "mainTicks": 556573, "helperTicks": 103544, "helpers": 7, "hz": 100}
-{"utc": 1794407086.139, "mainTicks": 556670, "helperTicks": 103547, "helpers": 7, "hz": 100}
-{"utc": 1794407087.139, "mainTicks": 556767, "helperTicks": 103547, "helpers": 7, "hz": 100}
-```
-
-These five seconds are a check that the script runs. They measure nothing that
-this document uses.
+**The follow-up's thread sampler, superseded.** The `thread_cpu.py` that stood
+here (SHA-256 `85b31ad49a4a45a7b53442e2089844ed3bc455fc01ced04997514638aee4645c`)
+summed the lifetime counters of the helper threads it had last listed, and its
+join subtracted adjacent sums. The second review showed the result wrong when a
+helper exits or is found late (section 5.9). It is removed here so that nobody
+runs it; it remains in this document at commit `b805606e`. Its five-second dry
+run against the serving Viewer, from 14:24:43.098 to 14:24:48.163 UTC, wrote
+five rows and exited; those rows measured nothing that this document uses.
+Section 5.10 holds the corrected sampler and its join.
 
 **Main and open pull requests**, read from 14:19:28.227 to 14:19:40.173 UTC,
 and two more compare reads from 14:30:44.891 to 14:30:50.682 UTC:
@@ -4501,5 +4524,445 @@ subprocess timeouts, procfs files of the serving Viewer, and GitHub reads. No
 database was opened, and no route, profiler, signal, restart, setting change or
 load generator was used. The only process started against the serving Viewer
 was the five-second sampler dry run, which reads procfs and exited on its own.
+
+</details>
+
+### 5.9 Second revision after review, 2026-11-11
+
+A second review handed over one finding. It was checked between 15:05 and
+15:19 UTC, read-only. The commands are in section 5.10.
+
+**The follow-up's thread sampler subtracted sums over a set of threads that can
+change.** The script of the first revision listed the `HeapHelper` threads once
+a minute. Each second it added the lifetime `utime + stime` ticks of those it
+could still read, and it skipped a thread that had gone. The join of section 5.3
+treated the difference of two adjacent sums as one counter. The reviewer's
+reproduction, run again on the document at `b805606e`, gave output identical to
+the reviewer's stored result. With a stable set it gave 0.1 and 0.1
+CPU-seconds per second, which is right. When a helper with 100 ticks exits it
+gave −1.0. When a helper with 5,900 earlier ticks is first listed it gave 59.0
+in one second. The same script on a fixture procfs showed two more faults. A
+thread id reused with a new start time gave −4.8 CPU-seconds. An unreadable
+`stat` file stopped the script after its first row, because it caught only a
+missing file.
+
+**What it changes in the attribution.** Nothing measured. No figure of sections
+1 to 5 came from the sampler. Its dry run measured nothing that this document
+uses, and no process running a `thread_cpu` script was found on this machine at
+15:04:50 UTC. The defect would have reached the follow-up's ratio of helper CPU
+inside gaps to outside them. The heap condition of "After item 1" and the
+trigger of the deferred in-process field (section 5.5) depend on that ratio.
+
+One statement had the same fault. Section 5.2 gave 621.9 CPU-seconds "since the
+start" for the seven helpers read at 13:47, but a sum of thread counters covers
+only the threads alive at the read. A read at 15:08:12 showed that the seven
+helpers then alive all started 90 ms after the process. They were therefore the
+seven counted at 13:47, and the sum is a lower bound of helper CPU since the
+start.
+
+**Changed:**
+
+- Section 5.3, "Collector-thread CPU, observed from outside the process": the
+  sampler lists every thread each second and records each helper by thread id,
+  start ticks and CPU ticks. The join counts increments per identity and counts
+  a thread born inside an interval whole. It marks an interval unavailable, with
+  its reason, on an exit, a thread found late, an unread thread, a sampling gap
+  or the end of the process. Unavailable time enters neither side of the ratio.
+  Each gap reports its covered seconds, and its helper CPU only when at least
+  90 % of it is covered. A new paragraph names what the sampler cannot see.
+- Section 5.10: the corrected `thread_cpu.py`, the join as code
+  (`thread_cpu_join.py`), a fixture harness with its output for both versions,
+  a check that thread start times read on the boot clock, and a 600-row run
+  against the serving Viewer joined to its gap records.
+- Section 5.8: the superseded script's text is removed; its hash and commit are
+  kept.
+- Section 5.5: if the in-process field is ever built, it counts by the same
+  identity rule and reports `null` on the same events. Its acceptance names an
+  exit, a birth, a reused thread id, a thread found late and a failed read. Its
+  trigger, and the heap condition of "After item 1", now require at least 90 %
+  coverage of the wall time inside and outside gaps.
+- Section 1: the follow-up reports the sampler's coverage and its unavailable
+  intervals by reason.
+- Section 5.2: the 621.9 s statement, as above.
+
+**The corrected procedure against the review's acceptance.** Each case runs the
+script cut from this document on a fixture procfs. The figures are helper
+CPU-seconds per one-second interval (section 5.10):
+
+| Case | Superseded script and join | Corrected script and join |
+| --- | --- | --- |
+| Stable set (the control) | 0.1, 0.1 | 0.1, 0.1 |
+| A helper exits | −1.0, then 0.0 | unavailable (`thread-exited`), then 0.0 |
+| A helper is born between two reads | 0.0 for 59 intervals, then 59.5 in one | 0.5 (its own ticks), then 1.0 each |
+| A helper older than the run is first listed late | 0.0, 0.0: its 1.0 per second is missed | unavailable (`thread-missed`), then 1.0 |
+| A thread id is reused with a new start time | −4.8, then 0.1 | unavailable (`thread-exited`), then 0.1 |
+| A helper's `stat` cannot be read | the script stops after one row | unavailable (`unread`) twice, then 0.1 |
+
+The control keeps its exact increment. No case gives negative CPU or moves
+earlier work into a later interval. A one-second gap that half overlaps an
+unavailable interval reports 0.5 s covered and no helper CPU.
+
+**On the serving Viewer.** A 600-row run against the `662a6012` Viewer (PID
+946855), from 15:08:23.614 to 15:18:22.938 UTC, saw the same seven helper
+identities in every row, all started 90 ms after the process. None of its 599
+intervals was unavailable. Section 4's collector found 170 Viewer gap records
+ending in that span, 77 of them one second or more. The intervals covered all
+216.5 s of wall time inside those gaps and all 382.8 s outside them, and 169
+gaps reported helper CPU; the other one began before the first row. One pass
+over all threads took 2 ms at the median, 9 ms at the 95th percentile and 70 ms
+at most. This run checks the procedure's coverage and cost on the live process.
+It is not the follow-up, and its helper CPU inside and outside gaps is not
+reported: ten minutes with unrecorded load support no conclusion. On a release
+whose helper threads come and go, the follow-up's count of unavailable intervals
+shows what the exclusion costs.
+
+**Unchanged:** every figure of sections 1, 2 and 4, including the 72.63 %
+unattributed share; the plan's items, their order, files, risks, review depths
+and sizes; item 1 in full. The 90-minute follow-up stays required before the
+next deployment. Main was `266b49d0` at 15:12:28; its one commit after
+`1037130e` (PR 3873) changes a workflow and its test, and none of the files this
+plan names. The only open PR that touches the files of the deferred in-process
+field is still 3710 (`viewerLoopMonitor.ts`).
+
+### 5.10 Commands and bounds for the second revision
+
+<details>
+<summary>The reproduction, the corrected sampler and join, the fixture cases, the clock check and the run against the serving Viewer</summary>
+
+**The finding, reproduced.** The reviewer's `sampler_repro.py` (SHA-256
+`5eb02abfa5d40ff9a3dc4bb63ffe328e21312bc99953e0941a5bd6d18f1f7911`) is kept
+in this lane's private evidence folder, under
+`review-b805606e-20261111-1455`. It cuts the sampler from a document and drives
+it on a stubbed procfs. It ran from 15:07:57.618 to 15:07:57.777 UTC on the
+document at `b805606e` (SHA-256
+`d7b75c4e41e1dddf6db37ec228d1cf13b05b5b256d4410ae1f710fa7951cc60b`, the same
+bytes as this worktree before the revision):
+
+```bash
+git show b805606e:docs/design/viewer-stalls-after-3846.md > doc-b805606e.md
+python3 -I sampler_repro.py doc-b805606e.md "$(mktemp -d)" > review-repro-out.json
+```
+
+Compared with the reviewer's `sampler-repro-result.json` after sorting keys, the
+output was identical. Its joined helper CPU per interval: stable `[0.1, 0.1]`,
+helper exits `[-1.0, 0.0]`, late helper discovery `[0.0, 59.0]` (the last two of
+60 intervals).
+
+**The corrected sampler.** `thread_cpu.py`, SHA-256
+`732245aa2cab768da1447bbd22d32e77f180d971079bd3c66ed110d2579b95d2`:
+
+```python
+# Read-only: per-thread CPU ticks of a process's main thread and HeapHelper threads, once a second.
+# Usage: python3 -I thread_cpu.py PID START_IDENTITY OUTPUT_FILE SECONDS (at most 6000) [PROC_ROOT, default /proc]
+# A row names every HeapHelper thread as [tid, start ticks since boot, utime+stime ticks]. A thread that
+# exits between the listing and its read is absent from the row; any other failed read is named in 'unread'.
+# 'boot' is the boot clock in ticks, read before the listing, on the clock of the threads' start ticks.
+import json, os, pathlib, sys, time
+pid, start, out, seconds = int(sys.argv[1]), sys.argv[2], sys.argv[3], min(int(sys.argv[4]), 6000)
+proc = pathlib.Path(sys.argv[5] if len(sys.argv) > 5 else '/proc') / str(pid); task = proc / 'task'
+hz = os.sysconf('SC_CLK_TCK')
+def stat(path):
+    s = path.read_text(); return s[s.index('(') + 1:s.rfind(')')], s[s.rfind(')') + 2:].split()
+with open(out, 'x') as w:
+    for _ in range(seconds):
+        at, boot = time.time(), int(time.clock_gettime(time.CLOCK_BOOTTIME) * hz)
+        row = {'utc': round(at, 3), 'boot': boot, 'hz': hz}
+        try:
+            if stat(proc / 'stat')[1][19] != start: row['end'] = 'identity-changed'
+            else:
+                tids = sorted(os.listdir(task), key=int); helpers, unread = [], []
+                if len(tids) > 512: unread.append('over-512-threads'); tids = tids[:512]
+                for tid in tids:
+                    try: name, f = stat(task / tid / 'stat')
+                    except FileNotFoundError: continue
+                    except OSError: unread.append(tid); continue
+                    if tid == str(pid): row['main'] = int(f[11]) + int(f[12])
+                    elif name == 'HeapHelper': helpers.append([int(tid), int(f[19]), int(f[11]) + int(f[12])])
+                row['helpers'] = helpers
+                if unread: row['unread'] = unread
+        except FileNotFoundError: row['end'] = 'process-gone'
+        except OSError as e: row['end'] = 'unreadable:' + type(e).__name__
+        row['readEnd'] = round(time.time(), 3)
+        w.write(json.dumps(row, separators=(',', ':')) + '\n'); w.flush()
+        if 'end' in row: break
+        time.sleep(max(0.0, 1 - (time.time() - at)))
+```
+
+**The join.** `thread_cpu_join.py`, SHA-256
+`7f3016b57625d76f3ea11ee45592357f5633b5dc78e3a6a22126c168ab294f82`:
+
+```python
+# Join of thread_cpu.py rows with Viewer gap records.
+# Usage: python3 -I thread_cpu_join.py ROWS.jsonl GAPS.json  (GAPS: [[gap end in epoch seconds, gap ms], ...])
+import collections, json, sys
+def intervals(rows):
+    """[t0, t1, helper ticks or None, main ticks or None, reason or None] for each pair of adjacent rows."""
+    out = []
+    for a, b in zip(rows, rows[1:]):
+        t0, t1 = a['utc'], b['utc']
+        main = b['main'] - a['main'] if 'main' in a and 'main' in b else None
+        if 'end' in a or 'end' in b: reason = b.get('end') or a.get('end')
+        elif t1 - t0 > 2.0: reason = 'sampling-gap'
+        elif a.get('unread') or b.get('unread'): reason = 'unread'
+        else:
+            A = {(t, s): c for t, s, c in a['helpers']}; B = {(t, s): c for t, s, c in b['helpers']}
+            if any(k not in B for k in A): reason = 'thread-exited'
+            elif any(k not in A and k[1] < a['boot'] for k in B): reason = 'thread-missed'
+            else: reason = None
+        helper = None if reason else sum(c - A.get(k, 0) for k, c in B.items())
+        out.append([t0, t1, helper, main, reason])
+    return out
+def join(rows, gaps, need=0.9):
+    hz = rows[0]['hz']; iv = intervals(rows); per_gap = []
+    span = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]   # [wall, covered wall, helper CPU s] inside and outside gaps
+    for t0, t1, h, _, _ in iv:
+        inside = sum(max(0.0, min(end, t1) - max(end - ms / 1000, t0)) for end, ms in gaps)
+        for k, wall in ((0, inside), (1, t1 - t0 - inside)):
+            span[k][0] += wall
+            if h is not None: span[k][1] += wall; span[k][2] += h / hz * wall / (t1 - t0)
+    for end, ms in gaps:
+        lo, cov, cpu = end - ms / 1000, 0.0, 0.0
+        for t0, t1, h, _, _ in iv:
+            o = max(0.0, min(end, t1) - max(lo, t0))
+            if o and h is not None: cov += o; cpu += h / hz * o / (t1 - t0)
+        per_gap.append({'end': end, 'gapS': ms / 1000, 'coveredS': round(cov, 3),
+                        'helperCpuS': round(cpu, 2) if cov >= need * ms / 1000 else None})
+    rate = lambda k: round(span[k][2] / span[k][1], 4) if span[k][1] else None
+    return {'intervals': len(iv), 'unavailable': dict(collections.Counter(r[4] for r in iv if r[4])),
+            'inside': {'wallS': round(span[0][0], 3), 'coveredS': round(span[0][1], 3), 'helperCpuPerWallS': rate(0)},
+            'outside': {'wallS': round(span[1][0], 3), 'coveredS': round(span[1][1], 3), 'helperCpuPerWallS': rate(1)},
+            'gaps': per_gap}
+if __name__ == '__main__':
+    rows = [json.loads(l) for l in open(sys.argv[1])]
+    print(json.dumps(join(rows, json.load(open(sys.argv[2])))))
+```
+
+**Fixture cases.** `sampler_cases.py`, SHA-256
+`f38a7b8454bb34c7e8555a3dbdd7a28ff0c2296b3ae4c618c3d90d61cd8ce8b5`.
+It cuts the sampler from a document, and for the corrected version the join
+too. For each case it builds a procfs tree in a new directory and
+replaces only the `time` module, so that each `sleep` advances one step and
+rewrites the tree. The superseded script's `/proc/{pid}` literal is pointed at
+the tree; the corrected script takes the tree as its fifth argument. Threads
+that predate the run start at tick 10. The boot clock reads 50,000 + 100 × step
+ticks, so a thread born between steps 0 and 1 starts at tick 50,050. An
+unreadable `stat` is a file with mode 000.
+
+```python
+# Drives a thread sampler cut from a document against a fixture procfs, one case at a time, and joins its rows.
+# Usage: python3 -I sampler_cases.py DOCUMENT {old|new} OUTPUT_DIR   (OUTPUT_DIR must not exist)
+# An 'intervals' row is [end step, helper CPU s, main CPU s] and, for 'new', the reason the interval is unavailable.
+# 'old' joins by the superseded rule: the difference of adjacent rows' helper sums.
+import json, os, pathlib, sys, types, unittest.mock
+doc, which, outdir = pathlib.Path(sys.argv[1]).read_text(), sys.argv[2], pathlib.Path(sys.argv[3])
+def cut(marker):
+    return marker + doc.split('```python\n' + marker, 1)[1].split('\n```', 1)[0]
+if which == 'old': sampler = cut('# Read-only: CPU ticks')
+else:
+    sampler = cut('# Read-only: per-thread CPU ticks'); joinns = {}
+    exec(compile(cut('# Join of thread_cpu.py rows'), 'thread_cpu_join.py', 'exec'), joinns)
+outdir.mkdir()
+OLD = 10                                   # start tick of threads that predate the run
+def born(step): return 50000 + 100 * step + 50   # start tick of a thread born between rows step and step+1
+# Each case: steps, and per step {tid: (name, start tick, cpu ticks)}; 'deny' lists tids whose stat is unreadable.
+def main(s): return {42: ('bun', OLD, 10 * s)}
+CASES = {
+  'stable':        (3,  lambda s: {**main(s), 43: ('HeapHelper', OLD, 100 + 10 * s)}),
+  'helper-exits':  (3,  lambda s: {**main(s), **({43: ('HeapHelper', OLD, 100)} if s < 1 else {})}),
+  'helper-born':   (62, lambda s: {**main(s), **({44: ('HeapHelper', born(0), 50 + 100 * (s - 1))} if s >= 1 else {})}),
+  'missed-thread': (3,  lambda s: {**main(s), **({43: ('HeapHelper', OLD, 5900 + 100 * (s - 1))} if s >= 1 else {})}),
+  'tid-reuse':     (3,  lambda s: {**main(s), 43: ('HeapHelper', OLD, 500) if s < 1 else ('HeapHelper', born(0), 20 + 10 * (s - 1))}),
+  'read-failure':  (4,  lambda s: {**main(s), 43: ('HeapHelper', OLD, 100 + 10 * s), 'deny': [43] if s == 1 else []}),
+}
+for case, (steps, state) in CASES.items():
+    root = outdir / (case + '-proc'); step = [0]
+    def write(s):
+        cur = dict(state(s)); deny = cur.pop('deny', [])
+        task = root / '42' / 'task'; task.mkdir(parents=True, exist_ok=True)
+        for t in os.listdir(task):
+            if int(t) not in cur: (task / t / 'stat').unlink(); (task / t / 'comm').unlink(); (task / t).rmdir()
+        for tid, (name, st, ticks) in cur.items():
+            f = ['0'] * 50; f[11] = str(ticks); f[19] = str(st)
+            d = task / str(tid); d.mkdir(exist_ok=True)
+            os.chmod(d / 'stat', 0o600) if (d / 'stat').exists() else None
+            (d / 'stat').write_text(f'{tid} ({name}) ' + ' '.join(f)); (d / 'comm').write_text(name + '\n')
+            os.chmod(d / 'stat', 0o000 if tid in deny else 0o600)
+        g = ['0'] * 50; g[19] = 'S0'; (root / '42' / 'stat').write_text('42 (bun) ' + ' '.join(g))
+    def advance(_): step[0] += 1; write(step[0])
+    clock = types.SimpleNamespace(time=lambda: 1000.0 + step[0], sleep=advance, clock_gettime=lambda c: 500.0 + step[0], CLOCK_BOOTTIME=7)
+    write(0); dest = outdir / (case + '.jsonl'); code = sampler
+    argv = ['thread_cpu.py', '42', 'S0', str(dest), str(steps)]
+    if which == 'old': code = code.replace("/proc/{pid}", str(root) + "/{pid}")
+    else: argv.append(str(root))
+    crash = None
+    with unittest.mock.patch.dict(sys.modules, {'time': clock}), unittest.mock.patch.object(sys, 'argv', argv):
+        try: exec(compile(code, 'thread_cpu.py', 'exec'), {'__name__': '__main__'})
+        except Exception as e: crash = type(e).__name__
+    for d in (root / '42' / 'task').iterdir():
+        if (d / 'stat').exists(): os.chmod(d / 'stat', 0o600)
+    rows = [json.loads(l) for l in dest.read_text().splitlines()]
+    if which == 'old':
+        joined = [[b['utc'] - 1000, (b['helperTicks'] - a['helperTicks']) / a['hz'], (b['mainTicks'] - a['mainTicks']) / a['hz']]
+                  for a, b in zip(rows, rows[1:]) if 'helperTicks' in a and 'helperTicks' in b]
+    else:
+        joined = [[t1 - 1000, None if h is None else h / rows[0]['hz'], None if m is None else m / rows[0]['hz'], r]
+                  for t0, t1, h, m, r in joinns['intervals'](rows)]
+    # A 62-step case prints its first two and last three intervals.
+    shown = joined if steps < 10 else [j for j in joined if j[0] <= 2 or j[0] >= steps - 3]
+    r = {'case': case, 'rows': len(rows), 'crash': crash, 'intervals': shown}
+    if which == 'new':   # one gap of 1 s from step 0.5 to step 1.5
+        j = joinns['join'](rows, [[1001.5, 1000]]); r['gap'] = j['gaps'][0]; r['unavailable'] = j['unavailable']
+    print(json.dumps(r))
+```
+
+Run from 15:19:10.192 to 15:19:10.383 UTC:
+
+```bash
+python3 -I sampler_cases.py docs/design/viewer-stalls-after-3846.md new "$(mktemp -d)/new"
+python3 -I sampler_cases.py doc-b805606e.md old "$(mktemp -d)/old"
+```
+
+The corrected version:
+
+```json
+{"case": "stable", "rows": 3, "crash": null, "intervals": [[1.0, 0.1, 0.1, null], [2.0, 0.1, 0.1, null]], "gap": {"end": 1001.5, "gapS": 1.0, "coveredS": 1.0, "helperCpuS": 0.1}, "unavailable": {}}
+{"case": "helper-exits", "rows": 3, "crash": null, "intervals": [[1.0, null, 0.1, "thread-exited"], [2.0, 0.0, 0.1, null]], "gap": {"end": 1001.5, "gapS": 1.0, "coveredS": 0.5, "helperCpuS": null}, "unavailable": {"thread-exited": 1}}
+{"case": "helper-born", "rows": 62, "crash": null, "intervals": [[1.0, 0.5, 0.1, null], [2.0, 1.0, 0.1, null], [59.0, 1.0, 0.1, null], [60.0, 1.0, 0.1, null], [61.0, 1.0, 0.1, null]], "gap": {"end": 1001.5, "gapS": 1.0, "coveredS": 1.0, "helperCpuS": 0.75}, "unavailable": {}}
+{"case": "missed-thread", "rows": 3, "crash": null, "intervals": [[1.0, null, 0.1, "thread-missed"], [2.0, 1.0, 0.1, null]], "gap": {"end": 1001.5, "gapS": 1.0, "coveredS": 0.5, "helperCpuS": null}, "unavailable": {"thread-missed": 1}}
+{"case": "tid-reuse", "rows": 3, "crash": null, "intervals": [[1.0, null, 0.1, "thread-exited"], [2.0, 0.1, 0.1, null]], "gap": {"end": 1001.5, "gapS": 1.0, "coveredS": 0.5, "helperCpuS": null}, "unavailable": {"thread-exited": 1}}
+{"case": "read-failure", "rows": 4, "crash": null, "intervals": [[1.0, null, 0.1, "unread"], [2.0, null, 0.1, "unread"], [3.0, 0.1, 0.1, null]], "gap": {"end": 1001.5, "gapS": 1.0, "coveredS": 0.0, "helperCpuS": null}, "unavailable": {"unread": 2}}
+```
+
+The superseded version:
+
+```json
+{"case": "stable", "rows": 3, "crash": null, "intervals": [[1.0, 0.1, 0.1], [2.0, 0.1, 0.1]]}
+{"case": "helper-exits", "rows": 3, "crash": null, "intervals": [[1.0, -1.0, 0.1], [2.0, 0.0, 0.1]]}
+{"case": "helper-born", "rows": 62, "crash": null, "intervals": [[1.0, 0.0, 0.1], [2.0, 0.0, 0.1], [59.0, 0.0, 0.1], [60.0, 59.5, 0.1], [61.0, 1.0, 0.1]]}
+{"case": "missed-thread", "rows": 3, "crash": null, "intervals": [[1.0, 0.0, 0.1], [2.0, 0.0, 0.1]]}
+{"case": "tid-reuse", "rows": 3, "crash": null, "intervals": [[1.0, -4.8, 0.1], [2.0, 0.1, 0.1]]}
+{"case": "read-failure", "rows": 1, "crash": "PermissionError", "intervals": []}
+```
+
+**Start times read on the boot clock.** `clock_check.py`, SHA-256
+`14a19df05b0cf8fa3930348a19d352e2c84e95f872c51d6c86150555cec1abdc`,
+ran from 15:11:45.511 to 15:11:46.554 UTC in its own process. It reads only the
+threads it creates.
+
+```python
+# Does a thread's start time in /proc (field 22) read on the boot clock in ticks? Twenty threads of this process.
+import json, os, threading, time
+hz = os.sysconf('SC_CLK_TCK'); res = []
+for _ in range(20):
+    before = time.clock_gettime(time.CLOCK_BOOTTIME); box = {}
+    def run(): box['tid'] = threading.get_native_id(); time.sleep(0.05)
+    t = threading.Thread(target=run); t.start(); time.sleep(0.01)
+    s = open(f"/proc/self/task/{box['tid']}/stat").read(); st = int(s[s.rfind(')') + 2:].split()[19])
+    after = time.clock_gettime(time.CLOCK_BOOTTIME); t.join()
+    res.append([int(before * hz), st, int(after * hz)])
+print(json.dumps({'hz': hz, 'threads': len(res), 'startWithinReads': sum(a <= s <= c for a, s, c in res),
+                  'startInTickOfEarlierRead': sum(s == a for a, s, c in res)}))
+```
+
+```json
+{"hz": 100, "threads": 20, "startWithinReads": 20, "startInTickOfEarlierRead": 20}
+```
+
+It ran twice more: once at about 15:16:08 UTC without time stamps, printing
+`"startInTickOfEarlierRead": 18`, and from 15:16:14.889 to 15:16:15.937 UTC,
+printing the same line as above. In all 60 threads the start tick lay between
+the two boot-clock reads, and in 58 it equalled the tick of the read taken
+before the thread started. A thread's start tick is therefore never lower than
+a boot-clock read taken before its birth, and the join's test `start < boot`
+counts a thread born in the same tick as a row's read as born inside the
+interval.
+
+**The run against the serving Viewer.** Procfs only: PID 946855, start identity
+56471738, release `662a6012`. A three-row run from 15:08:12.424 to 15:08:14.428
+UTC gave the helpers' start ticks used in section 5.2. Its first row:
+
+```json
+{"utc":1794409692.424,"boot":57374549,"hz":100,"main":803032,"helpers":[[946909,56471747,21700],[946910,56471747,21787],[946911,56471747,21664],[946912,56471747,21664],[946913,56471747,21670],[946914,56471747,21801],[946915,56471747,21796]],"readEnd":1794409692.427}
+```
+
+A draft run just before it, at 15:07:51.284 UTC, wrote one row ending
+`unreadable:IsADirectoryError` and exited: it read the main thread's directory
+instead of its `stat` file. The script above reads the main thread in the same
+loop as the other threads. The 600-row run, from 15:08:23.589 to 15:18:23.944 UTC:
+
+```bash
+timeout 660 python3 -I thread_cpu.py 946855 56471738 <scratch>/live/thread-cpu.jsonl 600
+python3 -I live_join.py defs.py thread_cpu_join.py <scratch>/live/thread-cpu.jsonl 946855 662a6012b39f051669da557d828c13b9e82aa27d
+```
+
+The observer recorded the sampler's own PID; the sampler exited on its row cap
+with status 0. `defs.py` is cut from this document as in section 5.8 (SHA-256
+`66905f81ed6d327b6b65c270aa75dd35e1cb9d477d27cac6df015eebcdcdfbe1`, the same
+bytes). `live_join.py`, SHA-256 `7951fe13b460e3bed652a5ca8d8a98e52601f8d10d39a3c603887b1b0c09fb7e`:
+
+```python
+# Joins a thread_cpu.py run with the Viewer gap records of the same span, by section 4's collector.
+# Usage: python3 -I live_join.py defs.py thread_cpu_join.py ROWS.jsonl PID REVISION
+import json, sys, time
+ns, jn = {}, {}
+exec(open(sys.argv[1]).read(), ns); exec(open(sys.argv[2]).read(), jn)
+ms, iso, collect = ns['ms'], ns['iso'], ns['collect']
+began = iso(time.time() * 1000)
+rows = [json.loads(l) for l in open(sys.argv[3])]; pid, rev = int(sys.argv[4]), sys.argv[5]
+a = collect(int(rows[0]['utc'] * 1000), int(rows[-1]['utc'] * 1000) + 1, rev)
+G = [v for v in a['gaps'] if v.get('role') == 'viewer' and v.get('pid') == pid]
+j = jn['join'](rows, [[ms(v['utc']) / 1000, v['gapMs']] for v in G])
+passes = sorted(r['readEnd'] - r['utc'] for r in rows)
+out = {'readStart': began, 'digest': a['digest'], 'rows': len(rows), 'first': iso(rows[0]['utc'] * 1000), 'last': iso(rows[-1]['utc'] * 1000),
+       'end': rows[-1].get('end'), 'helpersPerRow': sorted({len(r.get('helpers', [])) for r in rows}),
+       'helperIdentities': len({(t, s) for r in rows for t, s, _ in r.get('helpers', [])}),
+       'helperStartTicks': sorted({s for r in rows for _, s, _ in r.get('helpers', [])}),
+       'passMs': {'median': round(1000 * passes[len(passes) // 2], 1), 'p95': round(1000 * passes[int(len(passes) * 0.95)], 1),
+                  'max': round(1000 * passes[-1], 1)},
+       'gapRecords': len(G), 'gapS': round(sum(v['gapMs'] for v in G) / 1000, 3), 'gapsOf1sOrMore': sum(v['gapMs'] >= 1000 for v in G),
+       'intervals': j['intervals'], 'unavailable': j['unavailable'],
+       'insideWallS': j['inside']['wallS'], 'insideCoveredS': j['inside']['coveredS'],
+       'outsideWallS': j['outside']['wallS'], 'outsideCoveredS': j['outside']['coveredS'],
+       'gapsWithHelperCpu': sum(g['helperCpuS'] is not None for g in j['gaps']),
+       'readEnd': iso(time.time() * 1000)}
+for k, x in out.items(): print(json.dumps({k: x}))
+```
+
+Output, read from 15:18:28.256 to 15:18:29.022 UTC. `digest` fixes the
+collector's record set for this span, and `gapS` sums the records whose end lies
+in it. The wall and covered seconds are those of the sampler's intervals inside
+and outside the gaps. The one gap without helper CPU ended at 15:08:24.251 and
+began before the first row, so 0.637 s of its 1.359 s was covered:
+
+```json
+{"readStart": "2026-11-11T15:18:28.256Z"}
+{"digest": "c956bfdce7137d02bc993d70e41d746449b32d997c716c2b6b035bc335215840"}
+{"rows": 600}
+{"first": "2026-11-11T15:08:23.614Z"}
+{"last": "2026-11-11T15:18:22.938Z"}
+{"end": null}
+{"helpersPerRow": [7]}
+{"helperIdentities": 7}
+{"helperStartTicks": [56471747]}
+{"passMs": {"median": 2.0, "p95": 9.0, "max": 70.0}}
+{"gapRecords": 170}
+{"gapS": 217.227}
+{"gapsOf1sOrMore": 77}
+{"intervals": 599}
+{"unavailable": {}}
+{"insideWallS": 216.505}
+{"insideCoveredS": 216.505}
+{"outsideWallS": 382.819}
+{"outsideCoveredS": 382.819}
+{"gapsWithHelperCpu": 169}
+{"readEnd": "2026-11-11T15:18:29.022Z"}
+```
+
+Every read in this revision was read-only: procfs files of the serving Viewer
+from a separate process, `journalctl` with row caps and subprocess timeouts
+through section 4's collector, git and GitHub reads. No database was opened, and
+no route, profiler, tracer, signal, restart, setting change or load generator
+was used. The only processes started against the serving Viewer were the three
+sampler runs above, each of which read procfs and exited on its own.
 
 </details>
