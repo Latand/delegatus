@@ -12,6 +12,8 @@ import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 const exec = promisify(execFile);
 const within = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 type SavedFile = { path: string; savedPath: string; bytes: number; hash: string };
+/** Evidence reads share one guard result for this long. */
+const EVIDENCE_GUARD_REUSE_MS = 5_000;
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 
 /** A separate index preserves work without changing the checkout's index,
@@ -26,8 +28,24 @@ export async function backupWorktree(options: {
   ignored: string[];
   disposable: (relative: string) => boolean;
   guard: () => boolean;
+  /** How long a guard that held answers the reads of evidence files. */
+  guardReuseMs?: number;
 }) {
   const { directory, pipelineId, head } = options;
+  // The caller's guard scans every process and reads the lane registry, about
+  // a second on a busy machine. Each evidence file is read several times, so
+  // a guard per read made a checkout with thousands of captures outlast the
+  // sweep's deadline on every pass. While files are read, a guard that held a
+  // moment ago answers. Every Git step, both ends of `verify` and the caller's
+  // check before removal still ask the guard itself.
+  const reuseMs = options.guardReuseMs ?? EVIDENCE_GUARD_REUSE_MS;
+  let guardHeldAt = Number.NEGATIVE_INFINITY;
+  const guard = () => {
+    const held = options.guard();
+    guardHeldAt = held ? performance.now() : Number.NEGATIVE_INFINITY;
+    return held;
+  };
+  const guardWhileReading = () => performance.now() - guardHeldAt < reuseMs || guard();
   if (!/^[A-Za-z0-9_-]+$/.test(pipelineId)) throw new Error("invalid backup owner");
   if (fs.realpathSync(directory) !== directory) throw new Error("backup requires the physical checkout");
   const root = fs.lstatSync(directory);
@@ -40,7 +58,7 @@ export async function backupWorktree(options: {
     const childEnv: NodeJS.ProcessEnv = { ...env };
     if (index === undefined) delete childEnv.GIT_INDEX_FILE; else childEnv.GIT_INDEX_FILE = index;
     const result = await exec("git", ["-c", "core.fsync=loose-object,reference", ...args], { cwd: directory, env: childEnv, timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
-    if (!options.guard()) throw new Error("backup ownership changed");
+    if (!guard()) throw new Error("backup ownership changed");
     return result.stdout.trim();
   };
   const git = (...args: string[]) => gitWithIndex(env.GIT_INDEX_FILE, ...args);
@@ -88,7 +106,7 @@ export async function backupWorktree(options: {
       if (!fs.fstatSync(descriptor).isFile()) throw new Error("evidence is not a regular file");
       for await (const chunk of fs.createReadStream(file, { fd: descriptor, autoClose: false })) hash.update(chunk);
     } finally { fs.closeSync(descriptor); }
-    if (!options.guard()) throw new Error("backup ownership changed while reading evidence");
+    if (!guardWhileReading()) throw new Error("backup ownership changed while reading evidence");
     return hash.digest("hex");
   };
   let retained = false;
@@ -131,14 +149,14 @@ export async function backupWorktree(options: {
     writeJsonDurably(manifest, { ref, head, branch: options.branch, tree: savedTree, indexTree, indexCommit, files: kept,
       bytes: kept.reduce((total, file) => total + file.bytes, 0) });
     const verify = async () => {
-      if (!options.guard()) return false;
+      if (!guard()) return false;
       const expected = new Map(inventory);
       files.length = 0; inspected = 0; inventory.clear();
       for (const ignored of options.ignored) collect(ignored.replace(/\/$/, ""));
       if (inventory.size !== expected.size || [...inventory].some(([file, stamp]) => expected.get(file) !== stamp)) return false;
       if (await git("rev-parse", "HEAD") !== head || await tree() !== savedTree) return false;
       const current = fs.lstatSync(directory);
-      if (!options.guard() || current.dev !== root.dev || current.ino !== root.ino) return false;
+      if (!guard() || current.dev !== root.dev || current.ino !== root.ino) return false;
       for (const file of kept) {
         if (fs.lstatSync(path.join(directory, file.path)).size !== file.bytes
           || fs.lstatSync(path.join(evidence, file.savedPath)).size !== file.bytes
@@ -149,7 +167,7 @@ export async function backupWorktree(options: {
       if (await git("rev-parse", `${ref}^2^{tree}`) !== indexTree
         || await git("rev-parse", `${ref}^{tree}`) !== savedTree) return false;
       const final = fs.lstatSync(directory);
-      return options.guard() && final.dev === root.dev && final.ino === root.ino
+      return guard() && final.dev === root.dev && final.ino === root.ino
         && fs.readFileSync(originalIndex).equals(indexBytes)
         && [...inventory].every(([file, stamp]) => signature(fs.lstatSync(path.join(directory, file), { bigint: true })) === stamp);
     };
