@@ -46,7 +46,6 @@ async function detachedAttemptFixture(name: string) {
 }
 
 
-
 test.each([256, 257])("attempt Git custody accepts every proved suffix commit (%i)", async (count) => {
   const f = await detachedAttemptFixture(`attempt-git-bound-${count}`);
   try {
@@ -59,7 +58,6 @@ test.each([256, 257])("attempt Git custody accepts every proved suffix commit (%
     expect(settled.cursor?.stageId).toBe("review");
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 }, 120_000);
-
 
 
 test("attempt Git custody rechecks activation after preparing the native guard", async () => {
@@ -90,7 +88,6 @@ test("attempt Git custody rechecks activation after preparing the native guard",
 });
 
 
-
 test("attempt Git custody retries an unavailable remote before accepting the stage", async () => {
   const f = await detachedAttemptFixture("attempt-git-unavailable");
   try {
@@ -114,7 +111,6 @@ test("attempt Git custody retries an unavailable remote before accepting the sta
 });
 
 
-
 test("attempt Git custody refuses a commit outside its owned scratch scope", async () => {
   const f = await detachedAttemptFixture("attempt-git-foreign-checkout");
   try {
@@ -130,7 +126,6 @@ test("attempt Git custody refuses a commit outside its owned scratch scope", asy
     expect((await f.finish()).lastPassedCommit).toBe(f.base);
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
-
 
 
 test("attempt Git custody restores report provenance after an interrupted fast-forward", async () => {
@@ -298,7 +293,6 @@ test("attempt Git custody settles the later candidate after a rejected push is r
 });
 
 
-
 for (const stallMs of [0, 27_000]) test(`refresh completion advances its parent through the controller after a ${stallMs}ms stall`, async () => {
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `${stallMs === 0 ? "10000000" : "20000000"}-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -366,7 +360,6 @@ for (const stallMs of [0, 27_000]) test(`refresh completion advances its parent 
         if (entries.length) clock += stallMs;
         return result;
       },
-      tickFlows: async () => ({ changed: false }),
       sweepAutoMerge: () => { sweep = sweepAutoMerge(ports); },
     }, { maxPasses: 1 });
     const tick = async () => { await controller.tick(); await sweep; };

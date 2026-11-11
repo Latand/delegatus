@@ -109,11 +109,9 @@ function harness() {
       return n ? `conversation_stage_${n}` : null;
     },
     pipelineAdoptionCandidates: () => [],
-    createFlow: async () => ({ error: "no review flows in this suite" }),
     patchFlow: () => ({}),
     closeFlow: async () => ({}),
     getFlow: () => null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date((clock += 1_000)).toISOString(),
   };

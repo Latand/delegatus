@@ -757,19 +757,29 @@ export class CompanionAdmission {
       if (!entry) return;
       entry.parts ??= [...parts];
       entry.handed = Math.max(entry.handed, handed);
-      if (entry.handed >= entry.parts.length) session.reportSpeech = session.reportSpeech!.filter(row => row !== entry);
+      if (entry.kind !== "resume" && entry.handed >= entry.parts.length) session.reportSpeech = session.reportSpeech!.filter(row => row !== entry);
+    });
+  }
+  /** An output delta after the resume handoff proves it was voiced. Until then a drop still owes it. */
+  resumeReplied(id: string): void {
+    this.storage.change(document => {
+      const session = document.sessions[id];
+      if (session) session.reportSpeech = session.reportSpeech?.filter(row => row.kind !== "resume" || row.handed === 0);
     });
   }
   /** Compatibility for callers that still consume only correlated answers. */
   pollReplies(id: string): CompanionEvent[] { return this.pollReports(id).filter(event => event.type === "orchestrator.answer"); }
   retire(id: string): void {
+    // The bounded event ring may have rolled its end off while closed cards were reconciled.
+    const end = this.records.read(id).entries.findLast(row => row.kind === "session_end");
+    const dropped = ["transport", "error"].includes(String(end?.data.reason));
     this.storage.change(document => {
       const session = document.sessions[id];
       if (!session) return;
       session.closed = true;
       session.endedAt ??= this.now();
-      // Nobody is left to hear them; the transcript keeps every report.
-      delete session.reportSpeech;
+      // Slice 2 carries speech already queued at a drop. New report discovery and watermarks belong to slice 3.
+      if (!dropped) delete session.reportSpeech;
       for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
     });
     for (const map of [this.shown, this.reread]) for (const key of map.keys()) if (key.startsWith(`${id}\0`)) map.delete(key);
