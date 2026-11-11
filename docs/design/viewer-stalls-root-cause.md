@@ -4,7 +4,8 @@ Status: diagnosis, and the fixes built from it. Written 2026-11-11 from a read-o
 observation of one busy installation (24 CPUs, about 115 live agent processes, release
 `803f12c1`). Nothing on that installation was changed. Sections 1 to 11 are the
 diagnosis as it was handed to the build; section 12 records what was built, with the
-before and after measurements, and what the build moved to the deferred list.
+before and after measurements, and what the build moved to the deferred list. Section
+12.7 records what the first review of the build found in fix 1 and how it was fixed.
 
 This document answers four questions: what stops the Viewer and the runtime host, who
 holds the locks and for how long, what changed around 2026-10-28, and which fixes this
@@ -522,6 +523,7 @@ the files named above.
 | Other holders of the registry write lock above 5 s | Section 4.1: `registry.archive` 7.3 s, `registry.transcript-hosts` 5.9 s, `inventory.reconcile` 5.6 s | Four episodes in 72 h against six of `migration.stop`; not built |
 | The registry file never shrinks | Section 12.2: the serving registry reads `auto_vacuum = 0`, and so does a registry created today, because the pragma is set after the journal mode has initialised the file. The file is 2.09 GB | A decision: reclaiming the space takes a `VACUUM` of the registry |
 | The state store sets `auto_vacuum` on its open too | `src/lib/state/sqliteStateStore.ts`, the statement beside the store's schema. Whether it runs on every open of an existing database, and so takes a write transaction each time as the registry's did, was not established | Read and measure before changing: the state store's open path has its own retry |
+| The plain registry snapshot brings its view up to date in one synchronous step | Section 12.7: 538 to 923 ms on the loop after one small transaction at incident size (load average 29 to 32); 127 and 134 ms after 32 and 1 280 changed rows (load average 19). The hygiene pass still reads it after a stop, in the helper process (`terminalizeStaleUndeliverableHeldDeliveries` in `src/lib/reaperRuntime.ts`), as it did on the base | The stop no longer reads it. Its other callers each have to move to the prepared view or to a keyed read, which is the open work on registry reads |
 | Direct `setImmediate` yields and the unlabelled zero-timer yields | Section 3.3: 58 places call `setImmediate` directly; two zero-timer yields carry no label (`src/lib/state/sqliteStateStore.ts`, `src/lib/pipelines/store.ts`) | Fix 5 moves `yieldToRuntime` and the three labelled zero-timer yields. The counter of section 12.5 says after a deploy whether the rest matter |
 
 ## 11. Check after deploy
@@ -554,6 +556,13 @@ number of live host processes recorded beside the numbers.
 8. An MCP call refused with the text `state admission is busy at`, repeated under its
    original `clientRequestId`: for `seat_tick_settings` the repeat executes after fix 3
    and answers `replayed: false`. Base: the repeat answered the stored refusal.
+9. A migration stopped with the Stop button, which runs in the serving process: between
+   the request and its answer no `[viewer loop-gap]` record with `role: viewer` should
+   be longer than one registry transaction (section 12.7 measured 86 to 195 ms for the
+   longest timer gap at incident size). The first build of fix 1 would have produced
+   one gap as long as the stop. A line `migration.stop.sweep for <intent> ended early` means a
+   sweep was left to the hygiene pass; the intent then keeps a `stopSweep` value until
+   that pass finishes it.
 
 ## 12. What was built
 
@@ -566,11 +575,13 @@ probes ran in isolated state directories, never against the serving installation
 
 Stopping an intent is now one transaction for the intent and the conversations it owns,
 read by key, followed by a sweep that writes the engine-wide opt-out 32 conversations
-per transaction with the write lock given up between them. The stop records the opt-out
-as a decision on the intent (`stopSweep`); until the sweep reaches a conversation, an
-automatic or lazy migration reads the decision from there, and a manual migration to
-the same target withdraws it. A sweep that a refused write or a restart interrupts keeps
-its marker; the hygiene pass resumes it and the archive pass leaves such an intent hot.
+per transaction, with the write lock given up and the event loop given a turn between
+them. The stop records the opt-out as a decision on the intent (`stopSweep`); until the
+sweep reaches a conversation, an automatic or lazy migration reads the decision from
+there, and a manual migration to the same target withdraws it. A sweep that a refused
+write or a restart interrupts keeps its marker; the hygiene pass resumes it and the
+archive pass leaves such an intent hot. Section 12.7 describes how the late write is
+ordered against what is decided in between, and how the stop leaves the loop free.
 
 The readiness signature is computed inside the stop's transaction over the
 conversations the stop rolls back, where section 9 said once and outside the lock:
@@ -586,17 +597,27 @@ stale intent in a process of its own, as the migration helper does.
 | | Rounds | Write transactions of the pass | Longest hold of the write lock | Rows in the largest transaction | Pass | Load average |
 |---|---|---|---|---|---|---|
 | Base `917ccfbf` | 4 | 4 | 295.4, 305.1, 423.5, 431.8 s | 13 410 | 297 to 433 s | 15 to 28 |
-| Head | 4 | 424 | 93, 94, 98, 204 ms | 32 conversations | 9.5 to 11.5 s | 14 to 16 |
+| Head, first build | 4 | 424 | 93, 94, 98, 204 ms | 32 conversations | 9.5 to 11.5 s | 14 to 16 |
+| Head, after section 12.7 | 4 | 421 | 92, 101, 112, 118 ms | 32 conversations | 10.4 to 15.7 s | 20 to 25 |
+
+The last row is the final code. The first build measured again beside it, on the same
+copy of the fixture: 421 transactions, longest holds 95, 98, 125 and 147 ms, pass 10.4
+to 15.2 s, load average 25 to 37. The three transactions more in the first build's own
+row wrote no rows and carry no label of the stop.
 
 With 64 rows per transaction the longest hold was 117 to 176 ms and with 200 it was
-212 ms, so the slice is 32. Half of the head's pass is SQLite writing the rows (0.42 ms
-per row, 5.6 s of an 11.3 s profile); the base wrote the same rows.
+212 ms, so the slice is 32 (measured on the first build, load average 14). Half of that
+pass is SQLite writing the rows (0.42 ms per row, 5.6 s of an 11.3 s profile); the base
+wrote the same rows.
 
-Rows after the stop, base against head on one copy of the fixture: three values differ,
-the `settledAt` wall-clock stamps of the three cancelled deliveries' owners. Every
-conversation, delivery, intent and revision counter is equal.
+Rows after the stop, base against the first build on one copy of the fixture: three
+values differ, the `settledAt` wall-clock stamps of the three cancelled deliveries'
+owners. Every conversation, delivery, intent and revision counter is equal. The final
+code against the first build, compared the same way: the same three stamps differ and
+nothing else.
 
-Recurrence test (`src/lib/agent/registry.migrationStop.test.ts`, the last but one case):
+Recurrence test (`src/lib/agent/registry.migrationStop.test.ts`, the case "a stale intent
+is stopped at incident size without holding other writers out"):
 while the stop runs in its own process, this process keeps admitting deliveries with a
 one-second deadline. On the base the first admission made during the stop is refused
 after 1 002 ms. On the head every admission is admitted; the longest wait logged was
@@ -701,27 +722,168 @@ each turn, and whether the stall share falls depends on how much of it was this 
 saturated; it now waits in the queue, where the counter reports it, and requests and
 timers run between its slices.
 
-### 12.6 Checks run for the build
+### 12.6 Checks run
 
-- **Tests.** Touched test files and the neighbouring files that exercise the same code
-  ran one file per isolated command (private home, temporary directory and state
-  directory, the control URL on a closed port). On the final tree the sixteen touched
-  and adjacent files pass, except two cases of `src/lib/agent/registryArchive.test.ts`
-  that fail the same way on the base; the case this change extends there passes. Eight
-  of the wider set of files have failures on the head, and each fails with the same
-  tests on the base in the same isolation.
-- **Each new test on the base.** The recurrence tests of 12.1, 12.2 and 12.3 and the
-  measurement of 12.5 were run against the base tree and fail or stall there as
-  described above.
+Run on the final tree, after the changes of section 12.7.
+
+- **Tests.** One file per isolated command (private home, temporary directory and state
+  directory, the control URL on a closed port). `src/lib/agent/registry.migrationStop.test.ts`
+  27 cases, `src/lib/agent/registry.reseat.test.ts` 28, `src/lib/agent/registry.test.ts`
+  147, `src/lib/agent/registry.migrationBinding.test.ts` 18, the stop route's
+  `action.test.ts` 3, the conversation migration route's `route.test.ts` 13 and
+  `src/lib/accounts/migration/controller.test.ts` 22 pass. Four neighbouring files
+  have failures, and each fails with the same cases on the head before this round in
+  the same isolation: `src/lib/reaperRuntime.test.ts` (one case, the release of a dead
+  structured-host claim), `src/lib/accounts/migration/coordinator.test.ts` (two cases
+  on legacy held drains), `src/lib/runtime/structuredSwitchCancel.test.ts` (one case)
+  and `src/lib/agent/registryArchive.test.ts` (two cases, the two the build reported).
+  The files of fixes 2, 3 and 5 were run again on the final tree and pass:
+  `src/lib/agent/registry.open.test.ts` 10, `src/lib/agent/registry.openUnderWriter.test.ts`
+  7, `src/lib/agent/registry.spawnAdmission.test.ts` 18,
+  `src/lib/agent/registry.writerWait.test.ts` 31, `src/lib/mcp/callerIdentification.test.ts`
+  43, `src/lib/mcp/deferredBeforeAdmission.test.ts` 8, `src/lib/cooperative.test.ts` 10
+  and `src/lib/viewerLoopMonitor.test.ts` 18.
+- **Each new test on the code before it.** The recurrence tests of 12.1, 12.2 and 12.3
+  and the measurement of 12.5 were run against the base tree and fail or stall there as
+  described above. The cases of 12.7 were run against the head the review read: 12 of
+  17 fail there.
 - **Typecheck.** `tsc --noEmit` over the whole tree: no errors.
-- **Runtime host rehearsal.** The loop monitor runs in the runtime host and now reads
-  the cooperative queue, and the host opens the registry through the changed path, so
-  the rehearsal was run although no file under `src/runtime-host/` changed:
-  `bun scripts/verify-runtime-host.ts` under Bun 1.4.0 completed the succession in
-  1 019 ms, and the stable listener and the runtime socket each answered 27 of 27
-  polls over 15 s. That is a statement about the runtime host. The Viewer was not
-  started from this tree.
+- **Main.** Main gained pull requests 3835, 3837, 3834, 3832, 3840, 3847 and 3839 while
+  this was built. 3832 changes five files this lane changes (`src/lib/agent/registry.ts`,
+  `src/lib/agent/sqliteRegistryStore.ts`, `src/lib/mcp/server.ts`,
+  `src/lib/reaperRuntime.ts`, `src/lib/agent/registry.writerWait.test.ts`), none of
+  them in the lines changed here; the others touch no file of this lane. The final tree
+  merges with main without a conflict. On the tree merged with main at `5556e413`,
+  which is main without 3839, the typecheck has no errors and
+  `src/lib/agent/registry.migrationStop.test.ts` (27), `src/lib/agent/registry.reseat.test.ts`
+  (28) and `src/lib/agent/registry.writerWait.test.ts` (30) pass, and
+  `src/lib/reaperRuntime.test.ts` fails in the same one case as above.
+- **Runtime host rehearsal.** The loop monitor runs in the runtime host and reads the
+  cooperative queue, and the host opens the registry through the changed path, so the
+  rehearsal is run although no file under `src/runtime-host/` changed. On the final
+  tree `bun scripts/verify-runtime-host.ts` under Bun 1.4.0 completed the succession in
+  1 008 ms, and the stable listener and the runtime socket each answered 27 of 27 polls
+  over 15 s (the build measured 1 019 ms, the review 1 013 ms, both 27 of 27). That is a
+  statement about the runtime host. The Viewer was not started from this tree.
 - **Privacy publication gate.** Passed over the commits and their added lines, and
   again over the whole of each touched file.
-- **Base.** Main gained two commits while this was built (pull requests 3835 and
-  3837); neither touches a file changed here and the branch merges with it cleanly.
+
+### 12.7 Review round 1: the order of decisions, and the loop during a stop
+
+The first review of the build found two defects in fix 1. Both are fixed, together with
+what the same reading of the code turned up beside them.
+
+#### The order of decisions
+
+A stop decides the engine-wide opt-out at its own time and its sweep writes it later.
+The first build judged whether something had been decided for a conversation since the
+stop by the migration it found on the conversation, and a migration is removed once it
+is cleaned up. The sequence the review ran: a stop of target A interrupted before its
+sweep, a manual migration to B, a stop of B, the routine clearing of the rolled-back
+migration, the first sweep resumed. The resumed sweep found nothing on the conversation
+and wrote the opt-out from A over the opt-out from B. The next send then migrated the
+conversation to B, the migration that had just been stopped.
+
+The order is now read from the opt-out itself (`src/lib/agent/registry.ts`,
+`stopSweepOptsOut` and the functions beside it). A conversation has one opt-out, every
+decision about it carries its own time, and the newest stands:
+
+- A sweep writes its stop's decision under the stop's time, and only where nothing was
+  decided at or after that time. Whether the conversation migrated in between changes
+  nothing.
+- A withdrawal (a manual migration or a reseat that names the target) empties the
+  opt-out. While a stop that covers the conversation has its sweep still to finish, an
+  empty opt-out would read to that sweep as never decided, so the withdrawal keeps its
+  time there, as an opt-out with no target. A release from before this change reads that
+  value as no opt-out.
+- A reader that acts before the sweep arrives (an engine-wide migration, a reseat, a
+  send that follows routing) reads the opt-out that stands: the stored one, or a newer
+  one that a stop decided and has not written yet.
+- A stop decides for the account a conversation was on at the stop's time, taken from
+  the newest generation created by then. A conversation that left the target afterwards
+  is not opted out of it by a late sweep.
+- A manual migration to the stopped target withdraws the opt-outs the sweep has not
+  written. It does not touch pinned conversations, so the stop's opt-out for them is
+  written in that transaction, as the single transaction of the base had written it.
+- A stop repeated after routing left the target decides no opt-out; the one its first
+  run decided, and had not finished writing, stays.
+- The coordinator completes an intent from a reading it took earlier. A completion that
+  arrives while the sweep is writing leaves the intent stopped; the first build then
+  dropped the rest of the sweep.
+
+What a stop owes a conversation is fixed at the stop's time, and a conversation that is
+settled, or has something newer decided for it, does not become owed again. So a sweep
+makes one reading and is over with its last slice. The first build read the whole
+registry again until a reading came back empty, 1 150 ms on the loop for the second
+reading at incident size (load average 30).
+
+Tests (`src/lib/agent/registry.migrationStop.test.ts`). Nine sequences of later
+decisions each run on two copies of one registry, one whose sweep finished before the
+decisions and one whose sweep had not started, under a clock that steps one second per
+decision; the opt-out, the migration and the row time of every conversation are then
+compared, with what a send does to three of the conversations. The review's sequence
+has a case of its own with the expected rows written out, run once with a second
+between its steps and once with every step in the same instant. Two cases make their
+decisions between two transactions of a running sweep: a reseat and a rollback on rows
+the sweep had read and not yet written, and a repeated stop. One case writes the
+coordinator's late completion. On the head the review read, 12 of the 17
+new cases fail; the other five are sequences the first build already ordered
+correctly, and its own ten cases pass.
+
+Two limits, both by choice. Decisions stamped in the same millisecond as a stop are
+kept by its sweep, whichever was written first: a late write that replaces a newer
+decision is the defect, and the registry has no finer order than its clock. And a send
+that follows routing checks the stored opt-out before it lists the intents, as it did
+before fix 1, so a conversation with an older opt-out from the routed account stays
+there until a pending sweep of another target has reached it, where the base would
+have moved it.
+
+#### The loop during a stop
+
+A registry write lock that is free is granted without a wait, so the awaits on the
+sweep's writes never gave the loop a turn. A stop asked for through the Viewer's own
+route (`src/app/api/account-migrations/[intentId]/action.ts`) ran every transaction in
+one turn: the review measured 14 024 ms with a 10 ms timer that did not fire once and a
+delivery of the same process that started 14 035 ms late. The recurrence test of 12.1
+has its other writer in another process and could not see this.
+
+The sweep now gives the loop its turn after each transaction, through the queue of fix
+5, once the lock is released. Each transaction reads the sweep's marker, the intent's
+state and every conversation it was going to write again, so what a turn changed is
+seen. The stop's two readings of the registry come from the prepared reader view,
+which the serving process and the migration helper both keep and which is brought up to
+date a few milliseconds at a time. The plain snapshot brings its view up to date in one
+synchronous step: after the stop's own transaction that step took 538, 823 and 923 ms
+on the loop at incident size (three rounds, load average 29 to 32). A view that was
+started before the stop committed is recognised by the sweep's marker and prepared
+again; a sweep that cannot read or write keeps its marker for the hygiene pass, and the
+stop it belongs to is still answered as stopped.
+
+Measurement (the fixture of 12.1; one process stops the intent, keeps a 10 ms timer and
+has one delivery due 10 ms into the stop; the head the review read and the final head
+in turn, six rounds each):
+
+| | Rounds | Stop | Timer ticks during the stop | Longest timer gap | The delivery started | Admitted | Load average |
+|---|---|---|---|---|---|---|---|
+| Head the review read | 6 | 11.7 to 17.9 s | 0 | the whole stop | 11.7 to 17.9 s late | after the stop | 22 to 40 |
+| Final | 6 | 11.7 to 19.9 s | 517 to 629 | 86 to 195 ms | 22 to 53 ms late | during the stop | 22 to 39 |
+
+Both wrote 421 transactions and the same 13 403 opt-outs. The longest timer gap on the
+final head is one transaction of the sweep (86 to 184 ms).
+
+The stop takes as long as its writes take, and in this probe it took longer on the
+final head in four of the six rounds, by 1.7 to 4.1 s; one round was equal and one was
+0.5 s shorter. A second probe without the timer and the delivery, two rounds each:
+14.6 and 14.7 s against 13.3 and 14.3 s, with 14.4 to 14.6 s of process CPU against
+13.9 to 14.4 s; the time between transactions fell from 1.80 to 1.87 s (the two
+synchronous readings) to 1.64 to 1.67 s, and the time inside them rose from 11.5 to
+12.4 s to 12.9 to 13.1 s. The cause of that rise was not separated from the load of the
+machine, which moved a round of either head by more than a second. No gain in the
+stop's own duration is claimed; the hygiene pass in its own process measures the same
+on both (the table of 12.1).
+
+Tests: the loop gets a turn between every two transactions of a stop, counted with an
+immediate that re-arms itself (deterministic, small fixture); a stop at incident size
+with a timer and a delivery in the same process, where the delivery has to start
+within a second and be admitted before the stop ends; a view that cannot be read, and a
+view older than the stop. The first two fail on the head the review read.
