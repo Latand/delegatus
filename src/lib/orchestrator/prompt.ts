@@ -115,7 +115,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // v64 combines task progress estimates with terminal review, due dates and report handling.
 // v65 makes a quick scope check the default for a vague ask: the seat chooses direct work, a pipeline or research itself, and a form is for what stays materially ambiguous.
 // v66 promotes contract preparation and recovery guidance while preserving rotation headroom.
-export const ORCHESTRATOR_PROMPT_VERSION = 66;
+// Review scope and dependency-based evidence renewal ship with the shared working rules.
+export const ORCHESTRATOR_PROMPT_VERSION = 67;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -149,6 +150,20 @@ Your first turn after receiving this mandate must produce a visible assistant st
 Ready in {project}.
 ${ORCHESTRATOR_GREETING_OFFER}
 Use the actual project name in place of {project}. For a ROTATION, when work remains, inventory the mandate missions and state your plan in that status. When every rotation mission is already complete, reply exactly: "all mandate missions are complete; standing by". A generic continuation nudge never replaces or suppresses this first visible status.`;
+
+/**
+ * The instruction for the first orchestrator an installation ever has. It is
+ * appended to the text of that one spawn and is never part of a stored mandate,
+ * of {@link ORCHESTRATOR_SYSTEM_PROMPT} or of its version: a rotation, a kept
+ * mandate and an adopted conversation are built from the default text and so
+ * never carry it, and no existing seat reads it as stale. Which spawn gets it
+ * is decided under the seat store's lock (`firstRun` on the seat record).
+ */
+export const ORCHESTRATOR_FIRST_RUN_DIRECTIVE = `## First run
+This is the first orchestrator on this installation. After your greeting, in the same turn:
+1. Read the project's README, its top-level file list and the titles of its open issues (when a forge is connected; skip what is not there). Change nothing and run nothing.
+2. Publish exactly one decision form with publish_prototype_review, without taskId. Title, in the operator's language: "What should I do first?". One question: say what you read, that each choice starts agents on the operator's plan (name the engine you run on) and that they may write their own. Set other: true and skippable: false. Offer exactly three options, the first one recommended: a read-only tour of the code with one agent. The other two are concrete tasks from what you read. Word each option as the task, then " — " and what it starts, for example "a builder and a reviewer, then a pull request".
+3. In chat only point to the form. Start no other form or task until it is answered. Afterwards work as usual; run the tour as one read-only stage.`;
 
 /** Identifies the clock section below inside a mandate, however its body was
     edited. Delivery keys off THIS rather than the whole text: a caller who
@@ -785,6 +800,12 @@ const SHIPPED_PROMOTION_OBSERVATION_BULLETS = "- A spec never states an external
 const SHIPPED_PROMOTION_WORKING_RULE_2 = "2. Read the project's instruction files first; its required checks are those they or its CI name, or say which you ran and why.";
 const SHIPPED_PROMOTION_WORKING_RULE_15 = "15. A reply is no proof: before retrying, read the state the action should have changed; retry with the same key if it may have landed.";
 
+/** Exact shipped working rules; bespoke evidence and scope instructions survive. */
+const SHIPPED_REVIEW_WORKING_RULES = [
+  "6. Every claim carries its evidence (command and output, file:line, measurement and conditions, time bounds); keep observation apart from inference; say where you looked for what you could not confirm. Hand-over evidence comes from the final state, names revision, time and command, and is redone after any later change; look at every output you cite. Speed, memory or cost claims need repeated before/after runs on identical data and load, the load recorded.",
+  "8. Stay in the brief's scope; leave what other open work changes alone, read open changes on the same files, and recheck the base before you finish.",
+];
+
 /** The mandate upgrades, idempotent. A seat request applies them to its mandate
     before preflight and before it records a new intent, so the intent stores
     the upgraded text. They stay out of `orchestratorMandateWithRoleTable`: a
@@ -795,6 +816,11 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   mandate = mandate.split(SHIPPED_REVIEW_POLICY).join(ORCHESTRATOR_REVIEW_POLICY)
     .split("A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read.").join(ORCHESTRATOR_REVIEW_READY_BAR)
     .split("Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green").join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR);
+  for (const previous of SHIPPED_REVIEW_WORKING_RULES) {
+    const prefix = previous.slice(0, previous.indexOf(" ") + 1);
+    const current = WORKING_RULES_SHORT.split("\n").find(line => line.startsWith(prefix))!;
+    mandate = mandate.split(previous).join(current);
+  }
   const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
   const rule13 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
   mandate = mandate.split(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`).join(rule13);

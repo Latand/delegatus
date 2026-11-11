@@ -17,7 +17,7 @@ import {
 import { defaultSeatTickSettings, type SeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 
-import { callerAttributionFrom, flowDecisionCaller, viewerMcpBindings, type CallerAttribution, type ViewerControlDependencies } from "./bindings";
+import { callerAttributionFrom, viewerMcpBindings, type CallerAttribution, type ViewerControlDependencies } from "./bindings";
 import { McpToolRefusal } from "./server";
 
 /*
@@ -165,12 +165,6 @@ test("a deputy's pause names the seat and the deputy on the actor the lane store
   await as.pipeline_action({ clientRequestId: "p-1", pipelineId: "pipeline_1", action: "pause" }).catch(() => undefined);
   expect(actors[0]).toEqual({ kind: "agent", role: "orchestrator", conversationId: SEAT, via: { deputy: GHOST } });
   expect(pauseResumeDetail("paused", actors[0] as PauseResumeActor)).toBe(`paused by orchestrator ${SEAT} (parallel self ${GHOST})`);
-});
-
-test("a deputy submits a flow decision as itself: it is nobody's implementer, and the seat's turn is not its to settle", () => {
-  startDeputy();
-  expect(flowDecisionCaller(attributionFor(GHOST))).toBe(GHOST);
-  expect(flowDecisionCaller(attributionFor(SEAT))).toBe(SEAT);
 });
 
 test("a deputy may not deploy or rotate the seat", async () => {

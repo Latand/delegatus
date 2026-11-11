@@ -15,9 +15,15 @@ const renderTypes = new Set([
   "Render.renderToString", "Render.renderDocument",
 ]);
 
+/** A response still being sent after this long is a stream: an event stream
+    or an MCP session stays inside the render span until its client leaves. */
+export const HTTP_STREAM_AFTER_MS = 30_000;
+const STILL_OPEN = Symbol("still open");
+
 export function installNextRenderMonitor(
   tracer: Pick<NextTracer, "trace">,
   monitor = viewerLoopMonitor, spans = performanceSpans,
+  streamAfterMs = HTTP_STREAM_AFTER_MS,
 ) {
   if (installed.has(tracer)) return () => {};
   const original = tracer.trace;
@@ -26,7 +32,25 @@ export function installNextRenderMonitor(
     if (!renderTypes.has(args[0])) return run();
     // The synchronous prefix sets the watchdog site. The operation encloses
     // the returned promise too; overlapping awaits alone do not prove CPU use.
-    return monitor.run("http.render", () => spans.sync("http.render", run));
+    let result: unknown;
+    const tracked = monitor.run("http.render", () => {
+      result = spans.sync("http.render", run);
+      if (!result || typeof (result as PromiseLike<unknown>).then !== "function") return result;
+      /* Route handlers answer inside the same span and it stays open while
+         the body is sent. An open stream then read as a render that never
+         finished; after the bound it is counted under its own name. */
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = Promise.resolve(result).then(() => undefined, () => undefined);
+      const bound = new Promise<typeof STILL_OPEN>((resolve) => {
+        timer = setTimeout(() => resolve(STILL_OPEN), streamAfterMs);
+        timer.unref?.();
+      });
+      return Promise.race([settled, bound]).finally(() => clearTimeout(timer)).then((outcome) => {
+        if (outcome === STILL_OPEN) void Promise.resolve(monitor.run("http.stream", () => settled)).catch(() => undefined);
+      });
+    });
+    if (tracked && typeof (tracked as PromiseLike<unknown>).then === "function") void Promise.resolve(tracked).catch(() => undefined);
+    return result;
   } as NextTracer["trace"];
   tracer.trace = wrapped;
   installed.add(tracer);
@@ -37,10 +61,10 @@ export function installNextRenderMonitor(
   };
 }
 
-export async function installServingNextRenderMonitor(monitor = viewerLoopMonitor, spans = performanceSpans) {
+export async function installServingNextRenderMonitor(monitor = viewerLoopMonitor, spans = performanceSpans, streamAfterMs = HTTP_STREAM_AFTER_MS) {
   // A static createRequire call with a computed path becomes an undefined
   // webpack context. Match the native import used for the generated route.
   const { createRequire } = await import(/* webpackIgnore: true */ "node:module");
   const tracer = createRequire(path.join(process.cwd(), "package.json"))("next/dist/server/lib/trace/tracer").getTracer();
-  return installNextRenderMonitor(tracer, monitor, spans);
+  return installNextRenderMonitor(tracer, monitor, spans, streamAfterMs);
 }

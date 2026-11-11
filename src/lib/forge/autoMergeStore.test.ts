@@ -245,7 +245,7 @@ describe("global merge admission", () => {
     });
     let sweep = Promise.resolve();
     const controller = new FlowPipelineController({
-      now: () => 0, tickPipelines: async () => ({ changed: false }), tickFlows: async () => ({ changed: false }),
+      now: () => 0, tickPipelines: async () => ({ changed: false }),
       sweepAutoMerge: () => { sweep = sweepAutoMerge(ports); },
     }, { maxPasses: 1 });
     let resolve!: () => void, reject!: (error: unknown) => void;
