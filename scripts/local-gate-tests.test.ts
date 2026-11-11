@@ -93,11 +93,20 @@ test("a head crash is named and blocks without hiding results from other files",
 const taskControl = process.platform === "linux" && Bun.which("python3") && Bun.which("systemd-run")
   && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status === 0
   && readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line.startsWith("0::") && existsSync(path.join("/sys/fs/cgroup", line.slice(3), "pids.max")));
+const taskPeakLine = (denied: boolean) => new RegExp(
+  `pids\\.peak=(\\d+)(?: \\(sampled lower bound\\))? pids\\.max=${GATE_TASKS_MAX} pids\\.events:max=${denied ? "[1-9]\\d*" : "0"}`,
+);
+function expectTaskPeak(output: string, denied: boolean) {
+  const match = output.match(taskPeakLine(denied));
+  expect(match).not.toBeNull();
+  expect(Number(match![1])).toBeGreaterThan(0);
+  expect(Number(match![1])).toBeLessThanOrEqual(GATE_TASKS_MAX);
+}
 test.skipIf(!taskControl)("per-file summaries retain the owning unit's task peak", async () => {
   const f = fixture(source(true));
   expect((await f.run()).introduced).toHaveLength(0);
   const line = f.logs.find(line => line.startsWith("touched-tests: head file "))!;
-  expect(line).toMatch(new RegExp(`delegatus-gate-[a-f0-9-]+\\.service: pids\\.peak=\\d+ pids\\.max=${GATE_TASKS_MAX} pids\\.events:max=0`));
+  expectTaskPeak(line, false);
 });
 test.skipIf(!taskControl)("a real bounded task-limit refusal keeps its name and unit through the comparator", async () => {
   const f = fixture(source(true));
@@ -107,7 +116,8 @@ test.skipIf(!taskControl)("a real bounded task-limit refusal keeps its name and 
   const result = await f.run(["./storm.test.ts"]);
   expect(result.introduced).toHaveLength(1);
   expect(result.introduced[0]!.name).toMatch(/GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\.service/);
-  expect(f.logs.join("\n")).toContain(`pids.peak=${GATE_TASKS_MAX} pids.max=${GATE_TASKS_MAX}`);
+  expectTaskPeak(f.logs.join("\n"), true);
+  expect(f.logs.join("\n")).toMatch(new RegExp(`GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\\.service \\(pids\\.max=${GATE_TASKS_MAX}, pids\\.events:max=[1-9]\\d*\\)`));
   expect(f.logs.join("\n")).not.toContain("runner did not finish (70)");
 }, 30_000);
 test("per-file processes isolate globals and distinct state/HOME/TMPDIR before imports", async () => {

@@ -12,6 +12,15 @@ const manager = process.platform === "linux" && Bun.which("python3") && Bun.whic
 const controller = process.platform === "linux" && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n")
   .some(line => line.startsWith("0::") && fs.existsSync(path.join("/sys/fs/cgroup", line.slice(3), "pids.max")));
 const roots: string[] = [], children: ChildProcess[] = [];
+const peakLine = (denied: boolean) => new RegExp(
+  `pids\\.peak=(\\d+)(?: \\(sampled lower bound\\))? pids\\.max=${GATE_TASKS_MAX} pids\\.events:max=${denied ? "[1-9]\\d*" : "0"}`,
+);
+function expectPeak(output: string, denied: boolean) {
+  const match = output.match(peakLine(denied));
+  expect(match).not.toBeNull();
+  expect(Number(match![1])).toBeGreaterThan(0);
+  expect(Number(match![1])).toBeLessThanOrEqual(GATE_TASKS_MAX);
+}
 afterEach(async () => {
   for (const child of children.splice(0).reverse()) await stopFixtureProcess(child);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -43,7 +52,7 @@ test.skipIf(!manager || !controller)("real gate reads back TasksMax and reports 
   const f = fixture();
   const run = f.start([process.execPath, "-e", 'console.log("ready");']);
   expect(await run.done, run.output()).toBe(0);
-  expect(run.output()).toMatch(new RegExp(`pids.peak=\\d+ pids.max=${GATE_TASKS_MAX} pids.events:max=0`));
+  expectPeak(run.output(), false);
 });
 
 for (const mode of ["live saturation", "immediate successful exit", "stopped supervisor"] as const) test.skipIf(!manager || !controller)(`bounded fork fixture gets a named failure on ${mode}, preserving another gate`, async () => {
@@ -58,7 +67,8 @@ for (const mode of ["live saturation", "immediate successful exit", "stopped sup
   expect(await run.done, run.output()).toBe(GATE_TASK_LIMIT_EXIT);
   expect(performance.now() - started).toBeLessThan(8_000);
   expect(run.output()).toMatch(/GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\.service/);
-  expect(run.output()).toContain(`pids.peak=${GATE_TASKS_MAX} pids.max=${GATE_TASKS_MAX}`);
+  expect(run.output()).toMatch(new RegExp(`GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\\.service \\(pids\\.max=${GATE_TASKS_MAX}, pids\\.events:max=[1-9]\\d*\\)`));
+  expectPeak(run.output(), true);
   expect(neighbour.child.exitCode).toBeNull();
   await until(() => Number(fs.readFileSync(tick, "utf8")) > before);
 }, 20_000);
