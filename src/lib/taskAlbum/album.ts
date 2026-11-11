@@ -123,10 +123,12 @@ function drawable(taskId: string, collected: Collected[]): Array<Collected & { s
   for (const entry of ordered) {
     if (out.length >= ALBUM_MAX_IMAGES) break;
     const file = entry.image.path ? resolveLocal(entry.image.path) : null;
-    /* A kept copy stands for a picture that is gone; the picture keeps its own name. */
+    /* A kept copy stands for a picture that is gone. The address keeps the
+       picture's own path: the route finds the copy by it, and with it the
+       project a workspace member is checked against. */
     const place = file ? readablePlace(file, lexical ??= lexicalAllowedRoots()) : null;
     if (file && place && drawableFile(place, lexical ??= lexicalAllowedRoots(), real)) {
-      out.push({ ...entry, file, src: `/api/artifact?${new URLSearchParams({ path: place }).toString()}` });
+      out.push({ ...entry, file, src: `/api/artifact?${new URLSearchParams({ path: file }).toString()}` });
     } else if (entry.image.inline) {
       out.push({ ...entry, file: null, src: `/api/tasks/${encodeURIComponent(taskId)}/album/image?id=${albumImageId(entry.image.key)}` });
     }

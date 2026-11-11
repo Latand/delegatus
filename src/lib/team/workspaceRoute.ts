@@ -199,10 +199,15 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
     if (key === "path" && ["/api/artifact", "/api/image"].includes(route)) {
       const { realpath } = await import("node:fs/promises");
       const { dirname } = await import("node:path");
-      const { resolveLocal } = await import("@/lib/artifact/localFile");
+      const { keptPictureProject, readablePlace, resolveLocal } = await import("@/lib/artifact/localFile");
       const { projectForCwd } = await import("@/lib/scanner/describe");
       try {
-        const project = projectForCwd(dirname(await realpath(resolveLocal(value))));
+        /* A picture the report store kept answers for the project it lay in;
+           any other path for the project of the directory it lies in. */
+        const requested = resolveLocal(value);
+        const place = readablePlace(requested);
+        const kept = keptPictureProject(requested, place);
+        const project = kept === undefined ? projectForCwd(dirname(await realpath(place))) : kept;
         projects.push(requestWorkspaceScope(request)?.canReadFile(project) ? project : null);
       } catch { projects.push(null); }
       return;

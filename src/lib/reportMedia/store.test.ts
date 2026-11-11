@@ -97,8 +97,9 @@ test("paths are read bare, as link targets, as file URLs and from the home short
     "![x](~/shots/four.png) relative .artifacts/five.png and docs/six.png stay",
     ...recordTexts({ summary: "\"/a/one.png\"", verdict: { status: "pass", findings: [{ text: "line\n/a/seven.gif" }] }, n: 3 }),
     null, undefined, "/a/notes.txt /a/clip.mp4",
+    "Screenshot:/a/colon.png",
     "web https://host.example/a/eight.png and //host.example/nine.png are no local paths; /a/ten.png.bak is no picture; /a/eleven.png.",
-  ])).toEqual(["/a/one.png", "/a/two.JPG", "/a/three.webp", path.join(home, "shots/four.png"), "/a/seven.gif", "/a/eleven.png"]);
+  ])).toEqual(["/a/one.png", "/a/two.JPG", "/a/three.webp", path.join(home, "shots/four.png"), "/a/seven.gif", "/a/colon.png", "/a/eleven.png"]);
 });
 
 test("a picture in a named temp root that a report names is kept after the directory is swept", async () => {

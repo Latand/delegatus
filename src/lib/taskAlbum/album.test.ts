@@ -137,18 +137,54 @@ test("a named file outside the served roots, or one that does not exist, is left
 
 test("a picture a report named is drawn from its kept copy once it is gone from its own path", async () => {
   const { keepReportPictures } = await import("@/lib/reportMedia/store");
-  const { keptReportPicture } = await import("@/lib/reportMedia/lookup");
+  const { NextRequest } = await import("next/server");
+  const { GET: artifact } = await import("@/app/api/artifact/route");
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
   const savedTemp = process.env.LLV_REPORT_MEDIA_TEMP_ROOTS;
   process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = elsewhere;
   const named = png(elsewhere, "repo-pipeline-ab12cd34/.artifacts/after.png");
   const lost = path.join(elsewhere, "repo-pipeline-ab12cd34", ".artifacts", "lost.png");
-  try { await keepReportPictures([`Verified: ${named}`]); }
+  /* The picture is recorded under the fixture's own project. */
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const project = projectForCwd(path.join(home, "project"))!;
+  try { await keepReportPictures([`Verified: ${named}`], { projectOf: () => project }); }
   finally { if (savedTemp === undefined) delete process.env.LLV_REPORT_MEDIA_TEMP_ROOTS; else process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = savedTemp; }
   fs.rmSync(path.join(elsewhere, "repo-pipeline-ab12cd34"), { recursive: true, force: true });
   const file = transcript("retired", [claudeSays(`![after](${named}) and ![lost](${lost})`, 1)]);
   const album = await readTaskAlbum("task-a", {}, deps([task("task-a", [file])]));
-  expect(album.items.map((item) => item.src)).toEqual([`/api/artifact?${new URLSearchParams({ path: keptReportPicture(named)! })}`]);
+  /* The address carries the picture's own path, never the store's. */
+  expect(album.items.map((item) => item.src)).toEqual([`/api/artifact?${new URLSearchParams({ path: named })}`]);
   expect(album.items[0]!.name).toBe("after.png");
+
+  /* A workspace member loads it when the member may read the project the
+     picture lay in; a member of another workspace is refused. */
+  resetTeamStoreForTests();
+  const at = new Date().toISOString();
+  const [owner, inside, outside] = ["a", "b", "c"].map((letter) => `m_${letter.repeat(32)}`);
+  for (const [id, role] of [[owner, "owner"], [inside, "member"], [outside, "member"]] as const) {
+    teamStore().insertMember({ id, name: id, role, status: "active", color: "teal", telegram: null, createdAt: at, createdBy: "claim", revokedAt: null });
+  }
+  const workspaces = { a: `w_${"d".repeat(32)}`, b: `w_${"e".repeat(32)}` };
+  createWorkspace(teamStore(), teamStore().member(owner)!, { id: workspaces.a, name: "Project A", projects: [project] });
+  createWorkspace(teamStore(), teamStore().member(owner)!, { id: workspaces.b, name: "Project B", projects: ["project-b"] });
+  teamStore().putWorkspaceMember(workspaces.a, inside, "member", owner, at);
+  teamStore().putWorkspaceMember(workspaces.b, outside, "member", owner, at);
+  const load = async (member: string) => {
+    const cookie = `llv_member=${mintSession(teamStore(), member, "claim", { surface: "desktop", browser: "chrome" }, Date.now()).value}`;
+    const response = await artifact(new NextRequest(`http://127.0.0.1:8898${album.items[0]!.src}`, { headers: { host: "127.0.0.1", cookie } }));
+    await response.body?.cancel();
+    return response.status;
+  };
+  /* A workspace reads only projects the catalog knows. */
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  replaceConversationCatalog([{ path: path.join(transcripts, "known.jsonl"), project } as never]);
+  try {
+    expect(await load(owner)).toBe(200);
+    expect(await load(inside)).toBe(200);
+    expect(await load(outside)).toBe(403);
+  } finally { replaceConversationCatalog([]); resetTeamStoreForTests(); }
 });
 
 test("a symlink under an evidence root that leads out of the roots is left out", async () => {

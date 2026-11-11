@@ -10,12 +10,13 @@ export const WRITTEN_PATHS_PER_RECORD = 512;
 
 /* An absolute or home-relative path that ends in a picture extension, as a
    text writes it bare, as a link target or as a file URL. It starts where no
-   path character and no URL scheme precedes it, so the tail of a relative
-   path and the path of a web address are left alone; it ends where the name
+   path character precedes it and no second slash follows, so the tail of a
+   relative path and the path of a web address are left alone, while a path
+   written straight after a colon is read; it ends where the name
    ends, so `shot.png.bak` names no picture. The bounded run keeps the search
    linear in the text. */
 const PICTURE_PATH = new RegExp(
-  String.raw`(?<![\w.~/\\:-])(?:file:\/\/)?(~?\/(?!\/)[^\s"'\`<>()[\]{}|*,;]{1,${PATH_CHARS}}?\.(?:png|jpe?g|gif|webp|avif|bmp))(?![\w/-]|\.\w)`,
+  String.raw`(?<![\w.~/\\-])(?:file:\/\/)?(~?\/(?!\/)[^\s"'\`<>()[\]{}|*,;]{1,${PATH_CHARS}}?\.(?:png|jpe?g|gif|webp|avif|bmp))(?![\w/-]|\.\w)`,
   "gi",
 );
 
