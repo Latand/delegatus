@@ -15,6 +15,7 @@ import { projectForCwd } from "@/lib/scanner/describe";
 import { shortId } from "@/lib/shortIds";
 import { buildPipeline } from "@/lib/pipelines/store";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { seatTelegramChatAccess } from "@/lib/team/seatTelegram";
 import { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } from "@/lib/pipelines/engine";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
@@ -833,4 +834,68 @@ test("parallel request keys cannot expose another workspace's in-flight or saved
       .toMatchObject({ ok: false, code: "invalid_request", status: 409 });
     expect(deliveries).toBe(1); expect(readDeputies()).toHaveLength(1);
   } finally { release.resolve(); recorded.resolve(); await Promise.allSettled([first, collision].filter(Boolean)); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
+});
+
+test("a seat's Telegram grant stays usable under member reach, inside its own workspace's chats", async () => {
+  const seat = "conversation_seat";
+  snapshot.conversations[seat] = conversation(seat, own) as never;
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  const catalog = [
+    { chatId: "-100", chat: "team", alias: "team" }, { chatId: "-200", chat: "beta-reports", alias: "beta-reports" },
+    { chatId: "-300", chat: "beta-directives", alias: "beta-directives" }, { chatId: "77", chat: "77" },
+  ];
+  store.insertMember({ ...owner, id: "m_owner_linked", name: "linked", telegram: { userId: "77", username: null, firstName: null, linkedAt: AT } });
+  store.putWorkspaceDefaults(W2, { accounts: { claude: [], codex: [] }, reportChat: { chat: "beta-reports", name: "Beta" }, directiveChats: ["beta-directives"] });
+  dependencies.seatTelegramChats = (conversationId, project) => seatTelegramChatAccess(conversationId, project, store, catalog);
+  searchReply = { chats: catalog, messages: [] };
+  rebuild();
+  // Member reach without a seat grant: every Telegram tool stays refused.
+  expect(await call("telegram_bot_chats")).toMatchObject(REFUSED);
+  expect(await call("telegram_bot_messages", { chat: "team" })).toMatchObject(REFUSED);
+  beginOrchestratorSeatIntent({ project: own, mandate: "Run this workspace", clientRequestId: "telegram-seat", mode: "existing", conversationId: seat,
+    workspace: { memberId: member.id, workspaceId: W1 }, telegramGrant: true, now: AT });
+  completeOrchestratorSeatIntent({ project: own, clientRequestId: "telegram-seat", conversationId: seat, path: `${seat}.jsonl`, now: AT });
+  const chats = await call("telegram_bot_chats");
+  if (!chats.ok) throw new Error(chats.error);
+  expect((chats.chats as { chatId: string }[]).map(chat => chat.chatId)).toEqual(["-100"]);
+  expect((await call("telegram_bot_messages", { chat: "team" })).ok).toBe(true);
+  expect((await call("telegram_bot_send", { chat: "-100", text: "status" })).ok).toBe(true);
+  // Another workspace's chats, the owner's private chat and an unknown chat stay out of reach.
+  for (const chat of ["beta-reports", "-300", "77", "elsewhere"]) {
+    expect(await call("telegram_bot_messages", { chat })).toMatchObject(REFUSED);
+    expect(await call("telegram_bot_send", { chat, text: "status" })).toMatchObject(REFUSED);
+  }
+  // The grant belongs to the seat: its worker and installation-wide tools gain nothing.
+  expect(await call("deploy_exact_sha", { sha: "a".repeat(40) })).toMatchObject(REFUSED);
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_member", role: "builder" });
+  rebuild();
+  expect(await call("telegram_bot_send", { chat: "team", text: "status" })).toMatchObject(REFUSED);
+  // Losing the project ends the grant with it.
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  rebuild();
+  store.removeWorkspaceMember(W1, member.id);
+  expect(await call("telegram_bot_send", { chat: "team", text: "status" })).toMatchObject(REFUSED);
+});
+
+test("an agent author's project label never refuses a permitted transcript, and a foreign transcript stays refused", async () => {
+  const records = [{ role: "user", text: "relayed", author: { kind: "agent", role: "reviewer", project: "Another Project", conversationId: "conversation_foreign" } }];
+  const fenced = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  const permitted = await fenced.callTool("conversation_messages", { clientRequestId: "own-transcript", transcriptPath: "conversation_member.jsonl" });
+  if (!permitted.ok) throw new Error(permitted.error);
+  expect(permitted.records).toHaveLength(1);
+  // The label of a project outside the caller's reach is withheld with its author.
+  expect(JSON.stringify(permitted)).not.toContain("Another Project");
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-transcript", transcriptPath: "conversation_foreign.jsonl" })).toMatchObject(REFUSED);
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-id", conversationId: "conversation_foreign" })).toMatchObject(REFUSED);
+  // A row that itself belongs to a foreign project still refuses the whole answer.
+  const leaking = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records: [{ role: "user", text: "x", project: other }] } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  expect(await leaking.callTool("conversation_messages", { clientRequestId: "leak", transcriptPath: "conversation_member.jsonl" })).toMatchObject(REFUSED);
 });

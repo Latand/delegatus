@@ -892,6 +892,9 @@ interface TargetedConversationOptions extends McpToolCallContext {
 
 export interface ViewerMcpDomainDependencies {
   workspaceProject?(identity: string): string | null;
+  /** Which Telegram chats this caller's seat grant covers under member reach;
+      null when the caller is not its project's granted seat. */
+  seatTelegramChats?(conversationId: string | null, project: string | null): ((reference: unknown) => boolean) | null | Promise<((reference: unknown) => boolean) | null>;
   /** Keyed workspace authority reads; never decode the installation registry. */
   workspaceConversation?(identity: string): import("@/lib/agent/registry").RegistryConversation | null;
   listFiles(options?: Parameters<typeof listFiles>[0]): Promise<FileEntry[]>;

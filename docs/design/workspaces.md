@@ -1000,6 +1000,18 @@ one every owner conversation already has: after the owner writes, the seat acts
 with the owner's reach while the member's earlier request is still in its
 context. An older build reads a `workspaceFromMessage` seat as a plain member
 binding, which is the narrower answer.
+A seat belongs to its project, so its own grant stays usable under member
+reach: the current seat of a project whose record holds `telegramGrant` passes
+the five `telegram_bot_*` tools, for the project's own report destination and
+for every chat nobody else holds. The owner's private chat, another workspace's
+report and directive chats and the report destination of a project outside the
+seat's workspace stay refused, the same reservation a workspace manager meets
+when choosing a destination; `telegram_bot_chats` lists only the admitted
+chats. `publish_prototype_review` and `read_prototype_review` pass to their
+routes, which apply the workspace fence to the caller themselves. Every other
+installation-wide tool stays refused. A record's agent author carries the
+sender's project as a label; the result scan does not read it as a project
+key, and the answer withholds an author from outside the caller's reach.
 A seat record written before the field existed, bound by an agent-triggered
 designation, is read as message authority, so a seat an earlier release bound
 this way answers to the next person who writes to it with no state edit.

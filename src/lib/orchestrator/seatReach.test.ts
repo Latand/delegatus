@@ -126,7 +126,7 @@ async function personRotates(who: Member, successor: string): Promise<void> {
 }
 
 /** What the seat can reach through the fenced MCP surface. */
-async function reach(conversationId: string): Promise<{ telegram: boolean; ownTranscript: boolean }> {
+async function reach(conversationId: string): Promise<{ installation: boolean; ownTranscript: boolean }> {
   const fenced = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
     const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false } as McpToolResult;
     context?.assertResult?.(answer);
@@ -137,14 +137,14 @@ async function reach(conversationId: string): Promise<{ telegram: boolean; ownTr
     workspaceConversation: lookup,
     workspaceProject: () => PROJECT,
   } as unknown as ViewerMcpDomainDependencies);
-  const telegram = await fenced.callTool("telegram_bot_send", { clientRequestId: "telegram-send", chat: "team", text: "status" });
+  const installation = await fenced.callTool("account_limits", { clientRequestId: "installation-read" });
   const transcript = await fenced.callTool("conversation_messages", { clientRequestId: "own-transcript", transcriptPath: `${SEAT}.jsonl` });
-  for (const answer of [telegram, transcript]) if (!answer.ok) expect(answer.code).toBe("workspace_forbidden");
-  return { telegram: telegram.ok, ownTranscript: transcript.ok };
+  for (const answer of [installation, transcript]) if (!answer.ok) expect(answer.code).toBe("workspace_forbidden");
+  return { installation: installation.ok, ownTranscript: transcript.ok };
 }
 
-const OWNER_REACH = { telegram: true, ownTranscript: true };
-const MEMBER_REACH = { telegram: false, ownTranscript: true };
+const OWNER_REACH = { installation: true, ownTranscript: true };
+const MEMBER_REACH = { installation: false, ownTranscript: true };
 
 test("a member's message fences the owner's seat, and the owner's next message restores its reach", async () => {
   designate(SEAT);

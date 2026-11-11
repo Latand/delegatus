@@ -33,6 +33,12 @@ const PROJECT_TOOLS = new Set([
   "conversation_action", "conversation_migration", "agent_fleet", "agent_activity", "lifecycle_events", "bridge_report", "bridge_directive",
   "get_orchestrator", "create_orchestrator", "send_message_to_orchestrator", "ask_orchestrator_in_parallel", "rotate_orchestrator", "seat_tick_settings",
 ]);
+// A seat's own grant (`telegramGrant` on its record) stays usable under member
+// reach, limited to the chats `seatTelegramChatAccess` admits.
+const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
+// These reach a Viewer route that applies the workspace fence itself to the
+// caller's forwarded capability, so the route judges their arguments.
+const ROUTE_FENCED_TOOLS = new Set(["publish_prototype_review", "read_prototype_review"]);
 const COLLECTIONS = new Set(["list_conversations", "search_transcripts", "search_memory", "board_snapshot", "list_flows", "list_pipelines", "list_tasks", "agent_fleet", "agent_activity", "lifecycle_events"]);
 const CONVERSATIONS = new Set(["conversationId", "expectedConversationId", "sourceConversationId", "srcConversationId", "seatConversationId", "parentConversationId", "launcherConversationId", "parent", "supersedes", "reviews", "src", "srcPath", "transcriptPath", "path", "paths", "voiceFor"]);
 const TASKS = new Set(["taskId", "taskIds", "parentTaskId", "sourceTaskId", "finishesTask"]);
@@ -69,7 +75,8 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
       if (!principal) return service.callTool(tool, input, context);
       if (!store) denied();
-      if (!PROJECT_TOOLS.has(tool)) denied();
+      const seatTelegram = SEAT_TELEGRAM_TOOLS.has(tool);
+      if (!PROJECT_TOOLS.has(tool) && !seatTelegram && !ROUTE_FENCED_TOOLS.has(tool)) denied();
       if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
       const conversationProject = (id: string): string | null => {
         if (dependencies.workspaceProject) return dependencies.workspaceProject(id);
@@ -78,6 +85,28 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       };
       const project = conversationProject(callerId ?? "");
       let allowed = workspacePrincipalAccess(principal);
+      if (!PROJECT_TOOLS.has(tool)) {
+        const admitted = async () => {
+          if (!workspacePrincipalAccess(principal)(project)) denied();
+          if (!seatTelegram) return null;
+          const chats = await (dependencies.seatTelegramChats ?? (async (id, key) => {
+            const { telegramBotService } = await import("@/lib/telegram/bot/service");
+            const { seatTelegramChatAccess } = await import("@/lib/team/seatTelegram");
+            return seatTelegramChatAccess(id, key, store, telegramBotService().listChats({ includeInactive: true }).chats);
+          }))(callerId, project);
+          if (!chats || (tool !== "telegram_bot_chats" && !chats(input.chat))) denied();
+          return chats;
+        };
+        await admitted();
+        return await runWithWorkspaceExecution(target => {
+          if (!workspacePrincipalAccess(principal)(project) || (target !== undefined && !workspacePrincipalAccess(principal)(target))) denied();
+        }, async () => {
+          const result = await service.callTool(tool, input, context);
+          const chats = await admitted();
+          return tool === "telegram_bot_chats" && result.ok && chats && Array.isArray(result.chats)
+            ? { ...result, chats: (result.chats as { chatId?: unknown }[]).filter(chat => chats(chat.chatId)) } : result;
+        });
+      }
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
       if (typeof args.project === "string") {
@@ -194,7 +223,9 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
             if (!value || typeof value !== "object" || seen.has(value)) return;
             seen.add(value);
             if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied();
-            for (const item of Object.values(value)) visit(item);
+            // A record's agent author names the sender's project as a label. It
+            // is no row of that project; the compact answer withholds it below.
+            for (const [key, item] of Object.entries(value)) if (key !== "author") visit(item);
           };
           visit(answer);
         } });
