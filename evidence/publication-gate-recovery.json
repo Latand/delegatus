@@ -788,5 +788,44 @@
       "assertions": 12,
       "runnerSeconds": null
     }
-  ]
+  ],
+  "gitVerification": {
+    "testedCommit": "55743fdea04bbcd2554a36e3fa9db41013932cde",
+    "baseCommit": "1037130eed9d990edcdd3053150af7ba44592cf9",
+    "fullHead": {
+      "pass": 208,
+      "fail": 6,
+      "errors": 3,
+      "assertions": 1313,
+      "runnerSeconds": 442.62,
+      "commandWallSeconds": 443.523
+    },
+    "matchingBaseSample": {
+      "pass": 0,
+      "fail": 6,
+      "errors": 3,
+      "assertions": 12,
+      "runnerSeconds": 153.07,
+      "commandWallSeconds": 153.739
+    },
+    "systemGitSample": {
+      "head": {
+        "pass": 4,
+        "fail": 2,
+        "assertions": 38,
+        "runnerSeconds": 4.96,
+        "commandWallSeconds": 5.685
+      },
+      "base": {
+        "pass": 4,
+        "fail": 2,
+        "assertions": 38,
+        "runnerSeconds": 4.46,
+        "commandWallSeconds": 5.122
+      }
+    },
+    "toolResolution": "Four fixture failures disappear on both revisions when fixtures resolve system Git instead of the inherited agent Git wrapper.",
+    "remainingFailures": "Both unreadable-role-memory cases fail identically on base and head: the first expects one damaged row and receives two; the second never reaches its damage boundary.",
+    "status": "No introduced failure observed. The complete Git file is not green; base-identical failures remain reported."
+  }
 }

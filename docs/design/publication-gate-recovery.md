@@ -145,3 +145,16 @@ The machine-readable [measurement record](../../evidence/publication-gate-recove
 contains the phase data, per-file timings, native series and controls. Detailed
 logs remain in retained private evidence. Only one full gate was run; its
 failed result above remains part of the record.
+
+## Git verification and baseline comparison
+
+The complete `git.test.ts` run reported 208 passes, six failures and three
+between-test errors in 442.62 seconds. The same six selected cases failed on
+`1037130e` with the same three errors. Four fixture failures disappear on both
+revisions when the fixtures resolve system Git instead of the inherited agent
+Git wrapper: both selected runs then report four passes and two failures.
+The remaining unreadable-role-memory cases have identical assertions on base
+and head: the first damages two rows where it expects one, and the second
+never reaches its damage boundary. Those existing cases remain unchanged.
+This comparison establishes no introduced failure; the full Git file is not
+green. The measurement record retains all counts and command times.
