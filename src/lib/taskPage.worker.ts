@@ -24,7 +24,7 @@ for await (const line of lines) {
       const opaque = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
       if (!opaque.test(frame.correlation?.requestId ?? "") || !opaque.test(frame.correlation?.jobId ?? "")) throw new PrivacyWorkError("worker-invalid-reply");
       correlation = { requestId: frame.correlation.requestId, jobId: frame.correlation.jobId };
-      process.stdout.write(`${JSON.stringify({ id, correlation, phase: "started" })}\n`);
+      process.stdout.write(`${JSON.stringify({ id, correlation, phase: "started", rssBytes: residentWorkerRssBytes() })}\n`);
     }
     const cpu = process.cpuUsage();
     let previousPhase: string | undefined;

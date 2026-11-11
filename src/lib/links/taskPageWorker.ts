@@ -37,8 +37,12 @@ type Resident = { child: ChildProcess; closed: Promise<void>; buffer: string; fi
   startedAt: number; served: number; rssBytes?: number; rssBefore?: number };
 /** A task page worker holds the lesson matchers and a page cache. Above this
  * resident size after a job it is retired and the next job starts a fresh
- * process; `LLV_RESIDENT_WORKER_RSS_LIMIT_MB` overrides it for every worker. */
-export const TASK_PAGE_WORKER_RSS_LIMIT_BYTES = 2 * 1024 * 1024 * 1024;
+ * process; `LLV_RESIDENT_WORKER_RSS_LIMIT_MB` overrides it for every worker.
+ * A fresh process compiles the matchers again, 17 to 32 seconds on a store
+ * of about nine thousand rules, with queued jobs waiting. On that store the
+ * worker passes 2 GiB within minutes, which would mean a cold start every
+ * five minutes; 6 GiB comes to about one an hour. */
+export const TASK_PAGE_WORKER_RSS_LIMIT_BYTES = 6 * 1024 * 1024 * 1024;
 const unavailable = (failure: PrivacyFailure = "worker-unavailable") => Object.assign(new PrivacyWorkError(failure), { code: "LESSON_PRIVACY_UNAVAILABLE" });
 
 /** One leased, serial lane shared by route bundles. A queue of 16 and a 60s
@@ -183,7 +187,8 @@ export class TaskPageWorker {
           if (!frame || typeof frame !== "object") throw unavailable("worker-invalid-reply");
           const job = this.active;
           if (!job || job.settled || job.id !== frame.id) throw unavailable("worker-invalid-reply");
-          if (typeof frame.rssBytes === "number") worker.rssBytes = frame.rssBytes;
+          // The acknowledgement carries the size before the job, the reply the size after it.
+          if (typeof frame.rssBytes === "number") { if (frame.phase === "started") worker.rssBefore = frame.rssBytes; else worker.rssBytes = frame.rssBytes; }
           // Older fixtures/retained worker replies may lack an acknowledgement;
           // their execution duration stays explicitly unknown. A supplied token
           // must agree with this exact job before any phase/result is consumed.

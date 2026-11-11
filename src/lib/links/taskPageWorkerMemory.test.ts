@@ -59,8 +59,9 @@ test("a job that adds much resident memory is named in the journal by kind and s
     await filter(worker, 0);
     await filter(worker, 1);
     const lines = log.mock.calls.flat().filter(line => String(line).startsWith("[task-page-worker] memory step "));
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(String(lines[0]).slice("[task-page-worker] memory step ".length))).toEqual({ kind: "filter", addedBytes: expect.any(Number), rssBytes: expect.any(Number), served: 2 });
+    // The first job of a process is measured too, from the size the worker had when it took the job.
+    expect(lines).toHaveLength(2);
+    expect(lines.map(line => JSON.parse(String(line).slice("[task-page-worker] memory step ".length)))).toEqual([1, 2].map(served => ({ kind: "filter", addedBytes: expect.any(Number), rssBytes: expect.any(Number), served })));
     expect(lines.join("")).not.toContain("amber");
   } finally { log.mockRestore(); await worker.shutdown(); }
 }, 60_000);
